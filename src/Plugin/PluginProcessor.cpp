@@ -4,6 +4,7 @@
  */
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Core/AllocationTracker.h"
 
 namespace morphsnap {
 
@@ -124,6 +125,8 @@ bool MorphSnapProcessor::isBusesLayoutSupported(const BusesLayout& layouts) cons
 void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                        juce::MidiBuffer& midi)
 {
+    // Allocation tracking guard (zero overhead in release)
+    ScopedAudioCallback allocGuard;
     juce::ScopedNoDenormals noDenormals;
 
     if (!prepared) return;
@@ -149,7 +152,11 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const int paramCount = paramBridge.getParameterCount();
     if (paramCount > 0 && snapshotBank.hasAnyOccupied())
     {
-        morphOutput.resize(static_cast<size_t>(paramCount), 0.0f);
+        // CRITICAL: No resize here - buffer pre-allocated in prepareToPlay
+        // Clear only the portion we'll use
+        const size_t usedCount = static_cast<size_t>(paramCount);
+        if (morphOutput.size() >= usedCount)
+            std::fill(morphOutput.begin(), morphOutput.begin() + usedCount, 0.0f);
 
         const float dt = static_cast<float>(currentBlockSize) /
                          static_cast<float>(currentSampleRate);
@@ -163,8 +170,9 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         morphProcessor.process(mx, my, fp, source, mode, dt, morphOutput);
 
-        // Apply interpolated values to hosted plugin
-        paramBridge.applyParameterState(morphOutput);
+        // Apply interpolated values to hosted plugin (bounded by actual param count)
+        if (morphOutput.size() >= static_cast<size_t>(paramCount))
+            paramBridge.applyParameterState(morphOutput);
     }
 
     // 5) Forward audio + filtered MIDI to hosted plugin

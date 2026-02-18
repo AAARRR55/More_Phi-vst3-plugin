@@ -1,0 +1,49 @@
+# Build artifacts
+build/
+build2/
+out/
+cmake-build-*/
+
+# AI tool configs
+.claude/
+.gemini/
+.agent/
+
+# IDE files
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+CMakeSettings.json
+
+# Build outputs
+*.vst3
+*.component
+*.dll
+*.dylib
+
+# Temporary files
+*.log
+*.tmp
+errors*.txt
+cmake_*.txt
+build_*.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# JUCE generated
+JuceLibraryCode/
+
+# Test outputs
+eq_out.txt
+eq_result.txt
+verify_out.txt
+verify_result.txt
+eq_test_output.txt
+__pycache__/
+*.pyc

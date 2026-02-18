@@ -56,6 +56,7 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/MorphProcessor.h
     src/Core/MorphProcessor.cpp
     src/Core/LockFreeQueue.h
+    src/Core/AllocationTracker.h
 )
 
 set(MORPHSNAP_HOST_SOURCES
@@ -107,6 +108,8 @@ set(MORPHSNAP_UI_SOURCES
     src/UI/ModeBar.cpp
     src/UI/HostedPluginWindow.h
     src/UI/HostedPluginWindow.cpp
+    src/UI/ParameterMapPanel.h
+    src/UI/ParameterMapPanel.cpp
 )
 
 target_sources(MorphSnap PRIVATE

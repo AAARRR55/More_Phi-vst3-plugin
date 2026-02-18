@@ -1,4 +1,6 @@
-/* MorphSnap — UI/MorphPad.cpp */
+/* MorphSnap — UI/MorphPad.cpp
+ * Optimized for zero allocations during rendering.
+ */
 #include "MorphPad.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/InterpolationEngine.h"
@@ -8,12 +10,16 @@ namespace morphsnap {
 MorphPad::MorphPad(MorphSnapProcessor& processor)
     : proc_(processor)
 {
-    startTimerHz(30);
+    // Initialize trail buffer
+    trailBuffer_.fill(juce::Point<float>{0.5f, 0.5f});
+    startTimerHz(30);  // 30 FPS for smooth animation
 }
 
 void MorphPad::resized()
 {
-    trailPoints_.clear();
+    // Reset trail on resize
+    trailHead_ = 0;
+    trailCount_ = 0;
 }
 
 void MorphPad::mouseUp(const juce::MouseEvent&) { dragging_ = false; }
@@ -45,7 +51,7 @@ void MorphPad::setVisualizationMode(int modeIndex)
 
 void MorphPad::timerCallback()
 {
-    // Update trail points
+    // Update trail points from audio-thread trail
     float x = proc_.morphX.load(std::memory_order_relaxed);
     float y = proc_.morphY.load(std::memory_order_relaxed);
     juce::Point<float> currentPos{x, y};
@@ -59,11 +65,13 @@ void MorphPad::timerCallback()
     repaint();
 }
 
+// OPTIMIZATION: Ring buffer implementation - zero allocations
 void MorphPad::appendTrailPoint(juce::Point<float> point)
 {
-    trailPoints_.push_back(point);
-    if (trailPoints_.size() > maxTrailPoints_)
-        trailPoints_.erase(trailPoints_.begin());
+    trailBuffer_[trailHead_] = point;
+    trailHead_ = (trailHead_ + 1) % maxTrailPoints_;
+    if (trailCount_ < maxTrailPoints_)
+        ++trailCount_;
 }
 
 int MorphPad::findNextEmptySlot() const
@@ -85,7 +93,10 @@ int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
 
     for (int i = 0; i < 12; ++i)
     {
-        float dist = point.getDistanceFrom({positions[i].x, positions[i].y});
+        // Map clock position to screen coordinates (0-1 range)
+        float screenX = (positions[i].x + 1.0f) * 0.5f;
+        float screenY = (positions[i].y + 1.0f) * 0.5f;
+        float dist = point.getDistanceFrom({screenX, screenY});
         if (dist < minDist)
         {
             minDist = dist;
@@ -111,16 +122,19 @@ void MorphPad::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff0d1b2a));
     g.fillEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2);
 
-    // Subtle grid
-    g.setColour(juce::Colour(0xff0f3460).withAlpha(0.3f));
-    g.drawLine(centre.x - radius, centre.y, centre.x + radius, centre.y, 0.5f);
-    g.drawLine(centre.x, centre.y - radius, centre.x, centre.y + radius, 0.5f);
+    // Grid (optional)
+    if (showGrid_)
+    {
+        g.setColour(juce::Colour(0xff0f3460).withAlpha(0.3f));
+        g.drawLine(centre.x - radius, centre.y, centre.x + radius, centre.y, 0.5f);
+        g.drawLine(centre.x, centre.y - radius, centre.x, centre.y + radius, 0.5f);
+    }
 
     // Border
     g.setColour(juce::Colour(0xff0f3460));
     g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2, 1.5f);
 
-    // ── Cursor trail ───────────────────────────────────────────────
+    // ── Cursor trail (from audio thread) ───────────────────────────────────────
     auto& morph = proc_.getMorphProcessor();
     const auto& trail = morph.getTrail();
     int head = morph.getTrailHead();
@@ -141,7 +155,7 @@ void MorphPad::paint(juce::Graphics& g)
         g.drawLine(px0, py0, px1, py1, 1.5f);
     }
 
-    // ── Snapshot dots (clock layout) ───────────────────────────────
+    // ── Snapshot dots (clock layout) ───────────────────────────────────────────
     auto positions = InterpolationEngine::getClockPositions(0.85f);
     auto& bank = proc_.getSnapshotBank();
     for (int i = 0; i < 12; ++i)
@@ -160,7 +174,7 @@ void MorphPad::paint(juce::Graphics& g)
                    12, 10, juce::Justification::centred);
     }
 
-    // ── Physics-processed cursor position ──────────────────────────
+    // ── Physics-processed cursor position ──────────────────────────────────────
     float procX = morph.getProcessedX();
     float procY = morph.getProcessedY();
     // Map [-1,1] → screen coordinates

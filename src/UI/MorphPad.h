@@ -1,37 +1,39 @@
 /*
- * MorphSnap - UI/MorphPad.h
- * Main XY morphing pad with visualization and interaction.
+ * MorphSnap — UI/MorphPad.h
+ * 2D XY Morph Pad with clock-layout snapshot dots.
+ * Optimized for zero allocations during rendering.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <vector>
+#include <array>
 
 namespace morphsnap {
 
 class MorphSnapProcessor;
 
+enum class VisualizationMode
+{
+    Standard = 0,
+    Heatmap = 1,
+    Timeline = 2
+};
+
 class MorphPad : public juce::Component,
                  private juce::Timer
 {
 public:
-    enum class VisualizationMode
-    {
-        twoD = 0,
-        threeD = 1,
-        spectral = 2
-    };
-
-    explicit MorphPad(MorphSnapProcessor& processor);
+    explicit MorphPad(MorphSnapProcessor& p);
+    ~MorphPad() override = default;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
+    // Visualization options
     void setGridVisible(bool shouldShow);
     void setPathVisible(bool shouldShow);
     void setVisualizationMode(int modeIndex);
@@ -39,38 +41,26 @@ public:
 private:
     void timerCallback() override;
     void updatePosition(juce::Point<float> pos);
-
-    juce::Rectangle<float> getPadBounds() const;
-    juce::Point<float> normalizedToPoint(float xNorm, float yNorm) const;
-    juce::Point<float> pointToNormalized(juce::Point<float> point) const;
-
-    void setMorphPositionFromPoint(juce::Point<float> point);
-    void appendTrailPoint(juce::Point<float> point);
-
-    void drawBackground(juce::Graphics& g, juce::Rectangle<float> padBounds) const;
-    void drawGrid(juce::Graphics& g, juce::Rectangle<float> padBounds) const;
-    void drawAxes(juce::Graphics& g, juce::Rectangle<float> padBounds) const;
-    void drawTrail(juce::Graphics& g) const;
-    void drawSnapshotMarkers(juce::Graphics& g, juce::Rectangle<float> padBounds) const;
-    void drawPositionIndicator(juce::Graphics& g, juce::Point<float> position) const;
-    void drawModeBadge(juce::Graphics& g, juce::Rectangle<float> padBounds) const;
-
     int findNextEmptySlot() const;
     int findNearestSlotToPoint(juce::Point<float> point) const;
     void captureSnapshotAtSlot(int slot);
 
+    // OPTIMIZATION: Fixed-size ring buffer for trail (no allocations)
+    void appendTrailPoint(juce::Point<float> point);
+
     MorphSnapProcessor& proc_;
+
+    // Trail ring buffer (fixed size - no dynamic allocation)
+    static constexpr int maxTrailPoints_ = 64;
+    std::array<juce::Point<float>, maxTrailPoints_> trailBuffer_{};
+    int trailHead_ = 0;
+    int trailCount_ = 0;
+
+    juce::Point<float> lastTrailPoint_{-1.0f, -1.0f};
     bool dragging_ = false;
     bool showGrid_ = true;
     bool showPath_ = true;
-    VisualizationMode visMode_ = VisualizationMode::twoD;
-
-    std::vector<juce::Point<float>> trailPoints_;
-    juce::Point<float> lastTrailPoint_{ -1.0f, -1.0f };
-
-    static constexpr size_t maxTrailPoints_ = 80;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphPad)
+    VisualizationMode visMode_ = VisualizationMode::Standard;
 };
 
 } // namespace morphsnap

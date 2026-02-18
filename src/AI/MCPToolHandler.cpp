@@ -67,10 +67,13 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProc
     int id = params.getProperty("id", -1);
     float value = static_cast<float>(params.getProperty("value", 0.0));
 
-    // Push to lock-free command queue (consumed by audio thread)
-    MorphSnapProcessor::ParamCommand cmd{id, value};
-    p.commandQueue.push(cmd);
+    auto& bridge = p.getParameterBridge();
+    if (id < 0 || id >= bridge.getParameterCount())
+        return R"({"success":false,"error":"invalid_param_id"})";
 
+    // Call ParameterBridge which uses AudioProcessor::setParameter()
+    // — the legacy API that directly routes to VST3's setParamNormalized
+    bridge.setParameterNormalized(id, value);
     return R"({"success":true})";
 }
 
@@ -79,13 +82,17 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
     auto* list = params.getProperty("params", juce::var()).getArray();
     if (!list) return R"({"success":false,"error":"missing params array"})";
 
+    auto& bridge = p.getParameterBridge();
     int count = 0;
     for (const auto& item : *list)
     {
         int id = item.getProperty("id", -1);
         float value = static_cast<float>(item.getProperty("value", 0.0));
-        MorphSnapProcessor::ParamCommand cmd{id, value};
-        if (p.commandQueue.push(cmd)) ++count;
+        if (id >= 0 && id < bridge.getParameterCount())
+        {
+            bridge.setParameterNormalized(id, value);
+            ++count;
+        }
     }
 
     return "{\"success\":true,\"count\":" + juce::String(count) + "}";

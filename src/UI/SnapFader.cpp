@@ -1,86 +1,87 @@
-/*
- * MorphSnap - UI/SnapFader.cpp
- */
+/* MorphSnap — UI/SnapFader.cpp */
 #include "SnapFader.h"
 #include "Plugin/PluginProcessor.h"
 
 namespace morphsnap {
 
-SnapFader::SnapFader(MorphSnapProcessor& processor)
-    : proc_(processor)
-{
-    slider_.setSliderStyle(juce::Slider::LinearVertical);
-    slider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    slider_.setRange(0.0, 1.0, 0.001);
-    slider_.setDoubleClickReturnValue(true, 0.0);
-    slider_.setValue(proc_.faderPos.load(std::memory_order_relaxed), juce::dontSendNotification);
-
-    slider_.onValueChange = [this]()
-    {
-        if (!suppressSliderCallback_)
-            pushFaderValue(static_cast<float>(slider_.getValue()));
-    };
-
-    slider_.onDragStart = [this]()
-    {
-        proc_.morphSource.store(1, std::memory_order_relaxed);
-    };
-
-    title_.setText("SNAP", juce::dontSendNotification);
-    title_.setJustificationType(juce::Justification::centred);
-    title_.setColour(juce::Label::textColourId, juce::Colour(0xffa0a0b0));
-
-    valueLabel_.setText("0%", juce::dontSendNotification);
-    valueLabel_.setJustificationType(juce::Justification::centred);
-    valueLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffffffff));
-
-    addAndMakeVisible(slider_);
-    addAndMakeVisible(title_);
-    addAndMakeVisible(valueLabel_);
-
-    startTimerHz(24);
-}
+SnapFader::SnapFader(MorphSnapProcessor& p) : proc_(p) {}
 
 void SnapFader::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
-    g.setColour(juce::Colour(0xff16213e));
-    g.fillRoundedRectangle(bounds, 8.0f);
+    float trackX = bounds.getCentreX();
+    float trackTop = bounds.getY() + 10;
+    float trackBot = bounds.getBottom() - 10;
+    float trackH = trackBot - trackTop;
 
-    g.setColour(juce::Colours::white.withAlpha(0.14f));
-    g.drawRoundedRectangle(bounds.reduced(0.5f), 8.0f, 1.0f);
-}
+    // Background
+    g.setColour(juce::Colour(0xff0d1b2a));
+    g.fillRoundedRectangle(bounds, 6.0f);
 
-void SnapFader::resized()
-{
-    auto area = getLocalBounds().reduced(6);
-    title_.setBounds(area.removeFromTop(18));
-    valueLabel_.setBounds(area.removeFromBottom(18));
-    slider_.setBounds(area.reduced(4, 2));
-}
+    // Track groove
+    g.setColour(juce::Colour(0xff1a2742));
+    g.fillRoundedRectangle(trackX - 2.5f, trackTop, 5, trackH, 2.5f);
 
-void SnapFader::timerCallback()
-{
-    const float faderValue = proc_.faderPos.load(std::memory_order_relaxed);
-    if (!slider_.isMouseButtonDown())
+    // Slot markers along the track
+    auto& bank = proc_.getSnapshotBank();
+    int occupied = 0;
+    for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+        if (bank.isOccupied(i)) occupied++;
+
+    if (occupied > 1)
     {
-        suppressSliderCallback_ = true;
-        slider_.setValue(faderValue, juce::dontSendNotification);
-        suppressSliderCallback_ = false;
+        int idx = 0;
+        for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+        {
+            if (!bank.isOccupied(i)) continue;
+            float frac = static_cast<float>(idx) / static_cast<float>(occupied - 1);
+            float markerY = trackTop + (1.0f - frac) * trackH;
+
+            // Tick mark
+            g.setColour(juce::Colour(0xff533483));
+            g.fillRoundedRectangle(trackX - 8, markerY - 1.5f, 16, 3, 1.5f);
+
+            // Slot number
+            g.setColour(juce::Colour(0xff8b95a5));
+            g.setFont(8.0f);
+            g.drawText(juce::String(i + 1), static_cast<int>(trackX + 10),
+                       static_cast<int>(markerY - 6), 16, 12,
+                       juce::Justification::centredLeft);
+            ++idx;
+        }
     }
 
-    valueLabel_.setText(juce::String(faderValue * 100.0f, 0) + "%",
-                        juce::dontSendNotification);
+    // Filled portion (from bottom to thumb)
+    float faderPos = proc_.faderPos.load(std::memory_order_relaxed);
+    float thumbY = trackTop + (1.0f - faderPos) * trackH;
+
+    g.setColour(juce::Colour(0xffec415d).withAlpha(0.6f));
+    g.fillRoundedRectangle(trackX - 2.5f, thumbY, 5, trackBot - thumbY, 2.5f);
+
+    // Thumb glow
+    g.setColour(juce::Colour(0xffec415d).withAlpha(0.15f));
+    g.fillEllipse(trackX - 12, thumbY - 12, 24, 24);
+
+    // Thumb
+    g.setColour(juce::Colour(0xffe8eaed));
+    g.fillRoundedRectangle(trackX - 10, thumbY - 5, 20, 10, 5.0f);
+    g.setColour(juce::Colour(0xffec415d));
+    g.fillRoundedRectangle(trackX - 6, thumbY - 1.5f, 12, 3, 1.5f);
 }
 
-void SnapFader::pushFaderValue(float normalizedValue)
-{
-    const auto clamped = juce::jlimit(0.0f, 1.0f, normalizedValue);
-    proc_.faderPos.store(clamped, std::memory_order_relaxed);
-    proc_.morphSource.store(1, std::memory_order_relaxed);
+void SnapFader::mouseDown(const juce::MouseEvent& e) { updateValue(e.position.y); }
+void SnapFader::mouseDrag(const juce::MouseEvent& e) { updateValue(e.position.y); }
 
-    if (auto* faderParam = proc_.getAPVTS().getParameter("faderPos"))
-        faderParam->setValueNotifyingHost(clamped);
+void SnapFader::updateValue(float yPos)
+{
+    float trackTop = 10.0f;
+    float trackBot = getHeight() - 10.0f;
+    float normalised = 1.0f - juce::jlimit(0.0f, 1.0f,
+        (yPos - trackTop) / (trackBot - trackTop));
+
+    proc_.faderPos.store(normalised, std::memory_order_relaxed);
+    proc_.morphSource.store(1, std::memory_order_relaxed);  // Switch to fader mode
+    repaint();
 }
 
 } // namespace morphsnap
