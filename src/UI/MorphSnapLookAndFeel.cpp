@@ -25,7 +25,7 @@ MorphSnapLookAndFeel::MorphSnapLookAndFeel()
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
     // Default font
-    setDefaultSansSerifTypeface(juce::Font("Segoe UI", 13.0f, juce::Font::plain).getTypefacePtr());
+    setDefaultSansSerifTypefaceName("Segoe UI");
 }
 
 // ── Buttons ──────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ void MorphSnapLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button&
 void MorphSnapLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
                                             bool /*isOver*/, bool /*isDown*/)
 {
-    g.setFont(juce::Font(12.0f, juce::Font::plain));
+    g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::plain)));
     g.setColour(button.getToggleState() ? juce::Colours::white : textPrimary);
     g.drawText(button.getButtonText(), button.getLocalBounds(),
                juce::Justification::centred);

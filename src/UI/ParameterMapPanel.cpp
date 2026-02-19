@@ -16,7 +16,7 @@ ParameterRow::ParameterRow(int paramIndex, MorphSnapProcessor& proc)
     auto& bridge = proc_.getParameterBridge();
     nameLabel_.setText(bridge.getParameterName(index_), juce::dontSendNotification);
     nameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe8eaed));
-    nameLabel_.setFont(juce::Font(11.0f));
+    nameLabel_.setFont(juce::Font(juce::FontOptions(11.0f)));
     addAndMakeVisible(nameLabel_);
 
     slider_.setRange(0.0, 1.0, 0.001);
@@ -26,13 +26,13 @@ ParameterRow::ParameterRow(int paramIndex, MorphSnapProcessor& proc)
     slider_.onValueChange = [this]()
     {
         if (!syncing_)
-            proc_.getParameterBridge().setParameterNormalized(
+            proc_.enqueueParameterSet(
                 index_, static_cast<float>(slider_.getValue()));
     };
     addAndMakeVisible(slider_);
 
     valueLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
-    valueLabel_.setFont(juce::Font(10.0f));
+    valueLabel_.setFont(juce::Font(juce::FontOptions(10.0f)));
     valueLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(valueLabel_);
 
@@ -67,7 +67,7 @@ void ParameterRow::refresh()
 ParameterMapPanel::ParameterMapPanel(MorphSnapProcessor& proc) : proc_(proc)
 {
     headerLabel_.setText("Parameter Mapping", juce::dontSendNotification);
-    headerLabel_.setFont(juce::Font(13.0f, juce::Font::bold));
+    headerLabel_.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
     headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffec415d));
     addAndMakeVisible(headerLabel_);
 

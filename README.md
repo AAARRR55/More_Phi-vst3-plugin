@@ -278,7 +278,19 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details.
+This project's source code is released under the MIT License - See [LICENSE](LICENSE) for details.
+
+### Third-Party Licenses
+
+**JUCE Framework** - This software uses [JUCE](https://juce.com/) 8.0, which is dual-licensed:
+- **AGPLv3**: For open-source projects (requires making source available)
+- **Commercial License**: For closed-source/commercial distribution
+
+**Important**: If you distribute binary builds of MorphSnap, you must either:
+1. Release your entire project under AGPLv3, OR
+2. Purchase a [JUCE commercial license](https://juce.com/pricing)
+
+See [JUCE Licensing](https://juce.com/juce-licence) for details.
 
 ---
 

@@ -15,12 +15,12 @@ MacroKnobStrip::MacroKnobStrip(MorphSnapProcessor& p) : proc_(p)
         knobs_[i].onValueChange = [this, i]()
         {
             if (!syncing_)
-                proc_.getParameterBridge().setParameterNormalized(
+                proc_.enqueueParameterSet(
                     i, static_cast<float>(knobs_[i].getValue()));
         };
         addAndMakeVisible(knobs_[i]);
 
-        labels_[i].setFont(juce::Font(9.0f));
+        labels_[i].setFont(juce::Font(juce::FontOptions(9.0f)));
         labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff888888));
         labels_[i].setJustificationType(juce::Justification::centred);
         labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);

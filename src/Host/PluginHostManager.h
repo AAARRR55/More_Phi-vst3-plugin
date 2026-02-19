@@ -1,45 +1,59 @@
 /*
  * MorphSnap — Host/PluginHostManager.h
  * Manages loading and running a hosted VST3/AU plugin instance.
+ * Implements IPluginHostManager for testability.
+ *
+ * Stability: An exception counter tracks repeated failures from a hosted
+ * plugin. When it exceeds MAX_PLUGIN_EXCEPTIONS the plugin is auto-unloaded
+ * to prevent a misbehaving guest from continuously disrupting real-time audio.
  */
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "IPluginHostManager.h"
+#include <atomic>
 
 namespace morphsnap {
 
-class PluginHostManager
+class PluginHostManager : public IPluginHostManager
 {
 public:
     PluginHostManager();
-    ~PluginHostManager();
+    ~PluginHostManager() override;
 
-    void prepare(double sampleRate, int blockSize, int numChannels);
-    void releaseResources();
+    // IPluginHostManager implementation
+    void prepare(double sampleRate, int blockSize, int numChannels) override;
+    void releaseResources() override;
+    bool loadPlugin(const juce::PluginDescription& desc) override;
+    void unloadPlugin() override;
+    bool hasPlugin() const override { return hostedPlugin != nullptr; }
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
+    
+    juce::AudioPluginInstance* getPlugin() override { return hostedPlugin.get(); }
+    const juce::AudioPluginInstance* getPlugin() const override { return hostedPlugin.get(); }
+    
+    const juce::PluginDescription* getLastDescription() const override;
 
-    // Plugin lifecycle
-    bool loadPlugin(const juce::PluginDescription& desc);
-    void unloadPlugin();
-    bool hasPlugin() const { return hostedPlugin != nullptr; }
+    /** Number of processing exceptions since last successful load. */
+    int getExceptionCount() const { return exceptionCount_.load(std::memory_order_relaxed); }
 
-    // Audio processing — call from audio thread
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
-
-    // Access the hosted plugin instance (for GUI, parameter enumeration)
-    juce::AudioPluginInstance* getPlugin() { return hostedPlugin.get(); }
-    const juce::AudioPluginInstance* getPlugin() const { return hostedPlugin.get(); }
-
-    // Plugin scanning
-    juce::AudioPluginFormatManager& getFormatManager() { return formatManager; }
-    juce::KnownPluginList& getKnownPlugins() { return knownPlugins; }
-
-    // Scan standard plugin folders (call from background thread)
-    void scanPluginFolders();
+    juce::AudioPluginFormatManager& getFormatManager() override { return formatManager; }
+    juce::KnownPluginList& getKnownPlugins() override { return knownPlugins; }
+    void scanPluginFolders() override;
 
 private:
+    // Auto-unload a misbehaving plugin after this many consecutive exceptions.
+    static constexpr int MAX_PLUGIN_EXCEPTIONS = 5;
+
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
     std::unique_ptr<juce::AudioPluginInstance> hostedPlugin;
+    juce::PluginDescription lastDescription;
+    mutable juce::SpinLock  descLock_;    // guards lastDescription
+
+    // Counts consecutive processBlock exceptions; reset on successful load.
+    // When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is auto-unloaded.
+    std::atomic<int> exceptionCount_{0};
 
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;

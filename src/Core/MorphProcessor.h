@@ -2,6 +2,9 @@
  * MorphSnap — Core/MorphProcessor.h
  * Orchestrates morph computation: physics → interpolation → smoothing.
  * All methods are audio-thread safe (no allocations after prepare()).
+ *
+ * noexcept guarantee: process() is noexcept because all buffers are
+ * pre-allocated in prepare() and all called functions are noexcept.
  */
 #pragma once
 
@@ -28,9 +31,10 @@ public:
     // Main compute — call from processBlock
     // rawX, rawY ∈ [0,1], faderPos ∈ [0,1]
     // dt = blockSize / sampleRate
+    // noexcept: All buffers pre-allocated in prepare(), no allocations or throwing ops
     void process(float rawX, float rawY, float faderPos,
                  MorphSource source, MorphMode mode,
-                 float dt, std::vector<float>& output);
+                 float dt, std::vector<float>& output) noexcept;
 
     // Physics tuning
     void setElasticPreset(ElasticPreset p) { elasticPreset_ = p; }
@@ -48,7 +52,7 @@ public:
     static constexpr int TRAIL_SIZE = 64;
     struct TrailPoint { float x, y; };
     const std::array<TrailPoint, TRAIL_SIZE>& getTrail() const { return trail_; }
-    int getTrailHead() const { return trailHead_; }
+    int getTrailHead() const { return trailHead_.load(std::memory_order_relaxed); }
 
 private:
     void updatePhysics(float targetX, float targetY, MorphMode mode, float dt);
@@ -75,7 +79,7 @@ private:
 
     // Trail
     std::array<TrailPoint, TRAIL_SIZE> trail_{};
-    int trailHead_ = 0;
+    std::atomic<int> trailHead_{0};
     float trailTimer_ = 0.0f;
     static constexpr float TRAIL_INTERVAL = 0.016f;  // ~60 Hz trail sampling
 

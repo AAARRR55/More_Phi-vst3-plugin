@@ -71,19 +71,19 @@ void MorphSnapEditor::paint(juce::Graphics& g)
 
     // Logo
     g.setColour(lnf.accentCoral);
-    g.setFont(juce::Font(20.0f, juce::Font::bold));
+    g.setFont(juce::Font(juce::FontOptions(20.0f, juce::Font::bold)));
     g.drawText("MorphSnap", titleArea.reduced(14, 0).removeFromLeft(160),
                juce::Justification::centredLeft);
 
     // Version
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(10.0f));
+    g.setFont(juce::Font(juce::FontOptions(10.0f)));
     g.drawText("v1.0", titleArea.reduced(14, 0).removeFromLeft(200),
                juce::Justification::centredLeft);
 
     // RMS meter
     auto meterArea = titleArea.removeFromRight(120).reduced(10, 12);
-    float rms = processor.rmsLevel.load(std::memory_order_relaxed);
+    float rms = processor.getRmsLevel();
     float dbLevel = juce::jlimit(0.0f, 1.0f,
         (juce::Decibels::gainToDecibels(rms) + 60.0f) / 60.0f);
 
@@ -101,7 +101,7 @@ void MorphSnapEditor::paint(juce::Graphics& g)
     }
 
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(9.0f));
+    g.setFont(juce::Font(juce::FontOptions(9.0f)));
     g.drawText("OUT", meterArea.translated(-28, 0).withWidth(24),
                juce::Justification::centredRight);
 

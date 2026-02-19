@@ -1,6 +1,11 @@
 /*
  * MorphSnap — Core/PhysicsEngine.h
  * Spring-damper elastic mode + Perlin noise drift.
+ *
+ * noexcept guarantee: All physics functions are noexcept because:
+ * - Pure mathematical operations on primitives (no allocations)
+ * - Uses static const lookup tables (no dynamic memory)
+ * - All std::cmath functions are noexcept
  */
 #pragma once
 
@@ -21,24 +26,28 @@ class PhysicsEngine
 {
 public:
     // Spring-damper: moves state toward (targetX, targetY) with overshoot
+    // noexcept: Pure arithmetic on primitives, no allocations
     static void updateElastic(ElasticState& state,
                               float targetX, float targetY,
-                              ElasticPreset preset, float dt);
+                              ElasticPreset preset, float dt) noexcept;
 
     // Perlin noise drift: outputs (outX, outY)
+    // noexcept: Pure arithmetic, uses static lookup table
     static void updateDrift(float& outX, float& outY,
                             float time, float speed, float distance,
                             float chaos, DriftMode mode,
-                            float anchorX, float anchorY, float gravity);
+                            float anchorX, float anchorY, float gravity) noexcept;
 
     // Simple Perlin noise implementation (2D gradient noise)
-    static float perlin(float x, float y);
+    // noexcept: Pure arithmetic with static const lookup table
+    static float perlin(float x, float y) noexcept;
 
 private:
-    static float perlinOctaves(float x, float y, int octaves);
-    static float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
-    static float lerp(float a, float b, float t) { return a + t * (b - a); }
-    static float grad(int hash, float x, float y);
+    // noexcept: Pure arithmetic
+    static float perlinOctaves(float x, float y, int octaves) noexcept;
+    static float fade(float t) noexcept { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+    static float lerp(float a, float b, float t) noexcept { return a + t * (b - a); }
+    static float grad(int hash, float x, float y) noexcept;
 };
 
 } // namespace morphsnap

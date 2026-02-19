@@ -73,7 +73,7 @@ bool InterpolationEngine::hasSSESupport()
         hasSSE = (cpuInfo[3] & (1 << 26)) != 0;  // SSE2 bit
 #elif defined(__GNUC__) || defined(__clang__)
         unsigned int eax, ebx, ecx, edx;
-        if (__getcpuid(1, &eax, &ebx, &ecx, &edx))
+        if (__get_cpuid(1, &eax, &ebx, &ecx, &edx))
         {
             hasSSE = (edx & (1 << 26)) != 0;  // SSE2 bit
         }
@@ -88,7 +88,7 @@ bool InterpolationEngine::hasSSESupport()
 
 void InterpolationEngine::interpolateBatch_Scalar(
     const float* srcA, const float* srcB,
-    float* dest, float t, size_t count)
+    float* dest, float t, size_t count) noexcept
 {
     const float oneMinusT = 1.0f - t;
     for (size_t i = 0; i < count; ++i)
@@ -99,7 +99,7 @@ void InterpolationEngine::interpolateBatch_Scalar(
 
 void InterpolationEngine::interpolateBatch_SIMD(
     const float* srcA, const float* srcB,
-    float* dest, float t, size_t count)
+    float* dest, float t, size_t count) noexcept
 {
 #if defined(MORPHSNAP_USE_AVX)
     // AVX2 implementation - 8 floats at once
@@ -155,6 +155,9 @@ void InterpolationEngine::interpolateBatch_SIMD(
 
 // ── Clock Positions ────────────────────────────────────────────────────────────
 
+// FIX: Was incorrectly marked 'static const' meaning the lambda captured 'radius'
+// at first-call time and all subsequent calls silently returned stale positions.
+// Now computed fresh each call (12 trig ops — negligible overhead).
 std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float radius)
 {
     std::array<juce::Point<float>, 12> pos;
@@ -167,107 +170,144 @@ std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float 
     return pos;
 }
 
+// ── Retry helper ──────────────────────────────────────────────────────────────
+// Wraps the lock-free seqlock read with a bounded retry loop and a neutral
+// fallback on exhaustion. Both compute1D and compute2D use this pattern.
+// noexcept: tryReadLocked is noexcept, DBG and std::fill do not throw.
+template<typename Fn>
+static void computeWithRetry(const SnapshotBank& bank,
+                              std::vector<float>& output,
+                              const char* caller,
+                              Fn&& fn) noexcept
+{
+    constexpr int kMaxRetries = 5;
+    bool lockAcquired = false;
+
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt)
+    {
+        lockAcquired = bank.tryReadLocked(std::forward<Fn>(fn));
+        if (lockAcquired)
+            break;
+    }
+
+    if (!lockAcquired)
+    {
+        // Very rare: heavy write contention on the snapshot bank.
+        // Fill with neutral 0.5 to avoid undefined output on the audio thread.
+        DBG(juce::String(caller)
+            + " - lock acquisition failed after "
+            + juce::String(kMaxRetries)
+            + " retries, using neutral fallback");
+        std::fill(output.begin(), output.end(), 0.5f);
+    }
+}
+
 // ── 1D Interpolation (Fader Mode) ──────────────────────────────────────────────
 
 void InterpolationEngine::compute1D(float faderPos,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output)
+                                     std::vector<float>& output) noexcept
 {
-    // FIXED: Use std::array instead of std::vector to avoid allocation
-    // Track occupied slots in a fixed-size array (max 12 slots)
-    std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlots{};
-    int occupiedCount = 0;
-
-    for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
-    {
-        if (bank.isOccupied(i))
+    computeWithRetry(bank, output, "InterpolationEngine::compute1D",
+        [&output, faderPos](const auto& slots)
         {
-            occupiedSlots[occupiedCount++] = i;
-        }
-    }
+            std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlots{};
+            int occupiedCount = 0;
 
-    if (occupiedCount == 0) return;
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            {
+                if (slots[i].occupied)
+                    occupiedSlots[occupiedCount++] = i;
+            }
 
-    if (occupiedCount == 1)
-    {
-        const auto& vals = bank.getSlot(occupiedSlots[0]).values;
-        const size_t count = juce::jmin(vals.size(), output.size());
-        for (size_t p = 0; p < count; ++p)
-            output[p] = vals[p];
-        return;
-    }
+            if (occupiedCount == 0)
+                return;
 
-    // Map faderPos [0,1] across occupied slots
-    const float scaled = faderPos * static_cast<float>(occupiedCount - 1);
-    const int loIdx = juce::jlimit(0, occupiedCount - 1,
-                                   static_cast<int>(scaled));
-    const int hiIdx = juce::jmin(loIdx + 1, occupiedCount - 1);
-    const float alpha = scaled - static_cast<float>(loIdx);
+            if (occupiedCount == 1)
+            {
+                const auto& slot = slots[occupiedSlots[0]];
+                const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
+                for (size_t p = 0; p < count; ++p)
+                    output[p] = slot.data()[p];
+                return;
+            }
 
-    const auto& sLo = bank.getSlot(occupiedSlots[loIdx]).values;
-    const auto& sHi = bank.getSlot(occupiedSlots[hiIdx]).values;
+            // Map faderPos [0,1] across occupied slots
+            const float scaled = faderPos * static_cast<float>(occupiedCount - 1);
+            const int loIdx = juce::jlimit(0, occupiedCount - 1,
+                                           static_cast<int>(scaled));
+            const int hiIdx = juce::jmin(loIdx + 1, occupiedCount - 1);
+            const float alpha = scaled - static_cast<float>(loIdx);
 
-    const size_t count = juce::jmin(sLo.size(), sHi.size(), output.size());
+            const auto& sLo = slots[occupiedSlots[loIdx]];
+            const auto& sHi = slots[occupiedSlots[hiIdx]];
 
-    // Use SIMD interpolation for large batches
-    if (count >= 8)
-    {
-        interpolateBatch_SIMD(sLo.data(), sHi.data(), output.data(), alpha, count);
-    }
-    else
-    {
-        interpolateBatch_Scalar(sLo.data(), sHi.data(), output.data(), alpha, count);
-    }
+            const size_t count = juce::jmin(static_cast<size_t>(sLo.size()),
+                                            static_cast<size_t>(sHi.size()),
+                                            output.size());
+
+            if (count >= 8)
+                interpolateBatch_SIMD(sLo.data(), sHi.data(), output.data(), alpha, count);
+            else
+                interpolateBatch_Scalar(sLo.data(), sHi.data(), output.data(), alpha, count);
+        });
 }
 
 // ── 2D Interpolation (XY Pad Mode) ──────────────────────────────────────────────
 
 void InterpolationEngine::compute2D(float cursorX, float cursorY,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output)
+                                     std::vector<float>& output) noexcept
 {
     const auto positions = getClockPositions();
 
-    // FIXED: Use std::array for weights to avoid allocation
-    std::array<float, 12> weights{};
-    float totalWeight = 0.0f;
-
-    for (int i = 0; i < 12; ++i)
-    {
-        if (!bank.isOccupied(i)) continue;
-
-        const float dx = cursorX - positions[i].x;
-        const float dy = cursorY - positions[i].y;
-        const float dist = std::sqrt(dx * dx + dy * dy);
-
-        if (dist < kEpsilon)
+    computeWithRetry(bank, output, "InterpolationEngine::compute2D",
+        [&output, &positions, cursorX, cursorY](const auto& slots)
         {
-            // Cursor directly on snapshot — use it exclusively
-            const auto& vals = bank.getSlot(i).values;
-            const size_t count = juce::jmin(vals.size(), output.size());
-            for (size_t p = 0; p < count; ++p) output[p] = vals[p];
-            return;
-        }
+            std::array<float, SnapshotBank::NUM_SLOTS> weights{};
+            float totalWeight = 0.0f;
 
-        weights[i] = 1.0f / std::pow(dist, kIDWPower);
-        totalWeight += weights[i];
-    }
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            {
+                if (!slots[i].occupied)
+                    continue;
 
-    if (totalWeight < kEpsilon) return;
+                const float dx = cursorX - positions[i].x;
+                const float dy = cursorY - positions[i].y;
+                const float dist = std::sqrt(dx * dx + dy * dy);
 
-    std::fill(output.begin(), output.end(), 0.0f);
+                if (dist < kEpsilon)
+                {
+                    // Cursor directly on snapshot — use it exclusively
+                    const auto& slot = slots[i];
+                    const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
+                    for (size_t p = 0; p < count; ++p)
+                        output[p] = slot.data()[p];
+                    return;
+                }
 
-    for (int i = 0; i < 12; ++i)
-    {
-        if (!bank.isOccupied(i)) continue;
-        const float w = weights[i] / totalWeight;
-        const auto& vals = bank.getSlot(i).values;
-        const size_t count = juce::jmin(vals.size(), output.size());
+                weights[i] = 1.0f / (dist * dist);   // IDW power=2, avoid std::pow overhead
+                totalWeight += weights[i];
+            }
 
-        // Weighted accumulation - scalar is fine here (multiple sources)
-        for (size_t p = 0; p < count; ++p)
-            output[p] += vals[p] * w;
-    }
+            if (totalWeight < kEpsilon)
+                return;
+
+            std::fill(output.begin(), output.end(), 0.0f);
+
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            {
+                if (!slots[i].occupied)
+                    continue;
+
+                const float w = weights[i] / totalWeight;
+                const auto& slot = slots[i];
+                const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
+
+                for (size_t p = 0; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+            }
+        });
 }
 
 } // namespace morphsnap

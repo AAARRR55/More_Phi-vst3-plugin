@@ -1,0 +1,5 @@
+﻿Filters: [physics],[genetic]
+Randomness seeded to: 859283736
+===============================================================================
+All tests passed (286 assertions in 18 test cases)
+

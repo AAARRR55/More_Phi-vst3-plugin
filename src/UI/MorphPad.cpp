@@ -27,7 +27,12 @@ void MorphPad::mouseUp(const juce::MouseEvent&) { dragging_ = false; }
 void MorphPad::mouseDoubleClick(const juce::MouseEvent& e)
 {
     // Find nearest empty slot and capture
-    int slot = findNearestSlotToPoint(e.position);
+    const auto bounds = getLocalBounds().toFloat();
+    const juce::Point<float> normalizedPoint{
+        juce::jlimit(0.0f, 1.0f, e.position.x / bounds.getWidth()),
+        juce::jlimit(0.0f, 1.0f, e.position.y / bounds.getHeight())
+    };
+    int slot = findNearestSlotToPoint(normalizedPoint);
     captureSnapshotAtSlot(slot);
 }
 
@@ -52,8 +57,8 @@ void MorphPad::setVisualizationMode(int modeIndex)
 void MorphPad::timerCallback()
 {
     // Update trail points from audio-thread trail
-    float x = proc_.morphX.load(std::memory_order_relaxed);
-    float y = proc_.morphY.load(std::memory_order_relaxed);
+    float x = proc_.getMorphX();
+    float y = proc_.getMorphY();
     juce::Point<float> currentPos{x, y};
 
     if (lastTrailPoint_.getDistanceFrom(currentPos) > 0.01f)
@@ -93,7 +98,7 @@ int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
 
     for (int i = 0; i < 12; ++i)
     {
-        // Map clock position to screen coordinates (0-1 range)
+        // Map clock position to normalized coordinates (0..1)
         float screenX = (positions[i].x + 1.0f) * 0.5f;
         float screenY = (positions[i].y + 1.0f) * 0.5f;
         float dist = point.getDistanceFrom({screenX, screenY});
@@ -192,10 +197,10 @@ void MorphPad::paint(juce::Graphics& g)
     g.fillEllipse(cx - 5, cy - 5, 10, 10);
 
     // Raw input position (faint, shows where you're dragging)
-    if (proc_.physicsMode.load() > 0)  // Only in physics modes
+    if (proc_.getPhysicsMode() > 0)  // Only in physics modes
     {
-        float rawCx = centre.x + (proc_.morphX.load() * 2.0f - 1.0f) * radius;
-        float rawCy = centre.y + (proc_.morphY.load() * 2.0f - 1.0f) * radius;
+        float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
+        float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
         g.setColour(juce::Colour(0xff888888).withAlpha(0.4f));
         g.fillEllipse(rawCx - 3, rawCy - 3, 6, 6);
     }
@@ -209,9 +214,9 @@ void MorphPad::updatePosition(juce::Point<float> pos)
     auto bounds = getLocalBounds().toFloat();
     float x = juce::jlimit(0.0f, 1.0f, pos.x / bounds.getWidth());
     float y = juce::jlimit(0.0f, 1.0f, pos.y / bounds.getHeight());
-    proc_.morphX.store(x, std::memory_order_relaxed);
-    proc_.morphY.store(y, std::memory_order_relaxed);
-    proc_.morphSource.store(0, std::memory_order_relaxed);  // XY mode
+    proc_.setMorphX(x);
+    proc_.setMorphY(y);
+    proc_.setMorphSource(0);  // XY mode
     repaint();
 }
 

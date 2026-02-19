@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  build-windows:
+    name: Windows (MSVC / Release)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DMORPHSNAP_BUILD_TESTS=ON `
+            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Run Tests
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure --parallel 4
+
+  build-macos:
+    name: macOS (Clang / Release)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMORPHSNAP_BUILD_TESTS=ON \
+            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Run Tests
+        working-directory: build
+        run: ctest --build-config Release --output-on-failure --parallel 4
+
+  asan-linux:
+    name: Linux (Clang / Debug + ASAN + UBSAN)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Clang + JUCE dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            clang lld \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libfreetype-dev libasound2-dev \
+            libwebkit2gtk-4.1-dev
+
+      - name: Configure CMake (Debug + ASAN/UBSAN)
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DMORPHSNAP_BUILD_TESTS=ON \
+            -DMORPHSNAP_ENABLE_SANITIZERS=ON \
+            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build tests only
+        run: cmake --build build --target MorphSnapTests --parallel $(nproc)
+
+      - name: Run Tests under ASAN/UBSAN
+        working-directory: build
+        env:
+          ASAN_OPTIONS: "halt_on_error=1:detect_leaks=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: ctest --build-config Debug --output-on-failure --parallel 4
+

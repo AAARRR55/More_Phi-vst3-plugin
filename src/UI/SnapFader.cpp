@@ -52,7 +52,7 @@ void SnapFader::paint(juce::Graphics& g)
     }
 
     // Filled portion (from bottom to thumb)
-    float faderPos = proc_.faderPos.load(std::memory_order_relaxed);
+    float faderPos = proc_.getFaderPos();
     float thumbY = trackTop + (1.0f - faderPos) * trackH;
 
     g.setColour(juce::Colour(0xffec415d).withAlpha(0.6f));
@@ -79,8 +79,8 @@ void SnapFader::updateValue(float yPos)
     float normalised = 1.0f - juce::jlimit(0.0f, 1.0f,
         (yPos - trackTop) / (trackBot - trackTop));
 
-    proc_.faderPos.store(normalised, std::memory_order_relaxed);
-    proc_.morphSource.store(1, std::memory_order_relaxed);  // Switch to fader mode
+    proc_.setFaderPos(normalised);
+    proc_.setMorphSource(1);  // Switch to fader mode
     repaint();
 }
 

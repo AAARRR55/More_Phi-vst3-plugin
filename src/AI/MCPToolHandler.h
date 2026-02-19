@@ -1,6 +1,7 @@
 /*
  * MorphSnap — AI/MCPToolHandler.h
  * Dispatches MCP tool calls to plugin subsystems.
+ * Instance-aware: includes identity context in responses.
  */
 #pragma once
 
@@ -9,13 +10,15 @@
 namespace morphsnap {
 
 class MorphSnapProcessor;
+struct InstanceIdentity;
 
 class MCPToolHandler
 {
 public:
     static juce::String handle(const juce::String& method,
                                const juce::var& params,
-                               MorphSnapProcessor& processor);
+                               MorphSnapProcessor& processor,
+                               const InstanceIdentity& identity);
 
 private:
     static juce::String getPluginInfo(MorphSnapProcessor& p);
@@ -27,6 +30,10 @@ private:
     static juce::String recallSnapshot(const juce::var& params, MorphSnapProcessor& p);
     static juce::String setMorphPosition(const juce::var& params, MorphSnapProcessor& p);
     static juce::String getMorphState(MorphSnapProcessor& p);
+
+    // Multi-instance tools
+    static juce::String getInstanceInfo(const InstanceIdentity& id);
+    static juce::String listInstances();
 };
 
 } // namespace morphsnap

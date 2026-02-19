@@ -22,8 +22,7 @@ ModeBar::ModeBar(MorphSnapProcessor& p) : proc_(p)
     smoothSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     smoothSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 18);
     smoothSlider_.onValueChange = [this]() {
-        proc_.smoothingRate.store(static_cast<float>(smoothSlider_.getValue()),
-                                  std::memory_order_relaxed);
+        proc_.setSmoothingRate(static_cast<float>(smoothSlider_.getValue()));
     };
     addAndMakeVisible(smoothSlider_);
 
@@ -65,7 +64,7 @@ void ModeBar::updateSelection()
         if (modeButtons_[i].getToggleState())
         {
             currentMode_ = i;
-            proc_.physicsMode.store(i, std::memory_order_relaxed);
+            proc_.setPhysicsMode(i);
             break;
         }
     }

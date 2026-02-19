@@ -11,7 +11,7 @@ namespace morphsnap {
 
 void PhysicsEngine::updateElastic(ElasticState& s,
                                    float targetX, float targetY,
-                                   ElasticPreset preset, float dt)
+                                   ElasticPreset preset, float dt) noexcept
 {
     float stiffness, damping;
     switch (preset)
@@ -63,7 +63,7 @@ static const int perm[512] = {
     222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180
 };
 
-float PhysicsEngine::grad(int hash, float x, float y)
+float PhysicsEngine::grad(int hash, float x, float y) noexcept
 {
     const int h = hash & 3;
     const float u = h < 2 ? x : y;
@@ -71,12 +71,16 @@ float PhysicsEngine::grad(int hash, float x, float y)
     return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
 }
 
-float PhysicsEngine::perlin(float x, float y)
+float PhysicsEngine::perlin(float x, float y) noexcept
 {
-    const int xi = static_cast<int>(std::floor(x)) & 255;
-    const int yi = static_cast<int>(std::floor(y)) & 255;
-    const float xf = x - std::floor(x);
-    const float yf = y - std::floor(y);
+    // Cache floor values — each was previously computed twice (once for int cast,
+    // once for fractional part). Now computed once per coordinate.
+    const float fx = std::floor(x);
+    const float fy = std::floor(y);
+    const int xi = static_cast<int>(fx) & 255;
+    const int yi = static_cast<int>(fy) & 255;
+    const float xf = x - fx;
+    const float yf = y - fy;
     const float u = fade(xf);
     const float v = fade(yf);
 
@@ -90,7 +94,7 @@ float PhysicsEngine::perlin(float x, float y)
                 v);
 }
 
-float PhysicsEngine::perlinOctaves(float x, float y, int octaves)
+float PhysicsEngine::perlinOctaves(float x, float y, int octaves) noexcept
 {
     float value = 0.0f, amplitude = 1.0f, frequency = 1.0f;
     float maxAmplitude = 0.0f;
@@ -109,7 +113,7 @@ float PhysicsEngine::perlinOctaves(float x, float y, int octaves)
 void PhysicsEngine::updateDrift(float& outX, float& outY,
                                  float time, float speed, float distance,
                                  float chaos, DriftMode mode,
-                                 float anchorX, float anchorY, float gravity)
+                                 float anchorX, float anchorY, float gravity) noexcept
 {
     const int octaves = std::clamp(static_cast<int>(chaos * 6.0f) + 1, 1, 6);
     const float nx = perlinOctaves(time * speed, 0.5f, octaves) * distance;

@@ -4,7 +4,7 @@
 #include "BreedingPanel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/SnapshotBank.h"
-#include "Host/ParameterBridge.h"
+#include <array>
 #include <vector>
 
 namespace morphsnap {
@@ -49,28 +49,27 @@ void BreedingPanel::resized()
 void BreedingPanel::breedSnapshots()
 {
     auto& bank = proc_.getSnapshotBank();
-    auto& bridge = proc_.getParameterBridge();
-
-    std::vector<int> occupied;
-    for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
-    {
-        if (bank.isOccupied(i))
-            occupied.push_back(i);
-    }
-
-    if (occupied.size() < 2)
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    const int occupiedCount = bank.getOccupiedSlots(occupied);
+    if (occupiedCount < 2)
     {
         statusLabel_.setText("Need at least 2 snapshots to breed", juce::dontSendNotification);
         return;
     }
 
-    const int parentA = occupied[static_cast<size_t>(random_.nextInt(static_cast<int>(occupied.size())))];
+    const int parentA = occupied[static_cast<size_t>(random_.nextInt(occupiedCount))];
     int parentB = parentA;
     while (parentB == parentA)
-        parentB = occupied[static_cast<size_t>(random_.nextInt(static_cast<int>(occupied.size())))];
+        parentB = occupied[static_cast<size_t>(random_.nextInt(occupiedCount))];
 
-    const auto& a = bank.getSlot(parentA).values;
-    const auto& b = bank.getSlot(parentB).values;
+    std::vector<float> a;
+    std::vector<float> b;
+    if (!bank.getSlotValuesCopy(parentA, a) || !bank.getSlotValuesCopy(parentB, b))
+    {
+        statusLabel_.setText("Failed to read parent snapshots", juce::dontSendNotification);
+        return;
+    }
+
     const int count = juce::jmin(static_cast<int>(a.size()), static_cast<int>(b.size()));
     if (count <= 0)
     {
@@ -84,10 +83,15 @@ void BreedingPanel::breedSnapshots()
         blended[static_cast<size_t>(i)] = a[static_cast<size_t>(i)] * (1.0f - alpha)
                                         + b[static_cast<size_t>(i)] * alpha;
 
-    bridge.applyParameterState(blended);
+    const int queued = proc_.enqueueParameterState(blended);
+    if (queued != count)
+    {
+        statusLabel_.setText("Queue full: partial blend applied", juce::dontSendNotification);
+        return;
+    }
 
     const int targetSlot = findNextEmptySlot();
-    bank.getSlot(targetSlot).capture(blended.data(), count);
+    bank.captureValues(targetSlot, blended);
 
     statusLabel_.setText("Bred slot " + juce::String(targetSlot + 1)
                              + " from " + juce::String(parentA + 1)
@@ -98,40 +102,37 @@ void BreedingPanel::breedSnapshots()
 void BreedingPanel::mutateSnapshot()
 {
     auto& bank = proc_.getSnapshotBank();
-    auto& bridge = proc_.getParameterBridge();
-
-    std::vector<int> occupied;
-    for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
-    {
-        if (bank.isOccupied(i))
-            occupied.push_back(i);
-    }
-
-    if (occupied.empty())
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    const int occupiedCount = bank.getOccupiedSlots(occupied);
+    if (occupiedCount <= 0)
     {
         statusLabel_.setText("Capture a snapshot before mutating", juce::dontSendNotification);
         return;
     }
 
-    const int sourceSlot = occupied[static_cast<size_t>(random_.nextInt(static_cast<int>(occupied.size())))];
-    const auto& sourceValues = bank.getSlot(sourceSlot).values;
-    if (sourceValues.empty())
+    const int sourceSlot = occupied[static_cast<size_t>(random_.nextInt(occupiedCount))];
+    std::vector<float> mutated;
+    if (!bank.getSlotValuesCopy(sourceSlot, mutated) || mutated.empty())
     {
         statusLabel_.setText("Selected snapshot has no parameters", juce::dontSendNotification);
         return;
     }
 
-    std::vector<float> mutated = sourceValues;
     for (auto& value : mutated)
     {
         const float delta = (random_.nextFloat() - 0.5f) * 0.12f;
         value = juce::jlimit(0.0f, 1.0f, value + delta);
     }
 
-    bridge.applyParameterState(mutated);
+    const int queued = proc_.enqueueParameterState(mutated);
+    if (queued != static_cast<int>(mutated.size()))
+    {
+        statusLabel_.setText("Queue full: partial mutation applied", juce::dontSendNotification);
+        return;
+    }
 
     const int targetSlot = findNextEmptySlot();
-    bank.getSlot(targetSlot).capture(mutated.data(), static_cast<int>(mutated.size()));
+    bank.captureValues(targetSlot, mutated);
 
     statusLabel_.setText("Mutated slot " + juce::String(sourceSlot + 1)
                              + " into slot " + juce::String(targetSlot + 1),
@@ -143,9 +144,9 @@ void BreedingPanel::randomizeMorphPosition()
     const float x = random_.nextFloat();
     const float y = random_.nextFloat();
 
-    proc_.morphX.store(x, std::memory_order_relaxed);
-    proc_.morphY.store(y, std::memory_order_relaxed);
-    proc_.morphSource.store(0, std::memory_order_relaxed);
+    proc_.setMorphX(x);
+    proc_.setMorphY(y);
+    proc_.setMorphSource(0);
 
     if (auto* px = proc_.getAPVTS().getParameter("morphX"))
         px->setValueNotifyingHost(x);

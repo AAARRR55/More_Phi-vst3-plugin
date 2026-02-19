@@ -1,11 +1,13 @@
 /*
  * MorphSnap — AI/MCPServer.h
  * Embedded MCP JSON-RPC 2.0 server for AI client connectivity.
+ * Multi-instance aware: unique port, bearer auth, morph identity.
+ * Includes automatic recovery and error resilience.
  */
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include "Core/LockFreeQueue.h"
+#include "InstanceIdentity.h"
 #include <atomic>
 
 namespace morphsnap {
@@ -18,25 +20,48 @@ public:
     explicit MCPServer(MorphSnapProcessor& processor);
     ~MCPServer() override;
 
+    /** Start on the port from the assigned identity. */
     void startServer(int port = 30001);
     void stopServer();
 
     bool isRunning() const { return isThreadRunning(); }
-    int  getPort() const   { return port_; }
+    int  getPort() const   { return identity_.port > 0 ? identity_.port : port_; }
     int  getConnectedClients() const { return connectedClients_.load(); }
-    const juce::String& getAuthToken() const { return authToken_; }
+    
+    /** Health status for monitoring */
+    bool isHealthy() const { return healthy_.load(); }
+    int  getErrorCount() const { return errorCount_.load(); }
+    void resetErrorCount() { errorCount_.store(0); }
+
+    /** Get/set the instance identity (must be set before startServer). */
+    void setIdentity(const InstanceIdentity& id) { identity_ = id; }
+    const InstanceIdentity& getIdentity() const  { return identity_; }
+
+    /** Legacy accessor — returns identity's bearer token. */
+    const juce::String& getAuthToken() const { return identity_.bearerToken; }
 
 private:
     void run() override;
     void handleConnection(juce::StreamingSocket* client);
-    juce::String processRequest(const juce::String& jsonRequest);
+    juce::String processRequest(const juce::String& jsonRequest, bool& authenticated);
     juce::String dispatchTool(const juce::String& method, const juce::var& params);
+    bool validateAuth(const juce::var& params);
+    
+    // Error recovery helpers
+    bool attemptRecovery();
+    void logError(const juce::String& context, const juce::String& details = {});
 
     MorphSnapProcessor& processor_;
     juce::StreamingSocket serverSocket_;
     int port_ = 30001;
-    juce::String authToken_;
+    InstanceIdentity identity_;
     std::atomic<int> connectedClients_{0};
+    std::atomic<bool> healthy_{false};
+    std::atomic<int> errorCount_{0};
+    
+    // Recovery configuration
+    static constexpr int MAX_CONSECUTIVE_ERRORS = 5;
+    static constexpr int RECOVERY_DELAY_MS = 1000;
 };
 
 } // namespace morphsnap

@@ -1,6 +1,9 @@
 # Build artifacts
 build/
 build2/
+build_*/
+audit_build*/
+build_ninja/
 out/
 cmake-build-*/
 

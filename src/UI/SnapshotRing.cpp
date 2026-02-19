@@ -29,7 +29,7 @@ void SnapshotRing::mouseDown(const juce::MouseEvent& e)
     {
         // Left-click: recall this slot if occupied
         if (bank.isOccupied(slot))
-            bank.recall(slot, proc_.getParameterBridge());
+            proc_.recallSnapshotQueued(slot);
     }
 
     repaint();

@@ -5,6 +5,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Core/AllocationTracker.h"
+#include "AI/InstanceRegistry.h"
 
 namespace morphsnap {
 
@@ -29,15 +30,57 @@ MorphSnapProcessor::MorphSnapProcessor()
 
     midiRouter.setMorphCallback([this](float value)
     {
-        faderPos.store(value, std::memory_order_relaxed);
-        morphSource.store(1, std::memory_order_relaxed);  // Switch to fader mode
+        setFaderPos(value);
+        setMorphSource(1);  // Switch to fader mode
     });
 }
 
 MorphSnapProcessor::~MorphSnapProcessor()
 {
     mcpServer.stopServer();
+    InstanceRegistry::getInstance().deregisterInstance(instanceIdentity_.instanceId);
     hostManager.unloadPlugin();
+}
+
+bool MorphSnapProcessor::enqueueParameterSet(int paramIndex, float normalizedValue)
+{
+    const std::lock_guard<std::mutex> guard(commandQueueProducerMutex_);
+    return commandQueue.push(ParamCommand{
+        paramIndex,
+        juce::jlimit(0.0f, 1.0f, normalizedValue)
+    });
+}
+
+int MorphSnapProcessor::enqueueParameterState(const std::vector<float>& normalizedValues)
+{
+    const std::lock_guard<std::mutex> guard(commandQueueProducerMutex_);
+    const int count = static_cast<int>(normalizedValues.size());
+    if (count <= 0)
+        return 0;
+
+    if (static_cast<size_t>(count) > commandQueue.freeSpaceApprox())
+        return 0;
+
+    int queued = 0;
+    for (int i = 0; i < count; ++i)
+    {
+        if (!commandQueue.push(ParamCommand{
+                i,
+                juce::jlimit(0.0f, 1.0f, normalizedValues[static_cast<size_t>(i)])
+            }))
+            return queued;
+        ++queued;
+    }
+    return queued;
+}
+
+bool MorphSnapProcessor::recallSnapshotQueued(int slot)
+{
+    std::vector<float> values;
+    if (!snapshotBank.getSlotValuesCopy(slot, values))
+        return false;
+
+    return enqueueParameterState(values) == static_cast<int>(values.size());
 }
 
 // ── Parameter Layout ─────────────────────────────────────────────────────────
@@ -95,9 +138,16 @@ void MorphSnapProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     morphProcessor.prepare(2048);  // Max expected param count
     morphOutput.resize(2048, 0.0f);
 
-    // Auto-start MCP server
+    // Pre-allocate snapshot bank scratch buffers (real-time safety)
+    snapshotBank.prepare(2048);
+
+    // Auto-start MCP server with unique port from InstanceRegistry
     if (!mcpServer.isRunning())
-        mcpServer.startServer(30001);
+    {
+        instanceIdentity_ = InstanceRegistry::getInstance().registerInstance();
+        mcpServer.setIdentity(instanceIdentity_);
+        mcpServer.startServer(instanceIdentity_.port);
+    }
 
     prepared = true;
 }
@@ -133,8 +183,13 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 1) Drain command queue (MCP/LLM → audio thread)
     ParamCommand cmd;
-    while (commandQueue.pop(cmd))
+    constexpr int kMaxCommandDrainsPerBlock = 1024;
+    int drainedCommands = 0;
+    while (drainedCommands < kMaxCommandDrainsPerBlock && commandQueue.pop(cmd))
+    {
         paramBridge.setParameterNormalized(cmd.paramIndex, cmd.value);
+        ++drainedCommands;
+    }
 
     // 2) Process MIDI: filter trigger notes, pass rest through
     juce::MidiBuffer filteredMidi;
@@ -142,11 +197,11 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 3) Sync physics tuning from atomics
     morphProcessor.setElasticPreset(
-        static_cast<ElasticPreset>(elasticPreset.load(std::memory_order_relaxed)));
-    morphProcessor.setDriftSpeed(driftSpeed.load(std::memory_order_relaxed));
-    morphProcessor.setDriftDistance(driftDistance.load(std::memory_order_relaxed));
-    morphProcessor.setDriftChaos(driftChaos.load(std::memory_order_relaxed));
-    morphProcessor.setSmoothingRate(smoothingRate.load(std::memory_order_relaxed));
+        static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)));
+    morphProcessor.setDriftSpeed(driftSpeed_.load(std::memory_order_relaxed));
+    morphProcessor.setDriftDistance(driftDistance_.load(std::memory_order_relaxed));
+    morphProcessor.setDriftChaos(driftChaos_.load(std::memory_order_relaxed));
+    morphProcessor.setSmoothingRate(smoothingRate_.load(std::memory_order_relaxed));
 
     // 4) Compute morph target values through physics pipeline
     const int paramCount = paramBridge.getParameterCount();
@@ -161,12 +216,12 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         const float dt = static_cast<float>(currentBlockSize) /
                          static_cast<float>(currentSampleRate);
         const auto source = static_cast<MorphSource>(
-            morphSource.load(std::memory_order_relaxed));
+            morphSource_.load(std::memory_order_relaxed));
         const auto mode = static_cast<MorphMode>(
-            physicsMode.load(std::memory_order_relaxed));
-        const float mx = morphX.load(std::memory_order_relaxed);
-        const float my = morphY.load(std::memory_order_relaxed);
-        const float fp = faderPos.load(std::memory_order_relaxed);
+            physicsMode_.load(std::memory_order_relaxed));
+        const float mx = morphX_.load(std::memory_order_relaxed);
+        const float my = morphY_.load(std::memory_order_relaxed);
+        const float fp = faderPos_.load(std::memory_order_relaxed);
 
         morphProcessor.process(mx, my, fp, source, mode, dt, morphOutput);
 
@@ -180,8 +235,7 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 6) RMS for UI visualization
     if (buffer.getNumChannels() > 0)
-        rmsLevel.store(buffer.getRMSLevel(0, 0, buffer.getNumSamples()),
-                       std::memory_order_relaxed);
+        setRmsLevel(buffer.getRMSLevel(0, 0, buffer.getNumSamples()));
 }
 
 // ── State Persistence ────────────────────────────────────────────────────────
@@ -190,19 +244,52 @@ void MorphSnapProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     auto xml = state.createXml();
-    if (xml) copyXmlToBinary(*xml, destData);
+    if (!xml) return;
+
+    // Embed the hosted plugin description so we can reopen it on restore
+    if (auto* desc = hostManager.getLastDescription())
+    {
+        auto descXml = desc->createXml();
+        if (descXml)
+        {
+            descXml->setTagName("HOSTED_PLUGIN");
+            xml->addChildElement(descXml.release());
+        }
+    }
+
+    copyXmlToBinary(*xml, destData);
 }
 
 void MorphSnapProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary(data, sizeInBytes))
+    auto xml = getXmlFromBinary(data, sizeInBytes);
+    if (!xml) return;
+
+    // Restore APVTS parameters
+    if (xml->hasTagName(apvts.state.getType()))
+        apvts.replaceState(juce::ValueTree::fromXml(*xml));
+    else
+        DBG("MorphSnapProcessor::setStateInformation — skipping APVTS restore: root tag '" +
+            xml->getTagName() + "' does not match '" + apvts.state.getType().toString() + "'");
+
+    // Restore the hosted plugin — must happen on message thread
+    if (auto* descXml = xml->getChildByName("HOSTED_PLUGIN"))
     {
-        if (xml->hasTagName(apvts.state.getType()))
-            apvts.replaceState(juce::ValueTree::fromXml(*xml));
+        juce::PluginDescription desc;
+        if (desc.loadFromXml(*descXml))
+        {
+            // Defer to message thread to avoid audio-thread plugin loading
+            juce::WeakReference<MorphSnapProcessor> weakThis(this);
+            juce::MessageManager::callAsync([weakThis, desc]()
+            {
+                if (weakThis != nullptr)
+                    weakThis->getHostManager().loadPlugin(desc);
+            });
+        }
     }
 }
 
-// ── Editor ───────────────────────────────────────────────────────────────────
+// ── Editor ────────────────────────────────────────────────────────────────────────────
 
 juce::AudioProcessorEditor* MorphSnapProcessor::createEditor()
 {
@@ -216,3 +303,4 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new morphsnap::MorphSnapProcessor();
 }
+

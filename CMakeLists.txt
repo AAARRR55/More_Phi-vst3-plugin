@@ -3,6 +3,9 @@ project(MorphSnap VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(MORPHSNAP_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder after build" OFF)
+option(MORPHSNAP_BUILD_TESTS "Configure and build tests in tests/." ON)
+option(MORPHSNAP_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
 
 # Windows: 4 MB stack for plugin-in-plugin hosting (FL Studio compat)
 if(WIN32)
@@ -18,19 +21,39 @@ FetchContent_Declare(juce
 )
 FetchContent_MakeAvailable(juce)
 
+# ── nlohmann/json (header-only) ──────────────────────────────────────────────
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
+# Patch JUCE headers that conflict with Windows macros on MSVC
+include(cmake/PatchJuceForMSVC.cmake)
+
+
+# Plugin formats: AU is macOS-only, do not emit it on other platforms
+if(APPLE)
+    set(MORPHSNAP_PLUGIN_FORMATS VST3 AU)
+else()
+    set(MORPHSNAP_PLUGIN_FORMATS VST3)
+endif()
+
 # ── Plugin Target ─────────────────────────────────────────────────────────────
 juce_add_plugin(MorphSnap
     COMPANY_NAME            "MorphSnap"
     PLUGIN_MANUFACTURER_CODE Mrph
     PLUGIN_CODE              Mrps
-    FORMATS                  VST3 AU
+    FORMATS                  ${MORPHSNAP_PLUGIN_FORMATS}
     PRODUCT_NAME             "MorphSnap"
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
     IS_MIDI_EFFECT           FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    COPY_PLUGIN_AFTER_BUILD  TRUE
+    COPY_PLUGIN_AFTER_BUILD  ${MORPHSNAP_COPY_PLUGIN_AFTER_BUILD}
     VST3_CATEGORIES          "Fx" "Tools"
 )
 
@@ -62,6 +85,7 @@ set(MORPHSNAP_CORE_SOURCES
 set(MORPHSNAP_HOST_SOURCES
     src/Host/PluginScanner.h
     src/Host/PluginScanner.cpp
+    src/Host/IPluginHostManager.h
     src/Host/PluginHostManager.h
     src/Host/PluginHostManager.cpp
     src/Host/ParameterBridge.h
@@ -69,6 +93,9 @@ set(MORPHSNAP_HOST_SOURCES
 )
 
 set(MORPHSNAP_AI_SOURCES
+    src/AI/InstanceIdentity.h
+    src/AI/InstanceRegistry.h
+    src/AI/InstanceRegistry.cpp
     src/AI/MCPServer.h
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
@@ -131,7 +158,6 @@ target_include_directories(MorphSnap PRIVATE
 target_link_libraries(MorphSnap
     PRIVATE
         juce::juce_audio_basics
-        juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_audio_plugin_client
         juce::juce_audio_processors
@@ -143,6 +169,7 @@ target_link_libraries(MorphSnap
         juce::juce_graphics
         juce::juce_gui_basics
         juce::juce_gui_extra
+        nlohmann_json::nlohmann_json
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
@@ -156,5 +183,15 @@ target_compile_definitions(MorphSnap
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_PLUGINHOST_VST3=1
-        JUCE_PLUGINHOST_AU=1
+        JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
+
+if(APPLE)
+    target_compile_definitions(MorphSnap PUBLIC JUCE_PLUGINHOST_AU=1)
+endif()
+
+
+if(MORPHSNAP_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

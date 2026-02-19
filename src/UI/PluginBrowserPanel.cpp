@@ -73,15 +73,20 @@ void PluginBrowserPanel::showPluginListDialog()
     if (!scanDone_)
     {
         scanDone_ = true;
+        auto safeThis = juce::Component::SafePointer<PluginBrowserPanel>(this);
         // Scan in background thread to avoid blocking UI
-        juce::Thread::launch([this]()
+        juce::Thread::launch([safeThis]()
         {
-            host_.scanPluginFolders();
+            if (safeThis == nullptr)
+                return;
+
+            safeThis->host_.scanPluginFolders();
 
             // After scan completes, show the list on the message thread
-            juce::MessageManager::callAsync([this]()
+            juce::MessageManager::callAsync([safeThis]()
             {
-                showPluginListDialog();
+                if (safeThis != nullptr)
+                    safeThis->showPluginListDialog();
             });
         });
         pluginNameLabel_.setText("Scanning plugins...", juce::dontSendNotification);
@@ -106,11 +111,12 @@ void PluginBrowserPanel::showPluginListDialog()
         menu.addItem(i + 1, desc.name + " (" + desc.pluginFormatName + ")");
     }
 
+    auto safeThis = juce::Component::SafePointer<PluginBrowserPanel>(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(loadBtn_),
-        [this, types](int result)
+        [safeThis, types](int result)
         {
-            if (result > 0 && result <= types.size())
-                loadSelectedPlugin(types.getReference(result - 1));
+            if (safeThis != nullptr && result > 0 && result <= types.size())
+                safeThis->loadSelectedPlugin(types.getReference(result - 1));
         });
 }
 

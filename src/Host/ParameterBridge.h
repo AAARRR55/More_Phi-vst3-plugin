@@ -1,33 +1,37 @@
 /*
  * MorphSnap — Host/ParameterBridge.h
  * Read/write hosted plugin parameters by normalized index.
+ * Implements IParameterBridge for testability.
  */
 #pragma once
 
-#include "PluginHostManager.h"
+#include "IPluginHostManager.h"
 #include <vector>
 
 namespace morphsnap {
 
-class ParameterBridge
+class ParameterBridge : public IParameterBridge
 {
 public:
-    explicit ParameterBridge(PluginHostManager& host) : host_(host) {}
+    explicit ParameterBridge(IPluginHostManager& host) : host_(host) {}
 
-    int getParameterCount() const;
-    float getParameterNormalized(int index) const;
-    void  setParameterNormalized(int index, float value);
+    // IParameterBridge implementation
+    int getParameterCount() const override;
+    float getParameterNormalized(int index) const override;
+    void setParameterNormalized(int index, float value) override;
+    juce::String getParameterName(int index) const override;
 
-    juce::String getParameterName(int index) const;
+    // Apply contiguous normalized values [0,1] to hosted plugin
+    void applyParameterState(const float* values, int count) override;
 
     // Apply a full state vector to the hosted plugin
-    void applyParameterState(const std::vector<float>& values);
+    void applyParameterState(const std::vector<float>& values) override;
 
     // Read all current values into a vector
-    std::vector<float> captureParameterState() const;
+    std::vector<float> captureParameterState() const override;
 
 private:
-    PluginHostManager& host_;
+    IPluginHostManager& host_;
 };
 
 } // namespace morphsnap

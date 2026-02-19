@@ -1,9 +1,19 @@
 /*
  * MorphSnap — Core/MorphProcessor.cpp
+ * SIMD-optimized smoothing for real-time performance.
  */
 #include "MorphProcessor.h"
 #include <cmath>
 #include <algorithm>
+
+// SIMD headers
+#if defined(__AVX2__)
+    #include <immintrin.h>
+    #define MORPHSNAP_USE_AVX 1
+#elif defined(__SSE2__) || (defined(_MSC_VER) && defined(_M_X64))
+    #include <emmintrin.h>
+    #define MORPHSNAP_USE_SSE 1
+#endif
 
 namespace morphsnap {
 
@@ -23,7 +33,7 @@ void MorphProcessor::prepare(int maxParamCount)
 
 void MorphProcessor::process(float rawX, float rawY, float faderPos,
                               MorphSource source, MorphMode mode,
-                              float dt, std::vector<float>& output)
+                              float dt, std::vector<float>& output) noexcept
 {
     if (!prepared_ || !bank_.hasAnyOccupied()) return;
 
@@ -46,7 +56,7 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
         processedY_ = 0.0f;
     }
 
-    // 2) Apply per-parameter smoothing
+    // 2) Apply per-parameter smoothing (SIMD optimized)
     applySmoothing(output);
 
     // 3) Update cursor trail for visualization
@@ -59,7 +69,8 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
             (processedX_ + 1.0f) * 0.5f,
             (processedY_ + 1.0f) * 0.5f
         };
-        trailHead_ = (trailHead_ + 1) % TRAIL_SIZE;
+        trailHead_.store((trailHead_.load(std::memory_order_relaxed) + 1) % TRAIL_SIZE,
+                         std::memory_order_relaxed);
     }
 }
 
@@ -95,17 +106,74 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
 void MorphProcessor::applySmoothing(std::vector<float>& output)
 {
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
-    // If output is larger, we just smooth what we can (defensive programming)
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());
 
     const float rate = smoothRate_;
     const float oneMinusRate = 1.0f - rate;
 
+#if defined(MORPHSNAP_USE_AVX)
+    // AVX2 SIMD path - 8 floats at once
+    __m256 rateVec = _mm256_set1_ps(rate);
+    __m256 oneMinusRateVec = _mm256_set1_ps(oneMinusRate);
+    
+    const size_t simdCount = maxSmoothable - (maxSmoothable % 8);
+    
+    for (size_t i = 0; i < simdCount; i += 8)
+    {
+        __m256 smoothed = _mm256_loadu_ps(smoothedValues_.data() + i);
+        __m256 out = _mm256_loadu_ps(output.data() + i);
+        
+        // smoothed = smoothed * rate + output * (1 - rate)
+        __m256 newSmoothed = _mm256_add_ps(
+            _mm256_mul_ps(smoothed, rateVec),
+            _mm256_mul_ps(out, oneMinusRateVec));
+        
+        _mm256_storeu_ps(smoothedValues_.data() + i, newSmoothed);
+        _mm256_storeu_ps(output.data() + i, newSmoothed);
+    }
+    
+    // Handle remaining elements
+    for (size_t i = simdCount; i < maxSmoothable; ++i)
+    {
+        smoothedValues_[i] = smoothedValues_[i] * rate + output[i] * oneMinusRate;
+        output[i] = smoothedValues_[i];
+    }
+
+#elif defined(MORPHSNAP_USE_SSE)
+    // SSE2 SIMD path - 4 floats at once
+    __m128 rateVec = _mm_set1_ps(rate);
+    __m128 oneMinusRateVec = _mm_set1_ps(oneMinusRate);
+    
+    const size_t simdCount = maxSmoothable - (maxSmoothable % 4);
+    
+    for (size_t i = 0; i < simdCount; i += 4)
+    {
+        __m128 smoothed = _mm_loadu_ps(smoothedValues_.data() + i);
+        __m128 out = _mm_loadu_ps(output.data() + i);
+        
+        __m128 newSmoothed = _mm_add_ps(
+            _mm_mul_ps(smoothed, rateVec),
+            _mm_mul_ps(out, oneMinusRateVec));
+        
+        _mm_storeu_ps(smoothedValues_.data() + i, newSmoothed);
+        _mm_storeu_ps(output.data() + i, newSmoothed);
+    }
+    
+    // Handle remaining elements
+    for (size_t i = simdCount; i < maxSmoothable; ++i)
+    {
+        smoothedValues_[i] = smoothedValues_[i] * rate + output[i] * oneMinusRate;
+        output[i] = smoothedValues_[i];
+    }
+
+#else
+    // Scalar fallback
     for (size_t i = 0; i < maxSmoothable; ++i)
     {
         smoothedValues_[i] = smoothedValues_[i] * rate + output[i] * oneMinusRate;
         output[i] = smoothedValues_[i];
     }
+#endif
 }
 
 } // namespace morphsnap
