@@ -137,6 +137,15 @@ Genetic sound design tools:
 - **Breed:** Combine two snapshots into a new one
 - **Mutate:** Randomly vary a snapshot
 - **Randomize:** Jump to random morph position
+- **Smart Randomize:** DAW-automatable trigger for randomization
+
+### Safety & Link Controls (Bottom)
+
+Advanced control toggles:
+
+- **Sanity Mode:** Protects volume/bypass parameters during morphing
+- **Listen Mode:** Excludes discrete toggles/dropdowns from morphing to prevent clicks
+- **Link Mode (Amber):** Synchronizes morph position across multiple plugin instances
 
 ---
 
@@ -178,6 +187,14 @@ recall_snapshot(slot: 0)
 ### Clearing All Snapshots
 
 Currently requires manually overwriting each slot or reloading the plugin.
+
+### Meta Preset Manager
+
+MorphSnap provides its own internal preset system saving snapshot banks:
+
+- **Banks:** 16 banks available (switchable via UI or MIDI CC#0)
+- **Presets:** 128 presets per bank
+- Total configuration saves as JSON containing all APVTS values and 12 snapshot slots.
 
 ---
 
@@ -325,10 +342,17 @@ Jumps to a random morph position:
 | MIDI CC | Function |
 |---------|----------|
 | CC 1 (Mod Wheel) | Snap Fader position |
+| CC 0 | Bank Select (1-16) |
 
 **Behavior:**
 - Automatically switches to Fader mode
 - Full range (0-127) maps to 0.0-1.0
+
+### Recall Toggle (Sustain)
+
+When triggering snapshots via MIDI, you can toggle **Full Recall vs Param-only Recall**:
+- **On (Default):** Full VST state chunk recall.
+- **Off (Sustain):** Fast param-only recall. This allows synth notes to sustain while switching snapshots.
 
 ### Setup
 

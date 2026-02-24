@@ -372,3 +372,99 @@ TEST_CASE("SnapshotBank: tryReadLocked returns true when not contended", "[bank]
     REQUIRE(result);
     REQUIRE(called);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SnapshotBank — FastMode / RecallMode
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("SnapshotBank: default RecallMode is Fast", "[bank][fastmode]")
+{
+    SnapshotBank bank;
+    REQUIRE(bank.getRecallMode() == RecallMode::Fast);
+}
+
+TEST_CASE("SnapshotBank: setRecallMode round-trips", "[bank][fastmode]")
+{
+    SnapshotBank bank;
+    bank.setRecallMode(RecallMode::Full);
+    REQUIRE(bank.getRecallMode() == RecallMode::Full);
+
+    bank.setRecallMode(RecallMode::Fast);
+    REQUIRE(bank.getRecallMode() == RecallMode::Fast);
+}
+
+TEST_CASE("SnapshotBank: captureStateChunk with nullptr plugin is safe", "[bank][fastmode]")
+{
+    SnapshotBank bank;
+    bank.prepare(4);
+
+    // Must not crash when plugin is nullptr
+    bank.captureStateChunk(0, nullptr);
+    bank.captureStateChunk(-1, nullptr);
+    bank.captureStateChunk(999, nullptr);
+}
+
+TEST_CASE("SnapshotBank: recallStateChunk with nullptr plugin is safe", "[bank][fastmode]")
+{
+    SnapshotBank bank;
+    bank.prepare(4);
+
+    // Must not crash when plugin is nullptr
+    bank.recallStateChunk(0, nullptr);
+    bank.recallStateChunk(-1, nullptr);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  InterpolationEngine — 2D (IDW)
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("InterpolationEngine: compute2D with single occupied slot returns that slot", "[interp][2d]")
+{
+    SnapshotBank bank;
+    bank.prepare(3);
+
+    std::vector<float> vals = {0.2f, 0.6f, 0.9f};
+    bank.captureValues(0, vals);  // Slot 0 at 12 o'clock
+
+    std::vector<float> output(3, 0.0f);
+    InterpolationEngine::compute2D(0.0f, 0.0f, bank, output);
+
+    // With only one occupied slot, output should match that slot's values
+    REQUIRE(output[0] == Approx(0.2f).margin(1e-4f));
+    REQUIRE(output[1] == Approx(0.6f).margin(1e-4f));
+    REQUIRE(output[2] == Approx(0.9f).margin(1e-4f));
+}
+
+TEST_CASE("InterpolationEngine: compute2D with zero occupied slots leaves output unchanged", "[interp][2d]")
+{
+    SnapshotBank bank;
+    bank.prepare(3);
+
+    std::vector<float> output = {0.1f, 0.2f, 0.3f};
+    InterpolationEngine::compute2D(0.0f, 0.0f, bank, output);
+
+    // No occupied slots → output should remain at its initial values
+    REQUIRE(output[0] == Approx(0.1f));
+    REQUIRE(output[1] == Approx(0.2f));
+    REQUIRE(output[2] == Approx(0.3f));
+}
+
+TEST_CASE("InterpolationEngine: compute2D with two equidistant slots returns midpoint", "[interp][2d]")
+{
+    SnapshotBank bank;
+    bank.prepare(2);
+
+    // Slot 0 at 12 o'clock, slot 6 at 6 o'clock — equidistant from center
+    std::vector<float> valsA = {0.0f, 0.0f};
+    std::vector<float> valsB = {1.0f, 1.0f};
+    bank.captureValues(0, valsA);
+    bank.captureValues(6, valsB);
+
+    std::vector<float> output(2, 0.0f);
+    // Cursor at center — equidistant from both slots
+    InterpolationEngine::compute2D(0.0f, 0.0f, bank, output);
+
+    // Should be close to midpoint (0.5, 0.5)
+    REQUIRE(output[0] == Approx(0.5f).margin(0.05f));
+    REQUIRE(output[1] == Approx(0.5f).margin(0.05f));
+}
