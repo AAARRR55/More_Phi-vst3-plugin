@@ -10,6 +10,7 @@
 #include "InstanceIdentity.h"
 #include "InstanceRegistry.h"
 #include "Plugin/PluginProcessor.h"
+#include "MCPToolsExtended.h"
 #include <nlohmann/json.hpp>
 
 namespace morphsnap {
@@ -48,6 +49,25 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "set_morph_position")   return setMorphPosition(params, p);
     if (method == "get_morph_state")      return getMorphState(p);
 
+    // Extended AI Tools
+    if (method == "analyze_parameters")             return MCPToolsExtended::analyzeParameters(params, p, p.getParameterClassifier());
+    if (method == "expose_parameters")              return MCPToolsExtended::exposeParameters(params, p, p.getParameterClassifier());
+    if (method == "get_token_estimate")             return MCPToolsExtended::getTokenEstimate(params, p.getTokenOptimizer());
+    if (method == "set_parameters_optimized")       return MCPToolsExtended::setParametersOptimized(params, p, p.getTokenOptimizer());
+    if (method == "get_morph_compatibility")        return MCPToolsExtended::getMorphCompatibility(params, p, p.getParameterClassifier());
+    if (method == "suggest_intermediate_snapshots") return MCPToolsExtended::suggestIntermediateSnapshots(params, p, p.getParameterClassifier());
+    if (method == "get_parameter_categories")       return MCPToolsExtended::getParameterCategories(params, p, p.getParameterClassifier());
+    if (method == "learn_from_adjustment")          return MCPToolsExtended::learnFromAdjustment(params, p.getParameterClassifier());
+    if (method == "get_learn_mode_status")          return MCPToolsExtended::getLearnModeStatus(params, p.getParameterClassifier());
+    if (method == "set_learn_mode_config")          return MCPToolsExtended::setLearnModeConfig(params, p.getParameterClassifier());
+    if (method == "reset_learning_data")            return MCPToolsExtended::resetLearningData(params, p.getParameterClassifier());
+    if (method == "get_discrete_parameters")        return MCPToolsExtended::getDiscreteParameters(params, p, p.getParameterClassifier());
+    if (method == "suggest_morph_settings")         return MCPToolsExtended::suggestMorphSettings(params, p, p.getParameterClassifier());
+    if (method == "get_usage_stats")                return MCPToolsExtended::getUsageStats(params, p.getTokenOptimizer());
+    if (method == "set_token_budget")               return MCPToolsExtended::setTokenBudget(params, p.getTokenOptimizer());
+    if (method == "explain_parameter")              return MCPToolsExtended::explainParameter(params, p, p.getParameterClassifier());
+    if (method == "find_related_parameters")        return MCPToolsExtended::findRelatedParameters(params, p, p.getParameterClassifier());
+
     // Multi-instance tools
     if (method == "get_instance_info")    return getInstanceInfo(identity);
     if (method == "list_instances")       return listInstances();
@@ -59,15 +79,27 @@ juce::String MCPToolHandler::handle(const juce::String& method,
 
 juce::String MCPToolHandler::getPluginInfo(MorphSnapProcessor& p)
 {
-    auto* plugin = p.getHostManager().getPlugin();
-    if (!plugin)
-        return toJString(json{{"name",nullptr},{"type",nullptr},{"paramCount",0}});
+    json result = {
+        {"name",    "MorphSnap"},
+        {"type",    "effect"},
+        {"version", "3.3.0"}
+    };
 
-    return toJString(json{
-        {"name",       plugin->getName().toStdString()},
-        {"type",       plugin->acceptsMidi() ? "instrument" : "effect"},
-        {"paramCount", static_cast<int>(plugin->getParameters().size())}
-    });
+    auto* plugin = p.getHostManager().getPlugin();
+    if (plugin)
+    {
+        result["hostedPlugin"] = {
+            {"name",       plugin->getName().toStdString()},
+            {"type",       plugin->acceptsMidi() ? "instrument" : "effect"},
+            {"paramCount", static_cast<int>(plugin->getParameters().size())}
+        };
+    }
+    else
+    {
+        result["hostedPlugin"] = nullptr;
+    }
+
+    return toJString(result);
 }
 
 juce::String MCPToolHandler::listParameters(const juce::var& /*params*/, MorphSnapProcessor& p)
@@ -110,8 +142,10 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProc
     if (id < 0 || id >= bridge.getParameterCount())
         return toJString(json{{"success",false},{"error","invalid_param_id"}});
 
-    if (!p.enqueueParameterSet(id, value))
-        return toJString(json{{"success",false},{"error","command_queue_full"}});
+    // Apply directly via ParameterBridge (uses setValueNotifyingHost)
+    // instead of the audio-thread command queue, so changes take
+    // effect immediately even when audio isn't playing.
+    bridge.setParameterNormalized(id, value);
 
     return toJString(json{{"success",true}});
 }
@@ -127,8 +161,7 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
 
     auto& bridge = p.getParameterBridge();
     const int maxParamCount = bridge.getParameterCount();
-    int queued = 0;
-    int dropped = 0;
+    int applied = 0;
 
     for (const auto& item : *list)
     {
@@ -136,17 +169,14 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
         const float value = static_cast<float>(item.getProperty("value", 0.0));
         if (id >= 0 && id < maxParamCount)
         {
-            if (p.enqueueParameterSet(id, value))
-                ++queued;
-            else
-                ++dropped;
+            bridge.setParameterNormalized(id, value);
+            ++applied;
         }
     }
 
     return toJString(json{
-        {"success", dropped == 0},
-        {"queued",  queued},
-        {"dropped", dropped}
+        {"success", true},
+        {"applied", applied}
     });
 }
 
@@ -166,8 +196,13 @@ juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapPr
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
         return toJString(json{{"success",false},{"error","invalid slot"}});
 
-    if (!p.recallSnapshotQueued(slot))
-        return toJString(json{{"success",false},{"error","command_queue_full_or_empty_slot"}});
+    // Get snapshot values and apply directly via ParameterBridge
+    // (bypasses the audio-thread command queue so it works without playback)
+    std::vector<float> values;
+    if (!p.getSnapshotBank().getSlotValuesCopy(slot, values))
+        return toJString(json{{"success",false},{"error","empty_slot"}});
+
+    p.getParameterBridge().applyParameterState(values);
 
     return toJString(json{{"success",true},{"slot",slot}});
 }
