@@ -59,7 +59,10 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
     // 2) Apply per-parameter smoothing (SIMD optimized)
     applySmoothing(output);
 
-    // 3) Update cursor trail for visualization
+    // 3) Apply Listen Mode filter — mark discrete params as "skip"
+    applyListenFilter(output);
+
+    // 4) Update cursor trail for visualization
     trailTimer_ += dt;
     if (trailTimer_ >= TRAIL_INTERVAL)
     {
@@ -174,6 +177,18 @@ void MorphProcessor::applySmoothing(std::vector<float>& output)
         output[i] = smoothedValues_[i];
     }
 #endif
+}
+
+void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
+{
+    if (!listenMode_ || discreteMap_.empty()) return;
+
+    const size_t count = std::min(output.size(), discreteMap_.size());
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (discreteMap_[i])
+            output[i] = SKIP_SENTINEL;
+    }
 }
 
 } // namespace morphsnap

@@ -12,7 +12,8 @@ MorphPad::MorphPad(MorphSnapProcessor& processor)
 {
     // Initialize trail buffer
     trailBuffer_.fill(juce::Point<float>{0.5f, 0.5f});
-    startTimerHz(30);  // 30 FPS for smooth animation
+    showGrid_ = true;  // Enable grid by default (Stitch design)
+    startTimerHz(30);   // 30 FPS for smooth animation
 }
 
 void MorphPad::resized()
@@ -127,12 +128,24 @@ void MorphPad::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff0d1b2a));
     g.fillEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2);
 
-    // Grid (optional)
+    // Grid (enhanced Stitch style)
     if (showGrid_)
     {
-        g.setColour(juce::Colour(0xff0f3460).withAlpha(0.3f));
+        g.setColour(juce::Colour(0xff0f3460).withAlpha(0.2f));
+        // Crosshairs
         g.drawLine(centre.x - radius, centre.y, centre.x + radius, centre.y, 0.5f);
         g.drawLine(centre.x, centre.y - radius, centre.x, centre.y + radius, 0.5f);
+        // Diagonal guides
+        float diag = radius * 0.707f;
+        g.setColour(juce::Colour(0xff0f3460).withAlpha(0.1f));
+        g.drawLine(centre.x - diag, centre.y - diag, centre.x + diag, centre.y + diag, 0.5f);
+        g.drawLine(centre.x + diag, centre.y - diag, centre.x - diag, centre.y + diag, 0.5f);
+        // Concentric rings
+        for (float r : {0.33f, 0.66f})
+        {
+            float ringR = radius * r;
+            g.drawEllipse(centre.x - ringR, centre.y - ringR, ringR * 2, ringR * 2, 0.5f);
+        }
     }
 
     // Border
@@ -179,16 +192,45 @@ void MorphPad::paint(juce::Graphics& g)
                    12, 10, juce::Justification::centred);
     }
 
-    // ── Physics-processed cursor position ──────────────────────────────────────
-    float procX = morph.getProcessedX();
-    float procY = morph.getProcessedY();
-    // Map [-1,1] → screen coordinates
-    float cx = centre.x + procX * radius;
-    float cy = centre.y + procY * radius;
+    // ── Cursor position ────────────────────────────────────────────────────────
+    // In Direct mode (0) or Fader mode (1): use raw input position for
+    // immediate responsiveness — processBlock may not be running.
+    // In physics modes (Elastic=2, Drift=3): use physics-processed output.
+    float cx, cy;
+    int physMode = proc_.getPhysicsMode();
+
+    if (physMode >= 2)
+    {
+        // Physics modes: show processed output as main cursor
+        float procX = morph.getProcessedX();
+        float procY = morph.getProcessedY();
+        cx = centre.x + procX * radius;
+        cy = centre.y + procY * radius;
+
+        // Also show raw input as faint guide dot
+        float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
+        float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
+        g.setColour(juce::Colour(0xff888888).withAlpha(0.4f));
+        g.fillEllipse(rawCx - 3, rawCy - 3, 6, 6);
+    }
+    else
+    {
+        // Direct / Fader: use raw mouse position [0,1] → [-1,1] → screen
+        float rawX = proc_.getMorphX() * 2.0f - 1.0f;
+        float rawY = proc_.getMorphY() * 2.0f - 1.0f;
+        cx = centre.x + rawX * radius;
+        cy = centre.y + rawY * radius;
+    }
+
+    // Radial glow (Stitch-enhanced pulsing effect)
+    float glowPhase = static_cast<float>(juce::Time::getMillisecondCounter() % 2000) / 2000.0f;
+    float glowAlpha = 0.12f + 0.06f * std::sin(glowPhase * 6.2832f);
+    g.setColour(juce::Colour(0xffec415d).withAlpha(glowAlpha));
+    g.fillEllipse(cx - 24, cy - 24, 48, 48);
+    g.setColour(juce::Colour(0xffec415d).withAlpha(glowAlpha * 0.5f));
+    g.fillEllipse(cx - 32, cy - 32, 64, 64);
 
     // Glow ring
-    g.setColour(juce::Colour(0xffe94560).withAlpha(0.15f));
-    g.fillEllipse(cx - 16, cy - 16, 32, 32);
     g.setColour(juce::Colour(0xffe94560).withAlpha(0.3f));
     g.drawEllipse(cx - 12, cy - 12, 24, 24, 1.0f);
 
@@ -196,14 +238,14 @@ void MorphPad::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffe94560));
     g.fillEllipse(cx - 5, cy - 5, 10, 10);
 
-    // Raw input position (faint, shows where you're dragging)
-    if (proc_.getPhysicsMode() > 0)  // Only in physics modes
-    {
-        float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
-        float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
-        g.setColour(juce::Colour(0xff888888).withAlpha(0.4f));
-        g.fillEllipse(rawCx - 3, rawCy - 3, 6, 6);
-    }
+    // Mode label (top-left corner of pad)
+    const char* modeNames[] = {"2D Pad", "Fader", "Elastic", "Drift"};
+    int modeIdx = juce::jlimit(0, 3, proc_.getPhysicsMode());
+    g.setColour(juce::Colour(0xff8b95a5).withAlpha(0.7f));
+    g.setFont(juce::Font(juce::FontOptions(10.0f)));
+    g.drawText(juce::String("Mode: ") + modeNames[modeIdx],
+               bounds.toNearestInt().withHeight(16).translated(8, 4),
+               juce::Justification::centredLeft);
 }
 
 void MorphPad::mouseDown(const juce::MouseEvent& e) { updatePosition(e.position); }

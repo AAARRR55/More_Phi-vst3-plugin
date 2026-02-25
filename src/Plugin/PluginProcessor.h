@@ -27,7 +27,8 @@
 
 namespace morphsnap {
 
-class MorphSnapProcessor : public juce::AudioProcessor
+class MorphSnapProcessor : public juce::AudioProcessor,
+                          private juce::Timer
 {
 public:
     MorphSnapProcessor();
@@ -184,6 +185,37 @@ private:
     double currentSampleRate = 44100.0;
     int    currentBlockSize  = 512;
     std::atomic<bool> prepared{false};
+
+    // State restoration guard: blocks morph processing until hosted plugin is fully restored
+    std::atomic<bool> isRestoring_{false};
+    // Buffered hosted plugin state to apply after async reload completes
+    juce::MemoryBlock pendingHostedState_;
+    std::mutex pendingStateMutex_;
+    // Preserved MCP identity for port reuse across export cycles
+    InstanceIdentity pendingIdentity_;
+    // Pending plugin description for Timer-based deferred loading
+    // (replaces unreliable callAsync — timers work even with editor closed)
+    juce::PluginDescription pendingPluginDesc_;
+    bool hasPendingPluginLoad_{false};
+    int  pendingLoadAttempts_{0};  // retry counter (max 5 attempts, 250ms total)
+    int pluginLoadRetryCount_{0};
+    static constexpr int MAX_PLUGIN_LOAD_RETRIES = 10;  // 500ms total retry window
+    
+    // Force synchronous load flag for offline rendering contexts
+    std::atomic<bool> forceSynchronousLoad_{false};
+
+    /** Synchronous helper: loads hosted plugin from state and restores opaque data.
+     *  Returns true if plugin was successfully loaded and state applied.
+     */
+    bool loadHostedPluginFromState(const juce::PluginDescription& desc);
+    
+    /** Attempts to ensure plugin format manager is ready for loading.
+     *  Returns true if we can attempt plugin loading.
+     */
+    bool ensurePluginFormatsReady();
+
+    /** Timer fallback for deferred plugin loading (fires on message thread). */
+    void timerCallback() override;
 
     // Morph position (UI/MCP → audio thread)
     std::atomic<float> morphX_{0.5f};

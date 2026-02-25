@@ -267,6 +267,9 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
             std::array<float, SnapshotBank::NUM_SLOTS> weights{};
             float totalWeight = 0.0f;
 
+            // Epsilon² for squared-distance comparison (avoids sqrt entirely)
+            constexpr float kEpsilonSq = kEpsilon * kEpsilon;
+
             for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
             {
                 if (!slots[i].occupied)
@@ -274,9 +277,9 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 
                 const float dx = cursorX - positions[i].x;
                 const float dy = cursorY - positions[i].y;
-                const float dist = std::sqrt(dx * dx + dy * dy);
+                const float distSq = dx * dx + dy * dy;  // No sqrt needed
 
-                if (dist < kEpsilon)
+                if (distSq < kEpsilonSq)
                 {
                     // Cursor directly on snapshot — use it exclusively
                     const auto& slot = slots[i];
@@ -286,7 +289,8 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                     return;
                 }
 
-                weights[i] = 1.0f / (dist * dist);   // IDW power=2, avoid std::pow overhead
+                // IDW power=2: w = 1/d² = 1/distSq
+                weights[i] = 1.0f / distSq;
                 totalWeight += weights[i];
             }
 
@@ -304,8 +308,35 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                 const auto& slot = slots[i];
                 const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
 
+                // SIMD-accelerated weighted accumulation
+#if defined(MORPHSNAP_USE_AVX)
+                const __m256 wVec = _mm256_set1_ps(w);
+                const size_t simdCount = count - (count % 8);
+                for (size_t p = 0; p < simdCount; p += 8)
+                {
+                    __m256 acc = _mm256_loadu_ps(output.data() + p);
+                    __m256 src = _mm256_loadu_ps(slot.data() + p);
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(src, wVec));
+                    _mm256_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#elif defined(MORPHSNAP_USE_SSE)
+                const __m128 wVec = _mm_set1_ps(w);
+                const size_t simdCount = count - (count % 4);
+                for (size_t p = 0; p < simdCount; p += 4)
+                {
+                    __m128 acc = _mm_loadu_ps(output.data() + p);
+                    __m128 src = _mm_loadu_ps(slot.data() + p);
+                    acc = _mm_add_ps(acc, _mm_mul_ps(src, wVec));
+                    _mm_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#else
                 for (size_t p = 0; p < count; ++p)
                     output[p] += slot.data()[p] * w;
+#endif
             }
         });
 }

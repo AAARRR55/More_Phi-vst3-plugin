@@ -44,6 +44,15 @@ public:
     void setDriftMode(DriftMode m) { driftMode_ = m; }
     void setSmoothingRate(float r) { smoothRate_ = r; }  // 0=instant, 0.999=very slow
 
+    // Listen Mode: when enabled, discrete parameters are excluded from morph output
+    void setListenMode(bool enabled) { listenMode_ = enabled; }
+    bool getListenMode() const { return listenMode_; }
+    void setDiscreteMap(const std::vector<bool>& map) { discreteMap_ = map; }
+    void setDiscreteMap(std::vector<bool>&& map) { discreteMap_ = std::move(map); }
+
+    // Sentinel value written to morph output for params that should NOT be applied
+    static constexpr float SKIP_SENTINEL = -1.0f;
+
     // Read the physics-processed cursor position (for UI trail)
     float getProcessedX() const { return processedX_; }
     float getProcessedY() const { return processedY_; }
@@ -84,6 +93,11 @@ private:
     static constexpr float TRAIL_INTERVAL = 0.016f;  // ~60 Hz trail sampling
 
     bool prepared_ = false;
+
+    // Listen Mode
+    bool listenMode_ = false;
+    std::vector<bool> discreteMap_;
+    void applyListenFilter(std::vector<float>& output) noexcept;
 };
 
 } // namespace morphsnap

@@ -30,6 +30,10 @@ public:
     // Read all current values into a vector
     std::vector<float> captureParameterState() const override;
 
+    // Discrete parameter classification (for Listen Mode)
+    bool isDiscrete(int index) const override;
+    std::vector<bool> getDiscreteMap() const override;
+
 private:
     IPluginHostManager& host_;
 };

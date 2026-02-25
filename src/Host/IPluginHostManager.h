@@ -58,6 +58,10 @@ public:
     virtual void applyParameterState(const std::vector<float>& values) = 0;
     virtual void applyParameterState(const float* values, int count) = 0;
     virtual std::vector<float> captureParameterState() const = 0;
+
+    // Discrete parameter classification (for Listen Mode)
+    virtual bool isDiscrete(int index) const = 0;
+    virtual std::vector<bool> getDiscreteMap() const = 0;
 };
 
 /**

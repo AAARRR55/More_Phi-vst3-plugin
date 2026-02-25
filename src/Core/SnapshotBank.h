@@ -22,6 +22,9 @@
 #include <vector>
 #include <atomic>
 
+// Forward declare for Full recall mode
+namespace juce { class AudioPluginInstance; }
+
 // Platform-specific pause instruction for spin-wait loops
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <xmmintrin.h>
@@ -30,6 +33,11 @@
 namespace morphsnap {
 
 class ParameterBridge;  // forward
+
+/** Controls how snapshots are recalled.
+ *  Fast: normalized floats only (instant, works for most plugins)
+ *  Full: also stores/restores VST3 opaque state chunk (for Kontakt, wavetable synths) */
+enum class RecallMode { Fast = 0, Full = 1 };
 
 class SnapshotBank
 {
@@ -49,6 +57,17 @@ public:
     void captureValues(int slot, const std::vector<float>& values);
     void recall(int slot, ParameterBridge& bridge) const;
 
+    // Params-only recall: skips state chunk even in Full mode.
+    // Used when Recall Toggle is off to sustain notes during snapshot switches.
+    void recallFast(int slot, ParameterBridge& bridge) const;
+
+    // Full mode: capture/recall opaque VST3 state chunks alongside parameters
+    void captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
+    void recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
+
+    void setRecallMode(RecallMode m)  { recallMode_ = m; }
+    RecallMode getRecallMode() const  { return recallMode_; }
+
     bool isOccupied(int slot) const;
     bool hasAnyOccupied() const;
     int  getOccupiedSlots(std::array<int, NUM_SLOTS>& occupiedSlots) const;
@@ -56,6 +75,81 @@ public:
 
     void clearSlot(int slot);
     void clearAll();
+
+    // ── State persistence ───────────────────────────────────────────────────
+    /** Serialize all occupied snapshot slots to an XML element for DAW state save. */
+    std::unique_ptr<juce::XmlElement> toXml() const
+    {
+        auto xml = std::make_unique<juce::XmlElement>("SNAPSHOT_BANK");
+
+        for (int i = 0; i < NUM_SLOTS; ++i)
+        {
+            // Seqlock read for thread safety
+            for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
+            {
+                uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
+                if ((seq1 & 1) != 0) continue;
+
+                bool occupied = (*slots_)[i].occupied;
+                int count = (*slots_)[i].parameterCount;
+
+                uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+                if (seq1 != seq2) continue;
+
+                if (occupied && count > 0)
+                {
+                    auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
+                    slotXml->setAttribute("id", i);
+                    slotXml->setAttribute("paramCount", count);
+                    slotXml->setAttribute("name", juce::String((*slots_)[i].name));
+
+                    // Encode float values as base64 for compact, lossless storage
+                    juce::MemoryBlock block((*slots_)[i].values.data(),
+                                           static_cast<size_t>(count) * sizeof(float));
+                    slotXml->setAttribute("values", block.toBase64Encoding());
+
+                    xml->addChildElement(slotXml.release());
+                }
+                break;  // Success
+            }
+        }
+        return xml;
+    }
+
+    /** Restore snapshot slots from a previously saved XML element. */
+    void fromXml(const juce::XmlElement& xml)
+    {
+        WriteScope write(*this);
+
+        for (auto& s : *slots_) s.clear();
+
+        for (auto* child : xml.getChildIterator())
+        {
+            if (!child->hasTagName("SLOT")) continue;
+
+            int slot = child->getIntAttribute("id", -1);
+            int count = child->getIntAttribute("paramCount", 0);
+            if (slot < 0 || slot >= NUM_SLOTS || count <= 0) continue;
+
+            juce::String name = child->getStringAttribute("name", "");
+            juce::String base64 = child->getStringAttribute("values", "");
+
+            if (base64.isNotEmpty())
+            {
+                juce::MemoryBlock block;
+                if (block.fromBase64Encoding(base64))
+                {
+                    int safeCount = juce::jmin(count, MAX_PARAMETERS);
+                    int expectedBytes = safeCount * static_cast<int>(sizeof(float));
+                    if (static_cast<int>(block.getSize()) >= expectedBytes)
+                    {
+                        (*slots_)[slot].capture(static_cast<const float*>(block.getData()), safeCount);
+                        (*slots_)[slot].setName(name.toRawUTF8());
+                    }
+                }
+            }
+        }
+    }
 
     // Lock-free read access for audio thread
     // Returns false if read failed after MAX_READ_RETRIES (very rare)
@@ -121,6 +215,10 @@ private:
     // off the stack. Each ParameterState holds 2048 floats; 12 slots = ~384 KB.
     std::unique_ptr<std::array<ParameterState, NUM_SLOTS>> slots_;
     int preparedParamCount_ = 0;
+    RecallMode recallMode_ = RecallMode::Fast;
+
+    // State chunks for Full recall mode (one per slot)
+    std::array<juce::MemoryBlock, NUM_SLOTS> stateChunks_;
 
     // Begin write section - increments seqlock to odd
     void beginWrite()

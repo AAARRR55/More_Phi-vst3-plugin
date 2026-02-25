@@ -9,6 +9,7 @@
  */
 #include "SnapshotBank.h"
 #include "Host/ParameterBridge.h"
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <algorithm>
 
 namespace morphsnap {
@@ -64,6 +65,40 @@ void SnapshotBank::recall(int slot, ParameterBridge& bridge) const
 
     if (parameterCount > 0)
         bridge.applyParameterState(values.data(), parameterCount);
+}
+
+void SnapshotBank::recallFast(int slot, ParameterBridge& bridge) const
+{
+    // Same as recall() — applies normalized float params only.
+    // Never applies opaque state chunks, so synthesizer notes sustain.
+    if (slot < 0 || slot >= NUM_SLOTS) return;
+
+    std::array<float, MAX_PARAMETERS> values{};
+    int parameterCount = 0;
+
+    if (!copySlotValues(slot, values.data(), parameterCount))
+        return;
+
+    if (parameterCount > 0)
+        bridge.applyParameterState(values.data(), parameterCount);
+}
+
+void SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin)
+{
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+
+    juce::MemoryBlock chunk;
+    plugin->getStateInformation(chunk);
+    stateChunks_[static_cast<size_t>(slot)] = std::move(chunk);
+}
+
+void SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const
+{
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+
+    const auto& chunk = stateChunks_[static_cast<size_t>(slot)];
+    if (chunk.getSize() > 0)
+        plugin->setStateInformation(chunk.getData(), static_cast<int>(chunk.getSize()));
 }
 
 bool SnapshotBank::isOccupied(int slot) const

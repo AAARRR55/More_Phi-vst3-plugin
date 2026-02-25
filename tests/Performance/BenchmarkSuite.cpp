@@ -74,7 +74,7 @@ BenchmarkResult benchmarkScalarInterpolation(size_t count, int iterations)
 {
     std::vector<float> srcA(count), srcB(count), dest(count);
 
-    // Initialize with random-ish values
+    // Initialize with deterministic values
     for (size_t i = 0; i < count; ++i)
     {
         srcA[i] = static_cast<float>(i) * 0.01f;
@@ -89,8 +89,10 @@ BenchmarkResult benchmarkScalarInterpolation(size_t count, int iterations)
     for (int i = 0; i < iterations; ++i)
     {
         timer.start();
-        InterpolationEngine::interpolateBatch_Scalar(
-            srcA.data(), srcB.data(), dest.data(), 0.5f, count);
+        // Manual scalar interpolation as reference baseline
+        const float t = 0.5f;
+        for (size_t p = 0; p < count; ++p)
+            dest[p] = srcA[p] * (1.0f - t) + srcB[p] * t;
         double elapsed = timer.stopUs();
         totalTime += elapsed;
         minTime = std::min(minTime, elapsed);
@@ -203,15 +205,16 @@ BenchmarkResult benchmarkDriftPhysics(int iterations)
 BenchmarkResult benchmark2DInterpolation(int iterations)
 {
     SnapshotBank bank;
+    bank.prepare(256);
     std::vector<float> output(256);
 
-    // Capture some test snapshots
+    // Capture some test snapshots using public API
     std::vector<float> testValues(256, 0.5f);
     for (int i = 0; i < 4; ++i)
     {
         for (auto& v : testValues)
             v = static_cast<float>(rand()) / RAND_MAX;
-        bank.getSlot(i).capture(testValues.data(), 256);
+        bank.captureValues(i, testValues);
     }
 
     Timer timer;
@@ -263,10 +266,11 @@ bool simulateRealtimeLoad(int sampleRate, int blockSize, int durationMs)
     const float dt = static_cast<float>(blockSize) / static_cast<float>(sampleRate);
 
     SnapshotBank bank;
+    bank.prepare(256);
     std::vector<float> output(256);
     std::vector<float> testValues(256, 0.5f);
     for (int i = 0; i < 4; ++i)
-        bank.getSlot(i).capture(testValues.data(), 256);
+        bank.captureValues(i, testValues);
 
     ElasticState state{0.0f, 0.0f, 0.0f, 0.0f};
 

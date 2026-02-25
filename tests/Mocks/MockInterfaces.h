@@ -44,6 +44,8 @@ public:
     MOCK_METHOD(void, applyParameterState, (const std::vector<float>& values), (override));
     MOCK_METHOD(void, applyParameterState, (const float* values, int count), (override));
     MOCK_METHOD(std::vector<float>, captureParameterState, (), (const, override));
+    MOCK_METHOD(bool, isDiscrete, (int index), (const, override));
+    MOCK_METHOD(std::vector<bool>, getDiscreteMap, (), (const, override));
 };
 
 /**
@@ -112,6 +114,12 @@ public:
     void resize(int count, float value = 0.5f)
     {
         parameters.resize(count, value);
+    }
+
+    bool isDiscrete(int /*index*/) const override { return false; }
+    std::vector<bool> getDiscreteMap() const override
+    {
+        return std::vector<bool>(parameters.size(), false);
     }
 };
 

@@ -16,8 +16,22 @@ public:
 
     void setPresetDirectory(const juce::File& dir) { presetDir_ = dir; }
 
+    // Bank/preset state tracking
+    int getCurrentBank() const   { return currentBank_; }
+    int getCurrentPreset() const { return currentPreset_; }
+    void switchBank(int bank);
+    void switchPreset(int preset);
+    void switchToNext();
+    void switchToPrev();
+    juce::String getPresetName(int bank, int preset) const;
+
+    // Callback for preset changes (UI refresh, state load)
+    std::function<void(int bank, int preset)> onPresetChanged;
+
 private:
     juce::File presetDir_;
+    int currentBank_   = 0;
+    int currentPreset_ = 0;
     juce::File getPresetFile(int bank, int preset) const;
 };
 

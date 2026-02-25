@@ -18,12 +18,13 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
       aiPanel(p),
       breedingPanel(p),
       modeBar(p),
-      paramPanel(p)
+      paramPanel(p),
+      controlStrip(p)
 {
     setLookAndFeel(&lnf);
-    setSize(920, 660);
+    setSize(920, 710);
     setResizable(true, true);
-    setResizeLimits(720, 520, 1600, 1000);
+    setResizeLimits(720, 560, 1600, 1080);
 
     addAndMakeVisible(morphPad);
     addAndMakeVisible(snapFader);
@@ -33,6 +34,7 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     addAndMakeVisible(aiPanel);
     addAndMakeVisible(breedingPanel);
     addAndMakeVisible(modeBar);
+    addAndMakeVisible(controlStrip);
 
     // Parameter panel (initially hidden)
     addChildComponent(paramPanel);
@@ -49,11 +51,16 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     };
     addAndMakeVisible(paramToggleBtn_);
 
+    // Open Plugin UI button
+    openPluginBtn_.onClick = [this]() { openPluginWindow(); };
+    addAndMakeVisible(openPluginBtn_);
+
     startTimerHz(30);
 }
 
 MorphSnapEditor::~MorphSnapEditor()
 {
+    closePluginWindow();
     setLookAndFeel(nullptr);
 }
 
@@ -125,6 +132,7 @@ void MorphSnapEditor::resized()
     // Plugin browser row
     auto browserRow = area.removeFromTop(38);
     paramToggleBtn_.setBounds(browserRow.removeFromRight(80));
+    openPluginBtn_.setBounds(browserRow.removeFromRight(110));
     pluginBrowser.setBounds(browserRow);
 
     // Bottom bar
@@ -143,6 +151,10 @@ void MorphSnapEditor::resized()
     auto modeRow = area.removeFromBottom(32);
     modeBar.setBounds(modeRow);
 
+    // Bottom control strip (new Stitch-enhanced controls)
+    auto controlRow = area.removeFromBottom(48);
+    controlStrip.setBounds(controlRow);
+
     // Snap fader (left)
     auto leftCol = area.removeFromLeft(52);
     snapFader.setBounds(leftCol.reduced(6, 10));
@@ -160,3 +172,21 @@ void MorphSnapEditor::timerCallback()
 }
 
 } // namespace morphsnap
+
+void morphsnap::MorphSnapEditor::openPluginWindow()
+{
+    if (hostedWindow_) return;  // Already open
+
+    auto* plugin = processor.getHostManager().getPlugin();
+    if (!plugin) return;
+
+    hostedWindow_ = std::make_unique<HostedPluginWindow>(
+        plugin,
+        [this]() { closePluginWindow(); }  // on-close callback
+    );
+}
+
+void morphsnap::MorphSnapEditor::closePluginWindow()
+{
+    hostedWindow_.reset();
+}

@@ -1,0 +1,3687 @@
+[
+  {
+    "id": 0,
+    "name": "Band 1 Used",
+    "value": 0
+  },
+  {
+    "id": 1,
+    "name": "Band 1 Enabled",
+    "value": 1
+  },
+  {
+    "id": 2,
+    "name": "Band 1 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 3,
+    "name": "Band 1 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 4,
+    "name": "Band 1 Q",
+    "value": 0.5
+  },
+  {
+    "id": 5,
+    "name": "Band 1 Shape",
+    "value": 0
+  },
+  {
+    "id": 6,
+    "name": "Band 1 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 7,
+    "name": "Band 1 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 8,
+    "name": "Band 1 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 9,
+    "name": "Band 1 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 10,
+    "name": "Band 1 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 11,
+    "name": "Band 1 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 12,
+    "name": "Band 1 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 13,
+    "name": "Band 1 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 14,
+    "name": "Band 1 Release",
+    "value": 0.5
+  },
+  {
+    "id": 15,
+    "name": "Band 1 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 16,
+    "name": "Band 1 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 17,
+    "name": "Band 1 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 18,
+    "name": "Band 1 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 19,
+    "name": "Band 1 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 20,
+    "name": "Band 1 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 21,
+    "name": "Band 1 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 22,
+    "name": "Band 1 Solo",
+    "value": 0
+  },
+  {
+    "id": 23,
+    "name": "Band 1 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 24,
+    "name": "Band 2 Used",
+    "value": 0
+  },
+  {
+    "id": 25,
+    "name": "Band 2 Enabled",
+    "value": 1
+  },
+  {
+    "id": 26,
+    "name": "Band 2 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 27,
+    "name": "Band 2 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 28,
+    "name": "Band 2 Q",
+    "value": 0.5
+  },
+  {
+    "id": 29,
+    "name": "Band 2 Shape",
+    "value": 0
+  },
+  {
+    "id": 30,
+    "name": "Band 2 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 31,
+    "name": "Band 2 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 32,
+    "name": "Band 2 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 33,
+    "name": "Band 2 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 34,
+    "name": "Band 2 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 35,
+    "name": "Band 2 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 36,
+    "name": "Band 2 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 37,
+    "name": "Band 2 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 38,
+    "name": "Band 2 Release",
+    "value": 0.5
+  },
+  {
+    "id": 39,
+    "name": "Band 2 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 40,
+    "name": "Band 2 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 41,
+    "name": "Band 2 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 42,
+    "name": "Band 2 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 43,
+    "name": "Band 2 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 44,
+    "name": "Band 2 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 45,
+    "name": "Band 2 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 46,
+    "name": "Band 2 Solo",
+    "value": 0
+  },
+  {
+    "id": 47,
+    "name": "Band 2 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 48,
+    "name": "Band 3 Used",
+    "value": 0
+  },
+  {
+    "id": 49,
+    "name": "Band 3 Enabled",
+    "value": 1
+  },
+  {
+    "id": 50,
+    "name": "Band 3 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 51,
+    "name": "Band 3 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 52,
+    "name": "Band 3 Q",
+    "value": 0.5
+  },
+  {
+    "id": 53,
+    "name": "Band 3 Shape",
+    "value": 0
+  },
+  {
+    "id": 54,
+    "name": "Band 3 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 55,
+    "name": "Band 3 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 56,
+    "name": "Band 3 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 57,
+    "name": "Band 3 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 58,
+    "name": "Band 3 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 59,
+    "name": "Band 3 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 60,
+    "name": "Band 3 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 61,
+    "name": "Band 3 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 62,
+    "name": "Band 3 Release",
+    "value": 0.5
+  },
+  {
+    "id": 63,
+    "name": "Band 3 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 64,
+    "name": "Band 3 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 65,
+    "name": "Band 3 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 66,
+    "name": "Band 3 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 67,
+    "name": "Band 3 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 68,
+    "name": "Band 3 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 69,
+    "name": "Band 3 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 70,
+    "name": "Band 3 Solo",
+    "value": 0
+  },
+  {
+    "id": 71,
+    "name": "Band 3 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 72,
+    "name": "Band 4 Used",
+    "value": 0
+  },
+  {
+    "id": 73,
+    "name": "Band 4 Enabled",
+    "value": 1
+  },
+  {
+    "id": 74,
+    "name": "Band 4 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 75,
+    "name": "Band 4 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 76,
+    "name": "Band 4 Q",
+    "value": 0.5
+  },
+  {
+    "id": 77,
+    "name": "Band 4 Shape",
+    "value": 0
+  },
+  {
+    "id": 78,
+    "name": "Band 4 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 79,
+    "name": "Band 4 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 80,
+    "name": "Band 4 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 81,
+    "name": "Band 4 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 82,
+    "name": "Band 4 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 83,
+    "name": "Band 4 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 84,
+    "name": "Band 4 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 85,
+    "name": "Band 4 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 86,
+    "name": "Band 4 Release",
+    "value": 0.5
+  },
+  {
+    "id": 87,
+    "name": "Band 4 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 88,
+    "name": "Band 4 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 89,
+    "name": "Band 4 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 90,
+    "name": "Band 4 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 91,
+    "name": "Band 4 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 92,
+    "name": "Band 4 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 93,
+    "name": "Band 4 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 94,
+    "name": "Band 4 Solo",
+    "value": 0
+  },
+  {
+    "id": 95,
+    "name": "Band 4 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 96,
+    "name": "Band 5 Used",
+    "value": 0
+  },
+  {
+    "id": 97,
+    "name": "Band 5 Enabled",
+    "value": 1
+  },
+  {
+    "id": 98,
+    "name": "Band 5 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 99,
+    "name": "Band 5 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 100,
+    "name": "Band 5 Q",
+    "value": 0.5
+  },
+  {
+    "id": 101,
+    "name": "Band 5 Shape",
+    "value": 0
+  },
+  {
+    "id": 102,
+    "name": "Band 5 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 103,
+    "name": "Band 5 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 104,
+    "name": "Band 5 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 105,
+    "name": "Band 5 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 106,
+    "name": "Band 5 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 107,
+    "name": "Band 5 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 108,
+    "name": "Band 5 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 109,
+    "name": "Band 5 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 110,
+    "name": "Band 5 Release",
+    "value": 0.5
+  },
+  {
+    "id": 111,
+    "name": "Band 5 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 112,
+    "name": "Band 5 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 113,
+    "name": "Band 5 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 114,
+    "name": "Band 5 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 115,
+    "name": "Band 5 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 116,
+    "name": "Band 5 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 117,
+    "name": "Band 5 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 118,
+    "name": "Band 5 Solo",
+    "value": 0
+  },
+  {
+    "id": 119,
+    "name": "Band 5 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 120,
+    "name": "Band 6 Used",
+    "value": 0
+  },
+  {
+    "id": 121,
+    "name": "Band 6 Enabled",
+    "value": 1
+  },
+  {
+    "id": 122,
+    "name": "Band 6 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 123,
+    "name": "Band 6 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 124,
+    "name": "Band 6 Q",
+    "value": 0.5
+  },
+  {
+    "id": 125,
+    "name": "Band 6 Shape",
+    "value": 0
+  },
+  {
+    "id": 126,
+    "name": "Band 6 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 127,
+    "name": "Band 6 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 128,
+    "name": "Band 6 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 129,
+    "name": "Band 6 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 130,
+    "name": "Band 6 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 131,
+    "name": "Band 6 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 132,
+    "name": "Band 6 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 133,
+    "name": "Band 6 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 134,
+    "name": "Band 6 Release",
+    "value": 0.5
+  },
+  {
+    "id": 135,
+    "name": "Band 6 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 136,
+    "name": "Band 6 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 137,
+    "name": "Band 6 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 138,
+    "name": "Band 6 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 139,
+    "name": "Band 6 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 140,
+    "name": "Band 6 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 141,
+    "name": "Band 6 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 142,
+    "name": "Band 6 Solo",
+    "value": 0
+  },
+  {
+    "id": 143,
+    "name": "Band 6 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 144,
+    "name": "Band 7 Used",
+    "value": 0
+  },
+  {
+    "id": 145,
+    "name": "Band 7 Enabled",
+    "value": 1
+  },
+  {
+    "id": 146,
+    "name": "Band 7 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 147,
+    "name": "Band 7 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 148,
+    "name": "Band 7 Q",
+    "value": 0.5
+  },
+  {
+    "id": 149,
+    "name": "Band 7 Shape",
+    "value": 0
+  },
+  {
+    "id": 150,
+    "name": "Band 7 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 151,
+    "name": "Band 7 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 152,
+    "name": "Band 7 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 153,
+    "name": "Band 7 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 154,
+    "name": "Band 7 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 155,
+    "name": "Band 7 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 156,
+    "name": "Band 7 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 157,
+    "name": "Band 7 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 158,
+    "name": "Band 7 Release",
+    "value": 0.5
+  },
+  {
+    "id": 159,
+    "name": "Band 7 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 160,
+    "name": "Band 7 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 161,
+    "name": "Band 7 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 162,
+    "name": "Band 7 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 163,
+    "name": "Band 7 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 164,
+    "name": "Band 7 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 165,
+    "name": "Band 7 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 166,
+    "name": "Band 7 Solo",
+    "value": 0
+  },
+  {
+    "id": 167,
+    "name": "Band 7 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 168,
+    "name": "Band 8 Used",
+    "value": 0
+  },
+  {
+    "id": 169,
+    "name": "Band 8 Enabled",
+    "value": 1
+  },
+  {
+    "id": 170,
+    "name": "Band 8 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 171,
+    "name": "Band 8 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 172,
+    "name": "Band 8 Q",
+    "value": 0.5
+  },
+  {
+    "id": 173,
+    "name": "Band 8 Shape",
+    "value": 0
+  },
+  {
+    "id": 174,
+    "name": "Band 8 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 175,
+    "name": "Band 8 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 176,
+    "name": "Band 8 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 177,
+    "name": "Band 8 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 178,
+    "name": "Band 8 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 179,
+    "name": "Band 8 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 180,
+    "name": "Band 8 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 181,
+    "name": "Band 8 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 182,
+    "name": "Band 8 Release",
+    "value": 0.5
+  },
+  {
+    "id": 183,
+    "name": "Band 8 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 184,
+    "name": "Band 8 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 185,
+    "name": "Band 8 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 186,
+    "name": "Band 8 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 187,
+    "name": "Band 8 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 188,
+    "name": "Band 8 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 189,
+    "name": "Band 8 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 190,
+    "name": "Band 8 Solo",
+    "value": 0
+  },
+  {
+    "id": 191,
+    "name": "Band 8 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 192,
+    "name": "Band 9 Used",
+    "value": 0
+  },
+  {
+    "id": 193,
+    "name": "Band 9 Enabled",
+    "value": 1
+  },
+  {
+    "id": 194,
+    "name": "Band 9 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 195,
+    "name": "Band 9 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 196,
+    "name": "Band 9 Q",
+    "value": 0.5
+  },
+  {
+    "id": 197,
+    "name": "Band 9 Shape",
+    "value": 0
+  },
+  {
+    "id": 198,
+    "name": "Band 9 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 199,
+    "name": "Band 9 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 200,
+    "name": "Band 9 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 201,
+    "name": "Band 9 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 202,
+    "name": "Band 9 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 203,
+    "name": "Band 9 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 204,
+    "name": "Band 9 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 205,
+    "name": "Band 9 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 206,
+    "name": "Band 9 Release",
+    "value": 0.5
+  },
+  {
+    "id": 207,
+    "name": "Band 9 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 208,
+    "name": "Band 9 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 209,
+    "name": "Band 9 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 210,
+    "name": "Band 9 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 211,
+    "name": "Band 9 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 212,
+    "name": "Band 9 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 213,
+    "name": "Band 9 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 214,
+    "name": "Band 9 Solo",
+    "value": 0
+  },
+  {
+    "id": 215,
+    "name": "Band 9 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 216,
+    "name": "Band 10 Used",
+    "value": 0
+  },
+  {
+    "id": 217,
+    "name": "Band 10 Enabled",
+    "value": 1
+  },
+  {
+    "id": 218,
+    "name": "Band 10 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 219,
+    "name": "Band 10 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 220,
+    "name": "Band 10 Q",
+    "value": 0.5
+  },
+  {
+    "id": 221,
+    "name": "Band 10 Shape",
+    "value": 0
+  },
+  {
+    "id": 222,
+    "name": "Band 10 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 223,
+    "name": "Band 10 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 224,
+    "name": "Band 10 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 225,
+    "name": "Band 10 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 226,
+    "name": "Band 10 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 227,
+    "name": "Band 10 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 228,
+    "name": "Band 10 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 229,
+    "name": "Band 10 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 230,
+    "name": "Band 10 Release",
+    "value": 0.5
+  },
+  {
+    "id": 231,
+    "name": "Band 10 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 232,
+    "name": "Band 10 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 233,
+    "name": "Band 10 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 234,
+    "name": "Band 10 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 235,
+    "name": "Band 10 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 236,
+    "name": "Band 10 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 237,
+    "name": "Band 10 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 238,
+    "name": "Band 10 Solo",
+    "value": 0
+  },
+  {
+    "id": 239,
+    "name": "Band 10 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 240,
+    "name": "Band 11 Used",
+    "value": 0
+  },
+  {
+    "id": 241,
+    "name": "Band 11 Enabled",
+    "value": 1
+  },
+  {
+    "id": 242,
+    "name": "Band 11 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 243,
+    "name": "Band 11 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 244,
+    "name": "Band 11 Q",
+    "value": 0.5
+  },
+  {
+    "id": 245,
+    "name": "Band 11 Shape",
+    "value": 0
+  },
+  {
+    "id": 246,
+    "name": "Band 11 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 247,
+    "name": "Band 11 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 248,
+    "name": "Band 11 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 249,
+    "name": "Band 11 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 250,
+    "name": "Band 11 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 251,
+    "name": "Band 11 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 252,
+    "name": "Band 11 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 253,
+    "name": "Band 11 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 254,
+    "name": "Band 11 Release",
+    "value": 0.5
+  },
+  {
+    "id": 255,
+    "name": "Band 11 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 256,
+    "name": "Band 11 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 257,
+    "name": "Band 11 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 258,
+    "name": "Band 11 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 259,
+    "name": "Band 11 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 260,
+    "name": "Band 11 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 261,
+    "name": "Band 11 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 262,
+    "name": "Band 11 Solo",
+    "value": 0
+  },
+  {
+    "id": 263,
+    "name": "Band 11 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 264,
+    "name": "Band 12 Used",
+    "value": 0
+  },
+  {
+    "id": 265,
+    "name": "Band 12 Enabled",
+    "value": 1
+  },
+  {
+    "id": 266,
+    "name": "Band 12 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 267,
+    "name": "Band 12 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 268,
+    "name": "Band 12 Q",
+    "value": 0.5
+  },
+  {
+    "id": 269,
+    "name": "Band 12 Shape",
+    "value": 0
+  },
+  {
+    "id": 270,
+    "name": "Band 12 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 271,
+    "name": "Band 12 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 272,
+    "name": "Band 12 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 273,
+    "name": "Band 12 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 274,
+    "name": "Band 12 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 275,
+    "name": "Band 12 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 276,
+    "name": "Band 12 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 277,
+    "name": "Band 12 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 278,
+    "name": "Band 12 Release",
+    "value": 0.5
+  },
+  {
+    "id": 279,
+    "name": "Band 12 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 280,
+    "name": "Band 12 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 281,
+    "name": "Band 12 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 282,
+    "name": "Band 12 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 283,
+    "name": "Band 12 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 284,
+    "name": "Band 12 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 285,
+    "name": "Band 12 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 286,
+    "name": "Band 12 Solo",
+    "value": 0
+  },
+  {
+    "id": 287,
+    "name": "Band 12 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 288,
+    "name": "Band 13 Used",
+    "value": 0
+  },
+  {
+    "id": 289,
+    "name": "Band 13 Enabled",
+    "value": 1
+  },
+  {
+    "id": 290,
+    "name": "Band 13 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 291,
+    "name": "Band 13 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 292,
+    "name": "Band 13 Q",
+    "value": 0.5
+  },
+  {
+    "id": 293,
+    "name": "Band 13 Shape",
+    "value": 0
+  },
+  {
+    "id": 294,
+    "name": "Band 13 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 295,
+    "name": "Band 13 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 296,
+    "name": "Band 13 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 297,
+    "name": "Band 13 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 298,
+    "name": "Band 13 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 299,
+    "name": "Band 13 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 300,
+    "name": "Band 13 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 301,
+    "name": "Band 13 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 302,
+    "name": "Band 13 Release",
+    "value": 0.5
+  },
+  {
+    "id": 303,
+    "name": "Band 13 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 304,
+    "name": "Band 13 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 305,
+    "name": "Band 13 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 306,
+    "name": "Band 13 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 307,
+    "name": "Band 13 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 308,
+    "name": "Band 13 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 309,
+    "name": "Band 13 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 310,
+    "name": "Band 13 Solo",
+    "value": 0
+  },
+  {
+    "id": 311,
+    "name": "Band 13 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 312,
+    "name": "Band 14 Used",
+    "value": 0
+  },
+  {
+    "id": 313,
+    "name": "Band 14 Enabled",
+    "value": 1
+  },
+  {
+    "id": 314,
+    "name": "Band 14 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 315,
+    "name": "Band 14 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 316,
+    "name": "Band 14 Q",
+    "value": 0.5
+  },
+  {
+    "id": 317,
+    "name": "Band 14 Shape",
+    "value": 0
+  },
+  {
+    "id": 318,
+    "name": "Band 14 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 319,
+    "name": "Band 14 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 320,
+    "name": "Band 14 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 321,
+    "name": "Band 14 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 322,
+    "name": "Band 14 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 323,
+    "name": "Band 14 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 324,
+    "name": "Band 14 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 325,
+    "name": "Band 14 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 326,
+    "name": "Band 14 Release",
+    "value": 0.5
+  },
+  {
+    "id": 327,
+    "name": "Band 14 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 328,
+    "name": "Band 14 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 329,
+    "name": "Band 14 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 330,
+    "name": "Band 14 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 331,
+    "name": "Band 14 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 332,
+    "name": "Band 14 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 333,
+    "name": "Band 14 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 334,
+    "name": "Band 14 Solo",
+    "value": 0
+  },
+  {
+    "id": 335,
+    "name": "Band 14 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 336,
+    "name": "Band 15 Used",
+    "value": 0
+  },
+  {
+    "id": 337,
+    "name": "Band 15 Enabled",
+    "value": 1
+  },
+  {
+    "id": 338,
+    "name": "Band 15 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 339,
+    "name": "Band 15 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 340,
+    "name": "Band 15 Q",
+    "value": 0.5
+  },
+  {
+    "id": 341,
+    "name": "Band 15 Shape",
+    "value": 0
+  },
+  {
+    "id": 342,
+    "name": "Band 15 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 343,
+    "name": "Band 15 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 344,
+    "name": "Band 15 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 345,
+    "name": "Band 15 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 346,
+    "name": "Band 15 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 347,
+    "name": "Band 15 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 348,
+    "name": "Band 15 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 349,
+    "name": "Band 15 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 350,
+    "name": "Band 15 Release",
+    "value": 0.5
+  },
+  {
+    "id": 351,
+    "name": "Band 15 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 352,
+    "name": "Band 15 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 353,
+    "name": "Band 15 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 354,
+    "name": "Band 15 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 355,
+    "name": "Band 15 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 356,
+    "name": "Band 15 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 357,
+    "name": "Band 15 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 358,
+    "name": "Band 15 Solo",
+    "value": 0
+  },
+  {
+    "id": 359,
+    "name": "Band 15 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 360,
+    "name": "Band 16 Used",
+    "value": 0
+  },
+  {
+    "id": 361,
+    "name": "Band 16 Enabled",
+    "value": 1
+  },
+  {
+    "id": 362,
+    "name": "Band 16 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 363,
+    "name": "Band 16 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 364,
+    "name": "Band 16 Q",
+    "value": 0.5
+  },
+  {
+    "id": 365,
+    "name": "Band 16 Shape",
+    "value": 0
+  },
+  {
+    "id": 366,
+    "name": "Band 16 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 367,
+    "name": "Band 16 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 368,
+    "name": "Band 16 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 369,
+    "name": "Band 16 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 370,
+    "name": "Band 16 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 371,
+    "name": "Band 16 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 372,
+    "name": "Band 16 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 373,
+    "name": "Band 16 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 374,
+    "name": "Band 16 Release",
+    "value": 0.5
+  },
+  {
+    "id": 375,
+    "name": "Band 16 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 376,
+    "name": "Band 16 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 377,
+    "name": "Band 16 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 378,
+    "name": "Band 16 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 379,
+    "name": "Band 16 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 380,
+    "name": "Band 16 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 381,
+    "name": "Band 16 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 382,
+    "name": "Band 16 Solo",
+    "value": 0
+  },
+  {
+    "id": 383,
+    "name": "Band 16 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 384,
+    "name": "Band 17 Used",
+    "value": 0
+  },
+  {
+    "id": 385,
+    "name": "Band 17 Enabled",
+    "value": 1
+  },
+  {
+    "id": 386,
+    "name": "Band 17 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 387,
+    "name": "Band 17 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 388,
+    "name": "Band 17 Q",
+    "value": 0.5
+  },
+  {
+    "id": 389,
+    "name": "Band 17 Shape",
+    "value": 0
+  },
+  {
+    "id": 390,
+    "name": "Band 17 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 391,
+    "name": "Band 17 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 392,
+    "name": "Band 17 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 393,
+    "name": "Band 17 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 394,
+    "name": "Band 17 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 395,
+    "name": "Band 17 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 396,
+    "name": "Band 17 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 397,
+    "name": "Band 17 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 398,
+    "name": "Band 17 Release",
+    "value": 0.5
+  },
+  {
+    "id": 399,
+    "name": "Band 17 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 400,
+    "name": "Band 17 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 401,
+    "name": "Band 17 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 402,
+    "name": "Band 17 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 403,
+    "name": "Band 17 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 404,
+    "name": "Band 17 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 405,
+    "name": "Band 17 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 406,
+    "name": "Band 17 Solo",
+    "value": 0
+  },
+  {
+    "id": 407,
+    "name": "Band 17 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 408,
+    "name": "Band 18 Used",
+    "value": 0
+  },
+  {
+    "id": 409,
+    "name": "Band 18 Enabled",
+    "value": 1
+  },
+  {
+    "id": 410,
+    "name": "Band 18 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 411,
+    "name": "Band 18 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 412,
+    "name": "Band 18 Q",
+    "value": 0.5
+  },
+  {
+    "id": 413,
+    "name": "Band 18 Shape",
+    "value": 0
+  },
+  {
+    "id": 414,
+    "name": "Band 18 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 415,
+    "name": "Band 18 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 416,
+    "name": "Band 18 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 417,
+    "name": "Band 18 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 418,
+    "name": "Band 18 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 419,
+    "name": "Band 18 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 420,
+    "name": "Band 18 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 421,
+    "name": "Band 18 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 422,
+    "name": "Band 18 Release",
+    "value": 0.5
+  },
+  {
+    "id": 423,
+    "name": "Band 18 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 424,
+    "name": "Band 18 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 425,
+    "name": "Band 18 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 426,
+    "name": "Band 18 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 427,
+    "name": "Band 18 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 428,
+    "name": "Band 18 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 429,
+    "name": "Band 18 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 430,
+    "name": "Band 18 Solo",
+    "value": 0
+  },
+  {
+    "id": 431,
+    "name": "Band 18 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 432,
+    "name": "Band 19 Used",
+    "value": 0
+  },
+  {
+    "id": 433,
+    "name": "Band 19 Enabled",
+    "value": 1
+  },
+  {
+    "id": 434,
+    "name": "Band 19 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 435,
+    "name": "Band 19 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 436,
+    "name": "Band 19 Q",
+    "value": 0.5
+  },
+  {
+    "id": 437,
+    "name": "Band 19 Shape",
+    "value": 0
+  },
+  {
+    "id": 438,
+    "name": "Band 19 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 439,
+    "name": "Band 19 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 440,
+    "name": "Band 19 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 441,
+    "name": "Band 19 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 442,
+    "name": "Band 19 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 443,
+    "name": "Band 19 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 444,
+    "name": "Band 19 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 445,
+    "name": "Band 19 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 446,
+    "name": "Band 19 Release",
+    "value": 0.5
+  },
+  {
+    "id": 447,
+    "name": "Band 19 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 448,
+    "name": "Band 19 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 449,
+    "name": "Band 19 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 450,
+    "name": "Band 19 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 451,
+    "name": "Band 19 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 452,
+    "name": "Band 19 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 453,
+    "name": "Band 19 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 454,
+    "name": "Band 19 Solo",
+    "value": 0
+  },
+  {
+    "id": 455,
+    "name": "Band 19 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 456,
+    "name": "Band 20 Used",
+    "value": 0
+  },
+  {
+    "id": 457,
+    "name": "Band 20 Enabled",
+    "value": 1
+  },
+  {
+    "id": 458,
+    "name": "Band 20 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 459,
+    "name": "Band 20 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 460,
+    "name": "Band 20 Q",
+    "value": 0.5
+  },
+  {
+    "id": 461,
+    "name": "Band 20 Shape",
+    "value": 0
+  },
+  {
+    "id": 462,
+    "name": "Band 20 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 463,
+    "name": "Band 20 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 464,
+    "name": "Band 20 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 465,
+    "name": "Band 20 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 466,
+    "name": "Band 20 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 467,
+    "name": "Band 20 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 468,
+    "name": "Band 20 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 469,
+    "name": "Band 20 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 470,
+    "name": "Band 20 Release",
+    "value": 0.5
+  },
+  {
+    "id": 471,
+    "name": "Band 20 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 472,
+    "name": "Band 20 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 473,
+    "name": "Band 20 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 474,
+    "name": "Band 20 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 475,
+    "name": "Band 20 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 476,
+    "name": "Band 20 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 477,
+    "name": "Band 20 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 478,
+    "name": "Band 20 Solo",
+    "value": 0
+  },
+  {
+    "id": 479,
+    "name": "Band 20 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 480,
+    "name": "Band 21 Used",
+    "value": 0
+  },
+  {
+    "id": 481,
+    "name": "Band 21 Enabled",
+    "value": 1
+  },
+  {
+    "id": 482,
+    "name": "Band 21 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 483,
+    "name": "Band 21 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 484,
+    "name": "Band 21 Q",
+    "value": 0.5
+  },
+  {
+    "id": 485,
+    "name": "Band 21 Shape",
+    "value": 0
+  },
+  {
+    "id": 486,
+    "name": "Band 21 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 487,
+    "name": "Band 21 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 488,
+    "name": "Band 21 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 489,
+    "name": "Band 21 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 490,
+    "name": "Band 21 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 491,
+    "name": "Band 21 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 492,
+    "name": "Band 21 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 493,
+    "name": "Band 21 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 494,
+    "name": "Band 21 Release",
+    "value": 0.5
+  },
+  {
+    "id": 495,
+    "name": "Band 21 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 496,
+    "name": "Band 21 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 497,
+    "name": "Band 21 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 498,
+    "name": "Band 21 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 499,
+    "name": "Band 21 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 500,
+    "name": "Band 21 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 501,
+    "name": "Band 21 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 502,
+    "name": "Band 21 Solo",
+    "value": 0
+  },
+  {
+    "id": 503,
+    "name": "Band 21 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 504,
+    "name": "Band 22 Used",
+    "value": 0
+  },
+  {
+    "id": 505,
+    "name": "Band 22 Enabled",
+    "value": 1
+  },
+  {
+    "id": 506,
+    "name": "Band 22 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 507,
+    "name": "Band 22 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 508,
+    "name": "Band 22 Q",
+    "value": 0.5
+  },
+  {
+    "id": 509,
+    "name": "Band 22 Shape",
+    "value": 0
+  },
+  {
+    "id": 510,
+    "name": "Band 22 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 511,
+    "name": "Band 22 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 512,
+    "name": "Band 22 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 513,
+    "name": "Band 22 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 514,
+    "name": "Band 22 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 515,
+    "name": "Band 22 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 516,
+    "name": "Band 22 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 517,
+    "name": "Band 22 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 518,
+    "name": "Band 22 Release",
+    "value": 0.5
+  },
+  {
+    "id": 519,
+    "name": "Band 22 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 520,
+    "name": "Band 22 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 521,
+    "name": "Band 22 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 522,
+    "name": "Band 22 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 523,
+    "name": "Band 22 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 524,
+    "name": "Band 22 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 525,
+    "name": "Band 22 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 526,
+    "name": "Band 22 Solo",
+    "value": 0
+  },
+  {
+    "id": 527,
+    "name": "Band 22 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 528,
+    "name": "Band 23 Used",
+    "value": 0
+  },
+  {
+    "id": 529,
+    "name": "Band 23 Enabled",
+    "value": 1
+  },
+  {
+    "id": 530,
+    "name": "Band 23 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 531,
+    "name": "Band 23 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 532,
+    "name": "Band 23 Q",
+    "value": 0.5
+  },
+  {
+    "id": 533,
+    "name": "Band 23 Shape",
+    "value": 0
+  },
+  {
+    "id": 534,
+    "name": "Band 23 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 535,
+    "name": "Band 23 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 536,
+    "name": "Band 23 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 537,
+    "name": "Band 23 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 538,
+    "name": "Band 23 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 539,
+    "name": "Band 23 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 540,
+    "name": "Band 23 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 541,
+    "name": "Band 23 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 542,
+    "name": "Band 23 Release",
+    "value": 0.5
+  },
+  {
+    "id": 543,
+    "name": "Band 23 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 544,
+    "name": "Band 23 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 545,
+    "name": "Band 23 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 546,
+    "name": "Band 23 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 547,
+    "name": "Band 23 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 548,
+    "name": "Band 23 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 549,
+    "name": "Band 23 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 550,
+    "name": "Band 23 Solo",
+    "value": 0
+  },
+  {
+    "id": 551,
+    "name": "Band 23 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 552,
+    "name": "Band 24 Used",
+    "value": 0
+  },
+  {
+    "id": 553,
+    "name": "Band 24 Enabled",
+    "value": 1
+  },
+  {
+    "id": 554,
+    "name": "Band 24 Frequency",
+    "value": 0.5751884579658508
+  },
+  {
+    "id": 555,
+    "name": "Band 24 Gain",
+    "value": 0.5
+  },
+  {
+    "id": 556,
+    "name": "Band 24 Q",
+    "value": 0.5
+  },
+  {
+    "id": 557,
+    "name": "Band 24 Shape",
+    "value": 0
+  },
+  {
+    "id": 558,
+    "name": "Band 24 Slope",
+    "value": 0.20000000298023224
+  },
+  {
+    "id": 559,
+    "name": "Band 24 Stereo Placement",
+    "value": 0.5
+  },
+  {
+    "id": 560,
+    "name": "Band 24 Speakers",
+    "value": 0.0714285746216774
+  },
+  {
+    "id": 561,
+    "name": "Band 24 Dynamic Range",
+    "value": 0.5
+  },
+  {
+    "id": 562,
+    "name": "Band 24 Dynamics Enabled",
+    "value": 1
+  },
+  {
+    "id": 563,
+    "name": "Band 24 Dynamics Auto",
+    "value": 1
+  },
+  {
+    "id": 564,
+    "name": "Band 24 Threshold",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 565,
+    "name": "Band 24 Attack",
+    "value": 0.5
+  },
+  {
+    "id": 566,
+    "name": "Band 24 Release",
+    "value": 0.5
+  },
+  {
+    "id": 567,
+    "name": "Band 24 External Side Chain",
+    "value": 0
+  },
+  {
+    "id": 568,
+    "name": "Band 24 Side Chain Filtering",
+    "value": 0
+  },
+  {
+    "id": 569,
+    "name": "Band 24 Side Chain Low Frequency",
+    "value": 0
+  },
+  {
+    "id": 570,
+    "name": "Band 24 Side Chain High Frequency",
+    "value": 1
+  },
+  {
+    "id": 571,
+    "name": "Band 24 Side Chain Audition",
+    "value": 0
+  },
+  {
+    "id": 572,
+    "name": "Band 24 Spectral Enabled",
+    "value": 0
+  },
+  {
+    "id": 573,
+    "name": "Band 24 Spectral Density",
+    "value": 0.5
+  },
+  {
+    "id": 574,
+    "name": "Band 24 Solo",
+    "value": 0
+  },
+  {
+    "id": 575,
+    "name": "Band 24 Spectral Tilt",
+    "value": 0
+  },
+  {
+    "id": 576,
+    "name": "Processing Mode",
+    "value": 0
+  },
+  {
+    "id": 577,
+    "name": "Processing Resolution",
+    "value": 0.25
+  },
+  {
+    "id": 578,
+    "name": "Character",
+    "value": 0
+  },
+  {
+    "id": 579,
+    "name": "Gain Scale",
+    "value": 0.5
+  },
+  {
+    "id": 580,
+    "name": "Output Level",
+    "value": 0.5
+  },
+  {
+    "id": 581,
+    "name": "Output Pan",
+    "value": 0.5
+  },
+  {
+    "id": 582,
+    "name": "Output Pan Mode",
+    "value": 0
+  },
+  {
+    "id": 583,
+    "name": "Bypass",
+    "value": 0
+  },
+  {
+    "id": 584,
+    "name": "Output Invert Phase",
+    "value": 0
+  },
+  {
+    "id": 585,
+    "name": "Auto Gain",
+    "value": 0
+  },
+  {
+    "id": 586,
+    "name": "Analyzer Show Pre-Processing",
+    "value": 1
+  },
+  {
+    "id": 587,
+    "name": "Analyzer Show Post-Processing",
+    "value": 1
+  },
+  {
+    "id": 588,
+    "name": "Analyzer Show External Spectrum",
+    "value": 0
+  },
+  {
+    "id": 589,
+    "name": "Analyzer External Spectrum",
+    "value": 0
+  },
+  {
+    "id": 590,
+    "name": "Analyzer Range",
+    "value": 0.5
+  },
+  {
+    "id": 591,
+    "name": "Analyzer Resolution",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 592,
+    "name": "Analyzer Speed",
+    "value": 0.5
+  },
+  {
+    "id": 593,
+    "name": "Analyzer Tilt",
+    "value": 0.75
+  },
+  {
+    "id": 594,
+    "name": "Analyzer Freeze",
+    "value": 0
+  },
+  {
+    "id": 595,
+    "name": "Analyzer Show Collisions",
+    "value": 1
+  },
+  {
+    "id": 596,
+    "name": "Spectrum Grab",
+    "value": 1
+  },
+  {
+    "id": 597,
+    "name": "Display Range",
+    "value": 0.6666666865348816
+  },
+  {
+    "id": 598,
+    "name": "Receive Midi",
+    "value": 0
+  },
+  {
+    "id": 599,
+    "name": "Solo Gain",
+    "value": 0.5
+  },
+  {
+    "id": 600,
+    "name": "Host Bypass",
+    "value": 0
+  },
+  {
+    "id": 601,
+    "name": "Internal",
+    "value": 0
+  },
+  {
+    "id": 602,
+    "name": "Internal",
+    "value": 0
+  },
+  {
+    "id": 603,
+    "name": "Internal",
+    "value": 0
+  },
+  {
+    "id": 604,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 605,
+    "name": "Pitch Bend",
+    "value": 0
+  },
+  {
+    "id": 606,
+    "name": "Channel Pressure",
+    "value": 0
+  },
+  {
+    "id": 607,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 608,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 609,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 610,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 611,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 612,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 613,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 614,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 615,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 616,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 617,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 618,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 619,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 620,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 621,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 622,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 623,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 624,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 625,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 626,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 627,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 628,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 629,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 630,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 631,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 632,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 633,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 634,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 635,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 636,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 637,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 638,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 639,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 640,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 641,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 642,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 643,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 644,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 645,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 646,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 647,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 648,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 649,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 650,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 651,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 652,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 653,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 654,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 655,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 656,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 657,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 658,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 659,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 660,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 661,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 662,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 663,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 664,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 665,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 666,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 667,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 668,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 669,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 670,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 671,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 672,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 673,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 674,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 675,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 676,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 677,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 678,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 679,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 680,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 681,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 682,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 683,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 684,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 685,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 686,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 687,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 688,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 689,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 690,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 691,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 692,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 693,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 694,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 695,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 696,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 697,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 698,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 699,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 700,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 701,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 702,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 703,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 704,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 705,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 706,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 707,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 708,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 709,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 710,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 711,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 712,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 713,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 714,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 715,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 716,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 717,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 718,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 719,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 720,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 721,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 722,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 723,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 724,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 725,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 726,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 727,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 728,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 729,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 730,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 731,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 732,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 733,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 734,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 735,
+    "name": "MIDI CC",
+    "value": 0
+  },
+  {
+    "id": 736,
+    "name": "Internal",
+    "value": 0
+  }
+]

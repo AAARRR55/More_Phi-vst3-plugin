@@ -16,6 +16,8 @@
 #include "UI/BreedingPanel.h"
 #include "UI/ModeBar.h"
 #include "UI/ParameterMapPanel.h"
+#include "UI/BottomControlStrip.h"
+#include "UI/HostedPluginWindow.h"
 
 namespace morphsnap {
 
@@ -47,10 +49,17 @@ private:
     BreedingPanel     breedingPanel;
     ModeBar           modeBar;
     ParameterMapPanel paramPanel;
+    BottomControlStrip controlStrip;
 
     // Parameter panel toggle
     juce::TextButton paramToggleBtn_{"Params ▸"};
     bool paramPanelVisible_ = false;
+
+    // Hosted plugin window (detached)
+    std::unique_ptr<HostedPluginWindow> hostedWindow_;
+    juce::TextButton openPluginBtn_{"Open Plugin UI"};
+    void openPluginWindow();
+    void closePluginWindow();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphSnapEditor)
 };

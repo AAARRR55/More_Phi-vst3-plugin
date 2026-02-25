@@ -1,0 +1,596 @@
+﻿MSBuild version 18.4.0+6e61e96ac for .NET Framework
+
+  Checking File Globs
+  MorphSnap_rc_lib.vcxproj -> D:\morphy\build\MorphSnap_rc_lib.dir\Release\MorphSnap_rc_lib.lib
+  PluginProcessor.cpp
+  PluginEditor.cpp
+  SnapshotBank.cpp
+  InterpolationEngine.cpp
+  PhysicsEngine.cpp
+  GeneticEngine.cpp
+  MorphProcessor.cpp
+  ParameterClassifier.cpp
+D:\morphy\src\Core\ParameterClassifier.h(153,18): error C2039: 'mutex': is not a member of 'std' [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/ParameterClassifier.cpp')
+      D:\c++\VC\Tools\MSVC\14.50.35717\include\vector(29,1):
+      see declaration of 'std'
+  
+D:\morphy\src\Core\ParameterClassifier.h(153,24): error C3646: 'mutex_': unknown override specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/ParameterClassifier.cpp')
+  
+D:\morphy\src\Core\ParameterClassifier.h(153,18): error C4430: missing type specifier - int assumed. Note: C++ does not support default-int [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/ParameterClassifier.cpp')
+  
+  DiscreteParameterHandler.cpp
+D:\morphy\src\Core\ParameterClassifier.h(153,18): error C2039: 'mutex': is not a member of 'std' [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/DiscreteParameterHandler.cpp')
+      D:\c++\VC\Tools\MSVC\14.50.35717\include\vector(29,1):
+      see declaration of 'std'
+  
+D:\morphy\src\Core\ParameterClassifier.h(153,24): error C3646: 'mutex_': unknown override specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/DiscreteParameterHandler.cpp')
+  
+D:\morphy\src\Core\ParameterClassifier.h(153,18): error C4430: missing type specifier - int assumed. Note: C++ does not support default-int [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Core/DiscreteParameterHandler.cpp')
+  
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(171,41): error C2143: syntax error: missing ';' before 'morphsnap::DiscreteParameterHandler::getStrategyForParameter' [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(171,1): error C4430: missing type specifier - int assumed. Note: C++ does not support default-int [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(171,41): error C4430: missing type specifier - int assumed. Note: C++ does not support default-int [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(171,41): error C2556: 'int morphsnap::DiscreteParameterHandler::getStrategyForParameter(int) const': overloaded function differs only by return type from 'morphsnap::DiscreteParameterHandler::BlendStrategy morphsnap::DiscreteParameterHandler::getStrategyForParameter(int) const' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\DiscreteParameterHandler.h(110,19):
+      see declaration of 'morphsnap::DiscreteParameterHandler::getStrategyForParameter'
+  
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(171,41): error C2371: 'morphsnap::DiscreteParameterHandler::getStrategyForParameter': redefinition; different basic types [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\DiscreteParameterHandler.h(110,19):
+      see declaration of 'morphsnap::DiscreteParameterHandler::getStrategyForParameter'
+  
+D:\morphy\src\Core\DiscreteParameterHandler.cpp(176,9): warning C4390: ';': empty controlled statement found; is this the intent? [D:\morphy\build\MorphSnap.vcxproj]
+  PluginScanner.cpp
+D:\morphy\src\Core\InterpolationEngine.cpp(180,43): warning C4100: 'caller': unreferenced parameter [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\InterpolationEngine.cpp(180,43):
+      the template instantiation context (the oldest one first) is
+          D:\morphy\src\Core\InterpolationEngine.cpp(211,5):
+          see reference to function template instantiation 'void morphsnap::computeWithRetry<morphsnap::InterpolationEngine::compute1D::<lambda_1>>(const morphsnap::SnapshotBank &,std::vector<float,std::allocator<float>> &,const char *,Fn &&) noexcept' being compiled
+          with
+          [
+              Fn=morphsnap::InterpolationEngine::compute1D::<lambda_1>
+          ]
+  
+  PluginHostManager.cpp
+  ParameterBridge.cpp
+  InstanceRegistry.cpp
+D:\morphy\src\Core\ParameterClassifier.cpp(21,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(23,28): error C2039: 'getParameterCount': is not a member of 'morphsnap::IPluginHostManager' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\IPluginHostManager.h(16,7):
+      see declaration of 'morphsnap::IPluginHostManager'
+  
+D:\morphy\src\Core\ParameterClassifier.cpp(23,15): error C2737: 'count': const object must be initialized [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(31,34): error C2039: 'getParameterName': is not a member of 'morphsnap::IPluginHostManager' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\IPluginHostManager.h(16,7):
+      see declaration of 'morphsnap::IPluginHostManager'
+  
+D:\morphy\src\Core\ParameterClassifier.cpp(32,14): warning C4996: 'strncpy': This function or variable may be unsafe. Consider using strncpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details. [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(61,34): error C2039: 'getParameterNormalized': is not a member of 'morphsnap::IPluginHostManager' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\IPluginHostManager.h(16,7):
+      see declaration of 'morphsnap::IPluginHostManager'
+  
+D:\morphy\src\Core\ParameterClassifier.cpp(69,30): error C2039: 'getParameterName': is not a member of 'morphsnap::IPluginHostManager' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\IPluginHostManager.h(16,7):
+      see declaration of 'morphsnap::IPluginHostManager'
+  
+D:\morphy\src\Core\ParameterClassifier.cpp(165,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(172,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(178,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(209,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(229,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(245,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(263,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(269,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(280,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(290,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(303,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(316,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(335,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(383,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(398,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(463,46): warning C4146: unary minus operator applied to unsigned type, result still unsigned [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(490,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(536,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(549,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\Core\ParameterClassifier.cpp(574,38): error C2065: 'mutex_': undeclared identifier [D:\morphy\build\MorphSnap.vcxproj]
+  MCPServer.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Plugin/PluginProcessor.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/Plugin/PluginEditor.cpp')
+  
+  MCPToolHandler.cpp
+  LinkBroadcaster.cpp
+  TokenOptimizer.cpp
+  MCPToolsExtended.cpp
+  MIDIRouter.cpp
+D:\morphy\src\Host\ParameterBridge.cpp(31,61): warning C4100: 'context': unreferenced parameter [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\ParameterBridge.cpp(31,61):
+      the template instantiation context (the oldest one first) is
+          D:\morphy\src\Host\ParameterBridge.cpp(52,12):
+          see reference to function template instantiation 'Ret morphsnap::withPlugin<int,morphsnap::ParameterBridge::getParameterCount::<lambda_1>>(morphsnap::IPluginHostManager &,const char *,Ret,Fn &&)' being compiled
+          with
+          [
+              Ret=int,
+              Fn=morphsnap::ParameterBridge::getParameterCount::<lambda_1>
+          ]
+  
+  MetaPresetManager.cpp
+D:\morphy\src\Host\ParameterBridge.cpp(22,35): warning C4505: 'morphsnap::getHostPlugin': unreferenced function with internal linkage has been removed [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\TokenOptimizer.cpp(390,5): error C2662: 'void morphsnap::TokenOptimizer::cleanupOldTimestamps(void)': cannot convert 'this' pointer from 'const morphsnap::TokenOptimizer' to 'morphsnap::TokenOptimizer &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\TokenOptimizer.cpp(390,5):
+      Conversion loses qualifiers
+      D:\morphy\src\AI\TokenOptimizer.h(239,10):
+      see declaration of 'morphsnap::TokenOptimizer::cleanupOldTimestamps'
+      D:\morphy\src\AI\TokenOptimizer.cpp(390,5):
+      while trying to match the argument list '()'
+  
+D:\morphy\src\AI\TokenOptimizer.cpp(397,5): error C3861: 'cleanupOldOldTimestamps': identifier not found [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\TokenOptimizer.cpp(574,22): error C2511: 'void morphsnap::TokenOptimizer::cleanupOldTimestamps(void) const': overloaded member function not found in 'morphsnap::TokenOptimizer' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\TokenOptimizer.h(81,7):
+      see declaration of 'morphsnap::TokenOptimizer'
+  
+D:\morphy\src\AI\TokenOptimizer.cpp(585,22): error C2039: 'cleanupOldOldTimestamps': is not a member of 'morphsnap::TokenOptimizer' [D:\morphy\build\MorphSnap.vcxproj]
+  PresetSerializer.cpp
+      D:\morphy\src\AI\TokenOptimizer.h(81,7):
+      see declaration of 'morphsnap::TokenOptimizer'
+  
+D:\morphy\src\AI\TokenOptimizer.cpp(585,22): error C2270: 'cleanupOldOldTimestamps': modifiers not allowed on nonmember functions [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\TokenOptimizer.cpp(587,5): error C3861: 'cleanupOldTimestamps': identifier not found [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\MCPToolsExtended.h(150,21): error C2653: 'MorphSafeAdvisor': is not a class or namespace name [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/AI/MCPToolsExtended.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/AI/MCPServer.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/AI/LinkBroadcaster.cpp')
+  
+  MorphSnapLookAndFeel.cpp
+  MorphPad.cpp
+  SnapFader.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/AI/MCPToolHandler.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/AI/MCPToolsExtended.cpp')
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(261,76): error C2039: 'getParameterNormalized': is not a member of 'morphsnap::PluginHostManager' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Host\PluginHostManager.h(18,7):
+      see declaration of 'morphsnap::PluginHostManager'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(261,20): error C2660: 'juce::DynamicObject::setProperty': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(261,20):
+      while trying to match the argument list '(const char [14])'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(276,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'unsigned __int64' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(276,61):
+      Reason: cannot convert from 'unsigned __int64' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(276,61):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(276,61):
+          while trying to match the argument list '(unsigned __int64)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(276,13):
+      while trying to match the argument list '(const char [14], unsigned __int64)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(280,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'juce::DynamicObject::Ptr' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(280,63):
+      Reason: cannot convert from 'juce::DynamicObject::Ptr' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(280,63):
+      No user-defined-conversion operator available that can perform this conversion, or the operator cannot be called
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(280,13):
+      while trying to match the argument list '(const char [11], juce::DynamicObject::Ptr)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(360,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(360,48):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(360,48):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(360,48):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(360,13):
+      while trying to match the argument list '(const char [17], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(361,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+  SnapshotRing.cpp
+      D:\morphy\src\AI\MCPToolsExtended.cpp(361,45):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(361,45):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(361,45):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(361,13):
+      while trying to match the argument list '(const char [14], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(362,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(362,48):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(362,48):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(362,48):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(362,13):
+      while trying to match the argument list '(const char [17], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(416,41): warning C4267: '=': conversion from 'size_t' to 'uint32_t', possible loss of data [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\MCPToolsExtended.cpp(439,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(439,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(440,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(440,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(447,41): error C2664: 'morphsnap::MorphSafeAdvisor::SnapshotComparison morphsnap::MorphSafeAdvisor::compareSnapshots(const std::vector<float,std::allocator<float>> &,const std::vector<float,std::allocator<float>> &,const morphsnap::ParameterClassifier &)': cannot convert argument 1 from 'bool' to 'const std::vector<float,std::allocator<float>> &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(447,58):
+      Reason: cannot convert from 'bool' to 'const std::vector<float,std::allocator<float>>'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(447,58):
+      Constructor for class 'std::vector<float,std::allocator<float>>' is declared 'explicit'
+      D:\morphy\src\Core\DiscreteParameterHandler.h(128,31):
+      see declaration of 'morphsnap::MorphSafeAdvisor::compareSnapshots'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(447,41):
+      while trying to match the argument list '(bool, bool, morphsnap::ParameterClassifier)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(449,12): error C2664: 'juce::String morphsnap::MCPToolsExtended::formatCompatibilityReport(const morphsnap::SnapshotComparison &)': cannot convert argument 1 from 'morphsnap::MorphSafeAdvisor::SnapshotComparison' to 'const morphsnap::SnapshotComparison &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(449,38):
+      Reason: cannot convert from 'morphsnap::MorphSafeAdvisor::SnapshotComparison' to 'const morphsnap::SnapshotComparison'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(449,38):
+      use of undefined type 'morphsnap::SnapshotComparison'
+      D:\morphy\src\AI\MCPToolsExtended.h(150,39):
+      see declaration of 'morphsnap::SnapshotComparison'
+      D:\morphy\src\AI\MCPToolsExtended.h(149,25):
+      see declaration of 'morphsnap::MCPToolsExtended::formatCompatibilityReport'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(449,12):
+      while trying to match the argument list '(morphsnap::MorphSafeAdvisor::SnapshotComparison)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(452,32): error C2511: 'juce::String morphsnap::MCPToolsExtended::formatCompatibilityReport(const morphsnap::MorphSafeAdvisor::SnapshotComparison &)': overloaded member function not found in 'morphsnap::MCPToolsExtended' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.h(23,7):
+      see declaration of 'morphsnap::MCPToolsExtended'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(487,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(487,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(488,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(488,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(495,44): error C2664: 'std::vector<std::vector<float,std::allocator<float>>,std::allocator<std::vector<float,std::allocator<float>>>> morphsnap::MorphSafeAdvisor::suggestIntermediateSnapshots(const std::vector<float,std::allocator<float>> &,const std::vector<float,std::allocator<float>> &,const morphsnap::ParameterClassifier &,int)': cannot convert argument 1 from 'bool' to 'const std::vector<float,std::allocator<float>> &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(496,9):
+      Reason: cannot convert from 'bool' to 'const std::vector<float,std::allocator<float>>'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(496,9):
+      Constructor for class 'std::vector<float,std::allocator<float>>' is declared 'explicit'
+      D:\morphy\src\Core\DiscreteParameterHandler.h(134,44):
+      see declaration of 'morphsnap::MorphSafeAdvisor::suggestIntermediateSnapshots'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(495,44):
+      while trying to match the argument list '(bool, bool, morphsnap::ParameterClassifier, int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(513,56): error C2109: subscript requires array or pointer type [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\src\AI\MCPToolsExtended.cpp(555,28): warning C4457: declaration of 'params' hides function parameter [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(527,22):
+      see declaration of 'params'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(611,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(611,50):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(611,50):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(611,50):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(611,13):
+      while trying to match the argument list '(const char [17], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(612,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(612,55):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(612,55):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(612,55):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(612,13):
+      while trying to match the argument list '(const char [22], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(613,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(613,53):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(613,53):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(613,53):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(613,13):
+      while trying to match the argument list '(const char [20], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(614,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(614,51):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(614,51):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(614,51):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(614,13):
+      while trying to match the argument list '(const char [18], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(633,39): error C2440: 'static_cast': cannot convert from 'const juce::var' to 'uint32_t' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(633,39):
+      Ambiguous user-defined-conversion
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(711,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(711,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(712,47): error C2660: 'morphsnap::SnapshotBank::getSlotValuesCopy': function does not take 1 arguments [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\Core\SnapshotBank.h(74,10):
+      see declaration of 'morphsnap::SnapshotBank::getSlotValuesCopy'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(712,47):
+      while trying to match the argument list '(int)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(714,41): error C2664: 'morphsnap::MorphSafeAdvisor::SnapshotComparison morphsnap::MorphSafeAdvisor::compareSnapshots(const std::vector<float,std::allocator<float>> &,const std::vector<float,std::allocator<float>> &,const morphsnap::ParameterClassifier &)': cannot convert argument 1 from 'bool' to 'const std::vector<float,std::allocator<float>> &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(714,58):
+      Reason: cannot convert from 'bool' to 'const std::vector<float,std::allocator<float>>'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(714,58):
+      Constructor for class 'std::vector<float,std::allocator<float>>' is declared 'explicit'
+      D:\morphy\src\Core\DiscreteParameterHandler.h(128,31):
+      see declaration of 'morphsnap::MorphSafeAdvisor::compareSnapshots'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(714,41):
+      while trying to match the argument list '(bool, bool, morphsnap::ParameterClassifier)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(758,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(758,48):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(758,48):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(758,48):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(758,13):
+      while trying to match the argument list '(const char [15], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(759,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(759,53):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(759,53):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(759,53):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(759,13):
+      while trying to match the argument list '(const char [20], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(760,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(760,57):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(760,57):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(760,57):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(760,13):
+      while trying to match the argument list '(const char [24], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(762,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'uint32_t' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(762,56):
+      Reason: cannot convert from 'uint32_t' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(762,56):
+      'juce::var::var': ambiguous call to overloaded function
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(82,5):
+          could be 'juce::var::var(double) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(81,5):
+          or       'juce::var::var(bool) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(80,5):
+          or       'juce::var::var(juce::int64) noexcept'
+          D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_Variant.h(79,5):
+          or       'juce::var::var(int) noexcept'
+          D:\morphy\src\AI\MCPToolsExtended.cpp(762,56):
+          while trying to match the argument list '(uint32_t)'
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(762,13):
+      while trying to match the argument list '(const char [21], uint32_t)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(763,13): error C2664: 'void juce::DynamicObject::setProperty(const juce::Identifier &,const juce::var &)': cannot convert argument 2 from 'std::string' to 'const juce::var &' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(763,42):
+      Reason: cannot convert from 'std::string' to 'const juce::var'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(763,42):
+      No user-defined-conversion operator available that can perform this conversion, or the operator cannot be called
+      D:\morphy\build\_deps\juce-src\modules\juce_core\containers\juce_DynamicObject.h(72,10):
+      see declaration of 'juce::DynamicObject::setProperty'
+      D:\morphy\src\AI\MCPToolsExtended.cpp(763,13):
+      while trying to match the argument list '(const char [7], std::string)'
+  
+D:\morphy\src\AI\MCPToolsExtended.cpp(775,38): error C2440: 'static_cast': cannot convert from 'const juce::var' to 'uint32_t' [D:\morphy\build\MorphSnap.vcxproj]
+      D:\morphy\src\AI\MCPToolsExtended.cpp(775,38):
+      Ambiguous user-defined-conversion
+  
+  PluginBrowserPanel.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/MorphPad.cpp')
+  
+  MacroKnobStrip.cpp
+  AIStatusPanel.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/SnapFader.cpp')
+  
+  BreedingPanel.cpp
+  ModeBar.cpp
+  HostedPluginWindow.cpp
+  ParameterMapPanel.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/SnapshotRing.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/AIStatusPanel.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/PluginBrowserPanel.cpp')
+  
+  BottomControlStrip.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/MacroKnobStrip.cpp')
+  
+  juce_audio_processors.cpp
+  juce_audio_processors_ara.cpp
+  juce_audio_processors_lv2_libs.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/BreedingPanel.cpp')
+  
+  juce_gui_extra.cpp
+  juce_gui_basics.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/ModeBar.cpp')
+  
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/ParameterMapPanel.cpp')
+  
+  juce_graphics.cpp
+  juce_graphics_Harfbuzz.cpp
+  juce_events.cpp
+  juce_core.cpp
+D:\morphy\src\AI\LinkBroadcaster.h(41,1): warning C4324: 'morphsnap::LinkStateBlock': structure was padded due to alignment specifier [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '../src/UI/BottomControlStrip.cpp')
+  
+  juce_core_CompilationTime.cpp
+  juce_data_structures.cpp
+D:\morphy\build\_deps\juce-src\modules\juce_gui_basics\juce_gui_basics.cpp(61): warning : This version of JUCE does not use the splash screen, the flag JUCE_DISPLAY_SPLASH_SCREEN is ignored [D:\morphy\build\MorphSnap.vcxproj]
+D:\morphy\build\_deps\juce-src\modules\juce_audio_processors\format_types\juce_VST3PluginFormat.cpp(744,55): warning C4458: declaration of 'iid' hides class member [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '_deps/juce-src/modules/juce_audio_processors/juce_audio_processors.cpp')
+      D:\morphy\build\_deps\juce-src\modules\juce_audio_processors\format_types\VST3_SDK\pluginterfaces\vst\ivsteditcontroller.h(235,20):
+      see declaration of 'Steinberg::Vst::IComponentHandler::iid'
+  
+D:\morphy\build\_deps\juce-src\modules\juce_audio_processors\format_types\juce_VST3PluginFormat.cpp(780,51): warning C4458: declaration of 'iid' hides class member [D:\morphy\build\MorphSnap.vcxproj]
+  (compiling source file '_deps/juce-src/modules/juce_audio_processors/juce_audio_processors.cpp')
+      D:\morphy\build\_deps\juce-src\modules\juce_audio_processors\format_types\VST3_SDK\pluginterfaces\vst\ivsteditcontroller.h(235,20):
+      see declaration of 'Steinberg::Vst::IComponentHandler::iid'
+  
+  juce_audio_basics.cpp
+  juce_audio_formats.cpp
+  juce_audio_utils.cpp
+  juce_audio_devices.cpp
+  juce_dsp.cpp
+  juce_vst3_helper.vcxproj -> D:\morphy\build\Release\juce_vst3_helper.exe

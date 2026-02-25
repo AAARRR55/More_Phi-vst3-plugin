@@ -5,6 +5,7 @@
  * Includes exception handling for robustness.
  */
 #include "ParameterBridge.h"
+#include "PluginHostManager.h"
 #include <exception>
 
 // Suppress deprecation warning for setParameter — it's the only way
@@ -18,7 +19,7 @@ namespace morphsnap {
 // Returns the plugin pointer or nullptr if not available.
 // Avoids repeating the `host_.getPlugin()` null + try/catch guard in every method.
 // Usage: wrap your body in the withPlugin() template below.
-static juce::AudioPluginInstance* getHostPlugin(PluginHostManager& host)
+static juce::AudioPluginInstance* getHostPlugin(IPluginHostManager& host)
 {
     return host.getPlugin();
 }
@@ -27,7 +28,7 @@ static juce::AudioPluginInstance* getHostPlugin(PluginHostManager& host)
 // Catches all exceptions and logs to DBG. Returns the default value on failure.
 // This replaces the repeated 4-line guard in every method.
 template<typename Ret, typename Fn>
-static Ret withPlugin(PluginHostManager& host, const char* context,
+static Ret withPlugin(IPluginHostManager& host, const char* context,
                       Ret defaultValue, Fn&& fn)
 {
     auto* plugin = host.getPlugin();
@@ -71,10 +72,16 @@ void ParameterBridge::setParameterNormalized(int index, float value)
         [index, value](juce::AudioPluginInstance& plugin) -> int
     {
         if (index < 0 || index >= plugin.getParameters().size()) return 0;
-        // Legacy setParameter() directly calls VST3's setParamNormalized
-        // via the JUCE VST3 wrapper — the ONLY method that reliably
-        // changes hosted plugin state and updates the plugin's GUI.
-        plugin.setParameter(index, juce::jlimit(0.0f, 1.0f, value));
+
+        const float clamped = juce::jlimit(0.0f, 1.0f, value);
+
+        // Use the deprecated setParameter() — it's the ONLY method that
+        // reliably pushes values through to the VST3 edit controller
+        // AND updates the hosted plugin's GUI (e.g. Pro-Q 4).
+        // The modern setValueNotifyingHost() only updates JUCE's cached
+        // value but doesn't trigger the VST3 controller's GUI refresh.
+        plugin.setParameter(index, clamped);
+
         return 0;
     });
 }
@@ -102,7 +109,7 @@ void ParameterBridge::applyParameterState(const float* values, int count)
     withPlugin(host_, "applyParameterState", 0,
         [values, count](juce::AudioPluginInstance& plugin) -> int
     {
-        const int safeCount = juce::jmin(count, plugin.getParameters().size());
+        const int safeCount = juce::jmin(count, static_cast<int>(plugin.getParameters().size()));
         for (int i = 0; i < safeCount; ++i)
             plugin.setParameter(i, juce::jlimit(0.0f, 1.0f, values[i]));
         return 0;
@@ -119,6 +126,42 @@ std::vector<float> ParameterBridge::captureParameterState() const
         for (int i = 0; i < params.size(); ++i)
             state[i] = params[i]->getValue();
         return state;
+    });
+}
+
+bool ParameterBridge::isDiscrete(int index) const
+{
+    return withPlugin(host_, "isDiscrete", false,
+        [index](juce::AudioPluginInstance& plugin) -> bool
+    {
+        auto& params = plugin.getParameters();
+        if (index < 0 || index >= params.size()) return false;
+        auto* p = params[index];
+        // JUCE's isDiscrete() covers VST3 params with step counts.
+        // Also treat params with very few steps (≤32) as discrete —
+        // these are typically toggles, dropdown selectors, waveform types etc.
+        // that cause clicks/pops when interpolated during morphing.
+        if (p->isDiscrete()) return true;
+        int steps = p->getNumSteps();
+        return steps > 0 && steps <= 32;
+    });
+}
+
+std::vector<bool> ParameterBridge::getDiscreteMap() const
+{
+    return withPlugin(host_, "getDiscreteMap", std::vector<bool>{},
+        [](juce::AudioPluginInstance& plugin) -> std::vector<bool>
+    {
+        auto& params = plugin.getParameters();
+        std::vector<bool> map(params.size(), false);
+        for (int i = 0; i < params.size(); ++i)
+        {
+            auto* p = params[i];
+            if (p->isDiscrete()) { map[i] = true; continue; }
+            int steps = p->getNumSteps();
+            if (steps > 0 && steps <= 32) map[i] = true;
+        }
+        return map;
     });
 }
 

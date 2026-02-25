@@ -20,6 +20,8 @@ endif()
 add_executable(MorphSnapTests
     Unit/test_morphsnap_unit.cpp
     Unit/TestPhysicsAndGenetic.cpp
+    Unit/TestSidechainTrigger.cpp
+    Integration/TestPluginLifecycle.cpp
 )
 
 # Link the compiled plugin objects in (shared) so the test binary has access
@@ -58,6 +60,29 @@ include(Catch)
 catch_discover_tests(MorphSnapTests
     TEST_SPEC "*"
 )
+
+# ── Benchmark executable (opt-in) ──────────────────────────────────────────────
+option(MORPHSNAP_BUILD_BENCHMARKS "Build performance benchmark suite" ON)
+if(MORPHSNAP_BUILD_BENCHMARKS)
+    add_executable(MorphSnapBenchmarks
+        Performance/BenchmarkSuite.cpp
+    )
+
+    target_link_libraries(MorphSnapBenchmarks PRIVATE
+        MorphSnap
+        juce::juce_core
+        juce::juce_audio_processors
+    )
+
+    target_include_directories(MorphSnapBenchmarks PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_compile_definitions(MorphSnapBenchmarks PRIVATE
+        MORPHSNAP_TEST_MODE=1
+        JUCE_STANDALONE_APPLICATION=0
+    )
+endif()
 
 # VST3 validation (optional, needs vst3_validator on PATH)
 if(WIN32)

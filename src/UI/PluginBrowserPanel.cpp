@@ -24,6 +24,10 @@ PluginBrowserPanel::PluginBrowserPanel(MorphSnapProcessor& proc)
     pluginNameLabel_.setText("No plugin loaded", juce::dontSendNotification);
     pluginNameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff888888));
     pluginNameLabel_.setJustificationType(juce::Justification::centredLeft);
+
+    // Poll at 10 Hz to sync label/buttons after state restore or async plugin reload.
+    // This is what makes the UI show the plugin name after project open/export.
+    startTimerHz(10);
 }
 
 PluginBrowserPanel::~PluginBrowserPanel()
@@ -65,6 +69,33 @@ void PluginBrowserPanel::buttonClicked(juce::Button* b)
 void PluginBrowserPanel::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     // Scan completed or plugin list changed
+}
+
+void PluginBrowserPanel::timerCallback()
+{
+    // Auto-refresh label and button states after async plugin reload / state restore.
+    // This is the fix for 'No plugin loaded' persisting after project open or export.
+    const bool hasPlugin = host_.hasPlugin();
+    showBtn_.setEnabled(hasPlugin);
+    captureBtn_.setEnabled(hasPlugin);
+
+    if (hasPlugin)
+    {
+        const juce::String currentName = host_.getLastDescriptionRef().name;
+        if (currentName != lastKnownPluginName_)
+        {
+            lastKnownPluginName_ = currentName;
+            pluginNameLabel_.setText(currentName, juce::dontSendNotification);
+            pluginNameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe0e0e0));
+        }
+    }
+    else if (lastKnownPluginName_.isNotEmpty())
+    {
+        // Plugin was unloaded — reset label
+        lastKnownPluginName_ = {};
+        pluginNameLabel_.setText("No plugin loaded", juce::dontSendNotification);
+        pluginNameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff888888));
+    }
 }
 
 void PluginBrowserPanel::showPluginListDialog()

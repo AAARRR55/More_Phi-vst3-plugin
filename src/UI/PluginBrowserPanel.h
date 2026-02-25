@@ -16,7 +16,8 @@ class MorphSnapProcessor;
 
 class PluginBrowserPanel : public juce::Component,
                            private juce::Button::Listener,
-                           private juce::ChangeListener
+                           private juce::ChangeListener,
+                           private juce::Timer
 {
 public:
     explicit PluginBrowserPanel(MorphSnapProcessor& proc);
@@ -28,6 +29,7 @@ public:
 private:
     void buttonClicked(juce::Button* b) override;
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
+    void timerCallback() override;
 
     void showPluginListDialog();
     void loadSelectedPlugin(const juce::PluginDescription& desc);
@@ -45,6 +47,7 @@ private:
 
     std::unique_ptr<HostedPluginWindow> pluginWindow_;
     bool scanDone_ = false;
+    juce::String lastKnownPluginName_;  // tracks last label state to avoid redundant updates
 };
 
 } // namespace morphsnap

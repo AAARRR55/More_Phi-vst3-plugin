@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+        "morphsnap": {
+            "command": "node",
+            "args": [
+                "d:/morphy/docs/mcp_bridge.js"
+            ],
+            "env": {
+                "AUTHORIZATION": "Bearer 32 b7 2a e2 d3 7a 4a 18 7d 9c 3d 8f d5 63 d9 0a"
+            }
+        }
+    }
+}

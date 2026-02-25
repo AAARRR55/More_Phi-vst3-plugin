@@ -64,43 +64,48 @@ void PluginHostManager::releaseResources()
 
 bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
 {
-    unloadPlugin();
-
+    // Create the new instance BEFORE destroying the old one.
+    // If creation fails, the current plugin remains untouched.
     juce::String errorMessage;
-    hostedPlugin = formatManager.createPluginInstance(
+    auto newPlugin = formatManager.createPluginInstance(
         desc, currentSampleRate, currentBlockSize, errorMessage);
 
-    if (!hostedPlugin)
+    if (!newPlugin)
     {
         DBG("Failed to load plugin: " + errorMessage);
+        // IMPORTANT: do NOT unload the current plugin — keep it running
         return false;
     }
 
-    {
-        const juce::SpinLock::ScopedLockType guard(descLock_);
-        lastDescription = desc;  // protected write
-    }
-    
     try
     {
-        hostedPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
-        hostedPlugin->enableAllBuses();
+        newPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        newPlugin->enableAllBuses();
     }
     catch (const std::exception& e)
     {
         juce::ignoreUnused(e);
         DBG("Exception during plugin initialization: " + juce::String(e.what()));
-        unloadPlugin();
+        // newPlugin goes out of scope and is destroyed; old plugin stays.
         return false;
     }
     catch (...)
     {
         DBG("Unknown exception during plugin initialization");
-        unloadPlugin();
         return false;
     }
-    
-    exceptionCount_.store(0, std::memory_order_relaxed);  // reset on successful load
+
+    // New plugin is valid — now swap it in.
+    unloadPlugin();
+    hostedPlugin = std::move(newPlugin);
+
+    {
+        const juce::SpinLock::ScopedLockType guard(descLock_);
+        lastDescription = desc;  // protected write
+    }
+
+    exceptionCount_.store(0, std::memory_order_relaxed);
+    suspended_.store(false, std::memory_order_relaxed);
     return true;
 }
 
@@ -125,11 +130,39 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
 {
     if (!hostedPlugin) return;
 
+    // If suspended, pass-through silence — do NOT unload.
+    if (suspended_.load(std::memory_order_relaxed))
+    {
+        // Periodically attempt recovery (every ~100 blocks ≈ once per second)
+        const int count = exceptionCount_.load(std::memory_order_relaxed);
+        if (count > 0 && (count % 100) == 0)
+        {
+            try
+            {
+                hostedPlugin->processBlock(buffer, midi);
+                // If we get here, the plugin recovered!
+                suspended_.store(false, std::memory_order_relaxed);
+                exceptionCount_.store(0, std::memory_order_relaxed);
+                DBG("PluginHostManager: plugin recovered from suspended state");
+                return;
+            }
+            catch (...)
+            {
+                // Still failing — stay suspended
+                exceptionCount_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        else
+        {
+            exceptionCount_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;  // Output silence (buffer unchanged = pass-through)
+    }
+
     // Match channel count
     const int pluginChannels = hostedPlugin->getTotalNumOutputChannels();
     if (buffer.getNumChannels() > pluginChannels)
     {
-        // Clear extra channels
         for (int ch = pluginChannels; ch < buffer.getNumChannels(); ++ch)
             buffer.clear(ch, 0, buffer.getNumSamples());
     }
@@ -143,13 +176,14 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
     {
         juce::ignoreUnused(e);
         DBG("Exception in hosted plugin processBlock: " + juce::String(e.what()));
-        buffer.clear();  // zero output to prevent garbage audio
+        buffer.clear();
         const int count = exceptionCount_.fetch_add(1, std::memory_order_relaxed) + 1;
         if (count >= MAX_PLUGIN_EXCEPTIONS)
         {
-            DBG("PluginHostManager: auto-unloading misbehaving plugin after "
-                + juce::String(count) + " consecutive exceptions");
-            unloadPlugin();
+            // SUSPEND instead of UNLOAD — plugin stays in memory for recovery
+            DBG("PluginHostManager: suspending misbehaving plugin after "
+                + juce::String(count) + " consecutive exceptions (NOT unloading)");
+            suspended_.store(true, std::memory_order_relaxed);
         }
     }
     catch (...)
@@ -159,9 +193,9 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         const int count = exceptionCount_.fetch_add(1, std::memory_order_relaxed) + 1;
         if (count >= MAX_PLUGIN_EXCEPTIONS)
         {
-            DBG("PluginHostManager: auto-unloading misbehaving plugin after "
-                + juce::String(count) + " consecutive unknown exceptions");
-            unloadPlugin();
+            DBG("PluginHostManager: suspending misbehaving plugin after "
+                + juce::String(count) + " consecutive unknown exceptions (NOT unloading)");
+            suspended_.store(true, std::memory_order_relaxed);
         }
     }
 }
@@ -187,7 +221,9 @@ void PluginHostManager::scanPluginFolders()
 const juce::PluginDescription* PluginHostManager::getLastDescription() const
 {
     const juce::SpinLock::ScopedLockType guard(descLock_);
-    return hasPlugin() ? &lastDescription : nullptr;
+    // Always return description if we ever had a plugin — enables recovery
+    // and proper state persistence even after auto-suspend/unload.
+    return lastDescription.name.isNotEmpty() ? &lastDescription : nullptr;
 }
 
 } // namespace morphsnap

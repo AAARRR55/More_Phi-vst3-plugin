@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MorphSnap VERSION 1.0.0 LANGUAGES CXX)
+project(MorphSnap VERSION 3.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,6 +80,10 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/MorphProcessor.cpp
     src/Core/LockFreeQueue.h
     src/Core/AllocationTracker.h
+    src/Core/ParameterClassifier.h
+    src/Core/ParameterClassifier.cpp
+    src/Core/DiscreteParameterHandler.h
+    src/Core/DiscreteParameterHandler.cpp
 )
 
 set(MORPHSNAP_HOST_SOURCES
@@ -100,6 +104,12 @@ set(MORPHSNAP_AI_SOURCES
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
     src/AI/MCPToolHandler.cpp
+    src/AI/LinkBroadcaster.h
+    src/AI/LinkBroadcaster.cpp
+    src/AI/TokenOptimizer.h
+    src/AI/TokenOptimizer.cpp
+    src/AI/MCPToolsExtended.h
+    src/AI/MCPToolsExtended.cpp
 )
 
 set(MORPHSNAP_MIDI_SOURCES
@@ -137,6 +147,8 @@ set(MORPHSNAP_UI_SOURCES
     src/UI/HostedPluginWindow.cpp
     src/UI/ParameterMapPanel.h
     src/UI/ParameterMapPanel.cpp
+    src/UI/BottomControlStrip.h
+    src/UI/BottomControlStrip.cpp
 )
 
 target_sources(MorphSnap PRIVATE

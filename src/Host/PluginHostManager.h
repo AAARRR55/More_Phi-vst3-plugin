@@ -41,9 +41,13 @@ public:
     juce::KnownPluginList& getKnownPlugins() override { return knownPlugins; }
     void scanPluginFolders() override;
 
+    /** Get the last loaded plugin description — available even after unload for recovery. */
+    const juce::PluginDescription& getLastDescriptionRef() const { return lastDescription; }
+
 private:
-    // Auto-unload a misbehaving plugin after this many consecutive exceptions.
-    static constexpr int MAX_PLUGIN_EXCEPTIONS = 5;
+    // Suspend (bypass audio) a misbehaving plugin after this many consecutive
+    // exceptions. Raised from 5 to tolerate short DAW reconfiguration bursts.
+    static constexpr int MAX_PLUGIN_EXCEPTIONS = 20;
 
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
@@ -52,8 +56,12 @@ private:
     mutable juce::SpinLock  descLock_;    // guards lastDescription
 
     // Counts consecutive processBlock exceptions; reset on successful load.
-    // When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is auto-unloaded.
+    // When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is suspended (NOT unloaded).
     std::atomic<int> exceptionCount_{0};
+
+    // When true, plugin is suspended (audio bypassed) but NOT destroyed.
+    // Recovery is attempted automatically when processBlock succeeds.
+    std::atomic<bool> suspended_{false};
 
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;

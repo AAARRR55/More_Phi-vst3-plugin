@@ -285,3 +285,81 @@ TEST_CASE("GeneticEngine::smartRandomize: empty learned set makes no changes", "
     for (int i = 0; i < 5; ++i)
         REQUIRE(state.data()[i] == Approx(0.4f));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GeneticEngine — SanityMode
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+    constexpr juce::int64 kSeedSanityBreed     = 88888;
+    constexpr juce::int64 kSeedSanityRandomize = 77766;
+    constexpr juce::int64 kSeedSanityDisabled  = 33333;
+} // namespace
+
+TEST_CASE("GeneticEngine::breed: SanityMode protects danger params", "[genetic][sanity]")
+{
+    juce::Random rng(kSeedSanityBreed);
+    auto parentA = makeState(0.2f, 10);
+    auto parentB = makeState(0.9f, 10);
+
+    // Protect indices 0 (Volume), 3 (Pitch), 7 (Bypass)
+    SanityConfig sanity;
+    sanity.enabled = true;
+    sanity.protectedIndices = {0, 3, 7};
+
+    auto child = GeneticEngine::breed(parentA, parentB, 0.5f, 0.3f, rng, sanity);
+
+    REQUIRE(child.occupied);
+    REQUIRE(child.parameterCount == 10);
+
+    // Protected indices must retain parentA's exact value
+    REQUIRE(child.data()[0] == Approx(0.2f));
+    REQUIRE(child.data()[3] == Approx(0.2f));
+    REQUIRE(child.data()[7] == Approx(0.2f));
+
+    // At least one non-protected index should differ from parentA
+    // (crossover + mutation should modify them)
+    bool anyDifferent = false;
+    for (int i : {1, 2, 4, 5, 6, 8, 9})
+    {
+        if (std::abs(child.data()[i] - 0.2f) > 0.01f)
+            anyDifferent = true;
+    }
+    REQUIRE(anyDifferent);
+}
+
+TEST_CASE("GeneticEngine::smartRandomize: SanityMode protects danger params", "[genetic][sanity]")
+{
+    juce::Random rng(kSeedSanityRandomize);
+    ParameterState state = makeState(0.5f, 8);
+
+    // All params are "learned" but indices 1 and 4 are protected
+    const std::set<int> learned = {0, 1, 2, 3, 4, 5, 6, 7};
+    SanityConfig sanity;
+    sanity.enabled = true;
+    sanity.protectedIndices = {1, 4};
+
+    GeneticEngine::smartRandomize(state, 1.0f, learned, rng, sanity);
+
+    // Protected indices must be unchanged
+    REQUIRE(state.data()[1] == Approx(0.5f));
+    REQUIRE(state.data()[4] == Approx(0.5f));
+}
+
+TEST_CASE("GeneticEngine::breed: SanityMode disabled has no effect", "[genetic][sanity]")
+{
+    juce::Random rng(kSeedSanityDisabled);
+    auto parentA = makeState(0.2f, 8);
+    auto parentB = makeState(0.8f, 8);
+
+    SanityConfig sanity;
+    sanity.enabled = false;
+    sanity.protectedIndices = {0, 1, 2, 3, 4, 5, 6, 7};  // all "protected" but disabled
+
+    auto child = GeneticEngine::breed(parentA, parentB, 0.5f, 0.0f, rng, sanity);
+
+    // With disabled sanity and crossoverRatio=0.5, values should be ~0.5 (midpoint)
+    for (int i = 0; i < child.parameterCount; ++i)
+        REQUIRE(child.data()[i] == Approx(0.5f).margin(0.01f));
+}
+

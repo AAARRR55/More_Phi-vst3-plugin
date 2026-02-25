@@ -221,6 +221,11 @@ MIDI mapping is automatic. Just enable MIDI input on the track hosting MorphSnap
 - Only automatable parameters are captured
 - Try using the hosted plugin's preset system as a workaround
 
+### Plugin Disconnects During Export or Close/Reopen
+- This issue has been fixed in v3.3.0+ with robust state restoration
+- If you experience this, ensure you're using the latest version
+- See [TROUBLESHOOTING_PLUGIN_DISCONNECTION.md](docs/TROUBLESHOOTING_PLUGIN_DISCONNECTION.md) for detailed guidance
+
 ### Poor Performance
 - Reduce number of hosted plugin parameters
 - Switch to Direct physics mode (least CPU)
