@@ -16,6 +16,13 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
     ParameterState offspring;
     // Use parameterCount (not values.size() which is always MAX_PARAMETERS)
     const int count = juce::jmin(parentA.parameterCount, parentB.parameterCount);
+    if (parentA.parameterCount != parentB.parameterCount)
+    {
+        DBG("GeneticEngine::breed() - Parameter count mismatch: "
+            + juce::String(parentA.parameterCount) + " vs "
+            + juce::String(parentB.parameterCount) + ", using min: "
+            + juce::String(count));
+    }
 
     for (int i = 0; i < count; ++i)
     {

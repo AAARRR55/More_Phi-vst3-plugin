@@ -1,0 +1,182 @@
+/*
+ * MorphSnap — Core/LFO.cpp
+ * LFO implementation: 6 shapes, tempo-sync, S&H and smoothed-random.
+ */
+#include "LFO.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>   // std::rand / RAND_MAX
+
+namespace morphsnap {
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+static constexpr float kMinRate   =  0.01f;
+static constexpr float kMaxRate   = 50.0f;
+static constexpr float kTwoPi    =  6.283185307f;
+
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+void LFO::prepare(double sampleRate) noexcept
+{
+    sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
+    reset();
+}
+
+void LFO::reset() noexcept
+{
+    phase_        = 0.0f;
+    prevPhase_    = 0.0f;
+    shValue_      = 0.0f;
+    smoothRand_   = 0.0f;
+    randTarget_   = 0.0f;
+    currentValue_ = 0.0f;
+}
+
+// ── Parameter setters ─────────────────────────────────────────────────────────
+
+void LFO::setRate(float hz) noexcept
+{
+    rate_ = std::clamp(hz, kMinRate, kMaxRate);
+}
+
+void LFO::setPhaseOffset(float phase) noexcept
+{
+    // Wrap to [0, 1)
+    phase = std::fmod(phase, 1.0f);
+    if (phase < 0.0f) phase += 1.0f;
+    phaseOffset_ = phase;
+}
+
+void LFO::setSyncDivision(int division) noexcept
+{
+    // Clamp to sensible range: 1 (whole note) … 64 (64th note)
+    syncDivision_ = std::clamp(division, 1, 64);
+}
+
+// ── Effective rate resolution ─────────────────────────────────────────────────
+
+float LFO::effectiveRate() const noexcept
+{
+    if (!tempoSync_) return rate_;
+
+    // Tempo sync: one cycle = (division / bpm) * 60 seconds
+    // e.g. division=4 (quarter note), bpm=120 → rate = 120/60/4 = 0.5 Hz
+    const float safeBpm   = bpm_ > 0.0f ? bpm_ : 120.0f;
+    const float safeDivision = syncDivision_ > 0 ? static_cast<float>(syncDivision_) : 4.0f;
+    return (safeBpm / 60.0f) / safeDivision;
+}
+
+// ── Waveform generators ────────────────────────────────────────────────────────
+
+// phase ∈ [0, 1) → output ∈ [-1, 1]
+
+float LFO::sine(float phase) noexcept
+{
+    return std::sin(phase * kTwoPi);
+}
+
+float LFO::triangle(float phase) noexcept
+{
+    // Rise from -1 to +1 in first half, fall from +1 to -1 in second half
+    if (phase < 0.5f)
+        return phase * 4.0f - 1.0f;          // -1 → +1
+    return (1.0f - phase) * 4.0f - 1.0f;     // +1 → -1
+}
+
+float LFO::saw(float phase) noexcept
+{
+    // Rising sawtooth: -1 at phase=0, +1 just before wrap
+    return phase * 2.0f - 1.0f;
+}
+
+float LFO::square(float phase) noexcept
+{
+    return phase < 0.5f ? 1.0f : -1.0f;
+}
+
+// ── Process ───────────────────────────────────────────────────────────────────
+
+float LFO::process(float dt) noexcept
+{
+    if (dt <= 0.0f)
+    {
+        currentValue_ = 0.0f;
+        return 0.0f;
+    }
+
+    // Advance phase
+    const float hz       = effectiveRate();
+    const float increment= hz * dt;
+    prevPhase_           = phase_;
+    phase_              += increment;
+
+    // Wrap phase into [0, 1)
+    const bool wrapped = (phase_ >= 1.0f);
+    if (wrapped)
+        phase_ = std::fmod(phase_, 1.0f);
+
+    // Apply offset for read (do not mutate phase_)
+    float readPhase = phase_ + phaseOffset_;
+    if (readPhase >= 1.0f) readPhase -= 1.0f;
+
+    float output = 0.0f;
+
+    switch (shape_)
+    {
+        case LFOShape::Sine:
+            output = sine(readPhase);
+            break;
+
+        case LFOShape::Triangle:
+            output = triangle(readPhase);
+            break;
+
+        case LFOShape::Saw:
+            output = saw(readPhase);
+            break;
+
+        case LFOShape::Square:
+            output = square(readPhase);
+            break;
+
+        case LFOShape::SampleAndHold:
+            // Latch a new random value each time phase wraps
+            if (wrapped)
+            {
+                // Simple LCG-style float in [-1, 1] without heap allocation
+                // Use std::rand — audio thread usage is acceptable here as we
+                // only need rough randomness, not cryptographic quality.
+                shValue_ = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX))
+                           * 2.0f - 1.0f;
+            }
+            output = shValue_;
+            break;
+
+        case LFOShape::Random:
+        {
+            // Smoothed continuous random: interpolate toward a new target
+            // each time the phase wraps.
+            if (wrapped)
+            {
+                randTarget_ = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX))
+                              * 2.0f - 1.0f;
+            }
+            // Smooth coefficient: heavier smoothing at higher rates
+            const float smoothCoeff = std::clamp(1.0f - hz * dt * 0.5f, 0.0f, 0.99f);
+            smoothRand_ = smoothRand_ * smoothCoeff + randTarget_ * (1.0f - smoothCoeff);
+            output      = smoothRand_;
+            break;
+        }
+
+        default:
+            output = sine(readPhase);
+            break;
+    }
+
+    output        = std::clamp(output, -1.0f, 1.0f);
+    currentValue_ = output;
+    return output;
+}
+
+} // namespace morphsnap

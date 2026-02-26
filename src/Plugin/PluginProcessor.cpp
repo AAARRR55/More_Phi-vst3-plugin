@@ -235,6 +235,30 @@ void MorphSnapProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
         mcpServer.startServer(instanceIdentity_.port);
     }
 
+    // V2: Prepare second host manager
+    hostManagerB_.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+
+    // V2: Prepare modulation engine
+    modulationEngine_.prepare(sampleRate, samplesPerBlock, 2048);
+
+    // V2: Prepare audio-domain engines
+    spectralEngine_.prepare(sampleRate, samplesPerBlock);
+    granularEngine_.prepare(sampleRate, samplesPerBlock);
+    formantEngine_.prepare(sampleRate, samplesPerBlock);
+
+    // V2: Prepare oversampling
+    oversampling_.prepare(samplesPerBlock, getTotalNumOutputChannels(), sampleRate);
+    latencyManager_.setOversamplingLatency(oversampling_.getLatencyInSamples());
+    latencyManager_.setFFTWindowLatency(spectralEngine_.getLatencyInSamples());
+    latencyManager_.setHostedPluginLatency(
+        hostManager.getPlugin() ? hostManager.getPlugin()->getLatencySamples() : 0);
+    setLatencySamples(latencyManager_.getTotal());
+
+    // V2: Pre-allocate scratch buffers
+    bufferB_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
+    spectralOut_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
+    granularOut_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
+
     prepared = true;
 }
 
@@ -242,6 +266,11 @@ void MorphSnapProcessor::releaseResources()
 {
     prepared = false;
     hostManager.releaseResources();
+    hostManagerB_.releaseResources();
+    spectralEngine_.reset();
+    granularEngine_.reset();
+    formantEngine_.reset();
+    oversampling_.reset();
 }
 
 bool MorphSnapProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -364,6 +393,12 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         morphProcessor.process(linkX, linkY, fp, source, mode, dt, morphOutput);
 
+        // V2: Modulation engine — applies LFO/envelope/velocity modulation
+        // to the morphOutput vector before parameter apply. Pass-through in MVP.
+        modulationEngine_.setMorphPosition(linkX, linkY, fp);
+        modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
+        modulationEngine_.processBlock(morphOutput, dt);
+
         // Link Mode: if leader, broadcast current morph position
         if (linkEnabled_.load(std::memory_order_relaxed) && linkBroadcaster_.isLeader())
         {
@@ -419,6 +454,55 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 6) Forward audio + filtered MIDI to hosted plugin
     hostManager.processBlock(buffer, filteredMidi);
+
+    // V2: Audio-domain morph path
+    // When audioDomainEnabled_ is false, this entire block is skipped — zero extra cost.
+    if (audioDomainEnabled_.load(std::memory_order_relaxed) && hostManagerB_.hasPlugin())
+    {
+        const float alpha = morphAlpha_.load(std::memory_order_relaxed);
+
+        // Copy main buffer for Plugin B processing
+        bufferB_.makeCopyOf(buffer);
+        juce::MidiBuffer midiCopyB(filteredMidi);
+        hostManagerB_.processBlock(bufferB_, midiCopyB);
+
+        // Spectral morph
+        if (spectralEngine_.isActive())
+        {
+            spectralOut_.makeCopyOf(buffer);
+            spectralEngine_.processBlock(spectralOut_, bufferB_, alpha);
+        }
+
+        // Granular morph
+        if (granularEngine_.isActive())
+        {
+            granularOut_.makeCopyOf(buffer);
+            granularEngine_.processBlock(granularOut_, bufferB_, alpha);
+        }
+
+        // Formant preservation (applied after spectral/granular)
+        if (formantEngine_.isActive())
+        {
+            if (spectralEngine_.isActive())
+                formantEngine_.processBlock(spectralOut_);
+            if (granularEngine_.isActive())
+                formantEngine_.processBlock(granularOut_);
+        }
+
+        // Hybrid blend: combine parameter-domain and audio-domain outputs
+        const float pw = hybridParamWeight_.load(std::memory_order_relaxed);
+        const float sw = hybridSpectralWeight_.load(std::memory_order_relaxed);
+        const float gw = hybridGranularWeight_.load(std::memory_order_relaxed);
+
+        if (spectralEngine_.isActive() || granularEngine_.isActive())
+        {
+            HybridBlend::blend(buffer,
+                               buffer,       // parameter-domain output (already in buffer)
+                               spectralEngine_.isActive() ? spectralOut_ : buffer,
+                               granularEngine_.isActive() ? granularOut_ : buffer,
+                               pw, sw, gw);
+        }
+    }
 
     // 7) RMS for UI visualization
     if (buffer.getNumChannels() > 0)

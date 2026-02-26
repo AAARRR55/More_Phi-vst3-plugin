@@ -74,7 +74,7 @@ TEST_CASE("Sidechain: sustained loud does not re-trigger", "[midi][sidechain]")
     REQUIRE(triggerCount == 1);
 }
 
-TEST_CASE("Sidechain: loud→silent→loud triggers on second rising edge", "[midi][sidechain]")
+TEST_CASE("Sidechain: loud-silent-loud triggers on second rising edge", "[midi][sidechain]")
 {
     MIDIRouter router;
     std::vector<int> triggers;

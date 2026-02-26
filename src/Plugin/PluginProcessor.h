@@ -22,6 +22,14 @@
 #include "AI/InstanceIdentity.h"
 #include "AI/LinkBroadcaster.h"
 #include "AI/TokenOptimizer.h"
+#include "Core/ModulationEngine.h"
+#include "Core/SpectralMorphEngine.h"
+#include "Core/GranularMorphEngine.h"
+#include "Core/FormantMorphEngine.h"
+#include "Core/HybridBlend.h"
+#include "Core/VAEMorphEngine.h"
+#include "Core/OversamplingWrapper.h"
+#include "Core/LatencyManager.h"
 #include <vector>
 #include <mutex>
 
@@ -81,6 +89,26 @@ public:
     // Morph compatibility checking
     bool areSnapshotsCompatible(int slotA, int slotB) const;
     juce::String getMorphCompatibilityReport(int slotA, int slotB) const;
+
+    // ── V2 accessors ───────────────────────────────────────────────────────
+    ModulationEngine&      getModulationEngine()     { return modulationEngine_; }
+    SpectralMorphEngine&   getSpectralEngine()       { return spectralEngine_; }
+    GranularMorphEngine&   getGranularEngine()       { return granularEngine_; }
+    FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
+    VAEMorphEngine&        getVAEEngine()             { return vaeEngine_; }
+    OversamplingWrapper&   getOversampling()          { return oversampling_; }
+    LatencyManager&        getLatencyManager()        { return latencyManager_; }
+    PluginHostManager&     getHostManagerB()          { return hostManagerB_; }
+    ParameterBridge&       getParameterBridgeB()      { return paramBridgeB_; }
+
+    // Audio-domain morph controls
+    void setAudioDomainEnabled(bool v) { audioDomainEnabled_.store(v, std::memory_order_relaxed); }
+    bool getAudioDomainEnabled() const { return audioDomainEnabled_.load(std::memory_order_relaxed); }
+    void setMorphAlpha(float v) { morphAlpha_.store(v, std::memory_order_relaxed); }
+    float getMorphAlpha() const { return morphAlpha_.load(std::memory_order_relaxed); }
+    void setHybridParamWeight(float v) { hybridParamWeight_.store(v, std::memory_order_relaxed); }
+    void setHybridSpectralWeight(float v) { hybridSpectralWeight_.store(v, std::memory_order_relaxed); }
+    void setHybridGranularWeight(float v) { hybridGranularWeight_.store(v, std::memory_order_relaxed); }
 
     // Thread-safe requests (non-audio threads -> audio thread queue)
     struct ParamCommand {
@@ -169,6 +197,29 @@ private:
     ParameterClassifier      parameterClassifier_;
     DiscreteParameterHandler discreteHandler_;
     TokenOptimizer           tokenOptimizer_;
+
+    // ── V2 components ──────────────────────────────────────────────────────
+    PluginHostManager  hostManagerB_;
+    ParameterBridge    paramBridgeB_{hostManagerB_};
+    ModulationEngine   modulationEngine_;
+    SpectralMorphEngine spectralEngine_;
+    GranularMorphEngine granularEngine_;
+    FormantMorphEngine  formantEngine_;
+    VAEMorphEngine      vaeEngine_;
+    OversamplingWrapper oversampling_;
+    LatencyManager      latencyManager_;
+
+    // Audio-domain morph state
+    std::atomic<bool>  audioDomainEnabled_{false};
+    std::atomic<float> morphAlpha_{0.0f};
+    std::atomic<float> hybridParamWeight_{1.0f};
+    std::atomic<float> hybridSpectralWeight_{0.0f};
+    std::atomic<float> hybridGranularWeight_{0.0f};
+
+    // Scratch buffers for audio-domain processing (pre-allocated in prepareToPlay)
+    juce::AudioBuffer<float> bufferB_;
+    juce::AudioBuffer<float> spectralOut_;
+    juce::AudioBuffer<float> granularOut_;
 
     std::vector<float> morphOutput;
     std::vector<float> finalOutput_;  // After discrete processing

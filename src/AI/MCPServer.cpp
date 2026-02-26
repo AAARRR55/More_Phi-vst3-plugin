@@ -76,8 +76,7 @@ void MCPServer::run()
         bindAttempts = 0;
         healthy_.store(true);
 
-        DBG("MCP Instance [" + identity_.morphCode + "] listening on port "
-            + juce::String(port_) + " (token: " + identity_.bearerToken.substring(0, 8) + "...)");
+        DBG("MCP Instance [" + identity_.morphCode + "] listening on port " + juce::String(port_));
 
         // Main accept loop
         int consecutiveErrors = 0;
@@ -335,7 +334,11 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
     catch (const std::exception& e)
     {
         logError("dispatchTool", juce::String("Exception in ") + method + ": " + e.what());
+        #ifdef NDEBUG
+        return errResponse(-32603, "Internal error");
+        #else
         return errResponse(-32603, std::string("Internal error: ") + e.what());
+        #endif
     }
     catch (...)
     {

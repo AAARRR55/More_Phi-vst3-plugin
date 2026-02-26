@@ -176,7 +176,7 @@ namespace {
     constexpr juce::int64 kSeedSmartEmptySet = 11111;
 } // namespace
 
-TEST_CASE("GeneticEngine::breed: crossoverRatio=0 → result ≈ parentA", "[genetic]")
+TEST_CASE("GeneticEngine::breed: crossoverRatio=0 produces result approx parentA", "[genetic]")
 {
     juce::Random rng(kSeedBreedPureA);
     auto parentA = makeState(0.2f, 8);
@@ -190,7 +190,7 @@ TEST_CASE("GeneticEngine::breed: crossoverRatio=0 → result ≈ parentA", "[gen
         REQUIRE(child.data()[i] == Approx(0.2f).margin(0.01f));
 }
 
-TEST_CASE("GeneticEngine::breed: crossoverRatio=1 → result ≈ parentB", "[genetic]")
+TEST_CASE("GeneticEngine::breed: crossoverRatio=1 produces result approx parentB", "[genetic]")
 {
     juce::Random rng(kSeedBreedPureB);
     auto parentA = makeState(0.1f, 8);

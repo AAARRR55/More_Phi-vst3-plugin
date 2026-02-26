@@ -2,86 +2,315 @@ name: CI
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ mvp, main, develop, "release/**", "feature/**" ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ mvp, main, develop ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_NAME: MorphSnap
+  PLUGIN_VERSION: 3.3.0
+  CMAKE_VERSION: "3.28"
+  PLUGINVAL_VERSION: "1.0.3"
 
 jobs:
+
+  # ─── Windows x64 MSVC 2022 ──────────────────────────────────────────────────
   build-windows:
-    name: Windows (MSVC / Release)
-    runs-on: windows-latest
+    name: Windows x64 MSVC 2022
+    runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Configure CMake
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps
+            C:/Users/runneradmin/.cmake/packages
+          key: win-deps-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: win-deps-
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: 14.4
+
+      - name: Install CMake ${{ env.CMAKE_VERSION }}
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Configure Release
         run: |
-          cmake -B build -S . `
+          cmake -B build `
             -DCMAKE_BUILD_TYPE=Release `
             -DMORPHSNAP_BUILD_TESTS=ON `
-            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF `
+            -A x64
 
-      - name: Build
+      - name: Build Release
         run: cmake --build build --config Release --parallel
 
-      - name: Run Tests
+      - name: Run tests
         working-directory: build
-        run: ctest --build-config Release --output-on-failure --parallel 4
+        run: ctest --build-config Release --output-on-failure --parallel 4 --output-junit ../test-results-windows.xml
 
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows
+          path: test-results-windows.xml
+
+      - name: Locate VST3 bundle
+        shell: pwsh
+        run: |
+          $vst3 = Get-ChildItem -Recurse -Filter "${{ env.PLUGIN_NAME }}.vst3" | Select-Object -First 1
+          if (-not $vst3) { Write-Error "VST3 bundle not found"; exit 1 }
+          echo "VST3_PATH=$($vst3.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Found VST3: $($vst3.FullName)"
+
+      - name: Download pluginval
+        shell: pwsh
+        run: |
+          $url = "https://github.com/Tracktion/pluginval/releases/download/v${{ env.PLUGINVAL_VERSION }}/pluginval_Windows.zip"
+          Invoke-WebRequest -Uri $url -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval-tool
+          $exe = (Get-Item pluginval-tool/pluginval.exe).FullName
+          echo "PLUGINVAL=$exe" >> $env:GITHUB_ENV
+
+      - name: Run pluginval (strictness 5)
+        run: |
+          & "${{ env.PLUGINVAL }}" `
+            --strictness-level 5 `
+            --validate "${{ env.VST3_PATH }}" `
+            --output-dir pluginval-results `
+            --verbose
+
+      - name: Upload pluginval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-windows
+          path: pluginval-results/
+
+      - name: Upload VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64
+          path: ${{ env.VST3_PATH }}
+          if-no-files-found: error
+
+
+  # ─── macOS Universal Binary ──────────────────────────────────────────────────
   build-macos:
-    name: macOS (Clang / Release)
-    runs-on: macos-latest
+    name: macOS Universal Binary (x64 + arm64)
+    runs-on: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Configure CMake
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps
+            ~/Library/Caches/CMake
+          key: macos-deps-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: macos-deps-
+
+      - name: Install CMake ${{ env.CMAKE_VERSION }}
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Select Xcode 15
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Configure Universal Release
         run: |
-          cmake -B build -S . \
+          cmake -B build \
+            -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DMORPHSNAP_BUILD_TESTS=ON \
             -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
 
-      - name: Build
+      - name: Build Universal Release
         run: cmake --build build --config Release --parallel $(sysctl -n hw.logicalcpu)
 
-      - name: Run Tests
+      - name: Run tests (native arm64)
         working-directory: build
-        run: ctest --build-config Release --output-on-failure --parallel 4
+        run: ctest --build-config Release --output-on-failure --parallel 4 --output-junit ../test-results-macos.xml
 
-  asan-linux:
-    name: Linux (Clang / Debug + ASAN + UBSAN)
-    runs-on: ubuntu-latest
+      - name: Verify universal binary slices
+        run: |
+          VST3=$(find build -name "${{ env.PLUGIN_NAME }}.vst3" | head -1)
+          AU=$(find build -name "${{ env.PLUGIN_NAME }}.component" | head -1)
+          echo "VST3_PATH=$VST3" >> $GITHUB_ENV
+          echo "AU_PATH=$AU" >> $GITHUB_ENV
+          lipo -info "$VST3/Contents/MacOS/${{ env.PLUGIN_NAME }}"
+          lipo -info "$VST3/Contents/MacOS/${{ env.PLUGIN_NAME }}" | grep -q "x86_64" || (echo "Missing x86_64 slice"; exit 1)
+          lipo -info "$VST3/Contents/MacOS/${{ env.PLUGIN_NAME }}" | grep -q "arm64"  || (echo "Missing arm64 slice";  exit 1)
+          if [ -n "$AU" ]; then
+            lipo -info "$AU/Contents/MacOS/${{ env.PLUGIN_NAME }}"
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-macos
+          path: test-results-macos.xml
+
+      - name: Download pluginval (macOS)
+        run: |
+          curl -L \
+            "https://github.com/Tracktion/pluginval/releases/download/v${{ env.PLUGINVAL_VERSION }}/pluginval_macOS.zip" \
+            -o pluginval.zip
+          unzip pluginval.zip -d pluginval-tool
+          chmod +x pluginval-tool/pluginval.app/Contents/MacOS/pluginval
+          echo "PLUGINVAL=pluginval-tool/pluginval.app/Contents/MacOS/pluginval" >> $GITHUB_ENV
+
+      - name: Run pluginval on VST3
+        run: |
+          "${{ env.PLUGINVAL }}" \
+            --strictness-level 5 \
+            --validate "${{ env.VST3_PATH }}" \
+            --output-dir pluginval-results \
+            --verbose
+
+      - name: Run pluginval on AU
+        if: env.AU_PATH != ''
+        run: |
+          "${{ env.PLUGINVAL }}" \
+            --strictness-level 5 \
+            --validate "${{ env.AU_PATH }}" \
+            --output-dir pluginval-results \
+            --verbose
+
+      - name: Upload pluginval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluginval-macos
+          path: pluginval-results/
+
+      - name: Bundle for release
+        run: |
+          mkdir -p dist
+          cp -R "${{ env.VST3_PATH }}" dist/ || true
+          [ -n "${{ env.AU_PATH }}" ] && cp -R "${{ env.AU_PATH }}" dist/ || true
+
+      - name: Upload macOS plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-macOS-Universal
+          path: dist/
+          if-no-files-found: error
+
+
+  # ─── ASAN / UBSAN (Linux Clang) ─────────────────────────────────────────────
+  sanitizer-tests:
+    name: ASAN/UBSAN (Clang 17, Linux)
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install Clang + JUCE dependencies
+      - name: Install system dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            clang lld \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
-            libfreetype-dev libasound2-dev \
-            libwebkit2gtk-4.1-dev
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            clang-17 llvm-17 ninja-build cmake \
+            libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libfreetype-dev
 
-      - name: Configure CMake (Debug + ASAN/UBSAN)
+      - name: Configure Debug + ASAN/UBSAN
         run: |
-          cmake -B build -S . \
+          cmake -B build \
+            -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_COMPILER=clang++-17 \
+            -DCMAKE_C_COMPILER=clang-17 \
             -DMORPHSNAP_BUILD_TESTS=ON \
             -DMORPHSNAP_ENABLE_SANITIZERS=ON \
             -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
 
-      - name: Build tests only
-        run: cmake --build build --target MorphSnapTests --parallel $(nproc)
+      - name: Build tests
+        run: cmake --build build --config Debug --target MorphSnapTests --parallel $(nproc)
 
-      - name: Run Tests under ASAN/UBSAN
+      - name: Run tests under sanitizers
         working-directory: build
         env:
-          ASAN_OPTIONS: "halt_on_error=1:detect_leaks=1"
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=1:print_stats=1"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
-        run: ctest --build-config Debug --output-on-failure --parallel 4
+        run: ctest --build-config Debug --output-on-failure --parallel 2 -T Test
 
+      - name: Upload sanitizer results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-test-results
+          path: build/Testing/
+
+
+  # ─── Release publishing ───────────────────────────────────────────────────────
+  publish-release:
+    name: Publish GitHub Release
+    needs: [ build-windows, build-macos ]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64
+          path: release/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-macOS-Universal
+          path: release/macos
+
+      - name: Create release archives
+        run: |
+          cd release
+          zip -r "${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64.zip" windows/
+          zip -r "${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-macOS-Universal.zip" macos/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64.zip
+            release/${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-macOS-Universal.zip
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

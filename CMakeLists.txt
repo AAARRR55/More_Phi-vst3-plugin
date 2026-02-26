@@ -84,6 +84,34 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/ParameterClassifier.cpp
     src/Core/DiscreteParameterHandler.h
     src/Core/DiscreteParameterHandler.cpp
+    src/Core/GrainPool.h
+    src/Core/GranularMorphEngine.h
+    src/Core/GranularMorphEngine.cpp
+    src/Core/HybridBlend.h
+    src/Core/TransientDetector.h
+    src/Core/SpectralTypes.h
+    src/Core/SpectralMorphEngine.h
+    src/Core/SpectralMorphEngine.cpp
+    src/Core/FormantMorphEngine.h
+    src/Core/FormantMorphEngine.cpp
+    src/Core/ModulationTypes.h
+    src/Core/IModulationEngine.h
+    src/Core/ModulationEngine.h
+    src/Core/ModulationEngine.cpp
+    src/Core/ISpectralMorphEngine.h
+    src/Core/IGranularMorphEngine.h
+    src/Core/LFO.h
+    src/Core/LFO.cpp
+    src/Core/EnvelopeFollower.h
+    src/Core/EnvelopeFollower.cpp
+    src/Core/StepSequencer.h
+    src/Core/StepSequencer.cpp
+    src/Core/ModulationMatrix.h
+    src/Core/ModulationMatrix.cpp
+    src/Core/OversamplingWrapper.h
+    src/Core/LatencyManager.h
+    src/Core/VAEMorphEngine.h
+    src/Core/VAEMorphEngine.cpp
 )
 
 set(MORPHSNAP_HOST_SOURCES
@@ -122,6 +150,13 @@ set(MORPHSNAP_PRESET_SOURCES
     src/Preset/MetaPresetManager.cpp
     src/Preset/PresetSerializer.h
     src/Preset/PresetSerializer.cpp
+    src/Preset/PresetEntry.h
+    src/Preset/PresetSerializerV2.h
+    src/Preset/PresetSerializerV2.cpp
+    src/Preset/PresetLibrary.h
+    src/Preset/PresetLibrary.cpp
+    src/Preset/CloudSyncClient.h
+    src/Preset/CloudSyncClient.cpp
 )
 
 set(MORPHSNAP_UI_SOURCES
