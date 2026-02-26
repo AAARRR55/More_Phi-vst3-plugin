@@ -199,6 +199,16 @@ void ModulationEngine::clearAllRoutes()
     matrix_.clearAll();
 }
 
+void ModulationEngine::setRouteDepth(int routeId, float depth)
+{
+    matrix_.setRouteDepth(routeId, depth);
+}
+
+void ModulationEngine::setRouteEnabled(int routeId, bool enabled)
+{
+    matrix_.setRouteEnabled(routeId, enabled);
+}
+
 int ModulationEngine::getActiveRouteCount() const
 {
     return matrix_.getActiveRouteCount();

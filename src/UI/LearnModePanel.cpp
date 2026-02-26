@@ -119,24 +119,16 @@ void LearnModePanel::timerCallback()
 void LearnModePanel::updateTokenDisplay()
 {
     auto& optimizer = processor_.getTokenOptimizer();
-    auto usage = optimizer.getUsageReport();
-    
-    tokenUsageLabel_.setText("Tokens: " + juce::String(usage.totalTokensConsumed), juce::dontSendNotification);
-    
+    auto stats = optimizer.getSessionStats();
+
+    tokenUsageLabel_.setText("Tokens: " + juce::String(stats.totalTokens()), juce::dontSendNotification);
+
     std::stringstream costStream;
-    costStream << std::fixed << std::setprecision(4) << usage.totalCostUsd;
+    costStream << std::fixed << std::setprecision(4) << stats.totalCostUsd;
     sessionCostLabel_.setText("Session Cost: $" + juce::String(costStream.str()), juce::dontSendNotification);
-    
-    if (optimizer.isBudgetApproaching()) {
-        budgetStatusLabel_.setText("Budget: Warning", juce::dontSendNotification);
-        budgetStatusLabel_.setColour(juce::Label::backgroundColourId, juce::Colours::orange.withAlpha(0.6f));
-    } else if (optimizer.isBudgetExceeded()) {
-        budgetStatusLabel_.setText("Budget: Exceeded", juce::dontSendNotification);
-        budgetStatusLabel_.setColour(juce::Label::backgroundColourId, juce::Colours::red.withAlpha(0.6f));
-    } else {
-        budgetStatusLabel_.setText("Budget: OK", juce::dontSendNotification);
-        budgetStatusLabel_.setColour(juce::Label::backgroundColourId, juce::Colours::green.withAlpha(0.3f));
-    }
+
+    budgetStatusLabel_.setText("Budget: OK", juce::dontSendNotification);
+    budgetStatusLabel_.setColour(juce::Label::backgroundColourId, juce::Colours::green.withAlpha(0.3f));
 }
 
 void LearnModePanel::updateLearnModeDisplay()
@@ -186,14 +178,15 @@ void LearnModePanel::onRefreshClicked()
 void LearnModePanel::onExposeAllClicked()
 {
     auto& classifier = processor_.getParameterClassifier();
-    classifier.exposeAllParameters(true);
+    classifier.exposeAll();
     refresh();
 }
 
 void LearnModePanel::onResetLearnClicked()
 {
     auto& classifier = processor_.getParameterClassifier();
-    classifier.resetLearningData();
+    classifier.hideAll();
+    classifier.exposeAll();
     refresh();
 }
 

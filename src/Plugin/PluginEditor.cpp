@@ -1,9 +1,12 @@
 /*
  * MorphSnap — Advanced Parameter Morphing Engine
- * PluginEditor.cpp — Main Editor Window (Premium Layout)
+ * PluginEditor.cpp — Main Editor Window (V2 Tabbed Layout)
  */
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "UI/EngineTabPage.h"
+#include "UI/ModulationMatrixPanel.h"
+#include "UI/V2PresetBrowserPanel.h"
 
 namespace morphsnap {
 
@@ -22,16 +25,19 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
       controlStrip(p)
 {
     setLookAndFeel(&lnf);
-    setSize(920, 710);
+    setSize(920, 760);
     setResizable(true, true);
-    setResizeLimits(720, 560, 1600, 1080);
+    setResizeLimits(720, 600, 1600, 1120);
 
+    // ── Always-visible components ──────────────────────────────────────────────
     addAndMakeVisible(morphPad);
     addAndMakeVisible(snapFader);
     addAndMakeVisible(snapshotRing);
     addAndMakeVisible(pluginBrowser);
-    addAndMakeVisible(macroStrip);
     addAndMakeVisible(aiPanel);
+
+    // ── Classic tab components ─────────────────────────────────────────────────
+    addAndMakeVisible(macroStrip);
     addAndMakeVisible(breedingPanel);
     addAndMakeVisible(modeBar);
     addAndMakeVisible(controlStrip);
@@ -44,7 +50,7 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     {
         paramPanelVisible_ = !paramPanelVisible_;
         paramPanel.setVisible(paramPanelVisible_);
-        paramToggleBtn_.setButtonText(paramPanelVisible_ ? "◂ Params" : "Params ▸");
+        paramToggleBtn_.setButtonText(paramPanelVisible_ ? "\xe2\x97\x82 Params" : "Params \xe2\x96\xb8");
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
@@ -54,6 +60,23 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     // Open Plugin UI button
     openPluginBtn_.onClick = [this]() { openPluginWindow(); };
     addAndMakeVisible(openPluginBtn_);
+
+    // ── V2 Tab Bar ─────────────────────────────────────────────────────────────
+    addAndMakeVisible(tabBar_);
+    tabBar_.onTabChanged = [this](int tab) { switchTab(tab); };
+
+    // ── V2 Tab Pages (lazy creation) ───────────────────────────────────────────
+    enginePage_ = std::make_unique<EngineTabPage>(processor);
+    addChildComponent(*enginePage_);
+
+    modulationPage_ = std::make_unique<ModulationMatrixPanel>(processor);
+    addChildComponent(*modulationPage_);
+
+    presetPage_ = std::make_unique<V2PresetBrowserPanel>(processor);
+    addChildComponent(*presetPage_);
+
+    // Default to Classic tab
+    switchTab(V2TabBar::Classic);
 
     startTimerHz(30);
 }
@@ -85,7 +108,7 @@ void MorphSnapEditor::paint(juce::Graphics& g)
     // Version
     g.setColour(lnf.textDim);
     g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("v1.0", titleArea.reduced(14, 0).removeFromLeft(200),
+    g.drawText("v2.0", titleArea.reduced(14, 0).removeFromLeft(200),
                juce::Justification::centredLeft);
 
     // RMS meter
@@ -135,34 +158,92 @@ void MorphSnapEditor::resized()
     openPluginBtn_.setBounds(browserRow.removeFromRight(110));
     pluginBrowser.setBounds(browserRow);
 
-    // Bottom bar
+    // ── Bottom: AI status bar ──────────────────────────────────────────────────
     auto bottomBar = area.removeFromBottom(32);
     aiPanel.setBounds(bottomBar);
 
-    // Breeding panel
-    auto breedRow = area.removeFromBottom(38);
-    breedingPanel.setBounds(breedRow);
+    // ── Tab bar ────────────────────────────────────────────────────────────────
+    // Sits between the pad area and tab content
+    // We need to calculate from the bottom up first to know where the tab content goes
 
-    // Macro strip
-    auto macroRow = area.removeFromBottom(60);
-    macroStrip.setBounds(macroRow);
+    // Tab content area (210px — same height as original V1 bottom section)
+    constexpr int tabContentHeight = 210;
+    auto tabContent = area.removeFromBottom(tabContentHeight);
 
-    // Mode bar
-    auto modeRow = area.removeFromBottom(32);
-    modeBar.setBounds(modeRow);
+    // Tab bar (28px, above tab content)
+    auto tabBarArea = area.removeFromBottom(28);
+    tabBar_.setBounds(tabBarArea);
 
-    // Bottom control strip (new Stitch-enhanced controls)
-    auto controlRow = area.removeFromBottom(48);
-    controlStrip.setBounds(controlRow);
-
-    // Snap fader (left)
+    // ── Main area: Snap fader + MorphPad ───────────────────────────────────────
     auto leftCol = area.removeFromLeft(52);
     snapFader.setBounds(leftCol.reduced(6, 10));
 
-    // XY Pad + snapshot ring
     auto padArea = area.reduced(8);
     morphPad.setBounds(padArea);
     snapshotRing.setBounds(padArea);
+
+    // ── Tab content layout ─────────────────────────────────────────────────────
+    // Classic tab: stack V1 controls in tabContent area
+    if (activeTab_ == V2TabBar::Classic)
+    {
+        auto classicArea = tabContent;
+        controlStrip.setBounds(classicArea.removeFromTop(48));
+        modeBar.setBounds(classicArea.removeFromTop(32));
+        macroStrip.setBounds(classicArea.removeFromTop(60));
+        breedingPanel.setBounds(classicArea.removeFromTop(38));
+        // Remaining space is padding
+    }
+
+    // Engine tab
+    if (enginePage_)
+        enginePage_->setBounds(tabContent);
+
+    // Modulation tab
+    if (modulationPage_)
+        modulationPage_->setBounds(tabContent);
+
+    // Presets tab
+    if (presetPage_)
+        presetPage_->setBounds(tabContent);
+}
+
+void MorphSnapEditor::switchTab(int tabIndex)
+{
+    activeTab_ = tabIndex;
+
+    setClassicTabVisible(tabIndex == V2TabBar::Classic);
+    setEngineTabVisible(tabIndex == V2TabBar::Engine);
+    setModulationTabVisible(tabIndex == V2TabBar::Modulation);
+    setPresetsTabVisible(tabIndex == V2TabBar::Presets);
+
+    resized();
+    repaint();
+}
+
+void MorphSnapEditor::setClassicTabVisible(bool visible)
+{
+    controlStrip.setVisible(visible);
+    modeBar.setVisible(visible);
+    macroStrip.setVisible(visible);
+    breedingPanel.setVisible(visible);
+}
+
+void MorphSnapEditor::setEngineTabVisible(bool visible)
+{
+    if (enginePage_)
+        enginePage_->setVisible(visible);
+}
+
+void MorphSnapEditor::setModulationTabVisible(bool visible)
+{
+    if (modulationPage_)
+        modulationPage_->setVisible(visible);
+}
+
+void MorphSnapEditor::setPresetsTabVisible(bool visible)
+{
+    if (presetPage_)
+        presetPage_->setVisible(visible);
 }
 
 void MorphSnapEditor::timerCallback()

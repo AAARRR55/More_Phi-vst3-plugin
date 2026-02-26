@@ -114,6 +114,10 @@ public:
     int  getActiveRouteCount() const override;
     const ModRoute& getRoute(int routeId) const override;
 
+    // ── Route property modification (forwarded to matrix) ────────────────────
+    void setRouteDepth(int routeId, float depth);
+    void setRouteEnabled(int routeId, bool enabled);
+
     // ── Macro knobs (IModulationEngine) ───────────────────────────────────────
 
     void  setMacro(int index, float value) noexcept override;

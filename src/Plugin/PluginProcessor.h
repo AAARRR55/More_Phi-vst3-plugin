@@ -107,8 +107,11 @@ public:
     void setMorphAlpha(float v) { morphAlpha_.store(v, std::memory_order_relaxed); }
     float getMorphAlpha() const { return morphAlpha_.load(std::memory_order_relaxed); }
     void setHybridParamWeight(float v) { hybridParamWeight_.store(v, std::memory_order_relaxed); }
+    float getHybridParamWeight() const { return hybridParamWeight_.load(std::memory_order_relaxed); }
     void setHybridSpectralWeight(float v) { hybridSpectralWeight_.store(v, std::memory_order_relaxed); }
+    float getHybridSpectralWeight() const { return hybridSpectralWeight_.load(std::memory_order_relaxed); }
     void setHybridGranularWeight(float v) { hybridGranularWeight_.store(v, std::memory_order_relaxed); }
+    float getHybridGranularWeight() const { return hybridGranularWeight_.load(std::memory_order_relaxed); }
 
     // Thread-safe requests (non-audio threads -> audio thread queue)
     struct ParamCommand {

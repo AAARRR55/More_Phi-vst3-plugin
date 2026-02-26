@@ -184,6 +184,22 @@ set(MORPHSNAP_UI_SOURCES
     src/UI/ParameterMapPanel.cpp
     src/UI/BottomControlStrip.h
     src/UI/BottomControlStrip.cpp
+    src/UI/LearnModePanel.h
+    src/UI/LearnModePanel.cpp
+    src/UI/V2TabBar.h
+    src/UI/V2TabBar.cpp
+    src/UI/EngineTabPage.h
+    src/UI/EngineTabPage.cpp
+    src/UI/SpectralControlPanel.h
+    src/UI/SpectralControlPanel.cpp
+    src/UI/GranularControlPanel.h
+    src/UI/GranularControlPanel.cpp
+    src/UI/HybridBlendPanel.h
+    src/UI/HybridBlendPanel.cpp
+    src/UI/ModulationMatrixPanel.h
+    src/UI/ModulationMatrixPanel.cpp
+    src/UI/V2PresetBrowserPanel.h
+    src/UI/V2PresetBrowserPanel.cpp
 )
 
 target_sources(MorphSnap PRIVATE
