@@ -363,48 +363,73 @@ TEST_CASE("Audio quality: upsample+downsample SNR > 80 dB for 1 kHz sine at x4 F
 {
     // This verifies that the oversampling chain itself does not degrade the
     // signal by more than 80 dB — the threshold for production audio quality.
-    constexpr int N        = 1024;
+    //
+    // Strategy: process a continuous sine through upsample->downsample, then
+    // fit a sine of the known frequency to the output via DFT projection and
+    // measure the residual. This avoids fractional-sample latency alignment.
+    //
+    // Key: N must give an integer number of cycles so the DFT projection
+    // is exact (no spectral leakage). At 48 kHz, 1 kHz has period 48 samples.
+    // N = 4800 = 100 complete cycles -> bin 100 is exactly 1 kHz.
+    constexpr int N        = 4800;
     constexpr float SR     = 48000.0f;
     constexpr float freqHz = 1000.0f;
+    constexpr float kTwoPi = 2.0f * 3.14159265358979f;
 
     OversamplingWrapper os;
     os.setFactor(OversamplingFactor::x4);
     os.setFilterType(AAFilterType::FIR);
     os.prepare(N, 1, static_cast<double>(SR));
 
-    // Original sine
-    std::vector<float> original(N);
-    fillSine(original.data(), N, freqHz, SR);
+    // Process multiple blocks to let FIR filter fully settle
+    constexpr int kTotalBlocks = 5;
+    std::vector<float> continuousSine(static_cast<size_t>(N * kTotalBlocks));
+    fillSine(continuousSine.data(), N * kTotalBlocks, freqHz, SR);
 
-    // Working copy to process
-    std::vector<float> processed = original;
-
-    float* ptr = processed.data();
-    juce::dsp::AudioBlock<float> block(&ptr, 1, static_cast<size_t>(N));
-
-    // Upsample → identity processing → downsample
+    std::vector<float> lastBlockOutput(N);
+    for (int b = 0; b < kTotalBlocks; ++b)
     {
+        std::vector<float> blockBuf(continuousSine.begin() + b * N,
+                                    continuousSine.begin() + (b + 1) * N);
+        float* ptr = blockBuf.data();
+        juce::dsp::AudioBlock<float> block(&ptr, 1, static_cast<size_t>(N));
+
         auto osBlock = os.upsample(block);
-        // No nonlinear processing — identity pass-through
         os.downsample(block);
+
+        if (b == kTotalBlocks - 1)
+            lastBlockOutput.assign(blockBuf.begin(), blockBuf.end());
     }
 
-    // Compute noise = processed - original (accounting for filter latency)
-    const int latency = os.getLatencyInSamples();
-    const int compareN = N - latency;
-    if (compareN <= 0)
+    // DFT projection at the exact bin frequency (bin-aligned -> no leakage).
+    // Decompose output into a*cos(wn) + b*sin(wn) at the target frequency.
+    double cosCoeff = 0.0, sinCoeff = 0.0;
+    for (int n = 0; n < N; ++n)
     {
-        // Block too small for this latency — skip but document why
-        WARN("Block size too small to measure SNR at this latency (" << latency << " samples)");
-        return;
+        double omega = kTwoPi * freqHz * static_cast<double>(n) / static_cast<double>(SR);
+        cosCoeff += static_cast<double>(lastBlockOutput[n]) * std::cos(omega);
+        sinCoeff += static_cast<double>(lastBlockOutput[n]) * std::sin(omega);
+    }
+    cosCoeff *= 2.0 / N;
+    sinCoeff *= 2.0 / N;
+
+    double fittedAmp = std::sqrt(cosCoeff * cosCoeff + sinCoeff * sinCoeff);
+
+    // Compute residual power: output - fitted sine (using cos+sin form directly)
+    double signalPower = 0.0, noisePower = 0.0;
+    for (int n = 0; n < N; ++n)
+    {
+        double omega = kTwoPi * freqHz * static_cast<double>(n) / static_cast<double>(SR);
+        double fitted = cosCoeff * std::cos(omega) + sinCoeff * std::sin(omega);
+        double residual = static_cast<double>(lastBlockOutput[n]) - fitted;
+        signalPower += fitted * fitted;
+        noisePower  += residual * residual;
     }
 
-    std::vector<float> noise(compareN);
-    for (int i = 0; i < compareN; ++i)
-        noise[i] = processed[i + latency] - original[i];
+    if (noisePower < 1e-30) noisePower = 1e-30;
 
-    float snr = computeSNR_dB(original.data(), noise.data(), compareN);
-    INFO("SNR = " << snr << " dB (latency = " << latency << " samples)");
+    float snr = static_cast<float>(10.0 * std::log10(signalPower / noisePower));
+    INFO("SNR = " << snr << " dB (DFT sine-fit, amp = " << fittedAmp << ")");
 
     // 80 dB is the minimum acceptable for 24-bit audio processing
     REQUIRE(snr > 80.0f);
