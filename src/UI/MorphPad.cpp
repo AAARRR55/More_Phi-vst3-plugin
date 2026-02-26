@@ -57,9 +57,48 @@ void MorphPad::setVisualizationMode(int modeIndex)
 
 void MorphPad::timerCallback()
 {
-    // Update trail points from audio-thread trail
-    float x = proc_.getMorphX();
-    float y = proc_.getMorphY();
+    // Compute current cursor position based on morph source
+    float x, y;
+    int morphSrc = proc_.getMorphSource();
+
+    if (morphSrc == 1)
+    {
+        // Fader mode: derive XY from fader position along clock positions
+        float faderPos = proc_.getFaderPos();
+        auto positions = InterpolationEngine::getClockPositions(0.85f);
+        auto& bank = proc_.getSnapshotBank();
+
+        int occupiedSlots[SnapshotBank::NUM_SLOTS];
+        int numOccupied = 0;
+        for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            if (bank.isOccupied(i))
+                occupiedSlots[numOccupied++] = i;
+
+        if (numOccupied >= 2)
+        {
+            float index = faderPos * static_cast<float>(numOccupied - 1);
+            int lo = juce::jlimit(0, numOccupied - 2, static_cast<int>(index));
+            float t = index - static_cast<float>(lo);
+
+            auto& posA = positions[occupiedSlots[lo]];
+            auto& posB = positions[occupiedSlots[lo + 1]];
+
+            // Clock positions are in [-1,1] range, convert to [0,1] for trail
+            x = ((posA.x * (1.0f - t) + posB.x * t) + 1.0f) * 0.5f;
+            y = ((posA.y * (1.0f - t) + posB.y * t) + 1.0f) * 0.5f;
+        }
+        else
+        {
+            x = 0.5f;
+            y = 0.5f;
+        }
+    }
+    else
+    {
+        x = proc_.getMorphX();
+        y = proc_.getMorphY();
+    }
+
     juce::Point<float> currentPos{x, y};
 
     if (lastTrailPoint_.getDistanceFrom(currentPos) > 0.01f)
@@ -193,11 +232,12 @@ void MorphPad::paint(juce::Graphics& g)
     }
 
     // ── Cursor position ────────────────────────────────────────────────────────
-    // In Direct mode (0) or Fader mode (1): use raw input position for
-    // immediate responsiveness — processBlock may not be running.
+    // In Direct mode (0): use raw XY input for immediate responsiveness.
+    // In Fader mode (1): derive position from faderPos along snapshot positions.
     // In physics modes (Elastic=2, Drift=3): use physics-processed output.
     float cx, cy;
     int physMode = proc_.getPhysicsMode();
+    int morphSrc = proc_.getMorphSource();
 
     if (physMode >= 2)
     {
@@ -213,9 +253,49 @@ void MorphPad::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff888888).withAlpha(0.4f));
         g.fillEllipse(rawCx - 3, rawCy - 3, 6, 6);
     }
+    else if (morphSrc == 1)
+    {
+        // Fader mode: interpolate cursor along occupied snapshot clock positions
+        float faderPos = proc_.getFaderPos();
+
+        // Collect occupied slot indices (reuse 'bank' from snapshot dots above)
+        int occupiedSlots[SnapshotBank::NUM_SLOTS];
+        int numOccupied = 0;
+        for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            if (bank.isOccupied(i))
+                occupiedSlots[numOccupied++] = i;
+
+        if (numOccupied >= 2)
+        {
+            // Map faderPos [0,1] to a fractional index across occupied slots
+            float index = faderPos * static_cast<float>(numOccupied - 1);
+            int lo = juce::jlimit(0, numOccupied - 2, static_cast<int>(index));
+            int hi = lo + 1;
+            float t = index - static_cast<float>(lo);
+
+            auto& posA = positions[occupiedSlots[lo]];
+            auto& posB = positions[occupiedSlots[hi]];
+
+            float interpX = posA.x * (1.0f - t) + posB.x * t;
+            float interpY = posA.y * (1.0f - t) + posB.y * t;
+
+            cx = centre.x + interpX * radius;
+            cy = centre.y + interpY * radius;
+        }
+        else if (numOccupied == 1)
+        {
+            cx = centre.x + positions[occupiedSlots[0]].x * radius;
+            cy = centre.y + positions[occupiedSlots[0]].y * radius;
+        }
+        else
+        {
+            cx = centre.x;
+            cy = centre.y;
+        }
+    }
     else
     {
-        // Direct / Fader: use raw mouse position [0,1] → [-1,1] → screen
+        // Direct mode: use raw mouse position [0,1] -> [-1,1] -> screen
         float rawX = proc_.getMorphX() * 2.0f - 1.0f;
         float rawY = proc_.getMorphY() * 2.0f - 1.0f;
         cx = centre.x + rawX * radius;
