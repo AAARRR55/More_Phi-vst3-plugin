@@ -1,0 +1,65 @@
+name: Windows VST3 Artifact
+
+on:
+  push:
+    branches:
+      - "main"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-vst3-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_NAME: MorphSnap
+
+jobs:
+  build-windows-vst3:
+    name: Build Windows .vst3
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          toolset: 14.4
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Configure (Release)
+        run: |
+          cmake -B build `
+            -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DMORPHSNAP_BUILD_TESTS=OFF `
+            -DMORPHSNAP_ENABLE_DATASET_V3=OFF `
+            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+
+      - name: Build MorphSnap_VST3
+        run: cmake --build build --config Release --target MorphSnap_VST3 --parallel 2
+
+      - name: Collect VST3 artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "${{ env.PLUGIN_NAME }}.vst3" | Select-Object -First 1
+          if (-not $vst3) { throw "VST3 bundle not found under build/" }
+          Copy-Item -Path $vst3.FullName -Destination dist -Recurse -Force
+          Write-Host "Collected: $($vst3.FullName)"
+
+      - name: Upload Windows VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-Windows-VST3
+          path: dist/${{ env.PLUGIN_NAME }}.vst3
+          if-no-files-found: error
+          retention-days: 14
