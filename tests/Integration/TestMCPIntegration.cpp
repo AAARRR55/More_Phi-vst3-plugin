@@ -2,24 +2,31 @@
  * MorphSnap — MCP Integration Tests (Catch2)
  */
 
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/catch_approx.hpp>
-
-#include "Plugin/PluginProcessor.h"
-#include <nlohmann/json.hpp>
-
-#include <chrono>
-#include <string>
-#include <thread>
-
+// On Windows, WIN32_LEAN_AND_MEAN must be defined before ANY includes
+// to prevent <windows.h> (pulled in by <thread> etc.) from including
+// <winsock.h>, which conflicts with <winsock2.h>.
 #ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
     #define CLOSE_SOCKET closesocket
     #define SOCKET_TYPE SOCKET
     #define INVALID_SOCKET_VALUE INVALID_SOCKET
-#else
+#endif
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+#include <nlohmann/json.hpp>
+
+#include <chrono>
+#include <string>
+#include <thread>
+
+#ifndef _WIN32
     #include <arpa/inet.h>
     #include <netinet/in.h>
     #include <sys/socket.h>
@@ -28,6 +35,8 @@
     #define SOCKET_TYPE int
     #define INVALID_SOCKET_VALUE -1
 #endif
+
+#include "Plugin/PluginProcessor.h"
 
 using Catch::Approx;
 using json = nlohmann::json;
