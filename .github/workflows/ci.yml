@@ -57,10 +57,11 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DMORPHSNAP_BUILD_TESTS=ON `
             -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF `
+            -DMORPHSNAP_MSVC_MP=1 `
             -A x64
 
       - name: Build Release
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel 2
 
       - name: Run tests
         working-directory: build
@@ -156,7 +157,7 @@ jobs:
             -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
 
       - name: Build Universal Release
-        run: cmake --build build --config Release --parallel $(sysctl -n hw.logicalcpu)
+        run: cmake --build build --config Release --parallel 2
 
       - name: Run tests (native arm64)
         working-directory: build
