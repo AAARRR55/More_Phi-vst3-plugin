@@ -86,6 +86,7 @@ public:
     // Configuration
     void setCostModel(const CostModel& model);
     void setTokenBudget(const TokenBudget& budget);
+    TokenBudget getTokenBudget() const;
     void setBatchStrategy(BatchStrategy strategy);
     
     // Token estimation (before sending)
@@ -183,6 +184,8 @@ public:
     // Rate limiting
     void setRateLimit(uint32_t maxRequestsPerMinute);
     bool canMakeRequest() const;
+    bool tryConsumeRequestSlot();
+    void recordRequestTimestamp();
     float getTimeUntilNextRequest() const;  // seconds
     
     // Reporting
@@ -206,6 +209,7 @@ public:
 private:
     CostModel costModel_ = CostModels::Claude35Sonnet();
     TokenBudget budget_;
+    mutable std::mutex budgetMutex_;
     BatchStrategy batchStrategy_ = BatchStrategy::Debounce100ms;
     
     std::deque<TokenUsage> usageHistory_;

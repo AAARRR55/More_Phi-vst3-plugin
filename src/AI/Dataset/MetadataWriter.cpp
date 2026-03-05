@@ -529,7 +529,7 @@ DatasetMetadata MetadataWriter::jsonToMetadata(const nlohmann::json& json) const
     DatasetMetadata metadata;
 
     metadata.sampleId = json.value("sampleId", "");
-    metadata.timestamp = json.value("timestamp", int64(0));
+    metadata.timestamp = json.value("timestamp", juce::int64(0));
 
     if (json.contains("source"))
         metadata.source = jsonToSourceProvenance(json["source"]);
@@ -573,25 +573,7 @@ juce::String MetadataWriter::computeFileHash(const juce::File& file)
     if (!file.existsAsFile())
         return {};
 
-    juce::FileInputStream stream(file);
-    if (stream.failedToOpen())
-        return {};
-
-    juce::SHA256 hasher;
-
-    // Read in chunks for large files
-    constexpr int chunkSize = 65536;
-    juce::HeapBlock<char> buffer(chunkSize);
-
-    while (!stream.isExhausted())
-    {
-        auto bytesRead = stream.read(buffer, chunkSize);
-        if (bytesRead > 0)
-        {
-            hasher.update(buffer, bytesRead);
-        }
-    }
-
+    juce::SHA256 hasher(file);
     return hasher.toHexString();
 }
 
@@ -604,7 +586,7 @@ juce::String MetadataWriter::computeFileHashMD5(const juce::File& file)
     if (stream.failedToOpen())
         return {};
 
-    juce::MD5 hasher(&stream);
+    juce::MD5 hasher(stream);
     return hasher.toHexString();
 }
 
@@ -791,7 +773,7 @@ SourceProvenance MetadataWriter::jsonToSourceProvenance(const nlohmann::json& js
     source.dynamicRangeDb = json.value("dynamicRangeDb", 0.0f);
     source.sampleRate = json.value("sampleRate", 48000.0);
     source.numChannels = json.value("numChannels", 2);
-    source.numSamples = json.value("numSamples", int64(0));
+    source.numSamples = json.value("numSamples", juce::int64(0));
     source.fileHash = json.value("fileHash", "");
 
     return source;
@@ -922,7 +904,7 @@ OutputCharacteristics MetadataWriter::jsonToOutputCharacteristics(const nlohmann
     output.truePeakDb = json.value("truePeakDb", 0.0f);
     output.dynamicRangeDb = json.value("dynamicRangeDb", 0.0f);
     output.spectralCentroidHz = json.value("spectralCentroidHz", 0.0f);
-    output.numSamples = json.value("numSamples", int64(0));
+    output.numSamples = json.value("numSamples", juce::int64(0));
     output.durationSeconds = json.value("durationSeconds", 0.0);
 
     return output;

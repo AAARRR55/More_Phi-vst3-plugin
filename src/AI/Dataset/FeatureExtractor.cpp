@@ -971,7 +971,8 @@ void FeatureExtractor::performFFT(const float* samples, int numSamples, float* m
     }
 
     // Perform FFT
-    fft_->perform(fftBuffer_.data(), fftBuffer_.data(), false);
+    fft_->perform(reinterpret_cast<const juce::dsp::Complex<float>*>(fftBuffer_.data()),
+                 reinterpret_cast<juce::dsp::Complex<float>*>(fftBuffer_.data()), false);
 
     // Calculate magnitudes
     const int numBins = fftSize / 2 + 1;

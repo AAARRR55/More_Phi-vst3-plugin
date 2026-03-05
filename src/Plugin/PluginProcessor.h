@@ -159,9 +159,7 @@ public:
         const juce::SpinLock::ScopedLockType lock(sanityConfigLock_);
         return sanityConfig_;
     }
-    // Legacy API for message-thread-only access (UI components)
-    const SanityConfig& getSanityConfig() const   { return sanityConfig_; }
-    SanityConfig& getSanityConfig()               { return sanityConfig_; }
+    SanityConfig getSanityConfig() const { return getSanityConfigCopy(); }
 
     // ── Recall Mode: Fast (params only) vs Full (params + state chunks) ──────
     void setRecallMode(int v)        { recallMode_.store(v,     std::memory_order_relaxed); }

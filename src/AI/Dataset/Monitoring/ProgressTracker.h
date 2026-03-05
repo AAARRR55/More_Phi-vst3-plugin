@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <algorithm>
 #include <mutex>
 #include <string>
 
@@ -34,16 +35,25 @@ public:
     ProgressTracker() = default;
 
     /** Reset all counters and restart the timer. */
-    void reset(uint64_t totalBatches, uint64_t totalFrames)
+    void reset(uint64_t totalBatches,
+               uint64_t totalFrames,
+               uint64_t initialBatchesCompleted = 0,
+               uint64_t initialFramesCompleted = 0,
+               double initialElapsedSeconds = 0.0)
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        batchesCompleted_.store(0, std::memory_order_relaxed);
-        framesCompleted_.store(0, std::memory_order_relaxed);
+        const uint64_t clampedBatches = std::min(initialBatchesCompleted, totalBatches);
+        const uint64_t clampedFrames = std::min(initialFramesCompleted, totalFrames);
+        batchesCompleted_.store(clampedBatches, std::memory_order_relaxed);
+        framesCompleted_.store(clampedFrames, std::memory_order_relaxed);
         validationPasses_.store(0, std::memory_order_relaxed);
         validationFails_.store(0, std::memory_order_relaxed);
         totalBatches_ = totalBatches;
         totalFrames_  = totalFrames;
-        startTime_    = std::chrono::steady_clock::now();
+        const double safeElapsed = std::max(0.0, initialElapsedSeconds);
+        startTime_ = std::chrono::steady_clock::now()
+                   - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                         std::chrono::duration<double>(safeElapsed));
     }
 
     /** Increment batch and frame counters (called by workers). */

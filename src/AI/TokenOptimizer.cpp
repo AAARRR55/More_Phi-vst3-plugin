@@ -24,7 +24,14 @@ void TokenOptimizer::setCostModel(const CostModel& model)
 
 void TokenOptimizer::setTokenBudget(const TokenBudget& budget)
 {
+    std::lock_guard<std::mutex> lock(budgetMutex_);
     budget_ = budget;
+}
+
+TokenBudget TokenOptimizer::getTokenBudget() const
+{
+    std::lock_guard<std::mutex> lock(budgetMutex_);
+    return budget_;
 }
 
 void TokenOptimizer::setBatchStrategy(BatchStrategy strategy)
@@ -38,6 +45,7 @@ TokenOptimizer::Estimate TokenOptimizer::estimateRequest(
     const std::vector<std::string>& contextLines) const
 {
     Estimate est;
+    const TokenBudget budget = getTokenBudget();
     
     est.systemTokens = estimateTokensInString(systemPrompt_);
     
@@ -58,14 +66,14 @@ TokenOptimizer::Estimate TokenOptimizer::estimateRequest(
     uint32_t totalTokens = stats.totalTokens() + est.totalTokens;
     float totalCost = stats.totalCostUsd + est.estimatedCostUsd;
     
-    est.withinBudget = (totalTokens <= budget_.maxTokensPerSession) &&
-                       (totalCost <= budget_.maxCostPerSessionUsd);
+    est.withinBudget = (totalTokens <= budget.maxTokensPerSession) &&
+                       (totalCost <= budget.maxCostPerSessionUsd);
     
-    if (totalTokens > budget_.maxTokensPerSession * 0.9f)
+    if (totalTokens > budget.maxTokensPerSession * 0.9f)
     {
         est.warnings.push_back("Approaching token budget limit");
     }
-    if (totalCost > budget_.maxCostPerSessionUsd * 0.9f)
+    if (totalCost > budget.maxCostPerSessionUsd * 0.9f)
     {
         est.warnings.push_back("Approaching cost budget limit");
     }
@@ -118,21 +126,24 @@ TokenOptimizer::SessionStats TokenOptimizer::getSessionStats() const
 
 bool TokenOptimizer::isBudgetExceeded() const
 {
+    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
-    return (stats.totalTokens() >= budget_.maxTokensPerSession) ||
-           (stats.totalCostUsd >= budget_.maxCostPerSessionUsd);
+    return (stats.totalTokens() >= budget.maxTokensPerSession) ||
+           (stats.totalCostUsd >= budget.maxCostPerSessionUsd);
 }
 
 float TokenOptimizer::getBudgetRemainingUsd() const
 {
+    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
-    return std::max(0.0f, budget_.maxCostPerSessionUsd - stats.totalCostUsd);
+    return std::max(0.0f, budget.maxCostPerSessionUsd - stats.totalCostUsd);
 }
 
 uint32_t TokenOptimizer::getTokenBudgetRemaining() const
 {
+    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
-    return std::max(0u, budget_.maxTokensPerSession - stats.totalTokens());
+    return std::max(0u, budget.maxTokensPerSession - stats.totalTokens());
 }
 
 TokenOptimizer::OptimizedPayload TokenOptimizer::optimizeParameters(
@@ -141,12 +152,13 @@ TokenOptimizer::OptimizedPayload TokenOptimizer::optimizeParameters(
     uint32_t customMaxTokens) const
 {
     OptimizedPayload result;
+    const TokenBudget budget = getTokenBudget();
     
-    uint32_t maxTokens = customMaxTokens > 0 ? customMaxTokens : budget_.maxTokensPerRequest;
+    uint32_t maxTokens = customMaxTokens > 0 ? customMaxTokens : budget.maxTokensPerRequest;
     
     // Start with prioritized list
     std::vector<int> prioritized = availableParams;
-    if (classifier && budget_.prioritizeImportantParams)
+    if (classifier && budget.prioritizeImportantParams)
     {
         prioritized = prioritizeParameters(availableParams, classifier);
     }
@@ -323,6 +335,20 @@ TokenOptimizer::CompressionResult TokenOptimizer::compressParameters(
     // Simple compression: group consecutive indices
     std::ostringstream compressed;
     compressed << std::fixed << std::setprecision(3);
+
+    const auto valueForEntry = [&values](size_t entryPos, int parameterIndex) -> float
+    {
+        if (entryPos < values.size())
+            return values[entryPos];
+
+        if (parameterIndex >= 0 &&
+            static_cast<size_t>(parameterIndex) < values.size())
+        {
+            return values[static_cast<size_t>(parameterIndex)];
+        }
+
+        return 0.0f;
+    };
     
     int rangeStart = -1;
     int prevIdx = -1;
@@ -346,7 +372,7 @@ TokenOptimizer::CompressionResult TokenOptimizer::compressParameters(
             // End previous range, start new one
             if (rangeStart == prevIdx)
             {
-                compressed << rangeStart << ":" << values[rangeStart] << ";";
+                compressed << rangeStart << ":" << valueForEntry(i - 1, rangeStart) << ";";
             }
             else
             {
@@ -362,7 +388,7 @@ TokenOptimizer::CompressionResult TokenOptimizer::compressParameters(
     {
         if (rangeStart == prevIdx)
         {
-            compressed << rangeStart << ":" << values[rangeStart];
+            compressed << rangeStart << ":" << valueForEntry(indices.size() - 1, rangeStart);
         }
         else
         {
@@ -381,7 +407,7 @@ TokenOptimizer::CompressionResult TokenOptimizer::compressParameters(
 
 void TokenOptimizer::setRateLimit(uint32_t maxRequestsPerMinute)
 {
-    rateLimit_.store(maxRequestsPerMinute);
+    rateLimit_.store(std::max(1u, maxRequestsPerMinute));
 }
 
 bool TokenOptimizer::canMakeRequest() const
@@ -389,6 +415,23 @@ bool TokenOptimizer::canMakeRequest() const
     std::lock_guard<std::mutex> lock(rateMutex_);
     cleanupOldTimestamps();
     return requestTimestamps_.size() < rateLimit_.load();
+}
+
+bool TokenOptimizer::tryConsumeRequestSlot()
+{
+    std::lock_guard<std::mutex> lock(rateMutex_);
+    cleanupOldTimestamps();
+    if (requestTimestamps_.size() >= rateLimit_.load())
+        return false;
+    requestTimestamps_.push_back(std::chrono::steady_clock::now());
+    return true;
+}
+
+void TokenOptimizer::recordRequestTimestamp()
+{
+    std::lock_guard<std::mutex> lock(rateMutex_);
+    cleanupOldTimestamps();
+    requestTimestamps_.push_back(std::chrono::steady_clock::now());
 }
 
 float TokenOptimizer::getTimeUntilNextRequest() const
@@ -411,6 +454,7 @@ float TokenOptimizer::getTimeUntilNextRequest() const
 std::string TokenOptimizer::generateUsageReport() const
 {
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     
     std::ostringstream report;
     report << "=== MorphSnap AI Usage Report ===\n\n";
@@ -428,7 +472,7 @@ std::string TokenOptimizer::generateUsageReport() const
     
     report << "Total Cost: " << TokenOptimizerUI::formatCost(stats.totalCostUsd) << "\n";
     report << "Budget Used: " << std::fixed << std::setprecision(1)
-           << (stats.totalCostUsd / budget_.maxCostPerSessionUsd * 100) << "%\n\n";
+           << (stats.totalCostUsd / std::max(0.0001f, budget.maxCostPerSessionUsd) * 100) << "%\n\n";
     
     report << "Average per Request:\n";
     if (stats.totalRequests > 0)
@@ -447,8 +491,9 @@ std::string TokenOptimizer::generateOptimizationSuggestions() const
     suggestions << "=== Optimization Suggestions ===\n\n";
     
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     
-    if (stats.totalCostUsd > budget_.maxCostPerSessionUsd * 0.5f)
+    if (stats.totalCostUsd > budget.maxCostPerSessionUsd * 0.5f)
     {
         suggestions << "WARNING: You've used over 50% of your cost budget.\n";
         suggestions << "Consider:\n";
@@ -466,7 +511,7 @@ std::string TokenOptimizer::generateOptimizationSuggestions() const
     suggestions << "Current Settings:\n";
     suggestions << "  - Model: " << costModel_.modelName << "\n";
     suggestions << "  - Batch Strategy: " << static_cast<int>(batchStrategy_) << "\n";
-    suggestions << "  - Max Parameters: " << budget_.keepLastN_Parameters << "\n";
+    suggestions << "  - Max Parameters: " << budget.keepLastN_Parameters << "\n";
     
     return suggestions.str();
 }
@@ -481,12 +526,18 @@ void TokenOptimizer::resetSession()
         std::lock_guard<std::mutex> usageLock(usageMutex_);
         usageHistory_.clear();
     }
+
+    {
+        std::lock_guard<std::mutex> rateLock(rateMutex_);
+        requestTimestamps_.clear();
+    }
 }
 
 TokenOptimizer::DisplayData TokenOptimizer::getDisplayData() const
 {
     DisplayData data;
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     
     data.sessionCost = stats.totalCostUsd;
     data.sessionTokens = stats.totalTokens();
@@ -497,7 +548,7 @@ TokenOptimizer::DisplayData TokenOptimizer::getDisplayData() const
         now - stats.startTime).count();
     data.costPerMinute = minutes > 0 ? stats.totalCostUsd / minutes : 0.0f;
     
-    float budgetUsed = stats.totalCostUsd / budget_.maxCostPerSessionUsd;
+    float budgetUsed = stats.totalCostUsd / std::max(0.0001f, budget.maxCostPerSessionUsd);
     if (budgetUsed >= 1.0f)
     {
         data.status = "LIMIT_REACHED";

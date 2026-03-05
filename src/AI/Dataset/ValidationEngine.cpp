@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <set>
 #include <limits>
+#include <fstream>
 
 namespace morphsnap {
 
@@ -1224,7 +1225,7 @@ int ValidationEngine::countUniqueParameterSets(
 
 juce::String ValidationEngine::generateReportId()
 {
-    const int id = random_.nextInt(Range<int>(100000, 999999));
+    const int id = random_.nextInt(juce::Range<int>(100000, 999999));
     const juce::Time now = juce::Time::getCurrentTime();
     return juce::String::formatted("VAL-%04d%02d%02d-%06d",
         now.getYear(), now.getMonth(), now.getDayOfMonth(), id);

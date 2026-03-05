@@ -183,13 +183,13 @@ void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
 {
     if (!listenMode_) return;
 
-    const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
-    if (discreteMap_.empty()) return;
+    auto discreteMap = std::atomic_load_explicit(&discreteMapSnapshot_, std::memory_order_acquire);
+    if (!discreteMap || discreteMap->empty()) return;
 
-    const size_t count = std::min(output.size(), discreteMap_.size());
+    const size_t count = std::min(output.size(), discreteMap->size());
     for (size_t i = 0; i < count; ++i)
     {
-        if (discreteMap_[i])
+        if ((*discreteMap)[i] != 0)
             output[i] = SKIP_SENTINEL;
     }
 }

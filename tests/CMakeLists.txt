@@ -17,13 +17,16 @@ if(NOT TARGET Catch2::Catch2WithMain)
 endif()
 
 # ── Unit test executable ────────────────────────────────────────────────────────
+# Legacy Morphy-era tests under tests/src are intentionally excluded.
 add_executable(MorphSnapTests
     Unit/test_morphsnap_unit.cpp
     Unit/TestPhysicsAndGenetic.cpp
     Unit/TestSidechainTrigger.cpp
     Unit/TestAudioEngine.cpp
     Unit/TestDSPQuality.cpp
+    Unit/TestAIRegressions.cpp
     Integration/TestPluginLifecycle.cpp
+    Integration/TestMCPIntegration.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
@@ -80,7 +83,7 @@ catch_discover_tests(MorphSnapTests
 )
 
 # ── Benchmark executable (opt-in) ──────────────────────────────────────────────
-option(MORPHSNAP_BUILD_BENCHMARKS "Build performance benchmark suite" ON)
+option(MORPHSNAP_BUILD_BENCHMARKS "Build performance benchmark suite" OFF)
 if(MORPHSNAP_BUILD_BENCHMARKS)
     add_executable(MorphSnapBenchmarks
         Performance/BenchmarkSuite.cpp

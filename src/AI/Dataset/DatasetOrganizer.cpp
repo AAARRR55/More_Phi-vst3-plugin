@@ -3,6 +3,7 @@
  * Implementation of dataset organization, splitting, and verification.
  */
 #include "DatasetOrganizer.h"
+#include <juce_cryptography/juce_cryptography.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>

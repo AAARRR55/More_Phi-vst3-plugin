@@ -410,8 +410,8 @@ TEST_CASE("SnapshotBank: recallStateChunk with nullptr plugin is safe", "[bank][
     bank.prepare(4);
 
     // Must not crash when plugin is nullptr
-    bank.recallStateChunk(0, nullptr);
-    bank.recallStateChunk(-1, nullptr);
+    bank.recallStateChunk(0, static_cast<juce::AudioPluginInstance*>(nullptr));
+    bank.recallStateChunk(-1, static_cast<juce::AudioPluginInstance*>(nullptr));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

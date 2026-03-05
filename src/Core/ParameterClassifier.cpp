@@ -5,6 +5,7 @@
 #include "ParameterClassifier.h"
 #include "../Host/IPluginHostManager.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <chrono>
 #include <sstream>
@@ -21,44 +22,70 @@ void ParameterClassifier::analyzeParameters(const IParameterBridge& host)
     std::lock_guard<std::mutex> lock(mutex_);
     
     const int count = host.getParameterCount();
-    parameterCount_.store(static_cast<uint32_t>(count));
+    const uint32_t clampedCount = static_cast<uint32_t>(juce::jlimit(0, MAX_PARAMS, count));
+    parameterCount_.store(clampedCount);
+
+    const auto assignCategory = [](const juce::String& lowerName, ParameterMetadata& meta)
+    {
+        const juce::String category =
+            (lowerName.contains("osc") || lowerName.contains("wave")) ? "Oscillator" :
+            (lowerName.contains("filter") || lowerName.contains("cutoff") || lowerName.contains("reson")) ? "Filter" :
+            (lowerName.contains("attack") || lowerName.contains("decay") || lowerName.contains("sustain") || lowerName.contains("release")) ? "Envelope" :
+            (lowerName.contains("lfo") || lowerName.contains("mod")) ? "Modulation" :
+            (lowerName.contains("gain") || lowerName.contains("drive") || lowerName.contains("compress")) ? "Dynamics" :
+            (lowerName.contains("delay") || lowerName.contains("reverb") || lowerName.contains("mix") || lowerName.contains("width")) ? "Space" :
+            "General";
+
+        std::strncpy(meta.category, category.toRawUTF8(), sizeof(meta.category) - 1);
+        meta.category[sizeof(meta.category) - 1] = '\0';
+    };
     
-    for (int i = 0; i < count && i < MAX_PARAMS; ++i)
+    for (uint32_t i = 0; i < clampedCount; ++i)
     {
         auto& meta = metadata_[i];
         
         // Get parameter name
-        juce::String name = host.getParameterName(i);
+        const int paramIndex = static_cast<int>(i);
+        juce::String name = host.getParameterName(paramIndex);
+        const juce::String lowerName = name.toLowerCase();
         std::strncpy(meta.name, name.toRawUTF8(), sizeof(meta.name) - 1);
         meta.name[sizeof(meta.name) - 1] = '\0';
         
         // Classify type
-        meta.type = classifyParameter(i, host);
+        meta.type = classifyParameter(paramIndex, host);
+        meta.isSanityProtected = false;
+        meta.stepCount = 0;
         
         // Set default exposure (exclude obvious non-sound params)
         meta.isExposed = (meta.type != ParameterType::Unknown);
         
         // Detect discrete parameters
-        meta.isInterpolatable = (meta.type != ParameterType::Enumeration && 
-                                  meta.type != ParameterType::Binary);
-        
+        meta.isInterpolatable = (meta.type != ParameterType::Enumeration &&
+                                 meta.type != ParameterType::Binary &&
+                                 meta.type != ParameterType::Discrete);
+        if (meta.type == ParameterType::Binary)
+            meta.stepCount = 2;
+        else if (meta.type == ParameterType::Discrete || meta.type == ParameterType::Enumeration)
+            meta.stepCount = 1;
+
         // Sanity protection detection
-        const char* nameLower = meta.name;
-        if (std::strstr(nameLower, "volume") || 
-            std::strstr(nameLower, "gain") ||
-            std::strstr(nameLower, "output") ||
-            std::strstr(nameLower, "bypass") ||
-            std::strstr(nameLower, "mute") ||
-            std::strstr(nameLower, "power"))
+        if (lowerName.contains("volume") ||
+            lowerName.contains("gain") ||
+            lowerName.contains("output") ||
+            lowerName.contains("bypass") ||
+            lowerName.contains("mute") ||
+            lowerName.contains("power"))
         {
             meta.isSanityProtected = true;
             meta.isExposed = false; // Hide from AI to prevent accidents
         }
+
+        assignCategory(lowerName, meta);
         
         // Default values
         meta.minValue = 0.0f;
         meta.maxValue = 1.0f;
-        meta.defaultValue = host.getParameterNormalized(i);
+        meta.defaultValue = host.getParameterNormalized(paramIndex);
     }
     
     updateImportanceScores();
@@ -79,84 +106,86 @@ ParameterType ParameterClassifier::classifyParameter(int index, const IParameter
 
 ParameterType ParameterClassifier::detectTypeFromName(const char* name) const
 {
-    const char* lower = name;
+    if (name == nullptr)
+        return ParameterType::Unknown;
+    const juce::String lower = juce::String(name).toLowerCase();
     
     // Binary/On-Off detection
-    if (std::strstr(lower, "bypass") ||
-        std::strstr(lower, "mute") ||
-        std::strstr(lower, "on/off") ||
-        std::strstr(lower, "enable") ||
-        std::strstr(lower, "power") ||
-        std::strstr(lower, "active") ||
-        std::strstr(lower, "invert"))
+    if (lower.contains("bypass") ||
+        lower.contains("mute") ||
+        lower.contains("on/off") ||
+        lower.contains("enable") ||
+        lower.contains("power") ||
+        lower.contains("active") ||
+        lower.contains("invert"))
     {
         return ParameterType::Binary;
     }
     
     // Frequency detection
-    if (std::strstr(lower, "freq") ||
-        std::strstr(lower, "hz") ||
-        std::strstr(lower, "cutoff") ||
-        std::strstr(lower, "pitch") ||
-        std::strstr(lower, "tune") ||
-        std::strstr(lower, "rate"))  // LFO rate
+    if (lower.contains("freq") ||
+        lower.contains("hz") ||
+        lower.contains("cutoff") ||
+        lower.contains("pitch") ||
+        lower.contains("tune") ||
+        lower.contains("rate"))  // LFO rate
     {
         return ParameterType::Frequency;
     }
     
     // Decibel detection
-    if (std::strstr(lower, "db") ||
-        std::strstr(lower, "decibel") ||
-        std::strstr(lower, "volume") ||
-        std::strstr(lower, "gain") ||
-        std::strstr(lower, "level") ||
-        std::strstr(lower, "drive"))
+    if (lower.contains("db") ||
+        lower.contains("decibel") ||
+        lower.contains("volume") ||
+        lower.contains("gain") ||
+        lower.contains("level") ||
+        lower.contains("drive"))
     {
         return ParameterType::Decibel;
     }
     
     // Enumeration detection (cannot interpolate)
-    if (std::strstr(lower, "type") ||
-        std::strstr(lower, "mode") ||
-        std::strstr(lower, "shape") ||
-        std::strstr(lower, "waveform") ||
-        std::strstr(lower, "slope") ||
-        std::strstr(lower, "order") ||
-        std::strstr(lower, "source"))
+    if (lower.contains("type") ||
+        lower.contains("mode") ||
+        lower.contains("shape") ||
+        lower.contains("waveform") ||
+        lower.contains("slope") ||
+        lower.contains("order") ||
+        lower.contains("source"))
     {
         return ParameterType::Enumeration;
     }
     
     // Percentage detection
-    if (std::strstr(lower, "%") ||
-        std::strstr(lower, "percent") ||
-        std::strstr(lower, "mix") ||
-        std::strstr(lower, "blend") ||
-        std::strstr(lower, "balance") ||
-        std::strstr(lower, "width"))
+    if (lower.contains("%") ||
+        lower.contains("percent") ||
+        lower.contains("mix") ||
+        lower.contains("blend") ||
+        lower.contains("balance") ||
+        lower.contains("width"))
     {
         return ParameterType::Percentage;
     }
-    
-    // Category assignment
-    // (This would set meta.category but we're returning type)
-    
+
     return ParameterType::Unknown;
 }
 
 ParameterType ParameterClassifier::detectTypeFromBehavior(int index, const IParameterBridge& host) const
 {
-    // Sample parameter at multiple points to detect steppiness
-    float samples[11];
-    for (int i = 0; i <= 10; ++i)
+    if (host.isDiscrete(index))
     {
-        float testValue = i / 10.0f;
-        // Note: This is a const method, we can't actually set parameters here
-        // In practice, this would need to be done during analysis with temporary values
-        samples[i] = testValue;
+        const juce::String lower = host.getParameterName(index).toLowerCase();
+        if (lower.contains("bypass") ||
+            lower.contains("mute") ||
+            lower.contains("enable") ||
+            lower.contains("on/off"))
+        {
+            return ParameterType::Binary;
+        }
+        return ParameterType::Discrete;
     }
-    
-    // For now, assume continuous if no other indicators
+
+    // Fall back to continuous when no explicit hint exists.
     return ParameterType::Continuous;
 }
 
@@ -176,31 +205,32 @@ LearnConfiguration ParameterClassifier::getLearnConfiguration() const
 std::vector<int> ParameterClassifier::getExposedParameterIndices() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    return getExposedParameterIndicesNoLock();
+}
+
+std::vector<int> ParameterClassifier::getExposedParameterIndicesNoLock() const
+{
     std::vector<int> exposed;
-    
-    const uint32_t count = parameterCount_.load();
-    
-    // Collect all exposed parameters
+
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+
     for (uint32_t i = 0; i < count; ++i)
     {
-        if (metadata_[i].isExposed && metadata_[i].importanceScore >= learnConfig_.exposureThreshold)
+        if (metadata_[i].isExposed &&
+            metadata_[i].importanceScore >= learnConfig_.exposureThreshold)
         {
             exposed.push_back(static_cast<int>(i));
         }
     }
-    
-    // Sort by importance score (highest first)
+
     std::sort(exposed.begin(), exposed.end(),
-        [this](int a, int b) {
-            return metadata_[a].importanceScore > metadata_[b].importanceScore;
-        });
-    
-    // Limit to maxExposedParameters
+              [this](int a, int b) {
+                  return metadata_[a].importanceScore > metadata_[b].importanceScore;
+              });
+
     if (exposed.size() > learnConfig_.maxExposedParameters)
-    {
         exposed.resize(learnConfig_.maxExposedParameters);
-    }
-    
+
     return exposed;
 }
 
@@ -209,7 +239,7 @@ std::vector<int> ParameterClassifier::getInterpolatableIndices() const
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<int> interpolatable;
     
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (metadata_[i].isInterpolatable)
@@ -247,11 +277,12 @@ void ParameterClassifier::recordAIAdjustment(int paramIndex)
         std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
-const ParameterMetadata& ParameterClassifier::getMetadata(int index) const
+ParameterMetadata ParameterClassifier::getMetadata(int index) const
 {
     static const ParameterMetadata emptyMeta{};
     if (index < 0 || index >= MAX_PARAMS)
         return emptyMeta;
+    std::lock_guard<std::mutex> lock(mutex_);
     return metadata_[index];
 }
 
@@ -267,7 +298,7 @@ void ParameterClassifier::setMetadata(int index, const ParameterMetadata& meta)
 void ParameterClassifier::exposeAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (!metadata_[i].isSanityProtected)
@@ -278,7 +309,7 @@ void ParameterClassifier::exposeAll()
 void ParameterClassifier::hideAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     for (uint32_t i = 0; i < count; ++i)
     {
         metadata_[i].isExposed = false;
@@ -287,11 +318,15 @@ void ParameterClassifier::hideAll()
 
 void ParameterClassifier::exposeCategory(const char* category)
 {
+    if (category == nullptr)
+        return;
+    const juce::String categoryLower = juce::String(category).toLowerCase();
+
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     for (uint32_t i = 0; i < count; ++i)
     {
-        if (std::strstr(metadata_[i].category, category))
+        if (juce::String(metadata_[i].category).toLowerCase().contains(categoryLower))
         {
             metadata_[i].isExposed = true;
         }
@@ -300,11 +335,15 @@ void ParameterClassifier::exposeCategory(const char* category)
 
 void ParameterClassifier::hideCategory(const char* category)
 {
+    if (category == nullptr)
+        return;
+    const juce::String categoryLower = juce::String(category).toLowerCase();
+
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     for (uint32_t i = 0; i < count; ++i)
     {
-        if (std::strstr(metadata_[i].category, category))
+        if (juce::String(metadata_[i].category).toLowerCase().contains(categoryLower))
         {
             metadata_[i].isExposed = false;
         }
@@ -318,7 +357,7 @@ TokenEstimate ParameterClassifier::estimateTokens(bool includeDescriptions) cons
     
     estimate.systemPromptTokens = BASE_SYSTEM_TOKENS;
     
-    const auto exposed = getExposedParameterIndices();
+    const auto exposed = getExposedParameterIndicesNoLock();
     estimate.parameterTokens = static_cast<uint32_t>(exposed.size()) * TOKENS_PER_PARAM;
     
     if (includeDescriptions)
@@ -338,7 +377,7 @@ std::vector<int> ParameterClassifier::optimizeForTokenBudget(uint32_t maxTokens)
     uint32_t currentTokens = BASE_SYSTEM_TOKENS;
     
     // Get exposed indices sorted by importance
-    auto candidates = getExposedParameterIndices();
+    auto candidates = getExposedParameterIndicesNoLock();
     
     for (int idx : candidates)
     {
@@ -361,11 +400,17 @@ std::vector<int> ParameterClassifier::optimizeForTokenBudget(uint32_t maxTokens)
 
 bool ParameterClassifier::isDiscrete(int index) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return isDiscreteNoLock(index);
+}
+
+bool ParameterClassifier::isDiscreteNoLock(int index) const
+{
     if (index < 0 || index >= MAX_PARAMS)
         return false;
-    
+
     const auto& meta = metadata_[index];
-    return meta.type == ParameterType::Discrete || 
+    return meta.type == ParameterType::Discrete ||
            meta.type == ParameterType::Binary ||
            meta.type == ParameterType::Enumeration ||
            meta.stepCount > 0;
@@ -373,6 +418,7 @@ bool ParameterClassifier::isDiscrete(int index) const
 
 bool ParameterClassifier::isBinary(int index) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (index < 0 || index >= MAX_PARAMS)
         return false;
     return metadata_[index].type == ParameterType::Binary;
@@ -381,13 +427,13 @@ bool ParameterClassifier::isBinary(int index) const
 std::vector<bool> ParameterClassifier::getDiscreteMap() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     std::vector<bool> map;
     map.reserve(count);
     
     for (uint32_t i = 0; i < count; ++i)
     {
-        map.push_back(isDiscrete(static_cast<int>(i)));
+        map.push_back(isDiscreteNoLock(static_cast<int>(i)));
     }
     
     return map;
@@ -396,7 +442,7 @@ std::vector<bool> ParameterClassifier::getDiscreteMap() const
 std::vector<bool> ParameterClassifier::getBinaryMap() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     std::vector<bool> map;
     map.reserve(count);
     
@@ -410,6 +456,7 @@ std::vector<bool> ParameterClassifier::getBinaryMap() const
 
 bool ParameterClassifier::shouldSkipForMorph(int index) const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (index < 0 || index >= MAX_PARAMS)
         return true;
     
@@ -436,7 +483,7 @@ bool ParameterClassifier::shouldSkipForMorph(int index) const
 
 void ParameterClassifier::updateImportanceScores()
 {
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     
     auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     
@@ -490,7 +537,7 @@ ParameterClassifier::Statistics ParameterClassifier::getStatistics() const
     std::lock_guard<std::mutex> lock(mutex_);
     Statistics stats{};
     
-    stats.totalParameters = parameterCount_.load();
+    stats.totalParameters = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     
     float totalImportance = 0.0f;
     for (uint32_t i = 0; i < stats.totalParameters; ++i)
@@ -534,7 +581,7 @@ ParameterClassifier::Statistics ParameterClassifier::getStatistics() const
 void ParameterClassifier::clearLearningData()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     
     for (uint32_t i = 0; i < count; ++i)
     {
@@ -552,7 +599,7 @@ void ParameterClassifier::serialize(std::vector<uint8_t>& out) const
     out.clear();
     out.push_back(1); // Version
     
-    const uint32_t count = parameterCount_.load();
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
     out.insert(out.end(), 
         reinterpret_cast<const uint8_t*>(&count), 
         reinterpret_cast<const uint8_t*>(&count) + sizeof(count));
@@ -584,7 +631,7 @@ void ParameterClassifier::deserialize(const uint8_t* data, size_t size)
     if (size < expectedSize)
         return;
     
-    parameterCount_.store(count);
+    parameterCount_.store(std::min<uint32_t>(count, MAX_PARAMS));
     
     const uint8_t* metaData = data + 1 + sizeof(count);
     for (uint32_t i = 0; i < count && i < MAX_PARAMS; ++i)

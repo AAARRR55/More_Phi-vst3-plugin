@@ -82,9 +82,6 @@ public:
     DatasetGeneratorV3();
     ~DatasetGeneratorV3();
 
-    DatasetGeneratorV3(const DatasetGeneratorV3&) = delete;
-    DatasetGeneratorV3& operator=(const DatasetGeneratorV3&) = delete;
-
     // ── Configuration ──────────────────────────────────────────────────
     void setConfig(const V3GenerationConfig& config);
     const V3GenerationConfig& getConfig() const { return config_; }
@@ -146,8 +143,14 @@ private:
     // ── Dispatch thread ────────────────────────────────────────────────
     std::unique_ptr<std::thread> dispatchThread_;
 
+    /** Shared startup path used by both startGeneration() and resumeFromCheckpoint(). */
+    bool initializeAndStart(uint64_t startBatchId,
+                            uint64_t startFramesProcessed,
+                            double startElapsedSeconds,
+                            bool resumedFromCheckpoint);
+
     /** Main dispatch loop: batches captured data and submits to TaskQueue. */
-    void dispatchLoop(uint64_t startBatchId);
+    void dispatchLoop(uint64_t startBatchId, uint64_t startFramesDispatched);
 
     /** Process a single batch (runs inside a worker thread). */
     void processBatch(uint64_t batchId,

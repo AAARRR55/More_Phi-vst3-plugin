@@ -24,7 +24,7 @@ PluginSlot PluginSlot::fromJson(const nlohmann::json& j)
         slot.description.version = desc.value("version", "");
         slot.description.fileOrIdentifier = desc.value("fileOrIdentifier", "");
         slot.description.lastFileModTime = juce::Time(desc.value("lastFileModTime", 0LL));
-        slot.description.uid = desc.value("uid", 0);
+        slot.description.uniqueId = desc.value("uniqueId", 0);
         slot.description.isInstrument = desc.value("isInstrument", false);
         slot.description.numInputChannels = desc.value("numInputChannels", 2);
         slot.description.numOutputChannels = desc.value("numOutputChannels", 2);
@@ -57,7 +57,7 @@ nlohmann::json PluginSlot::toJson() const
     desc["version"] = description.version.toStdString();
     desc["fileOrIdentifier"] = description.fileOrIdentifier.toStdString();
     desc["lastFileModTime"] = description.lastFileModTime.toMilliseconds();
-    desc["uid"] = description.uid;
+    desc["uniqueId"] = description.uniqueId;
     desc["isInstrument"] = description.isInstrument;
     desc["numInputChannels"] = description.numInputChannels;
     desc["numOutputChannels"] = description.numOutputChannels;
@@ -259,8 +259,17 @@ bool PluginChainEngine::loadSinglePlugin(const PluginSlot& slot)
     // Create plugin instance synchronously
     std::unique_ptr<juce::AudioPluginInstance> plugin;
 
-    // Find the appropriate format
-    auto* format = formatManager_.getFormatForDescription(slot.description);
+    // Find the appropriate format by iterating registered formats
+    juce::AudioPluginFormat* format = nullptr;
+    for (int i = 0; i < formatManager_.getNumFormats(); ++i)
+    {
+        auto* f = formatManager_.getFormat(i);
+        if (f != nullptr && f->getName() == slot.description.pluginFormatName)
+        {
+            format = f;
+            break;
+        }
+    }
     if (format == nullptr)
     {
         // Try to find by file extension or identifier
@@ -272,7 +281,7 @@ bool PluginChainEngine::loadSinglePlugin(const PluginSlot& slot)
                 auto types = f->searchPathsForPlugins(juce::FileSearchPath(), false);
                 for (const auto& type : types)
                 {
-                    if (type.fileOrIdentifier == slot.description.fileOrIdentifier)
+                    if (type == slot.description.fileOrIdentifier)
                     {
                         format = f;
                         break;
@@ -421,7 +430,8 @@ std::vector<ParameterMapping> PluginChainEngine::getAllParameters() const
                 mapping.defaultValue = plugin->getParameterDefaultValue(paramIdx);
 
                 // Check for discrete/boolean parameters
-                if (plugin->getParameterCategory(paramIdx) == juce::AudioProcessorParameter::Category::discreteParameter)
+                auto* p = plugin->getParameters()[paramIdx];
+                if (p != nullptr && p->getNumSteps() > 0 && p->getNumSteps() != 0x7fffffff)
                 {
                     mapping.isDiscrete = true;
                 }

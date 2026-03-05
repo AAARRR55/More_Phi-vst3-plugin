@@ -26,8 +26,7 @@ bool AudioContentLibrary::scanDirectory(const juce::File& directory)
     if (!directory.isDirectory())
         return false;
 
-    juce::StringArray extensions = {"*.wav", "*.flac", "*.aiff", "*.aif"};
-    auto files = directory.findChildFiles(juce::File::findFiles, true, extensions);
+    auto files = directory.findChildFiles(juce::File::findFiles, true, "*.wav;*.flac;*.aiff;*.aif");
 
     for (const auto& file : files)
     {
@@ -539,7 +538,7 @@ bool AudioContentLibrary::fromJson(const nlohmann::json& j)
             src.numChannels = srcJson["numChannels"].get<int>();
 
         if (srcJson.contains("numSamples"))
-            src.numSamples = srcJson["numSamples"].get<int64>();
+            src.numSamples = srcJson["numSamples"].get<juce::int64>();
 
         if (srcJson.contains("description"))
             src.description = juce::String(srcJson["description"].get<std::string>());

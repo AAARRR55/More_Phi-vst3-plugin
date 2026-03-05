@@ -16,7 +16,6 @@ namespace morphsnap {
     class ParameterClassifier;
     class TokenOptimizer;
     struct InstanceIdentity;
-    struct SnapshotComparison;
 }
 
 namespace morphsnap {
@@ -137,6 +136,10 @@ public:
         MorphSnapProcessor& processor,
         ParameterClassifier& classifier);
 
+    // Tool: generate_dataset
+    // Renders multiple audio clips with random parameter settings to create a machine learning dataset
+    static juce::String generateDataset(const juce::var& params, MorphSnapProcessor& processor);
+
 private:
     // Helper: Build parameter JSON with metadata
     static juce::var buildParameterInfo(
@@ -149,12 +152,10 @@ private:
     
     // Helper: Format compatibility report
     static juce::String formatCompatibilityReport(
-        const SnapshotComparison& comparison);
+        const MorphSafeAdvisor::SnapshotComparison& comparison);
 
-    // Tool: generate_dataset
-    // Renders multiple audio clips with random parameter settings to create a machine learning dataset
-    static juce::String generateDataset(const juce::var& params, MorphSnapProcessor& processor);
 };
+
 
 // Tool descriptions for MCP discovery
 struct ExtendedToolInfo

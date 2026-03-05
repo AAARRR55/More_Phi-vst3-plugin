@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MorphSnap VERSION 3.3.0 LANGUAGES CXX)
+project(MorphSnap VERSION 3.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,14 @@ option(MORPHSNAP_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC
 option(MORPHSNAP_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
 set(MORPHSNAP_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORPHSNAP_ENABLE_LTO "Enable LTO for Release builds" OFF)
+option(MORPHSNAP_ENABLE_DATASET_V3 "Enable Dataset V3 modular pipeline sources" OFF)
+
+# Keep single-config generators deterministic when callers omit build type.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+        "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
+endif()
 
 if(MSVC AND NOT MORPHSNAP_MSVC_MP MATCHES "^[0-9]+$")
     message(FATAL_ERROR "MORPHSNAP_MSVC_MP must be numeric (for example: 0, 1, 2, 4).")
@@ -16,7 +24,11 @@ endif()
 
 # Windows: 4 MB stack for plugin-in-plugin hosting (FL Studio compat)
 if(WIN32)
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /STACK:4194304")
+    if(MSVC)
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /STACK:4194304")
+    elseif(MINGW)
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--stack,4194304")
+    endif()
 endif()
 
 function(morphsnap_apply_build_tuning target_name)
@@ -176,21 +188,7 @@ set(MORPHSNAP_HOST_SOURCES
     src/Host/ParameterBridge.cpp
 )
 
-set(MORPHSNAP_AI_SOURCES
-    src/AI/InstanceIdentity.h
-    src/AI/InstanceRegistry.h
-    src/AI/InstanceRegistry.cpp
-    src/AI/MCPServer.h
-    src/AI/MCPServer.cpp
-    src/AI/MCPToolHandler.h
-    src/AI/MCPToolHandler.cpp
-    src/AI/LinkBroadcaster.h
-    src/AI/LinkBroadcaster.cpp
-    src/AI/TokenOptimizer.h
-    src/AI/TokenOptimizer.cpp
-    src/AI/MCPToolsExtended.h
-    src/AI/MCPToolsExtended.cpp
-    # Dataset Generation System
+set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetGenerator.h
     src/AI/Dataset/DatasetGenerator.cpp
     src/AI/Dataset/ParameterSampler.h
@@ -212,7 +210,9 @@ set(MORPHSNAP_AI_SOURCES
     src/AI/Dataset/DatasetGeneratorV2.h
     src/AI/Dataset/DatasetGeneratorV2.cpp
     src/AI/Dataset/DatasetConfig.h
-    # V3 Modular Pipeline
+)
+
+set(MORPHSNAP_AI_DATASET_V3_SOURCES
     src/AI/Dataset/DatasetGeneratorV3.h
     src/AI/Dataset/DatasetGeneratorV3.cpp
     src/AI/Dataset/Scheduling/TaskQueue.h
@@ -223,6 +223,27 @@ set(MORPHSNAP_AI_SOURCES
     src/AI/Dataset/Recovery/CheckpointManager.h
     src/AI/Dataset/Recovery/WatchdogTimer.h
 )
+
+set(MORPHSNAP_AI_SOURCES
+    src/AI/InstanceIdentity.h
+    src/AI/InstanceRegistry.h
+    src/AI/InstanceRegistry.cpp
+    src/AI/MCPServer.h
+    src/AI/MCPServer.cpp
+    src/AI/MCPToolHandler.h
+    src/AI/MCPToolHandler.cpp
+    src/AI/LinkBroadcaster.h
+    src/AI/LinkBroadcaster.cpp
+    src/AI/TokenOptimizer.h
+    src/AI/TokenOptimizer.cpp
+    src/AI/MCPToolsExtended.h
+    src/AI/MCPToolsExtended.cpp
+    ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
+)
+
+if(MORPHSNAP_ENABLE_DATASET_V3)
+    list(APPEND MORPHSNAP_AI_SOURCES ${MORPHSNAP_AI_DATASET_V3_SOURCES})
+endif()
 
 set(MORPHSNAP_MIDI_SOURCES
     src/MIDI/MIDIRouter.h
@@ -331,6 +352,7 @@ target_compile_definitions(MorphSnap
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_PLUGINHOST_VST3=1
+        MORPHSNAP_ENABLE_DATASET_V3=$<BOOL:${MORPHSNAP_ENABLE_DATASET_V3}>
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
 

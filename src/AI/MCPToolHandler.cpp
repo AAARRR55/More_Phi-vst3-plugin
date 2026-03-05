@@ -12,6 +12,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "MCPToolsExtended.h"
 #include <nlohmann/json.hpp>
+#include <chrono>
 
 namespace morphsnap {
 
@@ -150,6 +151,16 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProc
     // better than crashing due to concurrent plugin API calls.
     p.enqueueParameterSet(id, value);
 
+    auto& optimizer = p.getTokenOptimizer();
+    const auto estimate = optimizer.estimateSetParameter(1);
+    TokenUsage usage;
+    usage.promptTokens = estimate.totalTokens;
+    usage.completionTokens = estimate.totalTokens / 5;
+    usage.estimatedCostUsd = estimate.estimatedCostUsd;
+    usage.timestamp = std::chrono::steady_clock::now();
+    usage.operation = "set_parameter";
+    optimizer.recordUsage(usage);
+
     return toJString(json{{"success",true}});
 }
 
@@ -179,6 +190,16 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
             ++applied;
         }
     }
+
+    auto& optimizer = p.getTokenOptimizer();
+    const auto estimate = optimizer.estimateSetParameter(applied);
+    TokenUsage usage;
+    usage.promptTokens = estimate.totalTokens;
+    usage.completionTokens = estimate.totalTokens / 5;
+    usage.estimatedCostUsd = estimate.estimatedCostUsd;
+    usage.timestamp = std::chrono::steady_clock::now();
+    usage.operation = "set_parameters_batch";
+    optimizer.recordUsage(usage);
 
     return toJString(json{
         {"success", true},
@@ -213,6 +234,16 @@ juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapPr
     const int queued = p.enqueueParameterState(values);
     if (queued == 0)
         return toJString(json{{"success",false},{"error","queue_full"}});
+
+    auto& optimizer = p.getTokenOptimizer();
+    const auto estimate = optimizer.estimateSetParameter(queued);
+    TokenUsage usage;
+    usage.promptTokens = estimate.totalTokens;
+    usage.completionTokens = estimate.totalTokens / 5;
+    usage.estimatedCostUsd = estimate.estimatedCostUsd;
+    usage.timestamp = std::chrono::steady_clock::now();
+    usage.operation = "recall_snapshot";
+    optimizer.recordUsage(usage);
 
     return toJString(json{{"success",true},{"slot",slot},{"queued",queued}});
 }

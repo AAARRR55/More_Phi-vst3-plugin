@@ -19,7 +19,6 @@
 #include "VAEMorphEngine.h"
 #include <algorithm>
 #include <cmath>
-#include <cassert>
 
 namespace morphsnap {
 
@@ -46,6 +45,7 @@ bool VAEMorphEngine::loadModel(const juce::File& onnxFile)
     if (!onnxFile.existsAsFile())
     {
         DBG("VAEMorphEngine::loadModel — file not found: " + onnxFile.getFullPathName());
+        backendStatus_ = "stub backend active (model file not found)";
         return false;
     }
 
@@ -68,9 +68,9 @@ bool VAEMorphEngine::loadModel(const juce::File& onnxFile)
     // For MVP, stub out with a fixed latent dimension of 16.
     latentDims_  = 16;
     modelLoaded_ = true;
+    backendMode_ = BackendMode::Stub;
+    backendStatus_ = "stub backend active (no ONNX inference; deterministic placeholder mode)";
 
-    // Runtime warning: this is a stub implementation
-    assert(false && "VAEMorphEngine::loadModel — STUB: ONNX Runtime not integrated. Using linear latent interpolation only.");
     DBG("VAEMorphEngine::loadModel — WARNING: STUB IMPLEMENTATION (no ONNX runtime). Using linear latent interpolation only. latentDims="
         + juce::String(latentDims_));
     return true;
@@ -88,8 +88,15 @@ void VAEMorphEngine::unloadModel()
     latentMap_.clear();
     latentDims_  = 0;
     modelLoaded_ = false;
+    backendMode_ = BackendMode::Stub;
+    backendStatus_ = "stub backend active (no model loaded)";
 
     DBG("VAEMorphEngine::unloadModel — model unloaded");
+}
+
+juce::String VAEMorphEngine::getBackendStatus() const
+{
+    return backendStatus_;
 }
 
 // ── Inference ────────────────────────────────────────────────────────────────

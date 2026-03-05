@@ -1,4 +1,6 @@
 #include "DatasetGeneratorV3.h"
+#include <algorithm>
+#include <cmath>
 
 namespace morphsnap {
 
@@ -36,7 +38,14 @@ bool DatasetGeneratorV3::startGeneration()
     if (!state_.compare_exchange_strong(expected, State::STARTING,
                                         std::memory_order_acq_rel))
         return false; // Already running
+    return initializeAndStart(0, 0, 0.0, false);
+}
 
+bool DatasetGeneratorV3::initializeAndStart(uint64_t startBatchId,
+                                            uint64_t startFramesProcessed,
+                                            double startElapsedSeconds,
+                                            bool resumedFromCheckpoint)
+{
     // --- Validate config ---
     juce::String error;
     if (!DatasetGeneratorV2::validateConfig(config_.baseConfig, error))
@@ -59,6 +68,27 @@ bool DatasetGeneratorV3::startGeneration()
                    ? config_.checkpointDirectory
                    : config_.outputDirectory.getChildFile("checkpoints");
 
+    // Tear down stale infrastructure (if any) before rebuilding.
+    if (dispatchThread_ && dispatchThread_->joinable())
+    {
+        state_.store(State::STOPPING, std::memory_order_release);
+        dispatchThread_->join();
+    }
+    dispatchThread_.reset();
+    if (watchdog_)
+        watchdog_->stop();
+    if (workerPool_)
+        workerPool_->stop();
+    if (resourceMonitor_)
+        resourceMonitor_->stop();
+
+    taskQueue_.reset();
+    workerPool_.reset();
+    resourceMonitor_.reset();
+    logger_.reset();
+    checkpointMgr_.reset();
+    watchdog_.reset();
+
     // --- Create infrastructure ---
     taskQueue_       = std::make_unique<TaskQueue>(static_cast<size_t>(config_.maxQueueDepth));
     workerPool_      = std::make_unique<WorkerPool>(*taskQueue_, config_.workerThreads);
@@ -79,11 +109,17 @@ bool DatasetGeneratorV3::startGeneration()
     });
 
     // --- Progress tracker ---
-    uint64_t totalBatches = config_.baseConfig.numSamples > 0
-        ? (static_cast<uint64_t>(config_.baseConfig.numSamples) + config_.batchSize - 1) / config_.batchSize
+    const uint64_t totalFrames = static_cast<uint64_t>(juce::jmax(config_.baseConfig.totalSamples, 0));
+    const uint64_t totalBatches = (totalFrames > 0 && config_.batchSize > 0)
+        ? (totalFrames + static_cast<uint64_t>(config_.batchSize) - 1) / static_cast<uint64_t>(config_.batchSize)
         : 0;
+    const uint64_t clampedStartBatch = std::min(startBatchId, totalBatches);
+    const uint64_t clampedStartFrames = std::min(startFramesProcessed, totalFrames);
     progressTracker_.reset(totalBatches,
-                           static_cast<uint64_t>(config_.baseConfig.numSamples));
+                           totalFrames,
+                           clampedStartBatch,
+                           clampedStartFrames,
+                           std::max(0.0, startElapsedSeconds));
 
     // --- Watchdog ---
     if (config_.enableWatchdog)
@@ -103,15 +139,24 @@ bool DatasetGeneratorV3::startGeneration()
     workerPool_->start();
 
     if (logger_)
-        logger_->log(LogLevel::INFO, "Generation started", {
-            {"batchSize",     config_.batchSize},
-            {"workerThreads", workerPool_->threadCount()},
-            {"totalSamples",  config_.baseConfig.numSamples}
-        });
+    {
+        logger_->log(LogLevel::INFO,
+                     resumedFromCheckpoint ? "Generation resumed from checkpoint" : "Generation started",
+                     nlohmann::json({
+                         {"batchSize",     config_.batchSize},
+                         {"workerThreads", workerPool_->threadCount()},
+                         {"totalSamples",  config_.baseConfig.totalSamples},
+                         {"startBatchId",  clampedStartBatch},
+                         {"startFrames",   clampedStartFrames}
+                     }));
+    }
 
     // --- Launch dispatch thread ---
     state_.store(State::RUNNING, std::memory_order_release);
-    dispatchThread_ = std::make_unique<std::thread>([this]() { dispatchLoop(0); });
+    dispatchThread_ = std::make_unique<std::thread>(
+        [this, clampedStartBatch, clampedStartFrames]() {
+            dispatchLoop(clampedStartBatch, clampedStartFrames);
+        });
 
     return true;
 }
@@ -156,46 +201,39 @@ void DatasetGeneratorV3::stopGeneration()
 
 bool DatasetGeneratorV3::resumeFromCheckpoint()
 {
-    if (!checkpointMgr_)
-        return false;
-
-    auto cp = checkpointMgr_->load();
+    auto cpDir = config_.checkpointDirectory.getFullPathName().isNotEmpty()
+                   ? config_.checkpointDirectory
+                   : config_.outputDirectory.getChildFile("checkpoints");
+    CheckpointManager reader(cpDir, config_.checkpointInterval);
+    auto cp = reader.load();
     if (!cp.has_value())
         return false;
 
-    // Start from the checkpoint's next batch
     State expected = State::IDLE;
     if (!state_.compare_exchange_strong(expected, State::STARTING,
                                         std::memory_order_acq_rel))
         return false;
 
-    // Recreate infrastructure (same as startGeneration but skip to batchId)
-    // For simplicity, call startGeneration internals then override the start batch
-    // This is a simplified version; production code would factor out init
-    startGeneration();
-
-    if (logger_)
-        logger_->log(LogLevel::INFO, "Resumed from checkpoint", {
-            {"batchId", cp->batchId},
-            {"framesProcessed", cp->totalFramesProcessed}
-        });
-
-    return true;
+    return initializeAndStart(cp->batchId,
+                              cp->totalFramesProcessed,
+                              cp->elapsedSeconds,
+                              true);
 }
 
 // ============================================================================
 // Dispatch Loop
 // ============================================================================
 
-void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId)
+void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId, uint64_t startFramesDispatched)
 {
     auto& sampler = v2_.getSampler();
-    const int paramCount = config_.baseConfig.numSamples > 0
-        ? static_cast<int>(config_.baseConfig.numSamples) : 100;
+    const int paramCount = config_.baseConfig.totalSamples > 0
+        ? static_cast<int>(config_.baseConfig.totalSamples) : 100;
+    juce::ignoreUnused(paramCount);
 
     uint64_t batchId = startBatchId;
-    uint64_t totalFramesNeeded = static_cast<uint64_t>(config_.baseConfig.numSamples);
-    uint64_t framesDispatched = startBatchId * config_.batchSize;
+    uint64_t totalFramesNeeded = static_cast<uint64_t>(config_.baseConfig.totalSamples);
+    uint64_t framesDispatched = std::min(startFramesDispatched, totalFramesNeeded);
 
     while (state_.load(std::memory_order_acquire) == State::RUNNING
            && framesDispatched < totalFramesNeeded)
@@ -210,9 +248,9 @@ void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId)
 
         // --- Generate parameter samples for this batch ---
         SamplingConfig samplingCfg;
-        samplingCfg.numSamples = currentBatchSize;
+        samplingCfg.sampleCount = currentBatchSize;
         auto batch = sampler.generateLHS(samplingCfg,
-                                          config_.baseConfig.numSamples);
+                                          config_.baseConfig.totalSamples);
 
         // --- Submit to task queue ---
         uint64_t thisBatchId = batchId;
@@ -251,7 +289,7 @@ void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId)
             checkpointMgr_->save(cp);
 
             if (logger_)
-                logger_->log(LogLevel::INFO, "Checkpoint saved", {{"batchId", batchId}});
+                logger_->log(LogLevel::INFO, "Checkpoint saved", nlohmann::json({{"batchId", batchId}}));
         }
 
         // --- Periodic progress report ---

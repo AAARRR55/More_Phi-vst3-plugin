@@ -45,6 +45,12 @@ namespace morphsnap {
 class VAEMorphEngine
 {
 public:
+    enum class BackendMode
+    {
+        Stub = 0,      // Safe non-inference mode (default)
+        OnnxRuntime    // Reserved for future integration
+    };
+
     VAEMorphEngine();
     ~VAEMorphEngine();
 
@@ -75,6 +81,8 @@ public:
      * Whether a model is currently loaded and ready for inference.
      */
     [[nodiscard]] bool isModelLoaded() const noexcept { return modelLoaded_; }
+    [[nodiscard]] BackendMode getBackendMode() const noexcept { return backendMode_; }
+    [[nodiscard]] juce::String getBackendStatus() const;
 
     // ─── Inference (message thread, may be slow) ─────────────────────────
 
@@ -166,6 +174,8 @@ public:
 private:
     bool modelLoaded_ = false;
     int  latentDims_  = 0;
+    BackendMode backendMode_ = BackendMode::Stub;
+    juce::String backendStatus_ = "stub backend active (no model loaded)";
 
     // Stored latent map (built by buildLatentMap)
     std::vector<LatentMapping> latentMap_;

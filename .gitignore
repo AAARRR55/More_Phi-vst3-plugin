@@ -2,6 +2,7 @@
 build/
 build2/
 build_*/
+build-*/
 audit_build*/
 build_ninja/
 out/

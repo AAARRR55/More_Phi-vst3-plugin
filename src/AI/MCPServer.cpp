@@ -288,7 +288,7 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
     if (!idVar.isVoid())
     {
         if (idVar.isInt() || idVar.isInt64())
-            reqId = static_cast<int64_t>(idVar);
+            reqId = static_cast<int64_t>((juce::int64)idVar);
         else if (idVar.isString())
             reqId = idVar.toString().toStdString();
     }
@@ -324,6 +324,10 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
     // ── All other methods require authentication ───────────────────────────────
     if (!authenticated)
         return errResponse(-32600, "Unauthorized: call initialize with bearer_token first");
+
+    // Consume a rate-limit slot for each authenticated MCP tool request.
+    if (!processor_.getTokenOptimizer().tryConsumeRequestSlot())
+        return errResponse(-32000, "Rate limit exceeded");
 
     // ── Dispatch to tool handler ──────────────────────────────────────────────
     juce::String toolResult;

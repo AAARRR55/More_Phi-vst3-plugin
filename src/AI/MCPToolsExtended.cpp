@@ -9,16 +9,11 @@
 #include "TokenOptimizer.h"
 #include "Dataset/DatasetGenerator.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cmath>
+#include <map>
 
 namespace morphsnap {
-
-// Basic struct to satisfy the dependency without bringing in the whole module yet
-struct SnapshotComparison {
-    float compatibilityScore = 1.0f;
-    int problematicParamCount = 0;
-    std::vector<int> problematicIndices;
-    std::vector<juce::String> suggestions;
-};
 
 const ExtendedToolInfo kExtendedTools[] = {
     {
@@ -200,9 +195,12 @@ const ExtendedToolInfo kExtendedTools[] = {
         R"({
             "type": "object",
             "properties": {
+                "max_tokens_per_request": {"type": "integer"},
                 "max_tokens_per_session": {"type": "integer"},
                 "max_cost_usd": {"type": "number", "minimum": 0},
-                "enable_compression": {"type": "boolean"}
+                "enable_compression": {"type": "boolean"},
+                "prioritize_important_params": {"type": "boolean"},
+                "keep_last_n_parameters": {"type": "integer"}
             }
         })"
     },
@@ -250,6 +248,7 @@ juce::String MCPToolsExtended::analyzeParameters(
     auto exposedIndices = classifier.getExposedParameterIndices();
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     juce::Array<juce::var> paramArray;
     
     int count = 0;
@@ -367,6 +366,7 @@ juce::String MCPToolsExtended::getTokenEstimate(
         est = optimizer.estimateRequest(paramCount, true, {});
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("estimated_tokens", static_cast<int>(est.totalTokens));
     result->setProperty("system_tokens", static_cast<int>(est.systemTokens));
     result->setProperty("parameter_tokens", static_cast<int>(est.parameterTokens));
@@ -410,7 +410,7 @@ juce::String MCPToolsExtended::setParametersOptimized(
     // Check budget
     if (optimizer.isBudgetExceeded())
     {
-        return R"({"success": false, "error": "Token budget exceeded"})";
+        return R"({"success": false, "error": "token budget exceeded"})";
     }
     
     // Apply updates
@@ -422,9 +422,11 @@ juce::String MCPToolsExtended::setParametersOptimized(
     }
     
     // Record usage estimate
+    const auto estimate = optimizer.estimateSetParameter(static_cast<int>(updates.size()));
     TokenUsage usage;
-    usage.promptTokens = static_cast<uint32_t>(updates.size() * 8);
-    usage.completionTokens = 20;
+    usage.promptTokens = estimate.totalTokens;
+    usage.completionTokens = estimate.totalTokens / 5;
+    usage.estimatedCostUsd = estimate.estimatedCostUsd;
     usage.operation = "set_parameters_optimized";
     usage.timestamp = std::chrono::steady_clock::now();
     optimizer.recordUsage(usage);
@@ -432,7 +434,10 @@ juce::String MCPToolsExtended::setParametersOptimized(
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
     result->setProperty("success", true);
     result->setProperty("applied_count", applied);
+    result->setProperty("estimated_tokens", static_cast<int>(estimate.totalTokens));
+    result->setProperty("estimated_cost_usd", estimate.estimatedCostUsd);
     result->setProperty("budget_remaining_usd", optimizer.getBudgetRemainingUsd());
+    result->setProperty("token_budget_remaining", static_cast<int>(optimizer.getTokenBudgetRemaining()));
     
     return juce::JSON::toString(juce::var(result.get()), true);
 }
@@ -455,16 +460,17 @@ juce::String MCPToolsExtended::getMorphCompatibility(
     {
         return R"({"success": false, "error": "One or both snapshots are empty"})";
     }
-    // Generate compatibility and suggestions
-    SnapshotComparison comparison;
+
+    const auto comparison = MorphSafeAdvisor::compareSnapshots(stateA, stateB, classifier);
     
     return formatCompatibilityReport(comparison);
 }
 
 juce::String MCPToolsExtended::formatCompatibilityReport(
-    const SnapshotComparison& comparison)
+    const MorphSafeAdvisor::SnapshotComparison& comparison)
 {
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("compatibility_score", comparison.compatibilityScore);
     result->setProperty("problematic_parameter_count", comparison.problematicParamCount);
     
@@ -510,6 +516,7 @@ juce::String MCPToolsExtended::suggestIntermediateSnapshots(
         stateA, stateB, classifier, steps);
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("from_snapshot", fromSnap);
     result->setProperty("to_snapshot", toSnap);
     result->setProperty("suggested_steps", steps);
@@ -545,6 +552,7 @@ juce::String MCPToolsExtended::getParameterCategories(
     bool includeEmpty = params.getProperty("include_empty", false);
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     juce::DynamicObject::Ptr categories = new juce::DynamicObject();
     
     // Group parameters by category
@@ -617,6 +625,7 @@ juce::String MCPToolsExtended::getLearnModeStatus(
     auto exposed = classifier.getExposedParameterIndices();
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("enabled", config.enabled);
     result->setProperty("exposure_threshold", config.exposureThreshold);
     result->setProperty("auto_learn", config.autoLearn);
@@ -668,6 +677,7 @@ juce::String MCPToolsExtended::getDiscreteParameters(
     bool includeEnums = params.getProperty("include_enums", true);
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     juce::Array<juce::var> discreteParams;
     juce::Array<juce::var> binaryParams;
     juce::Array<juce::var> enumParams;
@@ -730,6 +740,7 @@ juce::String MCPToolsExtended::suggestMorphSettings(
     auto comparison = MorphSafeAdvisor::compareSnapshots(stateA, stateB, classifier);
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("compatibility_score", comparison.compatibilityScore);
     
     // Suggest physics mode based on compatibility
@@ -767,15 +778,22 @@ juce::String MCPToolsExtended::getUsageStats(
     const juce::var& params,
     TokenOptimizer& optimizer)
 {
+    juce::ignoreUnused(params);
     auto stats = optimizer.getSessionStats();
     auto display = optimizer.getDisplayData();
+    auto budget = optimizer.getTokenBudget();
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("total_requests", static_cast<int>(stats.totalRequests));
     result->setProperty("total_prompt_tokens", static_cast<int>(stats.totalPromptTokens));
     result->setProperty("total_completion_tokens", static_cast<int>(stats.totalCompletionTokens));
+    result->setProperty("total_tokens", static_cast<int>(stats.totalTokens()));
     result->setProperty("total_cost_usd", stats.totalCostUsd);
-    result->setProperty("budget_remaining_usd", static_cast<int>(display.budgetRemaining));
+    result->setProperty("budget_remaining_usd", optimizer.getBudgetRemainingUsd());
+    result->setProperty("token_budget_remaining", static_cast<int>(optimizer.getTokenBudgetRemaining()));
+    result->setProperty("max_cost_per_session_usd", budget.maxCostPerSessionUsd);
+    result->setProperty("max_tokens_per_session", static_cast<int>(budget.maxTokensPerSession));
     result->setProperty("status", juce::String(display.status));
     
     return juce::JSON::toString(juce::var(result.get()), true);
@@ -785,18 +803,34 @@ juce::String MCPToolsExtended::setTokenBudget(
     const juce::var& params,
     TokenOptimizer& optimizer)
 {
-    TokenBudget budget;
+    TokenBudget budget = optimizer.getTokenBudget();
     
+    if (params.hasProperty("max_tokens_per_request"))
+        budget.maxTokensPerRequest = static_cast<uint32_t>(juce::jmax(1, static_cast<int>(params["max_tokens_per_request"])));
     if (params.hasProperty("max_tokens_per_session"))
-        budget.maxTokensPerSession = static_cast<uint32_t>(static_cast<int>(params["max_tokens_per_session"]));
+        budget.maxTokensPerSession = static_cast<uint32_t>(juce::jmax(1, static_cast<int>(params["max_tokens_per_session"])));
     if (params.hasProperty("max_cost_usd"))
-        budget.maxCostPerSessionUsd = static_cast<float>(params["max_cost_usd"]);
+        budget.maxCostPerSessionUsd = juce::jmax(0.0f, static_cast<float>(params["max_cost_usd"]));
     if (params.hasProperty("enable_compression"))
         budget.enableCompression = params["enable_compression"];
+    if (params.hasProperty("prioritize_important_params"))
+        budget.prioritizeImportantParams = params["prioritize_important_params"];
+    if (params.hasProperty("keep_last_n_parameters"))
+        budget.keepLastN_Parameters = static_cast<uint32_t>(juce::jmax(1, static_cast<int>(params["keep_last_n_parameters"])));
     
     optimizer.setTokenBudget(budget);
-    
-    return R"({"success": true, "message": "Token budget updated"})";
+
+    juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
+    result->setProperty("message", "Token budget updated");
+    result->setProperty("max_tokens_per_request", static_cast<int>(budget.maxTokensPerRequest));
+    result->setProperty("max_tokens_per_session", static_cast<int>(budget.maxTokensPerSession));
+    result->setProperty("max_cost_usd", budget.maxCostPerSessionUsd);
+    result->setProperty("enable_compression", budget.enableCompression);
+    result->setProperty("prioritize_important_params", budget.prioritizeImportantParams);
+    result->setProperty("keep_last_n_parameters", static_cast<int>(budget.keepLastN_Parameters));
+
+    return juce::JSON::toString(juce::var(result.get()), true);
 }
 
 juce::String MCPToolsExtended::explainParameter(
@@ -854,6 +888,7 @@ juce::String MCPToolsExtended::explainParameter(
     }
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("index", idx);
     result->setProperty("name", name);
     result->setProperty("explanation", explanation);
@@ -911,6 +946,7 @@ juce::String MCPToolsExtended::findRelatedParameters(
     }
     
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
+    result->setProperty("success", true);
     result->setProperty("source_parameter", idx);
     result->setProperty("source_name", sourceName);
     result->setProperty("related_parameters", related);
@@ -935,9 +971,9 @@ std::vector<int> MCPToolsExtended::parseParameterList(const juce::var& params)
 
 } // namespace morphsnap
 
-juce::String MCPToolsExtended::generateDataset(const juce::var& params, MorphSnapProcessor& processor)
+juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& params, morphsnap::MorphSnapProcessor& processor)
 {
-    GenerationConfig config;
+    morphsnap::GenerationConfig config;
     
     // Parse parameters from MCP call
     config.samplesPerState = static_cast<int>(params.getProperty("samples", 100));
@@ -957,7 +993,7 @@ juce::String MCPToolsExtended::generateDataset(const juce::var& params, MorphSna
     // concurrent MCP thread. The processor's getSanityConfigCopy() is properly protected.
     config.sanityConfig = processor.getSanityConfigCopy();
 
-    DatasetGenerator generator(processor.getHostManager());
+    morphsnap::DatasetGenerator generator(processor.getHostManager());
     
     bool success = generator.generate(config, inputFile);
 

@@ -11,6 +11,7 @@
 #include "../../Host/IPluginHostManager.h"
 #include "../../Core/ParameterState.h"
 #include "../../Core/MorphProcessor.h"
+#include "../../Core/GeneticEngine.h"
 #include <vector>
 #include <functional>
 

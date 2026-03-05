@@ -92,10 +92,10 @@ std::vector<std::vector<float>> ParameterSampler::generateStratified(const Sampl
         stratumConfig.seed = currentSeed_ + static_cast<unsigned int>(allSamples.size());
 
         // Generate LHS samples for this stratum
-        auto stratumSamples = latinHypercubeSample(paramCount, stratumSamples);
+        auto stratumResults = latinHypercubeSample(paramCount, stratumSamples);
 
         // Apply distribution transforms and constraints
-        for (auto& sample : stratumSamples)
+        for (auto& sample : stratumResults)
         {
             if (static_cast<int>(sample.size()) != paramCount)
             {
@@ -116,8 +116,8 @@ std::vector<std::vector<float>> ParameterSampler::generateStratified(const Sampl
 
         // Append to all samples
         allSamples.insert(allSamples.end(),
-                         std::make_move_iterator(stratumSamples.begin()),
-                         std::make_move_iterator(stratumSamples.end()));
+                         std::make_move_iterator(stratumResults.begin()),
+                         std::make_move_iterator(stratumResults.end()));
     }
 
     // Shuffle the combined samples to mix strata

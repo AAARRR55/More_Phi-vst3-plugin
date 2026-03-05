@@ -12,9 +12,10 @@
 - **1D Snap Fader** — Linear interpolation across occupied snapshots
 - **Physics Modes** — Direct, Elastic (spring-damper), Drift (Perlin noise)
 - **Genetic Breeding** — Crossover + mutation to evolve new presets
-- **MCP Server** — JSON-RPC 2.0 on localhost:30001 for AI integration
+- **MCP Server** — JSON-RPC 2.0 on localhost with per-instance auth token
 - **MIDI Mapping** — Note triggers for snapshots, CC routing for morphing
 - **8 Macro Knobs** — Quick access to hosted plugin parameters
+- **Dataset Generation V3** — Optional modular pipeline (build-time opt-in)
 
 ---
 
@@ -50,13 +51,19 @@ git clone https://github.com/your-repo/morphsnap.git
 cd morphsnap
 
 # Configure and build
-cmake -B build -S .
+cmake -B build -S . -DMORPHSNAP_ENABLE_DATASET_V3=OFF
 cmake --build build --config Release
 
 # Output location
 # Windows: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3
 # macOS: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3
 ```
+
+Common build options:
+
+- `-DMORPHSNAP_BUILD_TESTS=ON` (default `ON`)
+- `-DMORPHSNAP_BUILD_BENCHMARKS=ON` (tests/bench target opt-in)
+- `-DMORPHSNAP_ENABLE_DATASET_V3=ON` (defaults to `OFF` for production-safe builds)
 
 ---
 
@@ -84,7 +91,7 @@ cmake --build build --config Release
 
 ### 4. Connect AI (Optional)
 
-1. Check the AI Status panel shows "MCP Running" on port 30001
+1. Check the AI Status panel for the active MCP port and bearer token
 2. Connect from an MCP-compatible AI client
 3. Send commands to automate morphing, capture snapshots, or modify parameters
 
@@ -146,8 +153,9 @@ MorphSnap includes a built-in MCP (Model Context Protocol) server for AI integra
 
 ### Connection Details
 - **Protocol:** JSON-RPC 2.0
-- **Port:** 30001 (configurable)
+- **Port:** Per-instance dynamic port (shown in the plugin UI/status panel)
 - **Host:** localhost
+- **Auth:** Call `initialize` with `bearer_token` before tool methods
 
 ### Available Tools
 
@@ -168,10 +176,11 @@ MorphSnap includes a built-in MCP (Model Context Protocol) server for AI integra
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "tools/call",
+  "method": "set_morph_position",
   "params": {
-    "name": "set_morph_position",
-    "arguments": { "x": 0.5, "y": 0.5, "source": "xy" }
+    "x": 0.5,
+    "y": 0.5,
+    "source": "xy"
   },
   "id": 1
 }
@@ -263,6 +272,25 @@ cmake --build build --config Release
 cmake -B build -S . -DMORPHSNAP_TRACK_ALLOCATIONS=ON
 cmake --build build --config Debug
 ```
+
+### Run Tests
+```bash
+cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake --build build --parallel 2
+ctest --test-dir build --output-on-failure
+```
+
+### Optional Dataset V3 Compile Validation
+```bash
+cmake -B build-v3 -S . -DMORPHSNAP_ENABLE_DATASET_V3=ON -DMORPHSNAP_BUILD_TESTS=ON
+cmake --build build-v3 --parallel 2
+ctest --test-dir build-v3 --output-on-failure
+```
+
+### VAE Backend Status
+- `VAEMorphEngine` is currently a **safe stub backend**.
+- `loadModel()` no longer asserts/crashes when ONNX runtime is unavailable.
+- Use backend status/mode accessors to detect stub behavior explicitly.
 
 ---
 

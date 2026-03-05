@@ -105,7 +105,7 @@ public:
     void recordAIAdjustment(int paramIndex);
     
     // Metadata access
-    const ParameterMetadata& getMetadata(int index) const;
+    ParameterMetadata getMetadata(int index) const;
     void setMetadata(int index, const ParameterMetadata& meta);
     
     // Batch operations
@@ -156,6 +156,8 @@ private:
     // Analysis helpers
     ParameterType detectTypeFromName(const char* name) const;
     ParameterType detectTypeFromBehavior(int index, const class IParameterBridge& host) const;
+    std::vector<int> getExposedParameterIndicesNoLock() const;
+    bool isDiscreteNoLock(int index) const;
     void updateImportanceScores();
     float calculateImportance(const ParameterMetadata& meta) const;
     

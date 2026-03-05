@@ -79,11 +79,12 @@ cmake --build build --config RelWithDebInfo
 | Option | Default | Description |
 |--------|---------|-------------|
 | `MORPHSNAP_TRACK_ALLOCATIONS` | OFF | Enable allocation tracking in debug |
-| `MORPHSNAP_BUILD_TESTS` | OFF | Build test executables |
+| `MORPHSNAP_BUILD_TESTS` | ON | Build Catch2 test executable |
 | `MORPHSNAP_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
+| `MORPHSNAP_ENABLE_DATASET_V3` | OFF | Enable Dataset V3 pipeline sources |
 
 ```bash
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_TRACK_ALLOCATIONS=ON
+cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_TRACK_ALLOCATIONS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
 ```
 
 ### Build Artifacts
@@ -377,17 +378,19 @@ void processBlock(...)
 
 ```bash
 # Build tests
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON
-cmake --build build --config Debug
+cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake --build build --parallel 2
 
-# Run unit tests
-./build/tests/Unit/MorphSnap_UnitTests
+# Run all wired tests
+ctest --test-dir build --output-on-failure
 
-# Run integration tests
-./build/tests/Integration/MorphSnap_IntegrationTests
+# Optional: validate Dataset V3 compilation path
+cmake -B build-v3 -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=ON
+cmake --build build-v3 --parallel 2
+ctest --test-dir build-v3 --output-on-failure
 
 # Run benchmarks
-./build/tests/Performance/MorphSnap_Benchmarks
+./build/tests/MorphSnapBenchmarks
 ```
 
 ### Unit Test Pattern

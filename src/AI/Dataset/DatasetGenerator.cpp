@@ -45,7 +45,7 @@ bool DatasetGenerator::generate(const GenerationConfig& config, const juce::File
     nlohmann::json metadata = nlohmann::json::object();
     metadata["version"] = "1.0.0";
     metadata["timestamp"] = juce::Time::getCurrentTime().toMilliseconds();
-    metadata["plugin"] = plugin->getName(128).toStdString();
+    metadata["plugin"] = plugin->getName().toStdString();
     metadata["samples"] = nlohmann::json::array();
 
     hostManager_.prepare(config.sampleRate, config.blockSize, 2);
@@ -193,7 +193,7 @@ std::vector<float> DatasetGenerator::generateRandomParameters(int count, const G
         if (param->getNumSteps() > 0 && param->getNumSteps() != 0x7fffffff)
         {
             int step = r.nextInt(param->getNumSteps());
-            params[i] = param->convertTo0to1(static_cast<float>(step));
+            params[i] = static_cast<float>(step) / static_cast<float>(juce::jmax(1, param->getNumSteps() - 1));
         }
         else if (!config.randomizeBinaryParams && param->isBoolean())
         {

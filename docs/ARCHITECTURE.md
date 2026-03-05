@@ -154,13 +154,14 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 - **SpectralMorphEngine:** FFT-based overlap-add vocoder with magnitude/phase interpolation
 - **GranularMorphEngine:** Grain pool with position/size/density randomization
 - **FormantMorphEngine:** Formant-preserving spectral envelope morphing
-- **VAEMorphEngine:** Variational autoencoder latent-space morphing
+- **VAEMorphEngine:** Safe stub backend for latent-space API surface (ONNX runtime integration deferred)
 - **HybridBlend:** Coordinates multiple engines with configurable blend weights
 
 ## Testing Strategy
 
 - **Unit tests** (Catch2): Core engines, physics, genetics, sidechain, SIMD, spectral, granular, modulation
 - **Integration tests**: Plugin lifecycle (load/unload/state), MCP server tool invocations
+- **Legacy tests**: incompatible Morphy-era tests are documented in `tests/LEGACY_TESTS.md` and excluded from active targets
 - **Performance benchmarks**: CPU usage, audio processing throughput
 - **DAW test matrix**: Manual test docs for Ableton, FL Studio, Logic, Reaper
 - **Automated scripts**: Audio quality, real-time safety, VST3 validator (pluginval strictness 5)

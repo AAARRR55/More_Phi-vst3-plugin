@@ -14,6 +14,7 @@
 #include <vector>
 #include <array>
 #include <atomic>
+#include <memory>
 
 namespace morphsnap {
 
@@ -48,20 +49,19 @@ public:
     void setListenMode(bool enabled) { listenMode_ = enabled; }
     bool getListenMode() const { return listenMode_; }
 
-    // CRITICAL (Finding 5): setDiscreteMap() must ONLY be called while the audio
-    // thread is blocked (e.g., during isRestoring_ window). The std::vector<bool>
-    // move swaps internal pointers which races with audio thread reads in
-    // applyListenFilter(). Currently safe because only called from
-    // loadHostedPluginFromState() while isRestoring_=true.
     void setDiscreteMap(const std::vector<bool>& map)
     {
-        const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
-        discreteMap_ = map;
+        auto snapshot = std::make_shared<DiscreteMask>();
+        snapshot->reserve(map.size());
+        for (bool value : map)
+            snapshot->push_back(value ? 1u : 0u);
+        std::atomic_store_explicit(&discreteMapSnapshot_,
+                                   std::static_pointer_cast<const DiscreteMask>(snapshot),
+                                   std::memory_order_release);
     }
     void setDiscreteMap(std::vector<bool>&& map)
     {
-        const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
-        discreteMap_ = std::move(map);
+        setDiscreteMap(map);
     }
 
     // Sentinel value written to morph output for params that should NOT be applied
@@ -110,8 +110,8 @@ private:
 
     // Listen Mode
     bool listenMode_ = false;
-    std::vector<bool> discreteMap_;
-    mutable juce::SpinLock discreteMapLock_;
+    using DiscreteMask = std::vector<uint8_t>;
+    std::shared_ptr<const DiscreteMask> discreteMapSnapshot_;
     void applyListenFilter(std::vector<float>& output) noexcept;
 };
 
