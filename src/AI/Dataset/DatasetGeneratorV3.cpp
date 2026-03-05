@@ -108,6 +108,15 @@ bool DatasetGeneratorV3::initializeAndStart(uint64_t startBatchId,
             logger_->log(LogLevel::ERROR_, "Worker exception: " + msg);
     });
 
+    // --- Initialize V2 modules (source audio, plugin chain, organizer) ---
+    if (!v2_.initialize())
+    {
+        state_.store(State::IDLE, std::memory_order_release);
+        if (onComplete)
+            onComplete(false, "V2 module initialization failed");
+        return false;
+    }
+
     // --- Progress tracker ---
     const uint64_t totalFrames = static_cast<uint64_t>(juce::jmax(config_.baseConfig.totalSamples, 0));
     const uint64_t totalBatches = (totalFrames > 0 && config_.batchSize > 0)
@@ -325,23 +334,38 @@ void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId, uint64_t startFrame
 void DatasetGeneratorV3::processBatch(uint64_t batchId,
                                        std::vector<std::vector<float>> parameterBatch)
 {
-    auto& extractor  = v2_.getFeatureExtractor();
-    auto& validator  = v2_.getValidationEngine();
-    auto& writer     = v2_.getMetadataWriter();
+    auto& writer = v2_.getMetadataWriter();
 
-    // --- Validate parameter ranges (NaN, Inf, [0,1] range) ---
+    // --- Process each sample through V2's rendering pipeline ---
+    std::vector<DatasetMetadata> batchMetadata;
+    batchMetadata.reserve(parameterBatch.size());
+
     bool allValid = true;
-    for (auto& params : parameterBatch)
+    int sampleOffset = static_cast<int>(batchId * static_cast<uint64_t>(config_.batchSize));
+
+    for (size_t i = 0; i < parameterBatch.size(); ++i)
     {
+        auto& params = parameterBatch[i];
+
+        // Sanitise parameter values
+        bool sampleValid = true;
         for (float& v : params)
         {
             if (std::isnan(v) || std::isinf(v))
             {
-                allValid = false;
-                v = 0.0f; // Sanitize
+                sampleValid = false;
+                v = 0.0f;
             }
             v = std::clamp(v, 0.0f, 1.0f);
         }
+
+        if (!sampleValid)
+            allValid = false;
+
+        // Render audio, extract features, and generate metadata via V2
+        auto metadata = v2_.processSingleSample(
+            sampleOffset + static_cast<int>(i), params);
+        batchMetadata.push_back(std::move(metadata));
     }
 
     if (!allValid)
@@ -349,23 +373,13 @@ void DatasetGeneratorV3::processBatch(uint64_t batchId,
     else
         progressTracker_.recordValidationPass();
 
-    // --- Serialize batch to disk ---
-    // (Future: write HDF5/Parquet. For now, use MetadataWriter JSON)
+    // --- Write batch manifest to disk ---
     if (config_.outputDirectory.getFullPathName().isNotEmpty())
     {
         auto batchFile = config_.outputDirectory.getChildFile(
             juce::String("batch_") + juce::String(batchId) + ".json");
 
-        nlohmann::json batchJson;
-        batchJson["batchId"] = batchId;
-        batchJson["frameCount"] = parameterBatch.size();
-
-        nlohmann::json samplesArray = nlohmann::json::array();
-        for (const auto& params : parameterBatch)
-            samplesArray.push_back(params);
-        batchJson["parameters"] = samplesArray;
-
-        batchFile.replaceWithText(batchJson.dump());
+        writer.writeManifest(batchFile, batchMetadata);
     }
 
     // --- Update progress ---

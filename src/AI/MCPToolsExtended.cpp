@@ -8,9 +8,12 @@
 #include "../Core/DiscreteParameterHandler.h"
 #include "TokenOptimizer.h"
 #include "Dataset/DatasetGenerator.h"
+#include "Dataset/DatasetGeneratorV2.h"
+#include "Dataset/DatasetGeneratorV3.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <map>
 
 namespace morphsnap {
@@ -227,6 +230,61 @@ const ExtendedToolInfo kExtendedTools[] = {
             },
             "required": ["parameter_index"]
         })"
+    },
+    {
+        "generate_dataset_v2",
+        "Full ML dataset pipeline with Latin Hypercube Sampling, multi-plugin chains, feature extraction, "
+        "validation, and train/val/test splitting. Returns structured dataset with audio, metadata, and features.",
+        R"json({
+            "type": "object",
+            "properties": {
+                "samples": {"type": "integer", "default": 1000, "description": "Total samples to generate"},
+                "output_path": {"type": "string", "description": "Output directory path"},
+                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "source_audio_dir": {"type": "string", "description": "Directory of source audio files"},
+                "sample_rate": {"type": "number", "default": 48000},
+                "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
+                "output_format": {"type": "string", "enum": ["wav32", "wav24", "flac24"], "default": "wav32"},
+                "full_duration": {"type": "number", "default": 30.0},
+                "transient_duration": {"type": "number", "default": 2.0},
+                "steady_state_duration": {"type": "number", "default": 5.0},
+                "use_augmentation": {"type": "boolean", "default": true},
+                "enable_validation": {"type": "boolean", "default": true},
+                "parallel_threads": {"type": "integer", "default": 4},
+                "train_ratio": {"type": "number", "default": 0.70},
+                "val_ratio": {"type": "number", "default": 0.15},
+                "test_ratio": {"type": "number", "default": 0.15},
+                "seed": {"type": "integer", "default": 42},
+                "dry_run": {"type": "boolean", "default": false},
+                "config_file": {"type": "string", "description": "Path to JSON config file (overrides other params)"}
+            }
+        })json"
+    },
+    {
+        "generate_dataset_v3",
+        "Async high-performance dataset pipeline with worker pool, adaptive throttling, crash recovery, "
+        "and watchdog monitoring. Wraps V2 pipeline in parallel architecture for large-scale generation.",
+        R"json({
+            "type": "object",
+            "properties": {
+                "samples": {"type": "integer", "default": 1000},
+                "output_path": {"type": "string"},
+                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "source_audio_dir": {"type": "string"},
+                "sample_rate": {"type": "number", "default": 48000},
+                "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
+                "output_format": {"type": "string", "enum": ["wav32", "wav24", "flac24"], "default": "wav32"},
+                "batch_size": {"type": "integer", "default": 2048},
+                "worker_threads": {"type": "integer", "default": 0, "description": "0 = auto-detect"},
+                "checkpoint_interval": {"type": "integer", "default": 100},
+                "enable_watchdog": {"type": "boolean", "default": true},
+                "memory_limit_mb": {"type": "integer", "default": 2048},
+                "resume_checkpoint": {"type": "boolean", "default": false, "description": "Resume from last checkpoint"},
+                "seed": {"type": "integer", "default": 42},
+                "dry_run": {"type": "boolean", "default": false},
+                "config_file": {"type": "string", "description": "Path to JSON config file (overrides other params)"}
+            }
+        })json"
     }
 };
 
@@ -1005,6 +1063,263 @@ juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& param
     } else {
         result["error"] = "Generation failed. Ensure a plugin is loaded and output path is writable.";
     }
+
+    return juce::String(result.dump());
+}
+
+// ── V2 Dataset Generation ─────────────────────────────────────────────────────
+
+static morphsnap::ChainType parseChainType(const juce::String& s)
+{
+    if (s == "eq")        return morphsnap::ChainType::EQOnly;
+    if (s == "dynamics")  return morphsnap::ChainType::DynamicsOnly;
+    if (s == "mixing")    return morphsnap::ChainType::Mixing;
+    if (s == "creative")  return morphsnap::ChainType::Creative;
+    if (s == "custom")    return morphsnap::ChainType::Custom;
+    return morphsnap::ChainType::Mastering;
+}
+
+static morphsnap::OutputFormat parseOutputFormat(const juce::String& s)
+{
+    if (s == "wav24")  return morphsnap::OutputFormat::WAV24;
+    if (s == "flac24") return morphsnap::OutputFormat::FLAC24;
+    return morphsnap::OutputFormat::WAV32Float;
+}
+
+juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
+    const juce::var& params, morphsnap::MorphSnapProcessor& processor)
+{
+    // If a config file is provided, load from it
+    juce::String configFilePath = params.getProperty("config_file", "");
+    DatasetGeneratorConfig config;
+
+    if (configFilePath.isNotEmpty())
+    {
+        juce::File configFile(configFilePath);
+        if (!configFile.existsAsFile())
+        {
+            nlohmann::json err;
+            err["success"] = false;
+            err["error"] = "Config file not found: " + configFilePath.toStdString();
+            return juce::String(err.dump());
+        }
+        config = DatasetGeneratorConfig::fromFile(configFile);
+    }
+    else
+    {
+        // Parse individual parameters
+        config.totalSamples = static_cast<int>(params.getProperty("samples", 1000));
+        config.datasetName = params.getProperty("dataset_name", "morphsnap_dataset").toString();
+        config.sampleRate = static_cast<double>(params.getProperty("sample_rate", 48000.0));
+        config.fullDuration = static_cast<float>(params.getProperty("full_duration", 30.0));
+        config.transientDuration = static_cast<float>(params.getProperty("transient_duration", 2.0));
+        config.steadyStateDuration = static_cast<float>(params.getProperty("steady_state_duration", 5.0));
+        config.chainType = parseChainType(params.getProperty("chain_type", "mastering").toString());
+        config.outputFormat = parseOutputFormat(params.getProperty("output_format", "wav32").toString());
+        config.useAugmentation = static_cast<bool>(params.getProperty("use_augmentation", true));
+        config.enableValidation = static_cast<bool>(params.getProperty("enable_validation", true));
+        config.numParallelThreads = static_cast<int>(params.getProperty("parallel_threads", 4));
+        config.randomSeed = static_cast<unsigned int>(static_cast<int>(params.getProperty("seed", 42)));
+        config.dryRun = static_cast<bool>(params.getProperty("dry_run", false));
+
+        // Split ratios
+        config.splitConfig.trainRatio = static_cast<float>(params.getProperty("train_ratio", 0.70));
+        config.splitConfig.valRatio = static_cast<float>(params.getProperty("val_ratio", 0.15));
+        config.splitConfig.testRatio = static_cast<float>(params.getProperty("test_ratio", 0.15));
+
+        // Source audio
+        juce::String sourceDir = params.getProperty("source_audio_dir", "");
+        if (sourceDir.isNotEmpty())
+            config.sourceAudioDirectory = juce::File(sourceDir);
+    }
+
+    // Output path
+    juce::String outputPath = params.getProperty("output_path", "");
+    if (outputPath.isEmpty())
+        config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile("MorphSnap_Datasets")
+            .getChildFile(config.datasetName + "_v2_" + juce::Time::getCurrentTime().toString(true, true));
+    else
+        config.outputDirectory = juce::File(outputPath);
+
+    // Validate config
+    juce::String validationError;
+    if (!DatasetGeneratorV2::validateConfig(config, validationError))
+    {
+        nlohmann::json err;
+        err["success"] = false;
+        err["error"] = "Invalid config: " + validationError.toStdString();
+        return juce::String(err.dump());
+    }
+
+    // Run generation synchronously (MCP call blocks until complete)
+    DatasetGeneratorV2 generator;
+    generator.setConfig(config);
+    generator.setHostManager(&processor.getHostManager());
+
+    // Use a promise/future to capture the async result
+    std::promise<GenerationResult> promise;
+    auto future = promise.get_future();
+
+    generator.onComplete = [&promise](const GenerationResult& r) {
+        promise.set_value(r);
+    };
+
+    if (!generator.startGeneration())
+    {
+        nlohmann::json err;
+        err["success"] = false;
+        err["error"] = "Failed to start V2 generation. Check config and plugin state.";
+        return juce::String(err.dump());
+    }
+
+    // Wait for completion
+    auto genResult = future.get();
+
+    // Build response
+    nlohmann::json result;
+    result["success"] = genResult.success;
+    result["version"] = "v2";
+    result["samples_generated"] = genResult.samplesGenerated;
+    result["train_samples"] = genResult.trainSamples;
+    result["val_samples"] = genResult.valSamples;
+    result["test_samples"] = genResult.testSamples;
+    result["total_time_ms"] = genResult.totalTimeMs;
+    result["samples_per_hour"] = genResult.samplesPerHour;
+    result["output_directory"] = genResult.datasetDirectory.getFullPathName().toStdString();
+
+    if (genResult.manifestFile.existsAsFile())
+        result["manifest_file"] = genResult.manifestFile.getFullPathName().toStdString();
+
+    if (!genResult.errors.isEmpty())
+    {
+        nlohmann::json errArr = nlohmann::json::array();
+        for (const auto& e : genResult.errors)
+            errArr.push_back(e.toStdString());
+        result["errors"] = errArr;
+    }
+
+    if (!genResult.warnings.isEmpty())
+    {
+        nlohmann::json warnArr = nlohmann::json::array();
+        for (const auto& w : genResult.warnings)
+            warnArr.push_back(w.toStdString());
+        result["warnings"] = warnArr;
+    }
+
+    return juce::String(result.dump());
+}
+
+// ── V3 Dataset Generation ─────────────────────────────────────────────────────
+
+juce::String morphsnap::MCPToolsExtended::generateDatasetV3(
+    const juce::var& params, morphsnap::MorphSnapProcessor& processor)
+{
+    V3GenerationConfig v3Config;
+
+    // If a config file is provided, load base config from it
+    juce::String configFilePath = params.getProperty("config_file", "");
+    if (configFilePath.isNotEmpty())
+    {
+        juce::File configFile(configFilePath);
+        if (!configFile.existsAsFile())
+        {
+            nlohmann::json err;
+            err["success"] = false;
+            err["error"] = "Config file not found: " + configFilePath.toStdString();
+            return juce::String(err.dump());
+        }
+        v3Config.baseConfig = DatasetGeneratorConfig::fromFile(configFile);
+    }
+    else
+    {
+        // Parse V2 base config fields
+        v3Config.baseConfig.totalSamples = static_cast<int>(params.getProperty("samples", 1000));
+        v3Config.baseConfig.datasetName = params.getProperty("dataset_name", "morphsnap_dataset").toString();
+        v3Config.baseConfig.sampleRate = static_cast<double>(params.getProperty("sample_rate", 48000.0));
+        v3Config.baseConfig.chainType = parseChainType(params.getProperty("chain_type", "mastering").toString());
+        v3Config.baseConfig.outputFormat = parseOutputFormat(params.getProperty("output_format", "wav32").toString());
+        v3Config.baseConfig.randomSeed = static_cast<unsigned int>(static_cast<int>(params.getProperty("seed", 42)));
+        v3Config.baseConfig.dryRun = static_cast<bool>(params.getProperty("dry_run", false));
+
+        juce::String sourceDir = params.getProperty("source_audio_dir", "");
+        if (sourceDir.isNotEmpty())
+            v3Config.baseConfig.sourceAudioDirectory = juce::File(sourceDir);
+    }
+
+    // V3-specific params
+    v3Config.batchSize = static_cast<int>(params.getProperty("batch_size", 2048));
+    v3Config.workerThreads = static_cast<int>(params.getProperty("worker_threads", 0));
+    v3Config.checkpointInterval = static_cast<int>(params.getProperty("checkpoint_interval", 100));
+    v3Config.enableWatchdog = static_cast<bool>(params.getProperty("enable_watchdog", true));
+    v3Config.memoryLimitBytes = static_cast<uint64_t>(static_cast<int>(params.getProperty("memory_limit_mb", 2048))) * 1024ULL * 1024ULL;
+
+    // Output path
+    juce::String outputPath = params.getProperty("output_path", "");
+    if (outputPath.isEmpty())
+    {
+        auto baseDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile("MorphSnap_Datasets")
+            .getChildFile(v3Config.baseConfig.datasetName + "_v3_" + juce::Time::getCurrentTime().toString(true, true));
+        v3Config.outputDirectory = baseDir;
+        v3Config.baseConfig.outputDirectory = baseDir;
+        v3Config.logDirectory = baseDir.getChildFile("logs");
+        v3Config.checkpointDirectory = baseDir.getChildFile("checkpoints");
+    }
+    else
+    {
+        juce::File outDir(outputPath);
+        v3Config.outputDirectory = outDir;
+        v3Config.baseConfig.outputDirectory = outDir;
+        v3Config.logDirectory = outDir.getChildFile("logs");
+        v3Config.checkpointDirectory = outDir.getChildFile("checkpoints");
+    }
+
+    bool resumeFromCheckpoint = static_cast<bool>(params.getProperty("resume_checkpoint", false));
+
+    // Run generation
+    DatasetGeneratorV3 generator;
+    generator.setConfig(v3Config);
+    generator.getV2Module().setHostManager(&processor.getHostManager());
+
+    std::promise<std::pair<bool, std::string>> promise;
+    auto future = promise.get_future();
+
+    generator.onComplete = [&promise](bool success, const std::string& message) {
+        promise.set_value({success, message});
+    };
+
+    bool started = false;
+    if (resumeFromCheckpoint)
+        started = generator.resumeFromCheckpoint();
+    else
+        started = generator.startGeneration();
+
+    if (!started)
+    {
+        nlohmann::json err;
+        err["success"] = false;
+        err["error"] = "Failed to start V3 generation pipeline.";
+        return juce::String(err.dump());
+    }
+
+    // Wait for completion
+    auto [success, message] = future.get();
+
+    // Get final progress snapshot
+    auto progress = generator.getProgress();
+
+    nlohmann::json result;
+    result["success"] = success;
+    result["version"] = "v3";
+    result["message"] = message;
+    result["batches_completed"] = progress.batchesCompleted;
+    result["batches_total"] = progress.batchesTotal;
+    result["frames_completed"] = progress.framesCompleted;
+    result["batches_per_second"] = progress.batchesPerSecond;
+    result["elapsed_seconds"] = progress.elapsedSeconds;
+    result["percent_complete"] = progress.percentComplete;
+    result["output_directory"] = v3Config.outputDirectory.getFullPathName().toStdString();
 
     return juce::String(result.dump());
 }

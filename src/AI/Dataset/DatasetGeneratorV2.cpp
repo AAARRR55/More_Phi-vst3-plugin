@@ -229,6 +229,54 @@ void DatasetGeneratorV2::setConfig(const DatasetGeneratorConfig& config)
     sampler_.setSeed(config.randomSeed);
 }
 
+bool DatasetGeneratorV2::initialize()
+{
+    if (!initializeModules())
+        return false;
+    if (!loadSourceAudio())
+        return false;
+    if (!loadPluginChain())
+        return false;
+
+    // Create organizer if output directory is set
+    if (config_.outputDirectory != juce::File())
+    {
+        organizer_ = std::make_unique<DatasetOrganizer>(
+            config_.outputDirectory.getChildFile(config_.datasetName));
+        if (!organizer_->initializeStructure())
+            return false;
+    }
+
+    return true;
+}
+
+DatasetMetadata DatasetGeneratorV2::processSingleSample(
+    int sampleIndex, const std::vector<float>& parameters)
+{
+    // Lock chain engine for thread-safe access from V3 workers
+    std::lock_guard<std::mutex> lock(chainMutex_);
+
+    auto source = audioLibrary_.getRandomSourceByDistribution();
+    auto metadata = generateSample(sampleIndex, source, parameters);
+
+    // Determine split and organise if organizer is available
+    if (organizer_)
+    {
+        organizer_->performSplit(config_.splitConfig);
+        auto split = organizer_->getSplitForSample(metadata.sampleId);
+        metadata.split = split;
+
+        juce::File audioFile = organizer_->getAudioDirectory(
+            split, AudioContentLibrary::genreToString(source.genre))
+            .getChildFile(metadata.sampleId + ".wav");
+
+        organizer_->addSample(metadata.sampleId, audioFile,
+                              metadataWriter_.metadataToJson(metadata), split);
+    }
+
+    return metadata;
+}
+
 bool DatasetGeneratorV2::validateConfig(const DatasetGeneratorConfig& config, juce::String& outError)
 {
     if (config.outputDirectory == juce::File())
@@ -438,6 +486,33 @@ bool DatasetGeneratorV2::loadSourceAudio()
 
 bool DatasetGeneratorV2::loadPluginChain()
 {
+    // If a host manager is attached and has a loaded plugin,
+    // use it as a single-plugin chain (unless a custom chain config is provided).
+    if (hostManager_ != nullptr && hostManager_->hasPlugin()
+        && config_.chainType != ChainType::Custom)
+    {
+        auto* plugin = hostManager_->getPlugin();
+        if (plugin != nullptr)
+        {
+            const auto* desc = hostManager_->getLastDescription();
+            if (desc != nullptr)
+            {
+                ChainConfig chainConfig;
+                chainConfig.type = config_.chainType;
+                chainConfig.sampleRate = config_.sampleRate;
+                chainConfig.blockSize = config_.blockSize;
+                chainConfig.numChannels = config_.numChannels;
+
+                PluginSlot slot;
+                slot.description = *desc;
+                slot.settleTimeMs = config_.pluginSettleTimeMs;
+                chainConfig.plugins.add(slot);
+
+                return chainEngine_.loadChain(chainConfig);
+            }
+        }
+    }
+
     ChainConfig chainConfig;
 
     if (config_.chainType == ChainType::Custom && config_.chainConfigFile.exists())

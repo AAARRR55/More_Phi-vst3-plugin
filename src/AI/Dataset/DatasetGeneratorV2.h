@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <thread>
 
 namespace morphsnap {
@@ -144,6 +145,30 @@ public:
     void setConfig(const DatasetGeneratorConfig& config);
     const DatasetGeneratorConfig& getConfig() const { return config_; }
 
+    /**
+     * Optionally attach the processor's hosted plugin.
+     * When set, the chain engine uses this plugin as a single-plugin chain
+     * (unless a custom chain config is provided).
+     */
+    void setHostManager(IPluginHostManager* hostManager) { hostManager_ = hostManager; }
+
+    /**
+     * Initialize all modules (source audio, plugin chain, etc.).
+     * Must be called before processSingleSample(). startGeneration() calls
+     * this internally; call explicitly only when driving V2 from V3.
+     * @return true if all modules initialized successfully.
+     */
+    bool initialize();
+
+    /**
+     * Process a single sample with the given parameters.
+     * Thread-safe: serialises chain-engine access with an internal mutex.
+     * Requires initialize() to have been called first.
+     * @return Populated DatasetMetadata for this sample.
+     */
+    DatasetMetadata processSingleSample(int sampleIndex,
+                                        const std::vector<float>& parameters);
+
     // Generation control
     bool startGeneration();
     void stopGeneration();
@@ -176,6 +201,9 @@ private:
     // Configuration
     DatasetGeneratorConfig config_;
 
+    // Optional host manager for single-plugin mode
+    IPluginHostManager* hostManager_ = nullptr;
+
     // Modules
     ParameterSampler sampler_;
     AudioContentLibrary audioLibrary_;
@@ -185,6 +213,9 @@ private:
     MetadataWriter metadataWriter_;
     ValidationEngine validationEngine_;
     std::unique_ptr<DatasetOrganizer> organizer_;
+
+    // Chain engine mutex — serialises processBlock to support V3 worker threads
+    mutable std::mutex chainMutex_;
 
     // State
     std::atomic<bool> isGenerating_{false};
