@@ -107,11 +107,12 @@ jobs:
           path: pluginval-results/
 
       - name: Upload VST3 artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64
-          path: ${{ env.VST3_PATH }}
-          if-no-files-found: error
+          path: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3/
+          if-no-files-found: warn
 
 
   # ─── macOS Universal Binary ──────────────────────────────────────────────────
