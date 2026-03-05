@@ -61,7 +61,7 @@ jobs:
             -A x64
 
       - name: Build Release
-        run: cmake --build build --config Release --parallel 2
+        run: cmake --build build --config Release --parallel 1
 
       - name: Run tests
         working-directory: build

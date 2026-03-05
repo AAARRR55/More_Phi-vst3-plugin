@@ -4,22 +4,25 @@
  */
 #include "InterpolationEngine.h"
 
-// Platform detection for SIMD
-#if defined(_MSC_VER)
-    #include <intrin.h>
-    #define MORPHSNAP_HAS_INTRIN 1
-#elif defined(__GNUC__) || defined(__clang__)
-    #include <cpuid.h>
-    #define MORPHSNAP_HAS_INTRIN 1
-#endif
+// Platform detection for SIMD — x86/x64 only (not ARM/Apple Silicon)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #define MORPHSNAP_X86 1
+    #if defined(_MSC_VER)
+        #include <intrin.h>
+        #define MORPHSNAP_HAS_INTRIN 1
+    #elif defined(__GNUC__) || defined(__clang__)
+        #include <cpuid.h>
+        #define MORPHSNAP_HAS_INTRIN 1
+    #endif
 
-// SIMD headers
-#if defined(__AVX2__)
-    #include <immintrin.h>
-    #define MORPHSNAP_USE_AVX 1
-#elif defined(__SSE2__) || (defined(_MSC_VER) && defined(_M_X64))
-    #include <emmintrin.h>
-    #define MORPHSNAP_USE_SSE 1
+    // SIMD headers
+    #if defined(__AVX2__)
+        #include <immintrin.h>
+        #define MORPHSNAP_USE_AVX 1
+    #elif defined(__SSE2__) || (defined(_MSC_VER) && defined(_M_X64))
+        #include <emmintrin.h>
+        #define MORPHSNAP_USE_SSE 1
+    #endif
 #endif
 
 namespace morphsnap {
@@ -30,7 +33,7 @@ bool InterpolationEngine::hasAVXSupport()
 {
 #if defined(MORPHSNAP_USE_AVX)
     return true;
-#else
+#elif defined(MORPHSNAP_X86)
     static bool checked = false;
     static bool hasAVX = false;
 
@@ -54,6 +57,8 @@ bool InterpolationEngine::hasAVXSupport()
         checked = true;
     }
     return hasAVX;
+#else
+    return false;
 #endif
 }
 
@@ -61,7 +66,7 @@ bool InterpolationEngine::hasSSESupport()
 {
 #if defined(MORPHSNAP_USE_SSE)
     return true;
-#else
+#elif defined(MORPHSNAP_X86)
     static bool checked = false;
     static bool hasSSE = false;
 
@@ -81,6 +86,8 @@ bool InterpolationEngine::hasSSESupport()
         checked = true;
     }
     return hasSSE;
+#else
+    return false;
 #endif
 }
 
