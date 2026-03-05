@@ -147,7 +147,19 @@ public:
     float getSmoothingRate() const   { return smoothingRate_.load(std::memory_order_relaxed); }
 
     // ── Sanity Mode: protects critical params from breed/randomize ────────────
-    void setSanityConfig(const SanityConfig& cfg) { sanityConfig_ = cfg; }
+    // CRITICAL (Finding 3): SanityConfig contains std::set which is not thread-safe.
+    // All access must go through these synchronized methods.
+    void setSanityConfig(const SanityConfig& cfg)
+    {
+        const juce::SpinLock::ScopedLockType lock(sanityConfigLock_);
+        sanityConfig_ = cfg;
+    }
+    SanityConfig getSanityConfigCopy() const
+    {
+        const juce::SpinLock::ScopedLockType lock(sanityConfigLock_);
+        return sanityConfig_;
+    }
+    // Legacy API for message-thread-only access (UI components)
     const SanityConfig& getSanityConfig() const   { return sanityConfig_; }
     SanityConfig& getSanityConfig()               { return sanityConfig_; }
 
@@ -228,8 +240,11 @@ private:
     std::vector<float> finalOutput_;  // After discrete processing
 
     // Touch detection: prevents morph from overwriting manual knob changes
+    // CRITICAL: These vectors are accessed from both audio thread (read/write in processBlock)
+    // and message thread (write in recallSnapshotQueued). Use spinlock for synchronization.
     std::vector<float> lastApplied_;        // Last morph values we applied
     std::vector<int>   touchCooldown_;      // Per-param cooldown counter (blocks)
+    mutable juce::SpinLock touchStateLock_; // Protects lastApplied_ and touchCooldown_
     static constexpr float TOUCH_THRESHOLD = 0.005f;   // Min delta to detect manual touch
     static constexpr int   TOUCH_COOLDOWN_BLOCKS = 10; // ~200ms at 48kHz/1024
     // Named capacity constant (avoids magic number in queue declaration).
@@ -289,7 +304,9 @@ private:
     std::atomic<float> rmsLevel_{0.0f};
 
     // SanityMode config (UI writes, breed/randomize reads)
+    // CRITICAL (Finding 3): std::set<int> is not thread-safe, protect with spinlock
     SanityConfig sanityConfig_;
+    mutable juce::SpinLock sanityConfigLock_;
 
     // RecallMode (UI → audio thread)
     std::atomic<int> recallMode_{0};   // 0=Fast, 1=Full

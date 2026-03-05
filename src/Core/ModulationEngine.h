@@ -36,6 +36,7 @@
 #include <array>
 #include <vector>
 #include <memory>
+#include <cstdint>
 
 namespace morphsnap {
 
@@ -111,7 +112,7 @@ public:
     int  addRoute(ModSourceId source, int destParamIndex, float depth) override;
     void removeRoute(int routeId) override;
     void clearAllRoutes() override;
-    int  getActiveRouteCount() const override;
+    int  getAssignedRouteCount() const override;
     const ModRoute& getRoute(int routeId) const override;
 
     // ── Route property modification (forwarded to matrix) ────────────────────
@@ -192,6 +193,13 @@ private:
 
     double sampleRate_ = 48000.0;
     bool   prepared_   = false;
+
+    // ── PRNG (xorshift32, lock-free, audio-thread safe) ───────────────────────
+
+    uint32_t rngState_ = 0xCAFEBABEu; // non-zero seed
+
+    /** xorshift32 — returns a value in [0, 1). No heap, no locks. */
+    float nextRandom() noexcept;
 
     // ── Helpers (audio thread) ────────────────────────────────────────────────
 

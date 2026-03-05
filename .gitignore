@@ -50,3 +50,58 @@ verify_result.txt
 eq_test_output.txt
 __pycache__/
 *.pyc
+
+# Personal automation scripts (MCP connect/apply/test)
+connect_*.ps1
+apply_*.ps1
+reapply_*.ps1
+test_mcp*.ps1
+discover_tokens.ps1
+verify_*.ps1
+
+# Parameter dumps & session data
+*_params.json
+*_params_live.json
+morphsnap_*.json
+temp_params*.json
+neutron5_params.json
+params_list.json
+promb_params.json
+
+# AI session artifacts
+ai-insights-*.txt
+mix-analyzer-*.json
+chain_verification.json
+spicy_verification_report.json
+morphsnap_connection_test.json
+
+# Agent/swarm configs
+.claude-flow/
+.swarm/
+.mcp.json
+
+# Generated datasets & BMAD output
+_bmad-output/
+dataset_manifest.json
+vectors.db
+
+# Terraform
+terraform/
+terraform_*/
+*.zip
+
+# Misc guides (personal)
+FL_STUDIO_BEST_PLUGINS_GUIDE.md
+indie_dance_production_guide.md
+melodic_techno_production_guide.md
+
+# Python venv
+.venv/
+
+# Misc temp
+temp_processor.h
+*.db
+
+# Terraform state inside Dataset cloud
+**/.terraform/
+**/.terraform.lock.hcl

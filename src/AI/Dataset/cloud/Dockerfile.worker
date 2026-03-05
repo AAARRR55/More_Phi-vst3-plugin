@@ -1,0 +1,21 @@
+# Use the official PyTorch image as the base
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (needed for audio processing packages)
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements and script
+COPY requirements.txt .
+COPY train_worker.py .
+
+# Install python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Run the polling script when the container starts
+CMD ["python", "-u", "train_worker.py"]

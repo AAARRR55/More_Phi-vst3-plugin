@@ -32,6 +32,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 
 namespace morphsnap {
@@ -78,9 +79,12 @@ enum class AAFilterType
 class OversamplingWrapper
 {
 public:
-    static constexpr int kMaxChannels   = 2;
+    static constexpr int kMaxChannels    = 2;
     static constexpr int kMaxOSFactor   = 8;
     static constexpr int kFIRFilterOrder = 128; // taps per polyphase subfilter
+
+    // Maximum block size supported in x1 bypass mode (matches typical DAW limit).
+    static constexpr int kMaxBypassBlock = 65536;
 
     OversamplingWrapper() = default;
     ~OversamplingWrapper() = default;
@@ -191,7 +195,22 @@ public:
     upsample(const juce::dsp::AudioBlock<float>& input) noexcept
     {
         if (activeFactor_ == OversamplingFactor::x1)
-            return juce::dsp::AudioBlock<float>(const_cast<juce::dsp::AudioBlock<float>&>(input));
+        {
+            // Copy input into the bypass buffer so we can return a mutable
+            // block without casting away const (which would be UB if the
+            // caller's block wraps read-only storage).
+            const size_t numCh      = input.getNumChannels();
+            const size_t numSamples = input.getNumSamples();
+            for (size_t ch = 0; ch < numCh && ch < kMaxChannels; ++ch)
+                bypassChannelPtrs_[ch] = bypassBuffer_[ch].data();
+
+            juce::dsp::AudioBlock<float> bypassBlock(
+                bypassChannelPtrs_.data(),
+                numCh,
+                numSamples);
+            bypassBlock.copyFrom(input);
+            return bypassBlock;
+        }
 
         if (oversamplerFIR_)
             return oversamplerFIR_->processSamplesUp(input);
@@ -199,7 +218,18 @@ public:
         if (oversamplerIIR_)
             return oversamplerIIR_->processSamplesUp(input);
 
-        return juce::dsp::AudioBlock<float>(const_cast<juce::dsp::AudioBlock<float>&>(input));
+        // Fallback: same bypass-copy path as x1 case.
+        const size_t numCh      = input.getNumChannels();
+        const size_t numSamples = input.getNumSamples();
+        for (size_t ch = 0; ch < numCh && ch < kMaxChannels; ++ch)
+            bypassChannelPtrs_[ch] = bypassBuffer_[ch].data();
+
+        juce::dsp::AudioBlock<float> bypassBlock(
+            bypassChannelPtrs_.data(),
+            numCh,
+            numSamples);
+        bypassBlock.copyFrom(input);
+        return bypassBlock;
     }
 
     /**
@@ -272,6 +302,11 @@ private:
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversamplerFIR_;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversamplerIIR_;
+
+    // Bypass buffer: used in x1 mode to avoid const_cast UB.
+    // Sized to kMaxBypassBlock; filled each call to upsample() when factor == x1.
+    std::array<std::array<float, kMaxBypassBlock>, kMaxChannels> bypassBuffer_{};
+    std::array<float*, kMaxChannels> bypassChannelPtrs_{};
 };
 
 } // namespace morphsnap

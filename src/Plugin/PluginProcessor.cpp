@@ -99,11 +99,15 @@ bool MorphSnapProcessor::recallSnapshotQueued(int slot)
     // Sync touch detection state: mark all applied values as "last applied"
     // so the morph engine doesn't falsely detect them as manual user touches
     // and enter cooldown (which would block XY pad morphing).
-    const size_t count = std::min(values.size(), lastApplied_.size());
-    for (size_t i = 0; i < count; ++i)
+    // CRITICAL: Acquire spinlock to prevent data race with audio thread (Finding 1)
     {
-        lastApplied_[i] = values[i];
-        touchCooldown_[i] = 0;
+        const juce::SpinLock::ScopedLockType lock(touchStateLock_);
+        const size_t count = std::min(values.size(), lastApplied_.size());
+        for (size_t i = 0; i < count; ++i)
+        {
+            lastApplied_[i] = values[i];
+            touchCooldown_[i] = 0;
+        }
     }
 
     // Move the morph cursor to this slot's clock position so the
@@ -204,6 +208,11 @@ MorphSnapProcessor::createParameterLayout()
 
 void MorphSnapProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    // CRITICAL (Finding 8): Set prepared=false at START, not just at end.
+    // This prevents race where audio thread continues with stale state during
+    // concurrent prepareToPlay() call from misbehaving host.
+    prepared.store(false, std::memory_order_seq_cst);
+
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
 
@@ -330,6 +339,7 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // 2) Process MIDI: filter trigger notes, pass rest through
     juce::MidiBuffer filteredMidi;
     midiRouter.processMidi(midi, filteredMidi);
+    modulationEngine_.processMIDI(filteredMidi);
 
     // 2b) Process sidechain trigger (audio-driven snapshot recall)
     if (sidechainEnabled_.load(std::memory_order_relaxed))
@@ -410,6 +420,11 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // When Listen Mode is active, sentinel values (-1.0f) mark discrete params to skip
         if (morphOutput.size() >= static_cast<size_t>(paramCount))
         {
+            // CRITICAL (Finding 1): Use tryEnter for touch state lock on audio thread.
+            // If message thread is writing (rare, during snapshot recall), skip touch
+            // detection for this block - acceptable tradeoff for real-time safety.
+            const bool hasTouchLock = touchStateLock_.tryEnter();
+
             for (int i = 0; i < paramCount; ++i)
             {
                 const float morphVal = morphOutput[static_cast<size_t>(i)];
@@ -418,7 +433,8 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 if (morphVal < 0.0f) continue;
 
                 // Touch detection: check if user manually moved this parameter
-                if (lastApplied_[static_cast<size_t>(i)] >= 0.0f)
+                // Only perform if we acquired the lock (avoid data race with message thread)
+                if (hasTouchLock && lastApplied_[static_cast<size_t>(i)] >= 0.0f)
                 {
                     const float currentVal = paramBridge.getParameterNormalized(i);
                     const float lastVal = lastApplied_[static_cast<size_t>(i)];
@@ -432,7 +448,7 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 }
 
                 // If parameter is in cooldown, skip applying morph output
-                if (touchCooldown_[static_cast<size_t>(i)] > 0)
+                if (hasTouchLock && touchCooldown_[static_cast<size_t>(i)] > 0)
                 {
                     --touchCooldown_[static_cast<size_t>(i)];
                     lastApplied_[static_cast<size_t>(i)] = -1.0f; // Reset tracking
@@ -441,8 +457,12 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
                 // Apply morph output and track what we applied
                 paramBridge.setParameterNormalized(i, morphVal);
-                lastApplied_[static_cast<size_t>(i)] = morphVal;
+                if (hasTouchLock)
+                    lastApplied_[static_cast<size_t>(i)] = morphVal;
             }
+
+            if (hasTouchLock)
+                touchStateLock_.exit();
         }
     }
 
@@ -462,21 +482,39 @@ void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         const float alpha = morphAlpha_.load(std::memory_order_relaxed);
 
         // Copy main buffer for Plugin B processing
-        bufferB_.makeCopyOf(buffer);
+        {
+            const int nc = std::min(buffer.getNumChannels(), bufferB_.getNumChannels());
+            const int ns = buffer.getNumSamples();
+            for (int c = 0; c < nc; ++c)
+                juce::FloatVectorOperations::copy(bufferB_.getWritePointer(c),
+                                                  buffer.getReadPointer(c), ns);
+        }
         juce::MidiBuffer midiCopyB(filteredMidi);
         hostManagerB_.processBlock(bufferB_, midiCopyB);
 
         // Spectral morph
         if (spectralEngine_.isActive())
         {
-            spectralOut_.makeCopyOf(buffer);
+            {
+                const int nc = std::min(buffer.getNumChannels(), spectralOut_.getNumChannels());
+                const int ns = buffer.getNumSamples();
+                for (int c = 0; c < nc; ++c)
+                    juce::FloatVectorOperations::copy(spectralOut_.getWritePointer(c),
+                                                      buffer.getReadPointer(c), ns);
+            }
             spectralEngine_.processBlock(spectralOut_, bufferB_, alpha);
         }
 
         // Granular morph
         if (granularEngine_.isActive())
         {
-            granularOut_.makeCopyOf(buffer);
+            {
+                const int nc = std::min(buffer.getNumChannels(), granularOut_.getNumChannels());
+                const int ns = buffer.getNumSamples();
+                for (int c = 0; c < nc; ++c)
+                    juce::FloatVectorOperations::copy(granularOut_.getWritePointer(c),
+                                                      buffer.getReadPointer(c), ns);
+            }
             granularEngine_.processBlock(granularOut_, bufferB_, alpha);
         }
 
@@ -571,10 +609,11 @@ void MorphSnapProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (auto bankXml = snapshotBank.toXml())
         xml->addChildElement(bankXml.release());
 
-    // 4) Persist SanityConfig
+    // 4) Persist SanityConfig safely
+    auto sc = getSanityConfigCopy();
     auto sanityXml = std::make_unique<juce::XmlElement>("SANITY_CONFIG");
-    sanityXml->setAttribute("enabled", sanityConfig_.enabled);
-    for (int idx : sanityConfig_.protectedIndices)
+    sanityXml->setAttribute("enabled", sc.enabled);
+    for (int idx : sc.protectedIndices)
         sanityXml->createNewChildElement("PROTECTED")->setAttribute("index", idx);
     xml->addChildElement(sanityXml.release());
 
@@ -629,13 +668,14 @@ void MorphSnapProcessor::setStateInformation(const void* data, int sizeInBytes)
     // 3) Restore SanityConfig
     if (auto* sanityXml = xml->getChildByName("SANITY_CONFIG"))
     {
-        sanityConfig_.enabled = sanityXml->getBoolAttribute("enabled", false);
-        sanityConfig_.protectedIndices.clear();
+        SanityConfig sc;
+        sc.enabled = sanityXml->getBoolAttribute("enabled", false);
         for (auto* child : sanityXml->getChildIterator())
         {
             if (child->hasTagName("PROTECTED"))
-                sanityConfig_.protectedIndices.insert(child->getIntAttribute("index", -1));
+                sc.protectedIndices.insert(child->getIntAttribute("index", -1));
         }
+        setSanityConfig(sc);
     }
 
     // 4) Restore RecallMode
@@ -764,9 +804,14 @@ bool MorphSnapProcessor::loadHostedPluginFromState(const juce::PluginDescription
         }
 
         // Refresh discrete parameter map for the restored plugin
+        // CRITICAL (Finding 5): Must happen BEFORE isRestoring_ is cleared.
+        // The release store below ensures audio thread sees updated discreteMap_
+        // when it observes isRestoring_==false.
         refreshDiscreteMap();
-        
+
         // Unblock the morph engine on success
+        // Release semantics ensure all prior writes (including discreteMap_ update)
+        // are visible to audio thread when it loads isRestoring_ with acquire.
         isRestoring_.store(false, std::memory_order_release);
     }
     else

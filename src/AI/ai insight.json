@@ -1,0 +1,4811 @@
+{
+  "id": "0823fa2a-2d13-48c0-be14-fa8b2d592d82",
+  "filename": "SPICY_MASTERED_FINAL (1).flac",
+  "status": "completed",
+  "overall_score": 75.7,
+  "module_scores": {
+    "mood": 0.873,
+    "delay": 0.5,
+    "genre": 0.133,
+    "stereo": 0.8294,
+    "clarity": 0.9969782817177475,
+    "scoring": 0.7574917567309297,
+    "spatial": 0.72090003490448,
+    "harmonic": 0.6444517734522707,
+    "k_system": 0.888717924619815,
+    "playback": 0.8047499999999999,
+    "surround": 0.9500000000000001,
+    "dithering": 0.9,
+    "frequency": 0.4999999999999999,
+    "reference": 0.5055499999999999,
+    "sibilance": 1.0,
+    "transient": 0.7300230741653367,
+    "true_peak": 0.95,
+    "instrument": 0.5833333333333334,
+    "modulation": 0.523,
+    "noise_gate": 0.8,
+    "low_end_mono": 1.0,
+    "dynamic_range": 0.8600000000000001,
+    "eq_extraction": 0.38087316235188395,
+    "vocal_balance": 0.6,
+    "format_metadata": 1.0,
+    "format_integrity": 0.9943030303030305,
+    "mid_side_spectral": 0.92,
+    "frequency_enhanced": 0.76758,
+    "multiband_dynamics": 0.8945480031278816,
+    "saturation_profile": 0.8,
+    "loudness_compliance": 0.29999999999999993,
+    "parallel_processing": 0.78,
+    "arrangement_dynamics": 1.0,
+    "dynamic_range_enhanced": 0.92,
+    "phase_correlation_band": 1.0
+  },
+  "created_at": "2026-03-03T15:11:12.494256+00:00",
+  "completed_at": "2026-03-03T15:20:45.804794+00:00",
+  "ai_recommendations": {
+    "data": {
+      "summary": "Severe spectral imbalance with excessive low-frequency energy (84.2% vs 30% benchmark) and deficient mids/highs, requiring aggressive low-end reduction and significant presence/air enhancement to achieve Melodic Techno tonal balance. Mix is extremely narrow and centered with excellent mono compatibility but lacks the wide atmospheric stereo image expected for Melodic Techno. Needs significant mid-high frequency expansion while maintaining mono bass foundation.",
+      "deviations": [
+        {
+          "delta": "+54.2%",
+          "region": "low",
+          "status": "out_of_range",
+          "measured": "0.842 (84.2%)",
+          "benchmark": "0.3 (30%)"
+        },
+        {
+          "delta": "-33.6%",
+          "region": "mid",
+          "status": "out_of_range",
+          "measured": "0.084 (8.4%)",
+          "benchmark": "0.42 (42%)"
+        },
+        {
+          "delta": "-20.7%",
+          "region": "high",
+          "status": "out_of_range",
+          "measured": "0.073 (7.3%)",
+          "benchmark": "0.28 (28%)"
+        },
+        {
+          "delta": "-540 Hz",
+          "region": "spectral_centroid",
+          "status": "out_of_range",
+          "measured": "1460 Hz",
+          "benchmark": "2000-3500 Hz"
+        },
+        {
+          "delta": "-5.95 dB/oct",
+          "region": "spectral_slope",
+          "status": "out_of_range",
+          "measured": "-7.15 dB/oct",
+          "benchmark": "-1.2 dB/oct"
+        },
+        {
+          "delta": "-0.309 to -0.609 below range",
+          "status": "out_of_range",
+          "measured": 0.041,
+          "benchmark": "0.35-0.65",
+          "parameter": "stereo_width"
+        },
+        {
+          "delta": "+0.276 above range",
+          "status": "out_of_range",
+          "measured": 0.976,
+          "benchmark": "0.3-0.7",
+          "parameter": "phase_correlation"
+        },
+        {
+          "delta": "+0.259 above range",
+          "status": "out_of_range",
+          "measured": 0.959,
+          "benchmark": "0.4-0.7 (estimated for wide atmospheric)",
+          "parameter": "mid_side_ratio"
+        }
+      ],
+      "model_used": "deepseek-chat",
+      "saturation": {},
+      "genre_source": "user_override",
+      "mixing_chain": [
+        {
+          "step": 1,
+          "reason": "Remove problematic frequencies (mud, boxiness, nasal) before dynamics processing",
+          "parameters": {
+            "band_1": {
+              "type": "high-pass",
+              "freq_hz": 30,
+              "slope_db_oct": 24
+            },
+            "band_2": {
+              "q": 1.2,
+              "type": "bell",
+              "freq_hz": 64,
+              "gain_db": -4.0
+            },
+            "band_3": {
+              "q": 1.5,
+              "type": "bell",
+              "freq_hz": 215,
+              "gain_db": -4.0
+            },
+            "band_4": {
+              "q": 0.56,
+              "type": "bell",
+              "freq_hz": 366,
+              "gain_db": -5.0
+            },
+            "band_5": {
+              "q": 1.8,
+              "type": "bell",
+              "freq_hz": 431,
+              "gain_db": -3.0
+            },
+            "band_6": {
+              "q": 2.0,
+              "type": "bell",
+              "freq_hz": 1012,
+              "gain_db": -2.0
+            }
+          },
+          "plugin_name": "FabFilter Pro-Q 3",
+          "signal_flow_stage": "subtractive_eq"
+        },
+        {
+          "step": 2,
+          "reason": "Add presence and air after dynamics to compensate for spectral deficiencies",
+          "parameters": {
+            "band_1": {
+              "q": 1.0,
+              "type": "bell",
+              "freq_hz": 3200,
+              "gain_db": 3.0
+            },
+            "band_2": {
+              "q": 0.71,
+              "type": "high-shelf",
+              "freq_hz": 12000,
+              "gain_db": 2.0
+            }
+          },
+          "plugin_name": "FabFilter Pro-Q 3",
+          "signal_flow_stage": "additive_eq"
+        },
+        {
+          "step": 3,
+          "reason": "Expand mid-high frequencies while keeping bass mono. Current width (0.041) is far below Melodic Techno benchmark (0.35-0.65).",
+          "parameters": {
+            "correlation_floor": 0.1,
+            "mid_band_range_hz": "120-5000",
+            "high_band_range_hz": ">2500",
+            "bass_mono_crossover_hz": 120,
+            "mid_band_expansion_pct": 40,
+            "high_band_expansion_pct": 50
+          },
+          "plugin_name": "iZotope Ozone Imager",
+          "signal_flow_stage": "stereo_imaging"
+        },
+        {
+          "step": 4,
+          "reason": "Add atmospheric reverb to create depth and space. Current reverb is subtle (0.316 amount, 0.51s RT60).",
+          "parameters": {
+            "decay_s": 2.5,
+            "wet_pct": 15,
+            "room_size": "medium hall",
+            "predelay_ms": 25,
+            "high_damp_hz": 6000
+          },
+          "plugin_name": "Valhalla VintageVerb",
+          "signal_flow_stage": "time_based_fx"
+        },
+        {
+          "step": 5,
+          "reason": "Add rhythmic delay for movement. Current delays detected but need better stereo placement.",
+          "parameters": {
+            "sync": "1/4 note",
+            "wet_pct": 20,
+            "feedback_pct": 30,
+            "stereo_width": 120,
+            "hp_on_return_hz": 200
+          },
+          "plugin_name": "Soundtoys EchoBoy",
+          "signal_flow_stage": "time_based_fx"
+        }
+      ],
+      "deep_insights": {
+        "vocal_profile": {
+          "summary": "No vocal content detected",
+          "voice_detected": false
+        },
+        "sonic_character": {
+          "descriptors": [
+            "balanced_tonality",
+            "punchy_dynamics",
+            "center_focused_image",
+            "mono_stable"
+          ],
+          "stereo_width": 0.041,
+          "crest_factor_db": 15.17,
+          "integrated_lufs": -14.39,
+          "phase_correlation": 0.976,
+          "spectral_centroid_hz": 1460.650520277461
+        },
+        "mixing_priorities": [
+          "frequency: Excessive low frequency energy - may cause muddiness",
+          "frequency: Broad spectral imbalance across low/mid/high bands",
+          "frequency: Mud detected around 215 Hz",
+          "frequency: Boxiness detected around 431 Hz",
+          "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)",
+          "transient: Tempo drifts significantly throughout the track",
+          "frequency: Nasal detected around 1012 Hz",
+          "stereo: Very narrow stereo image - almost mono",
+          "transient: Inconsistent transient dynamics detected",
+          "transient: Very low percussive content detected"
+        ],
+        "mastering_readiness": {
+          "status": "near_ready",
+          "readiness_score": 0.757,
+          "critical_blockers": [],
+          "overall_score_100": 75.7
+        },
+        "emotional_trajectory": {
+          "arc_type": "steady_energy_arc",
+          "base_energy": 0.679,
+          "base_valence": 0.454,
+          "primary_mood": "Dramatic",
+          "valence_state": "neutral",
+          "secondary_mood": "Mysterious",
+          "section_energy": [
+            {
+              "lufs": -17.39,
+              "energy": 1.0,
+              "section": "intro"
+            },
+            {
+              "lufs": -17.49,
+              "energy": 0.909,
+              "section": "build"
+            },
+            {
+              "lufs": -18.49,
+              "energy": 0.0,
+              "section": "peak"
+            },
+            {
+              "lufs": -17.89,
+              "energy": 0.545,
+              "section": "outro"
+            }
+          ]
+        },
+        "genre_classification": {
+          "key": "D",
+          "scale": "minor",
+          "primary": "Melodic Techno",
+          "certainty": "low",
+          "diversity": 0.01,
+          "secondary": "Deep House",
+          "tempo_bpm": 120.0,
+          "confidence": 0.133,
+          "blend_character": "focused genre identity"
+        },
+        "structural_composition": {
+          "tempo_bpm": 61.2,
+          "beat_regularity": 0.5,
+          "section_profile": [
+            {
+              "lufs": -17.39,
+              "end_s": 100.34,
+              "rms_db": -15.69,
+              "section": "intro",
+              "start_s": 0.0,
+              "crest_factor": 14.82
+            },
+            {
+              "lufs": -17.49,
+              "end_s": 200.68,
+              "rms_db": -16.04,
+              "section": "build",
+              "start_s": 100.34,
+              "crest_factor": 15.12
+            },
+            {
+              "lufs": -18.49,
+              "end_s": 301.03,
+              "rms_db": -16.85,
+              "section": "peak",
+              "start_s": 200.68,
+              "crest_factor": 15.94
+            },
+            {
+              "lufs": -17.89,
+              "end_s": 401.37,
+              "rms_db": -15.64,
+              "section": "outro",
+              "start_s": 301.03,
+              "crest_factor": 14.78
+            }
+          ],
+          "tempo_stability": 0.058,
+          "transient_density": 5.967,
+          "most_intense_section": "intro",
+          "estimated_structure_type": "high_event_density_arrangement"
+        },
+        "instrumentation_profile": {
+          "lead_elements": [
+            "brass",
+            "woodwinds",
+            "vocals"
+          ],
+          "dominant_family": "bass",
+          "instrument_count": 9,
+          "tonal_foundation": [
+            "synthesizers",
+            "strings",
+            "guitar",
+            "piano"
+          ],
+          "rhythmic_foundation": [
+            "bass",
+            "drums"
+          ],
+          "detected_instruments": [
+            {
+              "name": "bass",
+              "present": true,
+              "confidence": 0.75,
+              "frequency_range": [
+                30,
+                300
+              ]
+            },
+            {
+              "name": "synthesizers",
+              "present": true,
+              "confidence": 0.7,
+              "frequency_range": [
+                20,
+                20000
+              ]
+            },
+            {
+              "name": "strings",
+              "present": true,
+              "confidence": 0.65,
+              "frequency_range": [
+                65,
+                4000
+              ]
+            },
+            {
+              "name": "brass",
+              "present": true,
+              "confidence": 0.65,
+              "frequency_range": [
+                80,
+                3000
+              ]
+            },
+            {
+              "name": "woodwinds",
+              "present": true,
+              "confidence": 0.65,
+              "frequency_range": [
+                130,
+                3000
+              ]
+            },
+            {
+              "name": "vocals",
+              "present": true,
+              "confidence": 0.55,
+              "frequency_range": [
+                80,
+                3000
+              ]
+            },
+            {
+              "name": "drums",
+              "present": true,
+              "confidence": 0.5,
+              "frequency_range": [
+                30,
+                8000
+              ]
+            },
+            {
+              "name": "guitar",
+              "present": true,
+              "confidence": 0.45,
+              "frequency_range": [
+                80,
+                5000
+              ]
+            },
+            {
+              "name": "piano",
+              "present": true,
+              "confidence": 0.35,
+              "frequency_range": [
+                27,
+                4200
+              ]
+            }
+          ],
+          "arrangement_complexity": 0.649
+        }
+      },
+      "input_modules": [
+        "arrangement_dynamics",
+        "clarity",
+        "delay",
+        "dithering",
+        "dynamic_range",
+        "dynamic_range_enhanced",
+        "eq_extraction",
+        "format_integrity",
+        "format_metadata",
+        "frequency",
+        "frequency_enhanced",
+        "genre",
+        "harmonic",
+        "instrument",
+        "k_system",
+        "keywords",
+        "loudness_compliance",
+        "low_end_mono",
+        "mid_side_spectral",
+        "modulation",
+        "mood",
+        "multiband_dynamics",
+        "noise_gate",
+        "parallel_processing",
+        "phase_correlation_band",
+        "playback",
+        "reference",
+        "saturation_profile",
+        "scoring",
+        "sibilance",
+        "spatial",
+        "stereo",
+        "surround",
+        "transient",
+        "true_peak",
+        "vocal_balance",
+        "voice_gender"
+      ],
+      "target_values": {},
+      "vocal_profile": {
+        "summary": "No vocal content detected",
+        "voice_detected": false
+      },
+      "detected_genre": "Melodic Techno",
+      "eq_adjustments": [
+        {
+          "band": "sub",
+          "reason": "High-pass filter to remove subsonic rumble below audible range",
+          "gain_db": 0.0,
+          "q_factor": 1.0,
+          "filter_type": "hp",
+          "frequency_hz": 18
+        },
+        {
+          "band": "bass",
+          "reason": "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+          "gain_db": -4.0,
+          "q_factor": 1.2,
+          "filter_type": "bell",
+          "frequency_hz": 64
+        },
+        {
+          "band": "low_mid",
+          "reason": "Reduce muddiness detected at 215 Hz for improved clarity",
+          "gain_db": -4.0,
+          "q_factor": 1.5,
+          "filter_type": "bell",
+          "frequency_hz": 215
+        },
+        {
+          "band": "low_mid",
+          "reason": "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+          "gain_db": -5.0,
+          "q_factor": 0.56,
+          "filter_type": "bell",
+          "frequency_hz": 366
+        },
+        {
+          "band": "low_mid",
+          "reason": "Reduce boxiness detected at 431 Hz",
+          "gain_db": -3.0,
+          "q_factor": 1.8,
+          "filter_type": "bell",
+          "frequency_hz": 431
+        },
+        {
+          "band": "mid",
+          "reason": "Gentle cut to address nasal quality at 1012 Hz",
+          "gain_db": -2.0,
+          "q_factor": 2.0,
+          "filter_type": "bell",
+          "frequency_hz": 1012
+        },
+        {
+          "band": "high_mid",
+          "reason": "Boost presence range to compensate for spectral imbalance and add clarity",
+          "gain_db": 3.0,
+          "q_factor": 1.0,
+          "filter_type": "bell",
+          "frequency_hz": 3200
+        },
+        {
+          "band": "high",
+          "reason": "Add air and brilliance to compensate for high-frequency deficiency",
+          "gain_db": 2.0,
+          "q_factor": 0.71,
+          "filter_type": "bell",
+          "frequency_hz": 12000
+        }
+      ],
+      "benchmark_genre": "Melodic Techno",
+      "export_settings": {},
+      "mastering_chain": [
+        {
+          "step": 1,
+          "reason": "Tonal correction",
+          "parameters": {
+            "bands": [
+              {
+                "q": 0.0,
+                "shape": "high-pass",
+                "freq_hz": 18,
+                "gain_db": 0.0,
+                "purpose": "Remove subsonic content"
+              },
+              {
+                "q": 1.4,
+                "shape": "bell",
+                "freq_hz": 285,
+                "gain_db": -2.1,
+                "purpose": "Final mud removal"
+              },
+              {
+                "q": 1.0,
+                "shape": "bell",
+                "freq_hz": 3200,
+                "gain_db": 1.5,
+                "purpose": "Presence enhancement"
+              },
+              {
+                "q": 0.71,
+                "shape": "high-shelf",
+                "freq_hz": 12000,
+                "gain_db": 1.2,
+                "purpose": "Air and brilliance"
+              }
+            ]
+          },
+          "plugin_name": "FabFilter Pro-Q 3 (Linear Phase)",
+          "plugin_type": "Linear Phase EQ"
+        },
+        {
+          "step": 2,
+          "reason": "Stereo enhancement",
+          "parameters": {
+            "width_pct": 115,
+            "correlation_floor": 0.1
+          },
+          "plugin_name": "Waves S1 Stereo Imager",
+          "plugin_type": "Stereo Imager"
+        }
+      ],
+      "requested_genre": "Melodic Techno",
+      "sonic_character": {
+        "descriptors": [
+          "balanced_tonality",
+          "punchy_dynamics",
+          "center_focused_image",
+          "mono_stable"
+        ],
+        "stereo_width": 0.041,
+        "crest_factor_db": 15.17,
+        "integrated_lufs": -14.39,
+        "phase_correlation": 0.976,
+        "spectral_centroid_hz": 1460.650520277461
+      },
+      "input_validation": {
+        "errors": [],
+        "passed": true,
+        "warnings": [],
+        "error_count": 0,
+        "fields_valid": 371,
+        "warning_count": 0,
+        "module_coverage": 1.0,
+        "field_validity_rate": 1.0,
+        "total_fields_checked": 371,
+        "critical_modules_present": true
+      },
+      "quality_manifest": {
+        "module_health": {
+          "mood": "healthy",
+          "genre": "healthy",
+          "stereo": "healthy",
+          "clarity": "healthy",
+          "spatial": "healthy",
+          "harmonic": "healthy",
+          "keywords": "partial",
+          "playback": "healthy",
+          "surround": "healthy",
+          "frequency": "healthy",
+          "reference": "healthy",
+          "transient": "healthy",
+          "instrument": "healthy",
+          "voice_gender": "partial",
+          "dynamic_range": "healthy"
+        },
+        "missing_fields": [],
+        "confidence_score": 0.988,
+        "reliability_tier": "high",
+        "consistency_score": 0.98,
+        "input_quality_score": 1.0,
+        "input_quality_details": {
+          "clipping_detected": false
+        },
+        "module_coverage_score": 0.98,
+        "data_completeness_score": 1.0
+      },
+      "diagnostic_report": {
+        "summary": "Severe spectral imbalance with excessive low-frequency energy (84.2% vs 30% benchmark) and deficient mids/highs, requiring aggressive low-end reduction and significant presence/air enhancement to achieve Melodic Techno tonal balance. Mix is extremely narrow and centered with excellent mono compatibility but lacks the wide atmospheric stereo image expected for Melodic Techno. Needs significant mid-high frequency expansion while maintaining mono bass foundation.",
+        "action_plan": [
+          "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+          "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+          "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+          "frequency: Excessive low frequency energy - may cause muddiness",
+          "frequency: Broad spectral imbalance across low/mid/high bands",
+          "frequency: Mud detected around 215 Hz",
+          "frequency: Boxiness detected around 431 Hz",
+          "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+        ],
+        "sonic_character": {
+          "descriptors": [
+            "balanced_tonality",
+            "punchy_dynamics",
+            "center_focused_image",
+            "mono_stable"
+          ],
+          "stereo_width": 0.041,
+          "crest_factor_db": 15.17,
+          "integrated_lufs": -14.39,
+          "phase_correlation": 0.976,
+          "spectral_centroid_hz": 1460.650520277461
+        },
+        "mastering_readiness": {
+          "status": "near_ready",
+          "readiness_score": 0.757,
+          "critical_blockers": [],
+          "overall_score_100": 75.7
+        }
+      },
+      "fl_studio_routing": {},
+      "output_validation": {
+        "valid": true,
+        "warnings": [],
+        "repairs_made": 2,
+        "quality_flags": {
+          "reason": "specialist_failure",
+          "status": "degraded",
+          "affected_modules": [
+            "arrangement_dynamics",
+            "dithering",
+            "dynamic_range",
+            "dynamic_range_enhanced",
+            "format_metadata",
+            "genre",
+            "instrument",
+            "k_system",
+            "keywords",
+            "loudness_compliance",
+            "mood",
+            "multiband_dynamics",
+            "noise_gate",
+            "parallel_processing",
+            "reference",
+            "scoring",
+            "transient",
+            "true_peak",
+            "voice_gender"
+          ],
+          "failed_specialists": [
+            "dynamics"
+          ]
+        },
+        "warning_count": 0,
+        "fields_checked": 36
+      },
+      "research_provider": "perplexity",
+      "validation_report": {
+        "agent_reports": {
+          "stereo": {
+            "score": 0.85,
+            "domain": "stereo",
+            "findings": [
+              {
+                "status": "fail",
+                "message": "Phase correlation of 0.976 with stereo width of 0.041 indicates extremely narrow stereo field. Width >0.8 with correlation >0.9 is physically unlikely, but this shows opposite extreme.",
+                "measured": 0.976,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "phase_correlation_vs_width",
+                "reference": [
+                  0.0,
+                  0.9
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "M/S ratio of 0.959 is consistent with narrow stereo width (0.041) and high phase correlation (0.976). No contradiction detected.",
+                "measured": 0.959,
+                "severity": "info",
+                "standard": "",
+                "parameter": "mid_side_ratio_consistency",
+                "reference": [
+                  0.0,
+                  3.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Phase correlation of 0.976 correctly predicts excellent mono compatibility (mono_compatible: true).",
+                "measured": 0.976,
+                "severity": "info",
+                "standard": "",
+                "parameter": "mono_compatibility_prediction",
+                "reference": [
+                  0.7,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Bass correlation of 1.0 (below 200Hz) meets requirement for >0.9 correlation in low frequencies. Excellent mono compatibility in bass region.",
+                "measured": 1.0,
+                "severity": "info",
+                "standard": "",
+                "parameter": "low_end_mono_validation",
+                "reference": [
+                  0.9,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Pan position of 0.011 indicates nearly perfect center balance, consistent with L/R energy distribution and narrow stereo field.",
+                "measured": 0.011,
+                "severity": "info",
+                "standard": "",
+                "parameter": "spatial_pan_position",
+                "reference": [
+                  -0.1,
+                  0.1
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Phase correlation of 0.918 is too high for effective surround upmixing. Surround module correctly indicates 'surround_ready: false'.",
+                "measured": 0.918,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "surround_readiness_validation",
+                "reference": [
+                  0.3,
+                  0.7
+                ],
+                "correction": null
+              },
+              {
+                "status": "marginal",
+                "message": "High frequency width (0.172) is higher than low/mid but still extremely narrow. Mid band shows 0.153 width with 0.394 correlation indicates some stereo content but minimal.",
+                "measured": 0.172,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "frequency_width_consistency",
+                "reference": [
+                  0.0,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Using canonical stereo width measurement of 0.041 (from canonical_measurements) as authoritative source.",
+                "measured": 0.041,
+                "severity": "info",
+                "standard": "",
+                "parameter": "canonical_width_usage",
+                "reference": [
+                  0.0,
+                  1.0
+                ],
+                "correction": null
+              }
+            ],
+            "agent_name": "stereo",
+            "finding_count": 8,
+            "recommendations": [],
+            "parameter_corrections": []
+          },
+          "dynamics": {
+            "score": 0.4,
+            "domain": "dynamics",
+            "findings": [
+              {
+                "status": "non_compliant",
+                "message": "Programme loudness -14.39 LUFS is significantly louder than EBU R128 broadcast target -23.0 LUFS \u00b10.5 LU. This is typical for music streaming but non-compliant for broadcast.",
+                "measured": -14.39,
+                "severity": "critical",
+                "standard": "EBU R128",
+                "parameter": "Integrated Loudness",
+                "reference": -23.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "LRA of 3.41 LU is below typical broadcast range of 5-20 LU, indicating highly compressed dynamics. This is common for electronic dance music but may lack dynamic variation.",
+                "measured": 3.41,
+                "severity": "warning",
+                "standard": "EBU R128",
+                "parameter": "Loudness Range (LRA)",
+                "reference": 5.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "True peak -0.84 dBTP exceeds EBU R128 maximum of -1.0 dBTP. Risk of inter-sample peaks and clipping on some playback systems.",
+                "measured": -0.84,
+                "severity": "critical",
+                "standard": "EBU R128",
+                "parameter": "Maximum True Peak",
+                "reference": -1.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "Maximum momentary loudness -13.2 LUFS exceeds EBU R128 typical maximum of -18.0 LUFS (gate-dependent).",
+                "measured": -13.2,
+                "severity": "critical",
+                "standard": "EBU R128",
+                "parameter": "Maximum Momentary Loudness",
+                "reference": -18.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "Maximum short-term loudness -14.38 LUFS exceeds EBU R128 typical maximum of -20.0 LUFS (gate-dependent).",
+                "measured": -14.38,
+                "severity": "critical",
+                "standard": "EBU R128",
+                "parameter": "Maximum Short-term Loudness",
+                "reference": -20.0,
+                "correction": null
+              },
+              {
+                "status": "compliant",
+                "message": "K-weighted loudness measurement -14.39 LUFS is accurate per ITU-R BS.1770-4 algorithm with proper channel weighting and gating behavior.",
+                "measured": -14.39,
+                "severity": "info",
+                "standard": "ITU-R BS.1770-4",
+                "parameter": "K-weighted Measurement",
+                "reference": -23.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "True peak -0.84 dBTP measured with 4x oversampling per BS.1770-4, but exceeds -1.0 dBTP limit.",
+                "measured": -0.84,
+                "severity": "critical",
+                "standard": "ITU-R BS.1770-4",
+                "parameter": "True Peak Measurement",
+                "reference": -1.0,
+                "correction": null
+              },
+              {
+                "status": "non_compliant",
+                "message": "LRA (3.41 LU) and dynamic range measurement (12.51 dB) show inconsistency >3 LU tolerance. LRA indicates high compression while dynamic range suggests moderate compression.",
+                "measured": 3.41,
+                "severity": "warning",
+                "standard": "dynamic_range",
+                "parameter": "Dynamic Range Consistency",
+                "reference": 12.51,
+                "correction": null
+              },
+              {
+                "status": "compliant",
+                "message": "Crest factor 15.17 dB indicates good instantaneous dynamics, consistent with low compression detection.",
+                "measured": 15.17,
+                "severity": "info",
+                "standard": "dynamic_range",
+                "parameter": "Crest Factor",
+                "reference": 10.0,
+                "correction": null
+              }
+            ],
+            "agent_name": "dynamics",
+            "finding_count": 9,
+            "recommendations": [],
+            "parameter_corrections": []
+          },
+          "harmonic": {
+            "score": 0.6,
+            "domain": "harmonic",
+            "findings": [
+              {
+                "status": "pass",
+                "message": "THD value of 11.3% is consistent between harmonic module (11.3%) and canonical_measurements (11.3%)",
+                "measured": 11.3,
+                "severity": "info",
+                "standard": "",
+                "parameter": "THD measurement consistency",
+                "reference": [
+                  0,
+                  100
+                ],
+                "correction": null
+              },
+              {
+                "status": "marginal",
+                "message": "THD of 11.3% exceeds creative_distortion threshold (0.1%) but may be intentional for genre; verify artistic intent",
+                "measured": 11.3,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "THD acceptability",
+                "reference": [
+                  0.1,
+                  100
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Fundamental frequency (72.604 Hz) does not match detected key C# minor (expected ~138.591-155.563 Hz for C#3-D3 range). Saturation_profile indicates 'No clear fundamental detected'",
+                "measured": 72.604,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "Fundamental frequency detection",
+                "reference": [
+                  138.591,
+                  155.563
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "H2 level of -14.91 dB falls within typical -6 to -20 dB range for tube saturation",
+                "measured": -14.91,
+                "severity": "info",
+                "standard": "",
+                "parameter": "H2/H1 ratio",
+                "reference": [
+                  -20,
+                  -6
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "H3 level of -26.68 dB falls within typical -12 to -30 dB range",
+                "measured": -26.68,
+                "severity": "info",
+                "standard": "",
+                "parameter": "H3/H1 ratio",
+                "reference": [
+                  -30,
+                  -12
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Even-odd ratio of 3.775 indicates even-order dominance consistent with tube saturation",
+                "measured": 3.775,
+                "severity": "info",
+                "standard": "",
+                "parameter": "Even-odd harmonic ratio",
+                "reference": [
+                  1,
+                  10
+                ],
+                "correction": null
+              },
+              {
+                "status": "marginal",
+                "message": "Harmonic profile shows H2 strongest (-14.91 dB) but H6 (-31.221 dB) is stronger than H4 (-39.74 dB) and H5 (-44.615 dB), suggesting complex saturation or measurement artifact",
+                "measured": 0,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "Harmonic series consistency",
+                "reference": [
+                  0,
+                  0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Nyquist frequency is 22050 Hz; harmonic profile shows no harmonics near this limit (H8 at ~580 Hz assuming fundamental ~72.6 Hz)",
+                "measured": 22050,
+                "severity": "info",
+                "standard": "",
+                "parameter": "Aliasing check",
+                "reference": [
+                  0,
+                  22050
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Key confidence of 0.296 is low; chroma vector shows C# (0.917) as strongest but fundamental frequency doesn't align with C# minor",
+                "measured": 0.296,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "Key-chroma alignment",
+                "reference": [
+                  0.5,
+                  1
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Saturation type 'tube' matches even-odd ratio of 3.775 (even-order dominant) and harmonic profile",
+                "measured": 0,
+                "severity": "info",
+                "standard": "",
+                "parameter": "Saturation type consistency",
+                "reference": [
+                  0,
+                  0
+                ],
+                "correction": null
+              }
+            ],
+            "agent_name": "harmonic",
+            "finding_count": 10,
+            "recommendations": [],
+            "parameter_corrections": []
+          },
+          "frequency": {
+            "score": 0.45,
+            "domain": "frequency",
+            "findings": [
+              {
+                "status": "fail",
+                "message": "Spectral centroid (1460.65 Hz) is significantly below the Melodic Techno reference range of 2000-3500 Hz. This indicates the mix is too bass-heavy and lacks high-frequency energy.",
+                "measured": 1460.65,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "spectral_centroid",
+                "reference": [
+                  2000,
+                  3500
+                ],
+                "correction": {
+                  "reasoning": "Bring spectral centroid into genre-typical range by reducing low frequencies and boosting presence/air bands.",
+                  "suggested_value": 2500
+                }
+              },
+              {
+                "status": "pass",
+                "message": "Spectral rolloff (7298.53 Hz) is within plausible range for electronic music.",
+                "measured": 7298.53,
+                "severity": "info",
+                "standard": "",
+                "parameter": "spectral_rolloff",
+                "reference": [
+                  3000,
+                  15000
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Spectral tilt (-3.35 dB/octave) is within typical range. Frequency-enhanced measurement shows -7.15 dB/octave, indicating some measurement variation but both are plausible.",
+                "measured": -3.35,
+                "severity": "info",
+                "standard": "",
+                "parameter": "spectral_tilt",
+                "reference": [
+                  -2,
+                  -8
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Band energy distribution sums to 0.9995 (within \u00b11.5dB tolerance of 1.0).",
+                "measured": 0.9995,
+                "severity": "info",
+                "standard": "",
+                "parameter": "band_energy_sum",
+                "reference": [
+                  0.933,
+                  1.067
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Low frequency balance (0.842) is severely excessive compared to Melodic Techno reference (0.3-0.42). This confirms the bass-heavy spectral imbalance.",
+                "measured": 0.842,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "frequency_balance",
+                "reference": [
+                  0.3,
+                  0.42
+                ],
+                "correction": {
+                  "reasoning": "Reduce low frequency energy by approximately 10-12 dB to match genre standards.",
+                  "suggested_value": 0.36
+                }
+              },
+              {
+                "status": "marginal",
+                "message": "Primary resonance peak at 13454 Hz is within audible range but has unusually wide bandwidth (11211.7 Hz) for Q=1.2. This suggests measurement artifact rather than true resonance.",
+                "measured": 13454,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "resonance_detection",
+                "reference": [
+                  20,
+                  20000
+                ],
+                "correction": {
+                  "reasoning": "Verify resonance detection with alternative algorithm; consider ignoring this peak if not audible.",
+                  "suggested_value": null
+                }
+              },
+              {
+                "status": "pass",
+                "message": "Transient-harmonic ratio (0.54) is consistent with spectral flatness (0.01) indicating predominantly harmonic content.",
+                "measured": 0.54,
+                "severity": "info",
+                "standard": "",
+                "parameter": "harmonic_percussive_consistency",
+                "reference": [
+                  0.3,
+                  0.7
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "EQ reconstruction fit quality (mean band confidence 0.786) is acceptable.",
+                "measured": 0.786,
+                "severity": "info",
+                "standard": "",
+                "parameter": "eq_band_consistency",
+                "reference": [
+                  0.7,
+                  1.0
+                ],
+                "correction": null
+              }
+            ],
+            "agent_name": "frequency",
+            "finding_count": 8,
+            "recommendations": [],
+            "parameter_corrections": []
+          },
+          "transient": {
+            "score": 0.2,
+            "domain": "transient",
+            "findings": [
+              {
+                "status": "fail",
+                "message": "Detected BPM (61.2) is far outside expected Melodic Techno range (120\u00b115 BPM). Likely half-time detection error or tempo drift issue.",
+                "measured": 61.2,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "BPM detection",
+                "reference": [
+                  105,
+                  135
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Beat regularity (0.5) is very low, inconsistent with BPM confidence (0.689). Indicates significant tempo instability or detection errors.",
+                "measured": 0.5,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "BPM vs beat regularity",
+                "reference": [
+                  0.7,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Transient density (5.967) aligns with onset count (2395) over 401s duration. Ratio is plausible.",
+                "measured": 5.967,
+                "severity": "info",
+                "standard": "",
+                "parameter": "Transient density vs onset count",
+                "reference": [
+                  4.0,
+                  8.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "Attack time (21.4ms) is within typical instrument range. Consistent with low percussive content (0.039).",
+                "measured": 21.4,
+                "severity": "info",
+                "standard": "",
+                "parameter": "Attack time",
+                "reference": [
+                  0.1,
+                  50.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Tempo stability (0.058) is extremely low. Confirmed by tempo_variations showing 61.5, 80.7, 97.5 BPM fluctuations.",
+                "measured": 0.058,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "Tempo stability",
+                "reference": [
+                  0.8,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "fail",
+                "message": "Beat count is 0, indicating complete failure of beat tracking. No phase alignment possible.",
+                "measured": 0.0,
+                "severity": "critical",
+                "standard": "",
+                "parameter": "Beat tracking phase alignment",
+                "reference": [
+                  0.7,
+                  1.0
+                ],
+                "correction": null
+              },
+              {
+                "status": "pass",
+                "message": "BPM (61.2) is within physical limits, but likely represents half-time of actual tempo.",
+                "measured": 61.2,
+                "severity": "info",
+                "standard": "",
+                "parameter": "BPM physical plausibility",
+                "reference": [
+                  20,
+                  300
+                ],
+                "correction": null
+              },
+              {
+                "status": "marginal",
+                "message": "Canonical LUFS (-14.39) differs from arrangement_dynamics integrated loudness (-16.8). Using canonical value as authoritative.",
+                "measured": -14.39,
+                "severity": "warning",
+                "standard": "",
+                "parameter": "LUFS measurement consistency",
+                "reference": [
+                  -16.8,
+                  -14.39
+                ],
+                "correction": null
+              }
+            ],
+            "agent_name": "transient",
+            "finding_count": 8,
+            "recommendations": [],
+            "parameter_corrections": []
+          },
+          "tonal_format": {
+            "score": 0.0,
+            "domain": "tonal_format",
+            "findings": [],
+            "agent_name": "tonal_format",
+            "finding_count": 0,
+            "recommendations": [],
+            "parameter_corrections": []
+          }
+        },
+        "format_integrity": {
+          "format_assessments": {
+            "flac": {
+              "codec": "FLAC",
+              "bitrate_kbps": null,
+              "predicted_issues": [
+                "No significant degradation expected"
+              ],
+              "preservation_score": 1.0
+            },
+            "aac_256": {
+              "codec": "AAC-LC",
+              "bitrate_kbps": 256,
+              "predicted_issues": [
+                "Codec THD contribution (2.0%) pushes total THD above acceptable mastering threshold"
+              ],
+              "preservation_score": 0.9
+            },
+            "mp3_128": {
+              "codec": "MP3 (LAME)",
+              "bitrate_kbps": 128,
+              "predicted_issues": [
+                "Codec THD contribution (30.0%) pushes total THD above acceptable mastering threshold"
+              ],
+              "preservation_score": 0.9
+            },
+            "mp3_320": {
+              "codec": "MP3 (LAME)",
+              "bitrate_kbps": 320,
+              "predicted_issues": [
+                "Codec THD contribution (5.0%) pushes total THD above acceptable mastering threshold"
+              ],
+              "preservation_score": 0.9
+            },
+            "wav_16bit": {
+              "codec": "PCM 16-bit",
+              "bitrate_kbps": 1411,
+              "predicted_issues": [
+                "No significant degradation expected"
+              ],
+              "preservation_score": 1.0
+            },
+            "wav_24bit": {
+              "codec": "PCM 24-bit",
+              "bitrate_kbps": 2116,
+              "predicted_issues": [
+                "No significant degradation expected"
+              ],
+              "preservation_score": 1.0
+            },
+            "ogg_vorbis_320": {
+              "codec": "Ogg Vorbis",
+              "bitrate_kbps": 320,
+              "predicted_issues": [
+                "Codec THD contribution (2.0%) pushes total THD above acceptable mastering threshold"
+              ],
+              "preservation_score": 0.9
+            }
+          },
+          "overall_preservation_score": 0.9
+        },
+        "master_bus_chain": [
+          {
+            "step": 1,
+            "stage": "Gain Staging",
+            "plugin": "Gain Plugin (any DAW)",
+            "reason": "Apply input trim to achieve target headroom and align with Apple Music +1.61 dB requirement",
+            "parameters": {
+              "gain_db": -1.16
+            },
+            "validates_against": [
+              "dynamics_validator"
+            ]
+          },
+          {
+            "step": 2,
+            "stage": "Subtractive EQ",
+            "plugin": "FabFilter Pro-Q 3",
+            "reason": "Remove excessive bass, mud, boxiness, and nasal frequencies to correct spectral imbalance",
+            "parameters": {
+              "bands": [
+                {
+                  "q": 0.707,
+                  "freq": 120,
+                  "gain": -6,
+                  "type": "low_shelf"
+                },
+                {
+                  "q": 2.0,
+                  "freq": 215,
+                  "gain": -3,
+                  "type": "bell"
+                },
+                {
+                  "q": 0.561,
+                  "freq": 366,
+                  "gain": -7,
+                  "type": "bell"
+                },
+                {
+                  "q": 1.5,
+                  "freq": 1012,
+                  "gain": -2,
+                  "type": "bell"
+                }
+              ]
+            },
+            "validates_against": [
+              "frequency_validator"
+            ]
+          },
+          {
+            "step": 3,
+            "stage": "Multiband Compression",
+            "plugin": "iZotope Ozone 11 Dynamics",
+            "reason": "Control dynamics per band to tighten low end and enhance clarity while maintaining crest factor",
+            "parameters": {
+              "bands": [
+                {
+                  "ratio": 3,
+                  "attack": 30,
+                  "release": 200,
+                  "crossover": [
+                    20,
+                    80
+                  ],
+                  "threshold": -12
+                },
+                {
+                  "ratio": 2,
+                  "attack": 20,
+                  "release": 150,
+                  "crossover": [
+                    80,
+                    500
+                  ],
+                  "threshold": -15
+                },
+                {
+                  "ratio": 1.5,
+                  "attack": 10,
+                  "release": 100,
+                  "crossover": [
+                    500,
+                    3000
+                  ],
+                  "threshold": -18
+                },
+                {
+                  "ratio": 1.2,
+                  "attack": 5,
+                  "release": 50,
+                  "crossover": [
+                    3000,
+                    20000
+                  ],
+                  "threshold": -20
+                }
+              ]
+            },
+            "validates_against": [
+              "dynamics_validator",
+              "transient_validator"
+            ]
+          },
+          {
+            "step": 4,
+            "stage": "Saturation/Harmonic Enhancement",
+            "plugin": "Softube Tube-Tech CL 1B",
+            "reason": "Reduce THD from 11.3% to warm mixing level while maintaining tube character",
+            "parameters": {
+              "mix": 30,
+              "drive": -6.0,
+              "character": "tube"
+            },
+            "validates_against": [
+              "harmonic_validator"
+            ]
+          },
+          {
+            "step": 5,
+            "stage": "Additive EQ",
+            "plugin": "FabFilter Pro-Q 3",
+            "reason": "Boost presence and air bands to improve spectral centroid and brightness for Melodic Techno",
+            "parameters": {
+              "bands": [
+                {
+                  "q": 1.0,
+                  "freq": 4000,
+                  "gain": 3,
+                  "type": "bell"
+                },
+                {
+                  "q": 0.707,
+                  "freq": 12000,
+                  "gain": 4,
+                  "type": "high_shelf"
+                }
+              ]
+            },
+            "validates_against": [
+              "frequency_validator"
+            ]
+          },
+          {
+            "step": 6,
+            "stage": "Stereo Enhancement",
+            "plugin": "iZotope Ozone Imager",
+            "reason": "Increase stereo width from 0.041 to enhance spatial immersion while maintaining mono compatibility",
+            "parameters": {
+              "width": 0.4,
+              "mid_gain": 0,
+              "side_gain": 6,
+              "bass_mono_crossover": 200
+            },
+            "validates_against": [
+              "stereo_validator"
+            ]
+          },
+          {
+            "step": 7,
+            "stage": "True Peak Limiter",
+            "plugin": "FabFilter Pro-L 2",
+            "reason": "Set ceiling to -1.5 dBTP to comply with Amazon Music -2.0 dBTP and prevent inter-sample peaks",
+            "parameters": {
+              "ceiling": -1.5,
+              "release": 50,
+              "lookahead": 5,
+              "true_peak": true
+            },
+            "validates_against": [
+              "dynamics_validator"
+            ]
+          },
+          {
+            "step": 8,
+            "stage": "Dither",
+            "plugin": "iZotope Ozone 11",
+            "reason": "Apply dither for 16-bit delivery to reduce quantization noise",
+            "parameters": {
+              "bit_depth": 16,
+              "noise_shaping": "MBIT+"
+            },
+            "validates_against": []
+          }
+        ],
+        "cross_validations": [
+          {
+            "check": "frequency_harmonic_consistency",
+            "agents": [
+              "frequency",
+              "harmonic"
+            ],
+            "status": "consistent",
+            "message": "Frequency and harmonic analyses are internally consistent",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "dynamics_transient_consistency",
+            "agents": [
+              "dynamics",
+              "transient"
+            ],
+            "status": "consistent",
+            "message": "Dynamic range and transient detection are consistent",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "stereo_tonal_consistency",
+            "agents": [
+              "stereo",
+              "tonal_format"
+            ],
+            "status": "consistent",
+            "message": "Stereo imaging and tonal character are consistent",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "dynamics_frequency_consistency",
+            "agents": [
+              "dynamics",
+              "frequency"
+            ],
+            "status": "consistent",
+            "message": "Dynamics and frequency measurements are mutually supportive",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "harmonic_format_consistency",
+            "agents": [
+              "harmonic",
+              "tonal_format"
+            ],
+            "status": "consistent",
+            "message": "Harmonic distortion measurements are consistent with source format",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "transient_stereo_consistency",
+            "agents": [
+              "transient",
+              "stereo"
+            ],
+            "status": "consistent",
+            "message": "Transient and spatial characteristics are consistent",
+            "confidence": 1.0,
+            "resolution": null
+          },
+          {
+            "check": "overall_plausibility",
+            "agents": [
+              "frequency",
+              "transient",
+              "dynamics",
+              "stereo",
+              "harmonic",
+              "tonal_format"
+            ],
+            "status": "conflict",
+            "message": "Overall plausibility concern: minimum agent score is 0.20, average is 0.50",
+            "confidence": 0.5,
+            "resolution": "Review lowest-scoring domain for measurement errors"
+          }
+        ],
+        "overall_confidence": 0.55,
+        "loudness_compliance": {
+          "ebu_r128": {
+            "findings": [
+              {
+                "status": "non_compliant",
+                "target": -23.0,
+                "measured": -14.39,
+                "parameter": "programme_loudness",
+                "tolerance": 0.5,
+                "deviation_lu": 8.61,
+                "correction_db": -8.61
+              },
+              {
+                "limit": -1.0,
+                "status": "non_compliant",
+                "measured": -0.84,
+                "parameter": "true_peak",
+                "correction_db": -0.16
+              },
+              {
+                "status": "non_compliant",
+                "measured": 3.41,
+                "parameter": "loudness_range",
+                "expected_range": [
+                  5.0,
+                  20.0
+                ]
+              }
+            ],
+            "compliant": false
+          },
+          "itu_bs1770_4": {
+            "findings": [
+              {
+                "note": "Measurement per BS.1770-4 K-weighting with dual-gate algorithm",
+                "measured": -14.39,
+                "parameter": "k_weighted_loudness"
+              }
+            ],
+            "compliant": true,
+            "measured_lufs": -14.39,
+            "gate_relative_lu": -10.0,
+            "gate_absolute_dbfs": -70.0
+          },
+          "platform_compliance": {
+            "tidal": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -14.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "No significant normalization needed.",
+              "adjustment_db": 0.39,
+              "normalization_action": "no_change",
+              "true_peak_limit_dbtp": -1.0
+            },
+            "spotify": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -14.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "No significant normalization needed.",
+              "adjustment_db": 0.39,
+              "normalization_action": "no_change",
+              "true_peak_limit_dbtp": -1.0
+            },
+            "youtube": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -14.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "No significant normalization needed.",
+              "adjustment_db": 0.39,
+              "normalization_action": "no_change",
+              "true_peak_limit_dbtp": -1.0
+            },
+            "soundcloud": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -14.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "No significant normalization needed.",
+              "adjustment_db": 0.39,
+              "normalization_action": "no_change",
+              "true_peak_limit_dbtp": -1.0
+            },
+            "apple_music": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -16.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "Platform will reduce volume by 1.6 dB. This may expose noise floor on quiet passages.",
+              "adjustment_db": -1.61,
+              "normalization_action": "turn_down",
+              "true_peak_limit_dbtp": -1.0
+            },
+            "amazon_music": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -2.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -14.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "No significant normalization needed.",
+              "adjustment_db": 0.39,
+              "normalization_action": "no_change",
+              "true_peak_limit_dbtp": -2.0
+            },
+            "broadcast_ebu": {
+              "issues": [
+                "True peak -0.84 dBTP exceeds limit of -1.0 dBTP"
+              ],
+              "compliant": false,
+              "target_lufs": -23.0,
+              "current_lufs": -14.39,
+              "sonic_impact": "Platform will reduce volume by 8.6 dB. This may expose noise floor on quiet passages.",
+              "adjustment_db": -8.61,
+              "normalization_action": "turn_down",
+              "true_peak_limit_dbtp": -1.0
+            }
+          }
+        },
+        "exhaustive_recommendations": {
+          "delay": {
+            "plugin": "Soundtoys EchoBoy",
+            "time_ms": 375,
+            "wet_pct": 8,
+            "ping_pong": true,
+            "feedback_pct": 25,
+            "hp_filter_hz": 200
+          },
+          "dither": {
+            "plugin": "iZotope Ozone 11",
+            "bit_depth": 16,
+            "noise_shaping": "MBIT+"
+          },
+          "reverb": {
+            "plugin": "ValhallaDSP ValhallaVintageVerb",
+            "decay_s": 1.8,
+            "wet_pct": 12,
+            "damping_hz": 8000,
+            "er_level_pct": 60,
+            "pre_delay_ms": 20
+          },
+          "limiter": {
+            "plugin": "FabFilter Pro-L 2",
+            "max_gr_db": 3.0,
+            "release_ms": 50.0,
+            "ceiling_dbtp": -1.5,
+            "lookahead_ms": 5.0,
+            "true_peak_mode": true
+          },
+          "saturation": {
+            "drive": -6.0,
+            "plugin": "Softube Tube-Tech CL 1B",
+            "mix_pct": 30.0,
+            "character": "tube"
+          },
+          "additive_eq": [
+            {
+              "reason": "Boost presence band to improve spectral centroid and balance",
+              "gain_db": 3.0,
+              "q_factor": 1.0,
+              "filter_type": "bell",
+              "frequency_hz": 4000
+            },
+            {
+              "reason": "Add air to bring spectral centroid into genre range and improve brightness",
+              "gain_db": 4.0,
+              "q_factor": 0.707,
+              "filter_type": "high_shelf",
+              "frequency_hz": 12000
+            }
+          ],
+          "compression": {
+            "ratio": "2.2:1",
+            "plugin": "Waves SSL G-Master Buss Compressor",
+            "knee_db": 6.0,
+            "attack_ms": 10.86,
+            "makeup_db": 0.0,
+            "release_ms": 134.5,
+            "threshold_db": -19.7
+          },
+          "gain_staging": {
+            "input_trim_db": -1.16,
+            "pre_eq_gain_db": 0.0,
+            "target_headroom_db": 3.0
+          },
+          "subtractive_eq": [
+            {
+              "reason": "Reduce excessive bass energy (+10.82 dB relative) to address muddiness and spectral imbalance",
+              "gain_db": -6.0,
+              "q_factor": 0.707,
+              "filter_type": "low_shelf",
+              "frequency_hz": 120
+            },
+            {
+              "reason": "Cut mud detected at 215 Hz to improve clarity",
+              "gain_db": -3.0,
+              "q_factor": 2.0,
+              "filter_type": "bell",
+              "frequency_hz": 215
+            },
+            {
+              "reason": "Deepen existing cut to address boxiness in 400-500 Hz region",
+              "gain_db": -7.0,
+              "q_factor": 0.561,
+              "filter_type": "bell",
+              "frequency_hz": 366
+            },
+            {
+              "reason": "Gentle cut to reduce nasal quality at 1012 Hz",
+              "gain_db": -2.0,
+              "q_factor": 1.5,
+              "filter_type": "bell",
+              "frequency_hz": 1012
+            }
+          ],
+          "stereo_optimization": {
+            "plugin": "iZotope Ozone Imager",
+            "mid_gain_db": 0.0,
+            "side_gain_db": 6.0,
+            "width_enhancement_pct": 40,
+            "bass_mono_crossover_hz": 200
+          },
+          "multiband_compression": [
+            {
+              "band": "sub",
+              "ratio": "3:1",
+              "attack_ms": 30.0,
+              "release_ms": 200.0,
+              "crossover_hz": [
+                20,
+                80
+              ],
+              "threshold_db": -12.0
+            },
+            {
+              "band": "low_mid",
+              "ratio": "2:1",
+              "attack_ms": 20.0,
+              "release_ms": 150.0,
+              "crossover_hz": [
+                80,
+                500
+              ],
+              "threshold_db": -15.0
+            },
+            {
+              "band": "mid",
+              "ratio": "1.5:1",
+              "attack_ms": 10.0,
+              "release_ms": 100.0,
+              "crossover_hz": [
+                500,
+                3000
+              ],
+              "threshold_db": -18.0
+            },
+            {
+              "band": "high",
+              "ratio": "1.2:1",
+              "attack_ms": 5.0,
+              "release_ms": 50.0,
+              "crossover_hz": [
+                3000,
+                20000
+              ],
+              "threshold_db": -20.0
+            }
+          ]
+        },
+        "playback_environment_report": {
+          "environments": {
+            "car_audio": {
+              "score": 0.9,
+              "issues": [
+                "Perfect center imaging works well but may lack stereo depth"
+              ],
+              "optimizations": [
+                "Stereo enhancement applied moderately",
+                "Mono compatibility maintained"
+              ]
+            },
+            "headphones": {
+              "score": 0.75,
+              "issues": [
+                "Lack of stereo width reduces spatial immersion",
+                "High THD may cause listening fatigue"
+              ],
+              "optimizations": [
+                "Stereo enhancement applied",
+                "Saturation reduced THD"
+              ]
+            },
+            "club_system": {
+              "score": 0.8,
+              "issues": [
+                "Excellent mono compatibility but lacks stereo excitement",
+                "Bass may be overwhelming in large systems"
+              ],
+              "optimizations": [
+                "Multiband compression tightens low end",
+                "Stereo enhancement adds width"
+              ]
+            },
+            "phone_speaker": {
+              "score": 0.95,
+              "issues": [
+                "Near-mono mix translates perfectly but may lack high-frequency clarity"
+              ],
+              "optimizations": [
+                "Additive EQ boosts presence and air",
+                "Mono compatibility excellent"
+              ]
+            },
+            "laptop_speakers": {
+              "score": 0.9,
+              "issues": [
+                "Mono-compatible mix ideal but may lack bass response"
+              ],
+              "optimizations": [
+                "Spectral balance corrected",
+                "Mono compatibility maintained"
+              ]
+            },
+            "studio_monitors": {
+              "score": 0.85,
+              "issues": [
+                "Extremely narrow stereo field may sound overly centered",
+                "Bass-heavy spectral imbalance could cause muddiness"
+              ],
+              "optimizations": [
+                "Stereo enhancement applied",
+                "Subtractive EQ to reduce bass"
+              ]
+            },
+            "bluetooth_earbuds": {
+              "score": 0.8,
+              "issues": [
+                "Stereo separation minimal but mono compatibility excellent",
+                "Compression may affect dynamics on low-quality codecs"
+              ],
+              "optimizations": [
+                "Stereo enhancement applied",
+                "Limiter prevents clipping"
+              ]
+            }
+          },
+          "overall_score": 0.72
+        }
+      },
+      "input_module_count": 37,
+      "overall_assessment": {
+        "grade": "F",
+        "summary": "Severe spectral imbalance with excessive low-frequency energy (84.2% vs 30% benchmark) and deficient mids/highs, requiring aggressive low-end reduction and significant presence/air enhancement to achieve Melodic Techno tonal balance. Mix is extremely narrow and centered with excellent mono compatibility but lacks the wide atmospheric stereo image expected for Melodic Techno. Needs significant mid-high frequency expansion while maintaining mono bass foundation.",
+        "commercial_readiness": 0.0
+      },
+      "stereo_adjustments": {
+        "mid_gain_db": 0.0,
+        "side_gain_db": 3.0,
+        "width_recommendation": "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies while keeping bass mono. Target 0.4-0.6 width for Melodic Techno atmospheric feel.",
+        "bass_mono_crossover_hz": 120
+      },
+      "system_translation": {
+        "car_audio": "Good translation with balanced frequency response. Narrow stereo image may reduce spatial interest in car environment.",
+        "headphones": "Will translate well but will sound overly centered/narrow. Needs stereo expansion for proper headphone imaging.",
+        "club_speakers": "Good translation with strong bass correlation (1.0) but lacks stereo width for immersive club experience. Mono compatibility is excellent.",
+        "phone_speakers": "Acceptable but bass-heavy mix may lose low-end on small speakers. Narrow stereo not an issue for mono phone playback."
+      },
+      "genre_specific_tips": [],
+      "key_recommendations": [
+        "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+        "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+        "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+        "frequency: Excessive low frequency energy - may cause muddiness",
+        "frequency: Broad spectral imbalance across low/mid/high bands",
+        "frequency: Mud detected around 215 Hz",
+        "frequency: Boxiness detected around 431 Hz",
+        "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)",
+        "transient: Tempo drifts significantly throughout the track",
+        "frequency: Nasal detected around 1012 Hz",
+        "stereo: Very narrow stereo image - almost mono",
+        "transient: Inconsistent transient dynamics detected",
+        "transient: Very low percussive content detected"
+      ],
+      "mastering_readiness": {
+        "status": "near_ready",
+        "readiness_score": 0.757,
+        "critical_blockers": [],
+        "overall_score_100": 75.7
+      },
+      "mixing_improvements": [
+        "frequency: Excessive low frequency energy - may cause muddiness",
+        "frequency: Broad spectral imbalance across low/mid/high bands",
+        "frequency: Mud detected around 215 Hz",
+        "frequency: Boxiness detected around 431 Hz",
+        "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)",
+        "transient: Tempo drifts significantly throughout the track",
+        "frequency: Nasal detected around 1012 Hz",
+        "stereo: Very narrow stereo image - almost mono",
+        "transient: Inconsistent transient dynamics detected",
+        "transient: Very low percussive content detected"
+      ],
+      "platform_compliance": [],
+      "playback_validation": {
+        "environments": {
+          "car_audio": {
+            "score": 0.9,
+            "issues": [
+              "Perfect center imaging works well but may lack stereo depth"
+            ],
+            "optimizations": [
+              "Stereo enhancement applied moderately",
+              "Mono compatibility maintained"
+            ]
+          },
+          "headphones": {
+            "score": 0.75,
+            "issues": [
+              "Lack of stereo width reduces spatial immersion",
+              "High THD may cause listening fatigue"
+            ],
+            "optimizations": [
+              "Stereo enhancement applied",
+              "Saturation reduced THD"
+            ]
+          },
+          "club_system": {
+            "score": 0.8,
+            "issues": [
+              "Excellent mono compatibility but lacks stereo excitement",
+              "Bass may be overwhelming in large systems"
+            ],
+            "optimizations": [
+              "Multiband compression tightens low end",
+              "Stereo enhancement adds width"
+            ]
+          },
+          "phone_speaker": {
+            "score": 0.95,
+            "issues": [
+              "Near-mono mix translates perfectly but may lack high-frequency clarity"
+            ],
+            "optimizations": [
+              "Additive EQ boosts presence and air",
+              "Mono compatibility excellent"
+            ]
+          },
+          "laptop_speakers": {
+            "score": 0.9,
+            "issues": [
+              "Mono-compatible mix ideal but may lack bass response"
+            ],
+            "optimizations": [
+              "Spectral balance corrected",
+              "Mono compatibility maintained"
+            ]
+          },
+          "studio_monitors": {
+            "score": 0.85,
+            "issues": [
+              "Extremely narrow stereo field may sound overly centered",
+              "Bass-heavy spectral imbalance could cause muddiness"
+            ],
+            "optimizations": [
+              "Stereo enhancement applied",
+              "Subtractive EQ to reduce bass"
+            ]
+          },
+          "bluetooth_earbuds": {
+            "score": 0.8,
+            "issues": [
+              "Stereo separation minimal but mono compatibility excellent",
+              "Compression may affect dynamics on low-quality codecs"
+            ],
+            "optimizations": [
+              "Stereo enhancement applied",
+              "Limiter prevents clipping"
+            ]
+          }
+        },
+        "overall_score": 0.72
+      },
+      "dynamics_adjustments": {},
+      "emotional_trajectory": {
+        "arc_type": "steady_energy_arc",
+        "base_energy": 0.679,
+        "base_valence": 0.454,
+        "primary_mood": "Dramatic",
+        "valence_state": "neutral",
+        "secondary_mood": "Mysterious",
+        "section_energy": [
+          {
+            "lufs": -17.39,
+            "energy": 1.0,
+            "section": "intro"
+          },
+          {
+            "lufs": -17.49,
+            "energy": 0.909,
+            "section": "build"
+          },
+          {
+            "lufs": -18.49,
+            "energy": 0.0,
+            "section": "peak"
+          },
+          {
+            "lufs": -17.89,
+            "energy": 0.545,
+            "section": "outro"
+          }
+        ]
+      },
+      "genre_classification": {
+        "key": "D",
+        "scale": "minor",
+        "primary": "Melodic Techno",
+        "certainty": "low",
+        "diversity": 0.01,
+        "secondary": "Deep House",
+        "tempo_bpm": 120.0,
+        "confidence": 0.133,
+        "blend_character": "focused genre identity"
+      },
+      "transient_adjustments": {},
+      "troubleshooting_notes": [],
+      "validation_enrichment": {
+        "delay": {
+          "plugin": "Soundtoys EchoBoy",
+          "time_ms": 375,
+          "wet_pct": 8,
+          "ping_pong": true,
+          "feedback_pct": 25,
+          "hp_filter_hz": 200
+        },
+        "dither": {
+          "plugin": "iZotope Ozone 11",
+          "bit_depth": 16,
+          "noise_shaping": "MBIT+"
+        },
+        "reverb": {
+          "plugin": "ValhallaDSP ValhallaVintageVerb",
+          "decay_s": 1.8,
+          "wet_pct": 12,
+          "damping_hz": 8000,
+          "er_level_pct": 60,
+          "pre_delay_ms": 20
+        },
+        "limiter": {
+          "plugin": "FabFilter Pro-L 2",
+          "max_gr_db": 3.0,
+          "release_ms": 50.0,
+          "ceiling_dbtp": -1.5,
+          "lookahead_ms": 5.0,
+          "true_peak_mode": true
+        },
+        "saturation": {
+          "drive": -6.0,
+          "plugin": "Softube Tube-Tech CL 1B",
+          "mix_pct": 30.0,
+          "character": "tube"
+        },
+        "additive_eq": [
+          {
+            "reason": "Boost presence band to improve spectral centroid and balance",
+            "gain_db": 3.0,
+            "q_factor": 1.0,
+            "filter_type": "bell",
+            "frequency_hz": 4000
+          },
+          {
+            "reason": "Add air to bring spectral centroid into genre range and improve brightness",
+            "gain_db": 4.0,
+            "q_factor": 0.707,
+            "filter_type": "high_shelf",
+            "frequency_hz": 12000
+          }
+        ],
+        "compression": {
+          "ratio": "2.2:1",
+          "plugin": "Waves SSL G-Master Buss Compressor",
+          "knee_db": 6.0,
+          "attack_ms": 10.86,
+          "makeup_db": 0.0,
+          "release_ms": 134.5,
+          "threshold_db": -19.7
+        },
+        "gain_staging": {
+          "input_trim_db": -1.16,
+          "pre_eq_gain_db": 0.0,
+          "target_headroom_db": 3.0
+        },
+        "subtractive_eq": [
+          {
+            "reason": "Reduce excessive bass energy (+10.82 dB relative) to address muddiness and spectral imbalance",
+            "gain_db": -6.0,
+            "q_factor": 0.707,
+            "filter_type": "low_shelf",
+            "frequency_hz": 120
+          },
+          {
+            "reason": "Cut mud detected at 215 Hz to improve clarity",
+            "gain_db": -3.0,
+            "q_factor": 2.0,
+            "filter_type": "bell",
+            "frequency_hz": 215
+          },
+          {
+            "reason": "Deepen existing cut to address boxiness in 400-500 Hz region",
+            "gain_db": -7.0,
+            "q_factor": 0.561,
+            "filter_type": "bell",
+            "frequency_hz": 366
+          },
+          {
+            "reason": "Gentle cut to reduce nasal quality at 1012 Hz",
+            "gain_db": -2.0,
+            "q_factor": 1.5,
+            "filter_type": "bell",
+            "frequency_hz": 1012
+          }
+        ],
+        "stereo_optimization": {
+          "plugin": "iZotope Ozone Imager",
+          "mid_gain_db": 0.0,
+          "side_gain_db": 6.0,
+          "width_enhancement_pct": 40,
+          "bass_mono_crossover_hz": 200
+        },
+        "multiband_compression": [
+          {
+            "band": "sub",
+            "ratio": "3:1",
+            "attack_ms": 30.0,
+            "release_ms": 200.0,
+            "crossover_hz": [
+              20,
+              80
+            ],
+            "threshold_db": -12.0
+          },
+          {
+            "band": "low_mid",
+            "ratio": "2:1",
+            "attack_ms": 20.0,
+            "release_ms": 150.0,
+            "crossover_hz": [
+              80,
+              500
+            ],
+            "threshold_db": -15.0
+          },
+          {
+            "band": "mid",
+            "ratio": "1.5:1",
+            "attack_ms": 10.0,
+            "release_ms": 100.0,
+            "crossover_hz": [
+              500,
+              3000
+            ],
+            "threshold_db": -18.0
+          },
+          {
+            "band": "high",
+            "ratio": "1.2:1",
+            "attack_ms": 5.0,
+            "release_ms": 50.0,
+            "crossover_hz": [
+              3000,
+              20000
+            ],
+            "threshold_db": -20.0
+          }
+        ]
+      },
+      "module_recommendations": {
+        "mood": {
+          "module_score": 0.873,
+          "actionable_insights": [
+            "Primary mood: Dramatic",
+            "Secondary mood: Mysterious",
+            "Use automation to enhance emotional peaks",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.873,
+              "status": "within_range"
+            },
+            {
+              "name": "primary",
+              "value": "Dramatic",
+              "status": "informational"
+            },
+            {
+              "name": "secondary",
+              "value": "Mysterious",
+              "status": "informational"
+            },
+            {
+              "name": "energy",
+              "value": 0.679,
+              "status": "within_range"
+            },
+            {
+              "name": "valence",
+              "value": 0.454,
+              "status": "within_range"
+            },
+            {
+              "name": "mood_distribution.Dramatic",
+              "value": 0.873,
+              "status": "within_range"
+            },
+            {
+              "name": "mood_distribution.Mysterious",
+              "value": 0.854,
+              "status": "within_range"
+            },
+            {
+              "name": "mood_distribution.Intense",
+              "value": 0.827,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Primary mood: Dramatic",
+            "Secondary mood: Mysterious",
+            "Use automation to enhance emotional peaks",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "delay": {
+          "module_score": 0.5,
+          "actionable_insights": [
+            "Adjustment: 5 delay echoes detected \u2014 this may create a cluttered mix.",
+            "Delay is tempo-synced (half_note, quarter_note). Good rhythmic cohesion.",
+            "Consider setting delay time to a rhythmic subdivision of the beat (beat period = 500.0 ms at 120.0 BPM) for tighter feel.",
+            "Multiple delay reflections detected. Use feedback control or a shorter tail to reduce buildup.",
+            "Long ambient delay (>1 s) detected. Automate or high-pass filter the delay return to prevent low-end buildup.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "frequency: Excessive low frequency energy - may cause muddiness"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.5,
+              "status": "marginal"
+            },
+            {
+              "name": "has_delay",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "delay_count",
+              "value": 5.0,
+              "status": "within_range"
+            },
+            {
+              "name": "tempo_synced_count",
+              "value": 2.0,
+              "status": "within_range"
+            },
+            {
+              "name": "estimated_feedback",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "tempo_used_bpm",
+              "value": 120.0,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Delay is tempo-synced (half_note, quarter_note). Good rhythmic cohesion.",
+            "Consider setting delay time to a rhythmic subdivision of the beat (beat period = 500.0 ms at 120.0 BPM) for tighter feel.",
+            "Multiple delay reflections detected. Use feedback control or a shorter tail to reduce buildup.",
+            "Long ambient delay (>1 s) detected. Automate or high-pass filter the delay return to prevent low-end buildup.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy"
+          ]
+        },
+        "genre": {
+          "module_score": 0.133,
+          "actionable_insights": [
+            "Track appears to be a hybrid of Melodic Techno and Deep House",
+            "Tempo: 120 BPM is typical for Melodic Techno",
+            "Balance melodic elements with driving rhythm",
+            "Pad reverb tails should sit behind the kick \u2014 sidechain compress",
+            "Keep synth leads clear in 1-4 kHz; avoid masking vocals if present",
+            "(Deep House influence): Warmth is everything \u2014 use analog-flavored saturation on the bus",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.133,
+              "status": "marginal"
+            },
+            {
+              "name": "primary",
+              "value": "Melodic Techno",
+              "status": "informational"
+            },
+            {
+              "name": "secondary",
+              "value": "Deep House",
+              "status": "informational"
+            },
+            {
+              "name": "confidence.Melodic Techno",
+              "value": 0.133,
+              "status": "within_range"
+            },
+            {
+              "name": "confidence.Deep House",
+              "value": 0.121,
+              "status": "within_range"
+            },
+            {
+              "name": "confidence.Afro House",
+              "value": 0.12,
+              "status": "within_range"
+            },
+            {
+              "name": "confidence.Progressive House",
+              "value": 0.113,
+              "status": "within_range"
+            },
+            {
+              "name": "confidence.House",
+              "value": 0.109,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Track appears to be a hybrid of Melodic Techno and Deep House",
+            "Tempo: 120 BPM is typical for Melodic Techno",
+            "Balance melodic elements with driving rhythm",
+            "Pad reverb tails should sit behind the kick \u2014 sidechain compress",
+            "Keep synth leads clear in 1-4 kHz; avoid masking vocals if present",
+            "(Deep House influence): Warmth is everything \u2014 use analog-flavored saturation on the bus"
+          ]
+        },
+        "stereo": {
+          "module_score": 0.8294,
+          "actionable_insights": [
+            "Adjustment: Very narrow stereo image - almost mono",
+            "Consider adding stereo width to create more space",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.829,
+              "status": "within_range"
+            },
+            {
+              "name": "mid_side_ratio",
+              "value": 0.959,
+              "status": "within_range"
+            },
+            {
+              "name": "phase_correlation",
+              "value": 0.976,
+              "status": "within_range"
+            },
+            {
+              "name": "stereo_width",
+              "value": 0.041,
+              "status": "within_range"
+            },
+            {
+              "name": "mono_compatible",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "frequency_stereo_width.low",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_stereo_width.mid",
+              "value": 0.153,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_stereo_width.high",
+              "value": 0.172,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Consider adding stereo width to create more space",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "clarity": {
+          "module_score": 0.9969782817177475,
+          "actionable_insights": [
+            "Mix has good overall clarity",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.997,
+              "status": "within_range"
+            },
+            {
+              "name": "spectral_contrast.overall",
+              "value": 50.0,
+              "status": "within_range"
+            },
+            {
+              "name": "spectral_flatness",
+              "value": 0.01,
+              "status": "within_range"
+            },
+            {
+              "name": "clarity_index",
+              "value": 0.997,
+              "status": "within_range"
+            },
+            {
+              "name": "masking_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "harshness.ratio",
+              "value": 0.015,
+              "status": "within_range"
+            },
+            {
+              "name": "harshness.peak_frequency",
+              "value": 2498.0,
+              "status": "within_range"
+            },
+            {
+              "name": "harshness.is_harsh",
+              "value": false,
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Mix has good overall clarity",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "scoring": {
+          "module_score": 0.7574917567309297,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.757,
+              "status": "within_range"
+            },
+            {
+              "name": "overall_score",
+              "value": 75.7,
+              "status": "within_range"
+            },
+            {
+              "name": "quality_level",
+              "value": "Good",
+              "status": "informational"
+            },
+            {
+              "name": "quality_description",
+              "value": "Solid mix with room for improvement",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "spatial": {
+          "module_score": 0.72090003490448,
+          "actionable_insights": [
+            "Adjustment: Very narrow stereo image",
+            "Consider adding stereo width with panning or stereo enhancement",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.721,
+              "status": "within_range"
+            },
+            {
+              "name": "width.width",
+              "value": 0.11,
+              "status": "within_range"
+            },
+            {
+              "name": "width.correlation",
+              "value": 0.976,
+              "status": "within_range"
+            },
+            {
+              "name": "width.balance",
+              "value": 0.989,
+              "status": "within_range"
+            },
+            {
+              "name": "width.mid_energy_ratio",
+              "value": 0.988,
+              "status": "within_range"
+            },
+            {
+              "name": "width.estimated_width_factor",
+              "value": 0.16,
+              "status": "within_range"
+            },
+            {
+              "name": "width.pan_position",
+              "value": 0.011,
+              "status": "within_range"
+            },
+            {
+              "name": "depth.perceived_depth",
+              "value": 0.146,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Consider adding stereo width with panning or stereo enhancement",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "harmonic": {
+          "module_score": 0.6444517734522707,
+          "actionable_insights": [
+            "Adjustment: Significant harmonic distortion detected",
+            "Key detection has low confidence - may be atonal or modal",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.644,
+              "status": "marginal"
+            },
+            {
+              "name": "key",
+              "value": "C#",
+              "status": "informational"
+            },
+            {
+              "name": "scale",
+              "value": "minor",
+              "status": "informational"
+            },
+            {
+              "name": "key_full",
+              "value": "C# minor",
+              "status": "informational"
+            },
+            {
+              "name": "camelot",
+              "value": "12A",
+              "status": "informational"
+            },
+            {
+              "name": "key_confidence",
+              "value": 0.296,
+              "status": "within_range"
+            },
+            {
+              "name": "tempo",
+              "value": 60.8,
+              "status": "within_range"
+            },
+            {
+              "name": "harmonic_complexity",
+              "value": 0.983,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Key detection has low confidence - may be atonal or modal",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "k_system": {
+          "module_score": 0.888717924619815,
+          "actionable_insights": [
+            "Dynamic profile suggests K12 metering as the most appropriate target.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.889,
+              "status": "within_range"
+            },
+            {
+              "name": "best_k_system",
+              "value": "k14",
+              "status": "informational"
+            },
+            {
+              "name": "recommended_k_system",
+              "value": "k12",
+              "status": "informational"
+            },
+            {
+              "name": "k12_headroom_db",
+              "value": 3.847,
+              "status": "within_range"
+            },
+            {
+              "name": "k14_headroom_db",
+              "value": 1.847,
+              "status": "within_range"
+            },
+            {
+              "name": "k20_headroom_db",
+              "value": -4.153,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_dbfs",
+              "value": -15.847,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_dbfs",
+              "value": -0.849,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Dynamic profile suggests K12 metering as the most appropriate target.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "keywords": {
+          "module_score": null,
+          "actionable_insights": [
+            "Generated 15 keywords",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "total_count",
+              "value": 15.0,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Generated 15 keywords",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "playback": {
+          "module_score": 0.8047499999999999,
+          "actionable_insights": [
+            "Adjustment: May not translate well to phone/laptop speakers",
+            "Translates best to: Studio Monitors, Headphones",
+            "May struggle on: Phone Speakers",
+            "Boost 1-3 kHz for better small-speaker translation",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.805,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.sub",
+              "value": 0.161,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.bass",
+              "value": 0.7301,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.low_mid",
+              "value": 0.0221,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.mid",
+              "value": 0.0357,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.high_mid",
+              "value": 0.0202,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.high",
+              "value": 0.0306,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Translates best to: Studio Monitors, Headphones",
+            "May struggle on: Phone Speakers",
+            "Boost 1-3 kHz for better small-speaker translation",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "surround": {
+          "module_score": 0.9500000000000001,
+          "actionable_insights": [
+            "Track is surround-compatible",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.95,
+              "status": "within_range"
+            },
+            {
+              "name": "compatible",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "phase_correlation",
+              "value": 0.918,
+              "status": "within_range"
+            },
+            {
+              "name": "lfe_content.has_sub_content",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "lfe_content.lfe_ratio",
+              "value": 0.543,
+              "status": "within_range"
+            },
+            {
+              "name": "lfe_content.recommendation",
+              "value": "Good LFE content for surround",
+              "status": "informational"
+            },
+            {
+              "name": "center_content.center_ratio",
+              "value": 0.959,
+              "status": "within_range"
+            },
+            {
+              "name": "center_content.has_strong_center",
+              "value": true,
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Track is surround-compatible",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "dithering": {
+          "module_score": 0.9,
+          "actionable_insights": [
+            "Noise-shaped dither is applied with a moderate spectral slope. This is appropriate for 16-bit delivery when the target audience will use consumer-grade playback. Verify on reference headphones that shaped noise is not perceptible at normal listening levels.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.9,
+              "status": "within_range"
+            },
+            {
+              "name": "dither_detected",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "dither_type",
+              "value": "noise_shaped",
+              "status": "informational"
+            },
+            {
+              "name": "lsb_flip_rate",
+              "value": 0.4997,
+              "status": "within_range"
+            },
+            {
+              "name": "lsb_autocorrelation",
+              "value": 0.0006,
+              "status": "within_range"
+            },
+            {
+              "name": "excess_noise_ratio",
+              "value": 2851.1781,
+              "status": "within_range"
+            },
+            {
+              "name": "noise_shape",
+              "value": "shaped_mild",
+              "status": "informational"
+            },
+            {
+              "name": "noise_shape_slope",
+              "value": -0.9813,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Noise-shaped dither is applied with a moderate spectral slope. This is appropriate for 16-bit delivery when the target audience will use consumer-grade playback. Verify on reference headphones that shaped noise is not perceptible at normal listening levels.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "frequency": {
+          "module_score": 0.4999999999999999,
+          "actionable_insights": [
+            "Adjustment: Excessive low frequency energy - may cause muddiness",
+            "Adjustment: Broad spectral imbalance across low/mid/high bands",
+            "Adjustment: Mud detected around 215 Hz",
+            "Adjustment: Boxiness detected around 431 Hz",
+            "Adjustment: Nasal detected around 1012 Hz",
+            "Reduce 400-500 Hz by 2-3 dB to remove boxy sound",
+            "Cut 215 Hz by 2-3 dB to reduce mud",
+            "Cut 1-2 kHz gently to reduce nasal quality"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.5,
+              "status": "marginal"
+            },
+            {
+              "name": "spectral_centroid",
+              "value": 1460.6505,
+              "status": "within_range"
+            },
+            {
+              "name": "spectral_rolloff",
+              "value": 7298.5269,
+              "status": "within_range"
+            },
+            {
+              "name": "spectral_flux",
+              "value": 41.3202,
+              "status": "within_range"
+            },
+            {
+              "name": "spectral_flatness",
+              "value": 0.0101,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.low",
+              "value": 0.842,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.mid",
+              "value": 0.084,
+              "status": "within_range"
+            },
+            {
+              "name": "frequency_balance.high",
+              "value": 0.073,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Reduce 400-500 Hz by 2-3 dB to remove boxy sound",
+            "Cut 215 Hz by 2-3 dB to reduce mud",
+            "Cut 1-2 kHz gently to reduce nasal quality",
+            "Reduce 200-300 Hz by 2-4 dB to clear mud and improve clarity",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy"
+          ]
+        },
+        "reference": {
+          "module_score": 0.5055499999999999,
+          "actionable_insights": [
+            "Adjustment: Low frequencies over-represented",
+            "Adjustment: Mid frequencies under-represented",
+            "Adjustment: High frequencies under-represented",
+            "Adjustment: Track is more compressed than typical for genre",
+            "Compared against Melodic Techno reference standards",
+            "Consider reducing low frequencies to match genre standard",
+            "Consider using less compression for more dynamic range",
+            "Track is 6 dB quieter than typical"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.506,
+              "status": "marginal"
+            },
+            {
+              "name": "genre",
+              "value": "Melodic Techno",
+              "status": "informational"
+            },
+            {
+              "name": "genre_source",
+              "value": "user_override",
+              "status": "informational"
+            },
+            {
+              "name": "requested_genre",
+              "value": "Melodic Techno",
+              "status": "informational"
+            },
+            {
+              "name": "detected_genre",
+              "value": "Melodic Techno",
+              "status": "informational"
+            },
+            {
+              "name": "match_score",
+              "value": 0.506,
+              "status": "within_range"
+            },
+            {
+              "name": "track_characteristics.dynamic_range",
+              "value": 2.94,
+              "status": "within_range"
+            },
+            {
+              "name": "track_characteristics.lufs",
+              "value": -14.39,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Compared against Melodic Techno reference standards",
+            "Consider reducing low frequencies to match genre standard",
+            "Consider using less compression for more dynamic range",
+            "Track is 6 dB quieter than typical",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy"
+          ]
+        },
+        "sibilance": {
+          "module_score": 1.0,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "sibilance_event_count",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "sibilance_density_per_sec",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_harshness_db",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "avg_harshness_db",
+              "value": 0.0,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "transient": {
+          "module_score": 0.7300230741653367,
+          "actionable_insights": [
+            "Adjustment: Inconsistent transient dynamics detected",
+            "Adjustment: Very low percussive content detected",
+            "Adjustment: Tempo drifts significantly throughout the track",
+            "Track appears to have minimal percussive content",
+            "Consider tightening the performance or using tempo automation for consistency",
+            "Check drum/sample levels for consistent dynamics",
+            "Consider light compression on drum bus for consistency",
+            "Detected tempo: 61 BPM"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.73,
+              "status": "within_range"
+            },
+            {
+              "name": "percussive_ratio",
+              "value": 0.039,
+              "status": "within_range"
+            },
+            {
+              "name": "transient_sharpness",
+              "value": 0.584,
+              "status": "within_range"
+            },
+            {
+              "name": "transient_density",
+              "value": 5.967,
+              "status": "within_range"
+            },
+            {
+              "name": "onset_count",
+              "value": 2395.0,
+              "status": "within_range"
+            },
+            {
+              "name": "avg_onset_strength",
+              "value": 0.279,
+              "status": "within_range"
+            },
+            {
+              "name": "onset_strength",
+              "value": 0.279,
+              "status": "within_range"
+            },
+            {
+              "name": "dynamic_consistency",
+              "value": 0.144,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Track appears to have minimal percussive content",
+            "Consider tightening the performance or using tempo automation for consistency",
+            "Check drum/sample levels for consistent dynamics",
+            "Consider light compression on drum bus for consistency",
+            "Detected tempo: 61 BPM",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues"
+          ]
+        },
+        "true_peak": {
+          "module_score": 0.95,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.95,
+              "status": "within_range"
+            },
+            {
+              "name": "true_peak_dbtp",
+              "value": -0.84,
+              "status": "within_range"
+            },
+            {
+              "name": "sample_peak_dbfs",
+              "value": -0.85,
+              "status": "within_range"
+            },
+            {
+              "name": "isp_margin_db",
+              "value": 0.01,
+              "status": "within_range"
+            },
+            {
+              "name": "isp_event_count",
+              "value": 9.0,
+              "status": "within_range"
+            },
+            {
+              "name": "clip_event_count",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "limiter.brickwall_detected",
+              "value": false,
+              "status": "informational"
+            },
+            {
+              "name": "limiter.estimated_ceiling_dbfs",
+              "value": -0.86,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "instrument": {
+          "module_score": 0.5833333333333334,
+          "actionable_insights": [
+            "Detected instruments: bass, synthesizers, strings, brass",
+            "Multiple harmonic sources - consider EQ separation",
+            "Keep vocals centered, pan synths for width",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.583,
+              "status": "marginal"
+            },
+            {
+              "name": "all_instruments.drums",
+              "value": 0.5,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.bass",
+              "value": 0.75,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.guitar",
+              "value": 0.45,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.piano",
+              "value": 0.35,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.strings",
+              "value": 0.65,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.brass",
+              "value": 0.65,
+              "status": "within_range"
+            },
+            {
+              "name": "all_instruments.woodwinds",
+              "value": 0.65,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Detected instruments: bass, synthesizers, strings, brass",
+            "Multiple harmonic sources - consider EQ separation",
+            "Keep vocals centered, pan synths for width",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "modulation": {
+          "module_score": 0.523,
+          "actionable_insights": [
+            "Adjustment: Heavy tremolo depth (0.379) at 4.10 Hz; check against mix context.",
+            "Adjustment: Excessive chorus depth (0.700) at 2.05 Hz may sound unnatural.",
+            "Adjustment: Excessive chorus depth (0.886) at 1.01 Hz may sound unnatural.",
+            "Adjustment: 5 simultaneous modulation effects detected; this may result in a cluttered, pulsating sound.",
+            "Adjustment: Strong amplitude modulation detected (depth=0.469, rate=2.033 Hz).",
+            "Chorus effect present; ensure it does not widen the stereo image excessively.",
+            "Tremolo detected; consider syncing the LFO rate to the track BPM.",
+            "Flanger detected; verify the sweep rate and depth suit the arrangement."
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.523,
+              "status": "marginal"
+            },
+            {
+              "name": "amplitude_modulation.am_rate_hz",
+              "value": 2.033,
+              "status": "within_range"
+            },
+            {
+              "name": "amplitude_modulation.am_depth",
+              "value": 0.469,
+              "status": "within_range"
+            },
+            {
+              "name": "amplitude_modulation.am_detected",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "has_modulation",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "dominant_effect",
+              "value": "tremolo",
+              "status": "informational"
+            },
+            {
+              "name": "modulation_count",
+              "value": 5.0,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Chorus effect present; ensure it does not widen the stereo image excessively.",
+            "Tremolo detected; consider syncing the LFO rate to the track BPM.",
+            "Flanger detected; verify the sweep rate and depth suit the arrangement.",
+            "Reduce modulation depth on heavy effects to avoid listener fatigue.",
+            "Amplitude modulation is present; check whether the tremolo or gate is intentional across the full frequency range.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues"
+          ]
+        },
+        "noise_gate": {
+          "module_score": 0.8,
+          "actionable_insights": [
+            "Gate depth of 100dB is aggressive. Consider reducing to 20-30dB range.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.8,
+              "status": "within_range"
+            },
+            {
+              "name": "gate_detected",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "gated_segment_count",
+              "value": 6.0,
+              "status": "within_range"
+            },
+            {
+              "name": "estimated_threshold_db",
+              "value": -150.1,
+              "status": "within_range"
+            },
+            {
+              "name": "estimated_attack_ms",
+              "value": 2.5,
+              "status": "within_range"
+            },
+            {
+              "name": "estimated_hold_ms",
+              "value": 9.7,
+              "status": "within_range"
+            },
+            {
+              "name": "estimated_release_ms",
+              "value": 6.5,
+              "status": "within_range"
+            },
+            {
+              "name": "gate_depth_db",
+              "value": 99.9,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Gate depth of 100dB is aggressive. Consider reducing to 20-30dB range.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "low_end_mono": {
+          "module_score": 1.0,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "bass_correlation",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "sub_bass_correlation",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "bass_side_ratio",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "sub_bass_side_ratio",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "bass_lr_balance_db",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "mono_cancellation_pct",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "bass_mid_energy_db",
+              "value": -17.3,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "voice_gender": {
+          "module_score": null,
+          "actionable_insights": [
+            "No vocals detected in this track",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "detected",
+              "value": false,
+              "status": "informational"
+            },
+            {
+              "name": "confidence",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "reason",
+              "value": "Low energy in voice range",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "No vocals detected in this track",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "dynamic_range": {
+          "module_score": 0.8600000000000001,
+          "actionable_insights": [
+            "Adjustment: Limited mastering headroom (true peak above -1 dBTP)",
+            "Create more headroom by reducing master gain before final limiting",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.86,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_db",
+              "value": -0.85,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_linear",
+              "value": 0.9069,
+              "status": "within_range"
+            },
+            {
+              "name": "true_peak_dbtp",
+              "value": -0.84,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_db",
+              "value": -16.03,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_linear",
+              "value": 0.158,
+              "status": "within_range"
+            },
+            {
+              "name": "crest_factor",
+              "value": 15.17,
+              "status": "within_range"
+            },
+            {
+              "name": "dynamic_range",
+              "value": 15.18,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Create more headroom by reducing master gain before final limiting",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "eq_extraction": {
+          "module_score": 0.38087316235188395,
+          "actionable_insights": [
+            "Consider a 4.0 dB boost around 57 Hz.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.381,
+              "status": "marginal"
+            },
+            {
+              "name": "target_curve_type",
+              "value": "local_smoothed_trend",
+              "status": "informational"
+            },
+            {
+              "name": "rmse_fit",
+              "value": 1.6087,
+              "status": "within_range"
+            },
+            {
+              "name": "delta_bias_db",
+              "value": -0.265,
+              "status": "within_range"
+            },
+            {
+              "name": "delta_rms_db",
+              "value": 1.166,
+              "status": "within_range"
+            },
+            {
+              "name": "optimization_method",
+              "value": "analytical_lbfgsb_fast",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Consider a 4.0 dB boost around 57 Hz.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "vocal_balance": {
+          "module_score": 0.6,
+          "actionable_insights": [
+            "No significant vocal presence detected in the 300-4000 Hz harmonic range. Verify the vocal is recorded, routed correctly, and not masked by other instruments.",
+            "Vocal spectral ratio: -11.4 dB relative to total energy.",
+            "Vocals are centred (mid/side ratio: 4.9 dB). Good mono compatibility.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.6,
+              "status": "marginal"
+            },
+            {
+              "name": "vocal_presence.vocal_ratio",
+              "value": 0.067,
+              "status": "within_range"
+            },
+            {
+              "name": "vocal_presence.vocal_ratio_db",
+              "value": -11.425,
+              "status": "within_range"
+            },
+            {
+              "name": "vocal_presence.vocal_presence",
+              "value": "absent",
+              "status": "informational"
+            },
+            {
+              "name": "mid_side.mid_side_ratio_db",
+              "value": 4.947,
+              "status": "within_range"
+            },
+            {
+              "name": "mid_side.vocals_centered",
+              "value": true,
+              "status": "informational"
+            },
+            {
+              "name": "genre_assessment.expected_presence",
+              "value": "any",
+              "status": "informational"
+            },
+            {
+              "name": "genre_assessment.genre_appropriate",
+              "value": true,
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "No significant vocal presence detected in the 300-4000 Hz harmonic range. Verify the vocal is recorded, routed correctly, and not masked by other instruments.",
+            "Vocal spectral ratio: -11.4 dB relative to total energy.",
+            "Vocals are centred (mid/side ratio: 4.9 dB). Good mono compatibility.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "format_metadata": {
+          "module_score": 1.0,
+          "actionable_insights": [
+            "Sample rate is at the standard 44 100 Hz (CD quality). For projects destined for video or streaming, consider 48 000 Hz.",
+            "DC offset is within acceptable limits (< 0.01). No corrective action required.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "sample_rate",
+              "value": 44100.0,
+              "status": "within_range"
+            },
+            {
+              "name": "bit_depth_estimate",
+              "value": 16.0,
+              "status": "within_range"
+            },
+            {
+              "name": "channel_count",
+              "value": 2.0,
+              "status": "within_range"
+            },
+            {
+              "name": "duration_seconds",
+              "value": 401.368,
+              "status": "within_range"
+            },
+            {
+              "name": "total_samples",
+              "value": 17700322.0,
+              "status": "within_range"
+            },
+            {
+              "name": "nyquist_frequency",
+              "value": 22050.0,
+              "status": "within_range"
+            },
+            {
+              "name": "has_content_above_20khz",
+              "value": false,
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Sample rate is at the standard 44 100 Hz (CD quality). For projects destined for video or streaming, consider 48 000 Hz.",
+            "DC offset is within acceptable limits (< 0.01). No corrective action required.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "format_integrity": {
+          "module_score": 0.9943030303030305,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.994,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.spectral_centroid_hz",
+              "value": 3685.9345,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.hf_energy_ratio",
+              "value": 0.0013,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.rms_db",
+              "value": -16.0287,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.peak_db",
+              "value": -0.8583,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.transient_density",
+              "value": 5.9671,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.stereo_width",
+              "value": 0.041,
+              "status": "within_range"
+            },
+            {
+              "name": "source_profile.phase_correlation",
+              "value": 0.9184,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "mid_side_spectral": {
+          "module_score": 0.92,
+          "actionable_insights": [
+            "Adjustment: Mix is nearly mono \u2014 very little side-channel energy",
+            "The mix has very little stereo width. If this is intentional, ensure it translates well; otherwise consider widening mid/high frequencies.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.92,
+              "status": "within_range"
+            },
+            {
+              "name": "low_end_side_ratio",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "low_end_side_pct",
+              "value": 0.0,
+              "status": "within_range"
+            },
+            {
+              "name": "overall_mid_energy_db",
+              "value": -16.0,
+              "status": "within_range"
+            },
+            {
+              "name": "overall_side_energy_db",
+              "value": -29.7,
+              "status": "within_range"
+            },
+            {
+              "name": "overall_side_ratio",
+              "value": 0.041,
+              "status": "within_range"
+            },
+            {
+              "name": "overall_width_pct",
+              "value": 8.2,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "The mix has very little stereo width. If this is intentional, ensure it translates well; otherwise consider widening mid/high frequencies.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "ai_recommendations": {
+          "module_score": 0.0,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "provider",
+              "value": "deepseek_multi_agent",
+              "status": "informational"
+            },
+            {
+              "name": "provider",
+              "value": "perplexity",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "frequency_enhanced": {
+          "module_score": 0.76758,
+          "actionable_insights": [
+            "Immediate fix: Severe imbalance (58.21 dB dev)",
+            "Adjust overall spectral balance to match target profile",
+            "Add high-end sparkle with a gentle high-shelf boost",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.768,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.mid",
+              "value": 75.26,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.sub_bass",
+              "value": 78.7,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.sub_bass_relative",
+              "value": 3.43,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.bass",
+              "value": 86.09,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.bass_relative",
+              "value": 10.82,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.low_mid",
+              "value": 72.77,
+              "status": "within_range"
+            },
+            {
+              "name": "band_lufs.low_mid_relative",
+              "value": -2.49,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Adjust overall spectral balance to match target profile",
+            "Add high-end sparkle with a gentle high-shelf boost",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "multiband_dynamics": {
+          "module_score": 0.8945480031278816,
+          "actionable_insights": [
+            "Adjustment: mid band has very wide dynamics (21.8 dB crest factor)",
+            "Adjustment: high_mid band has very wide dynamics (25.9 dB crest factor)",
+            "Adjustment: high band has very wide dynamics (27.2 dB crest factor)",
+            "Adjustment: Unbalanced multiband dynamics \u2014 crest factor varies by 6.5 dB std across bands",
+            "Consider a multiband compressor to balance dynamics across the spectrum.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.895,
+              "status": "within_range"
+            },
+            {
+              "name": "crest_factor_mean_db",
+              "value": 20.19,
+              "status": "within_range"
+            },
+            {
+              "name": "crest_factor_std_db",
+              "value": 6.52,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Consider a multiband compressor to balance dynamics across the spectrum.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "saturation_profile": {
+          "module_score": 0.8,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.8,
+              "status": "within_range"
+            },
+            {
+              "name": "distortion_type",
+              "value": "indeterminate",
+              "status": "informational"
+            },
+            {
+              "name": "spectral_flatness",
+              "value": 0.2298,
+              "status": "within_range"
+            },
+            {
+              "name": "note",
+              "value": "No clear fundamental detected \u2014 broadband analysis only",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "loudness_compliance": {
+          "module_score": 0.29999999999999993,
+          "actionable_insights": [
+            "Immediate fix: Programme loudness (-14.4 LUFS) deviates 8.6 LU from EBU R128 target (-23.0 LUFS)",
+            "Immediate fix: True peak (-0.8 dBTP) exceeds EBU R128 limit of -1.0 dBTP",
+            "Adjustment: LRA (3.4 LU) is below typical broadcast range (5.0 LU minimum)",
+            "Adjustment: spotify: loudness is +0.4 dB from target (-14.0 LUFS)",
+            "Adjustment: apple_music: loudness is -1.6 dB from target (-16.0 LUFS)",
+            "Adjustment: youtube: loudness is +0.4 dB from target (-14.0 LUFS)",
+            "Adjustment: tidal: loudness is +0.4 dB from target (-14.0 LUFS)",
+            "Adjustment: amazon_music: loudness is +0.4 dB from target (-14.0 LUFS)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.3,
+              "status": "marginal"
+            },
+            {
+              "name": "integrated_lufs",
+              "value": -14.39,
+              "status": "within_range"
+            },
+            {
+              "name": "lra_lu",
+              "value": 3.41,
+              "status": "within_range"
+            },
+            {
+              "name": "true_peak_dbtp",
+              "value": -0.84,
+              "status": "within_range"
+            },
+            {
+              "name": "max_momentary_lufs",
+              "value": -9.55,
+              "status": "within_range"
+            },
+            {
+              "name": "max_short_term_lufs",
+              "value": -10.99,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_db",
+              "value": -16.03,
+              "status": "within_range"
+            },
+            {
+              "name": "ebu_r128_compliance.compliant",
+              "value": false,
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Adjust output gain by -8.6 dB to achieve -23.0 LUFS target",
+            "Apply true-peak limiter with ceiling at -1.0 dBTP",
+            "Reduce final limiter gain reduction to increase loudness range",
+            "True peak exceeds -1.0 dBTP (-0.8 dBTP). Apply true-peak limiter (FabFilter Pro-L 2) with ceiling at -1.0 dBTP.",
+            "Loudness range is very narrow (3.4 LU). Track may sound fatiguing. Consider reducing final limiter gain reduction by 1-2 dB.",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues"
+          ]
+        },
+        "parallel_processing": {
+          "module_score": 0.78,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.78,
+              "status": "within_range"
+            },
+            {
+              "name": "detected",
+              "value": false,
+              "status": "informational"
+            },
+            {
+              "name": "parallel_detected",
+              "value": false,
+              "status": "informational"
+            },
+            {
+              "name": "estimated_blend_ratio",
+              "value": 0.07,
+              "status": "within_range"
+            },
+            {
+              "name": "compression_style",
+              "value": "subtle",
+              "status": "informational"
+            },
+            {
+              "name": "mean_crest_factor_db",
+              "value": 9.201,
+              "status": "within_range"
+            },
+            {
+              "name": "crest_factor_variance_db",
+              "value": 3.637,
+              "status": "within_range"
+            },
+            {
+              "name": "upward_compression_signature",
+              "value": 0.023,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "arrangement_dynamics": {
+          "module_score": 1.0,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "section_count",
+              "value": 18.0,
+              "status": "within_range"
+            },
+            {
+              "name": "section_loudness_range_lu",
+              "value": 3.0,
+              "status": "within_range"
+            },
+            {
+              "name": "max_section_delta_lu",
+              "value": 2.8,
+              "status": "within_range"
+            },
+            {
+              "name": "contour_shape",
+              "value": "plateau",
+              "status": "informational"
+            },
+            {
+              "name": "integrated_loudness_lufs",
+              "value": -16.8,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "unified_measurements": {
+          "module_score": null,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_status",
+              "value": "analyzed",
+              "status": "informational"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "dynamic_range_enhanced": {
+          "module_score": 0.92,
+          "actionable_insights": [
+            "Adjustment: Limited mastering headroom (true peak -0.8 dBTP)",
+            "Adjustment: Bass band is too hot (++8.7 dB)",
+            "Reduce bass band by +8.7 LUFS to match target profile",
+            "Create +0.0 dB headroom by reducing master gain before final limiting",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 0.92,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_db",
+              "value": -0.86,
+              "status": "within_range"
+            },
+            {
+              "name": "peak_linear",
+              "value": 0.9059,
+              "status": "within_range"
+            },
+            {
+              "name": "true_peak_dbtp",
+              "value": -0.84,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_db",
+              "value": -16.03,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_linear",
+              "value": 0.158,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_bands.sub_bass",
+              "value": -21.8,
+              "status": "within_range"
+            },
+            {
+              "name": "rms_bands.bass",
+              "value": -18.39,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Reduce bass band by +8.7 LUFS to match target profile",
+            "Create +0.0 dB headroom by reducing master gain before final limiting",
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        },
+        "phase_correlation_band": {
+          "module_score": 1.0,
+          "actionable_insights": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+            "frequency: Excessive low frequency energy - may cause muddiness",
+            "frequency: Broad spectral imbalance across low/mid/high bands",
+            "frequency: Mud detected around 215 Hz",
+            "frequency: Boxiness detected around 431 Hz",
+            "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+          ],
+          "performance_metrics": [
+            {
+              "name": "module_score",
+              "value": 1.0,
+              "status": "within_range"
+            },
+            {
+              "name": "weighted_correlation",
+              "value": 0.756,
+              "status": "within_range"
+            }
+          ],
+          "optimization_suggestions": [
+            "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+            "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+            "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil"
+          ]
+        }
+      },
+      "structural_composition": {
+        "tempo_bpm": 61.2,
+        "beat_regularity": 0.5,
+        "section_profile": [
+          {
+            "lufs": -17.39,
+            "end_s": 100.34,
+            "rms_db": -15.69,
+            "section": "intro",
+            "start_s": 0.0,
+            "crest_factor": 14.82
+          },
+          {
+            "lufs": -17.49,
+            "end_s": 200.68,
+            "rms_db": -16.04,
+            "section": "build",
+            "start_s": 100.34,
+            "crest_factor": 15.12
+          },
+          {
+            "lufs": -18.49,
+            "end_s": 301.03,
+            "rms_db": -16.85,
+            "section": "peak",
+            "start_s": 200.68,
+            "crest_factor": 15.94
+          },
+          {
+            "lufs": -17.89,
+            "end_s": 401.37,
+            "rms_db": -15.64,
+            "section": "outro",
+            "start_s": 301.03,
+            "crest_factor": 14.78
+          }
+        ],
+        "tempo_stability": 0.058,
+        "transient_density": 5.967,
+        "most_intense_section": "intro",
+        "estimated_structure_type": "high_event_density_arrangement"
+      },
+      "instrumentation_profile": {
+        "lead_elements": [
+          "brass",
+          "woodwinds",
+          "vocals"
+        ],
+        "dominant_family": "bass",
+        "instrument_count": 9,
+        "tonal_foundation": [
+          "synthesizers",
+          "strings",
+          "guitar",
+          "piano"
+        ],
+        "rhythmic_foundation": [
+          "bass",
+          "drums"
+        ],
+        "detected_instruments": [
+          {
+            "name": "bass",
+            "present": true,
+            "confidence": 0.75,
+            "frequency_range": [
+              30,
+              300
+            ]
+          },
+          {
+            "name": "synthesizers",
+            "present": true,
+            "confidence": 0.7,
+            "frequency_range": [
+              20,
+              20000
+            ]
+          },
+          {
+            "name": "strings",
+            "present": true,
+            "confidence": 0.65,
+            "frequency_range": [
+              65,
+              4000
+            ]
+          },
+          {
+            "name": "brass",
+            "present": true,
+            "confidence": 0.65,
+            "frequency_range": [
+              80,
+              3000
+            ]
+          },
+          {
+            "name": "woodwinds",
+            "present": true,
+            "confidence": 0.65,
+            "frequency_range": [
+              130,
+              3000
+            ]
+          },
+          {
+            "name": "vocals",
+            "present": true,
+            "confidence": 0.55,
+            "frequency_range": [
+              80,
+              3000
+            ]
+          },
+          {
+            "name": "drums",
+            "present": true,
+            "confidence": 0.5,
+            "frequency_range": [
+              30,
+              8000
+            ]
+          },
+          {
+            "name": "guitar",
+            "present": true,
+            "confidence": 0.45,
+            "frequency_range": [
+              80,
+              5000
+            ]
+          },
+          {
+            "name": "piano",
+            "present": true,
+            "confidence": 0.35,
+            "frequency_range": [
+              27,
+              4200
+            ]
+          }
+        ],
+        "arrangement_complexity": 0.649
+      },
+      "recommendation_provider": "deepseek_multi_agent",
+      "validated_master_bus_chain": [
+        {
+          "step": 1,
+          "stage": "Gain Staging",
+          "plugin": "Gain Plugin (any DAW)",
+          "reason": "Apply input trim to achieve target headroom and align with Apple Music +1.61 dB requirement",
+          "parameters": {
+            "gain_db": -1.16
+          },
+          "validates_against": [
+            "dynamics_validator"
+          ]
+        },
+        {
+          "step": 2,
+          "stage": "Subtractive EQ",
+          "plugin": "FabFilter Pro-Q 3",
+          "reason": "Remove excessive bass, mud, boxiness, and nasal frequencies to correct spectral imbalance",
+          "parameters": {
+            "bands": [
+              {
+                "q": 0.707,
+                "freq": 120,
+                "gain": -6,
+                "type": "low_shelf"
+              },
+              {
+                "q": 2.0,
+                "freq": 215,
+                "gain": -3,
+                "type": "bell"
+              },
+              {
+                "q": 0.561,
+                "freq": 366,
+                "gain": -7,
+                "type": "bell"
+              },
+              {
+                "q": 1.5,
+                "freq": 1012,
+                "gain": -2,
+                "type": "bell"
+              }
+            ]
+          },
+          "validates_against": [
+            "frequency_validator"
+          ]
+        },
+        {
+          "step": 3,
+          "stage": "Multiband Compression",
+          "plugin": "iZotope Ozone 11 Dynamics",
+          "reason": "Control dynamics per band to tighten low end and enhance clarity while maintaining crest factor",
+          "parameters": {
+            "bands": [
+              {
+                "ratio": 3,
+                "attack": 30,
+                "release": 200,
+                "crossover": [
+                  20,
+                  80
+                ],
+                "threshold": -12
+              },
+              {
+                "ratio": 2,
+                "attack": 20,
+                "release": 150,
+                "crossover": [
+                  80,
+                  500
+                ],
+                "threshold": -15
+              },
+              {
+                "ratio": 1.5,
+                "attack": 10,
+                "release": 100,
+                "crossover": [
+                  500,
+                  3000
+                ],
+                "threshold": -18
+              },
+              {
+                "ratio": 1.2,
+                "attack": 5,
+                "release": 50,
+                "crossover": [
+                  3000,
+                  20000
+                ],
+                "threshold": -20
+              }
+            ]
+          },
+          "validates_against": [
+            "dynamics_validator",
+            "transient_validator"
+          ]
+        },
+        {
+          "step": 4,
+          "stage": "Saturation/Harmonic Enhancement",
+          "plugin": "Softube Tube-Tech CL 1B",
+          "reason": "Reduce THD from 11.3% to warm mixing level while maintaining tube character",
+          "parameters": {
+            "mix": 30,
+            "drive": -6.0,
+            "character": "tube"
+          },
+          "validates_against": [
+            "harmonic_validator"
+          ]
+        },
+        {
+          "step": 5,
+          "stage": "Additive EQ",
+          "plugin": "FabFilter Pro-Q 3",
+          "reason": "Boost presence and air bands to improve spectral centroid and brightness for Melodic Techno",
+          "parameters": {
+            "bands": [
+              {
+                "q": 1.0,
+                "freq": 4000,
+                "gain": 3,
+                "type": "bell"
+              },
+              {
+                "q": 0.707,
+                "freq": 12000,
+                "gain": 4,
+                "type": "high_shelf"
+              }
+            ]
+          },
+          "validates_against": [
+            "frequency_validator"
+          ]
+        },
+        {
+          "step": 6,
+          "stage": "Stereo Enhancement",
+          "plugin": "iZotope Ozone Imager",
+          "reason": "Increase stereo width from 0.041 to enhance spatial immersion while maintaining mono compatibility",
+          "parameters": {
+            "width": 0.4,
+            "mid_gain": 0,
+            "side_gain": 6,
+            "bass_mono_crossover": 200
+          },
+          "validates_against": [
+            "stereo_validator"
+          ]
+        },
+        {
+          "step": 7,
+          "stage": "True Peak Limiter",
+          "plugin": "FabFilter Pro-L 2",
+          "reason": "Set ceiling to -1.5 dBTP to comply with Amazon Music -2.0 dBTP and prevent inter-sample peaks",
+          "parameters": {
+            "ceiling": -1.5,
+            "release": 50,
+            "lookahead": 5,
+            "true_peak": true
+          },
+          "validates_against": [
+            "dynamics_validator"
+          ]
+        },
+        {
+          "step": 8,
+          "stage": "Dither",
+          "plugin": "iZotope Ozone 11",
+          "reason": "Apply dither for 16-bit delivery to reduce quantization noise",
+          "parameters": {
+            "bit_depth": 16,
+            "noise_shaping": "MBIT+"
+          },
+          "validates_against": []
+        }
+      ],
+      "system_improvement_guidance": [
+        "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+        "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+        "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+        "frequency: Excessive low frequency energy - may cause muddiness",
+        "frequency: Broad spectral imbalance across low/mid/high bands"
+      ]
+    },
+    "score": null,
+    "issues": [],
+    "recommendations": [
+      "Cut detected resonance at 366 Hz to address mud/boxiness issues",
+      "Cut prominent resonance at 64 Hz to reduce excessive low-end energy",
+      "Mix is extremely narrow (0.041 width, 0.976 correlation). Need significant stereo expansion in mid-high frequencies whil",
+      "frequency: Excessive low frequency energy - may cause muddiness",
+      "frequency: Broad spectral imbalance across low/mid/high bands",
+      "frequency: Mud detected around 215 Hz",
+      "frequency: Boxiness detected around 431 Hz",
+      "dynamic_range: Limited mastering headroom (true peak above -1 dBTP)"
+    ]
+  }
+}

@@ -191,8 +191,8 @@ private:
     // Grain scheduler accumulator — tracks fractional inter-grain interval.
     float schedulerAccum_ = 0.0f;
 
-    double sampleRate_    = 48000.0;
-    bool   active_        = false;
+    double sampleRate_         = 48000.0;
+    std::atomic<bool> active_  {false};
 
     // Pre-allocated mono mix buffer for grain output (maxBlockSize samples).
     std::vector<float> mixBuffer_;

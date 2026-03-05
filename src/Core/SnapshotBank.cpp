@@ -89,19 +89,59 @@ void SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin
 
     juce::MemoryBlock chunk;
     plugin->getStateInformation(chunk);
+
+    // CRITICAL (Finding 4): Protect stateChunks_ write with seqlock.
+    // This prevents data race if recallStateChunk is reading concurrently.
+    WriteScope write(*this);
     stateChunks_[static_cast<size_t>(slot)] = std::move(chunk);
+}
+
+void SnapshotBank::captureStateChunk(int slot, const juce::MemoryBlock& chunk)
+{
+    if (slot >= 0 && slot < NUM_SLOTS)
+    {
+        WriteScope write(*this);
+        stateChunks_[slot] = chunk;
+    }
 }
 
 void SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const
 {
     if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
 
-    const auto& chunk = stateChunks_[static_cast<size_t>(slot)];
-    if (chunk.getSize() > 0)
-        plugin->setStateInformation(chunk.getData(), static_cast<int>(chunk.getSize()));
+    // CRITICAL (Finding 4): Protect stateChunks_ read with seqlock.
+    // Use tryReadLocked pattern for lock-free read with retry on concurrent write.
+    juce::MemoryBlock chunkCopy;
+    bool hasChunk = false;
+
+    if (copyStateChunk(slot, chunkCopy))
+    {
+        hasChunk = true;
+    }
+
+    if (hasChunk && chunkCopy.getSize() > 0)
+        plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
 }
 
-bool SnapshotBank::isOccupied(int slot) const
+void SnapshotBank::recallStateChunk(int slot, juce::AudioProcessor* plugin) const
+{
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+
+    // CRITICAL (Finding 4): Protect stateChunks_ read with seqlock.
+    // Use tryReadLocked pattern for lock-free read with retry on concurrent write.
+    juce::MemoryBlock chunkCopy;
+    bool hasChunk = false;
+
+    if (copyStateChunk(slot, chunkCopy))
+    {
+        hasChunk = true;
+    }
+
+    if (hasChunk && chunkCopy.getSize() > 0)
+        plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
+}
+
+bool SnapshotBank::isOccupied(int slot) const noexcept
 {
     if (slot < 0 || slot >= NUM_SLOTS) return false;
 
@@ -126,7 +166,7 @@ bool SnapshotBank::isOccupied(int slot) const
     return false;
 }
 
-bool SnapshotBank::hasAnyOccupied() const
+bool SnapshotBank::hasAnyOccupied() const noexcept
 {
     // Lock-free read using seqlock
     for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)

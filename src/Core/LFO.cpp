@@ -5,7 +5,6 @@
 #include "LFO.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>   // std::rand / RAND_MAX
 
 namespace morphsnap {
 
@@ -31,6 +30,7 @@ void LFO::reset() noexcept
     smoothRand_   = 0.0f;
     randTarget_   = 0.0f;
     currentValue_ = 0.0f;
+    rngState_     = 0x12345678u; // reset to deterministic seed
 }
 
 // ── Parameter setters ─────────────────────────────────────────────────────────
@@ -65,6 +65,17 @@ float LFO::effectiveRate() const noexcept
     const float safeBpm   = bpm_ > 0.0f ? bpm_ : 120.0f;
     const float safeDivision = syncDivision_ > 0 ? static_cast<float>(syncDivision_) : 4.0f;
     return (safeBpm / 60.0f) / safeDivision;
+}
+
+// ── PRNG ──────────────────────────────────────────────────────────────────────
+
+float LFO::nextRandom() noexcept
+{
+    // xorshift32 — identical pattern to GranularMorphEngine::nextRandom()
+    rngState_ ^= rngState_ << 13;
+    rngState_ ^= rngState_ >> 17;
+    rngState_ ^= rngState_ << 5;
+    return static_cast<float>(rngState_) * 2.3283064365386963e-10f; // / 2^32
 }
 
 // ── Waveform generators ────────────────────────────────────────────────────────
@@ -144,11 +155,7 @@ float LFO::process(float dt) noexcept
             // Latch a new random value each time phase wraps
             if (wrapped)
             {
-                // Simple LCG-style float in [-1, 1] without heap allocation
-                // Use std::rand — audio thread usage is acceptable here as we
-                // only need rough randomness, not cryptographic quality.
-                shValue_ = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX))
-                           * 2.0f - 1.0f;
+                shValue_ = nextRandom() * 2.0f - 1.0f;
             }
             output = shValue_;
             break;
@@ -159,8 +166,7 @@ float LFO::process(float dt) noexcept
             // each time the phase wraps.
             if (wrapped)
             {
-                randTarget_ = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX))
-                              * 2.0f - 1.0f;
+                randTarget_ = nextRandom() * 2.0f - 1.0f;
             }
             // Smooth coefficient: heavier smoothing at higher rates
             const float smoothCoeff = std::clamp(1.0f - hz * dt * 0.5f, 0.0f, 0.99f);

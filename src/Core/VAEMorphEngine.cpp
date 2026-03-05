@@ -11,10 +11,15 @@
  *   #include <onnxruntime_cxx_api.h>
  *   Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "VAEMorphEngine");
  *   Ort::Session session(env, modelPath.toWideCharPointer(), sessionOptions);
+ *
+ * WARNING: This engine is currently a STUB. It provides linear interpolation
+ * in latent space but does NOT perform actual neural network inference.
+ * The ONNX Runtime integration is planned for a post-MVP release.
  */
 #include "VAEMorphEngine.h"
 #include <algorithm>
 #include <cmath>
+#include <cassert>
 
 namespace morphsnap {
 
@@ -64,7 +69,9 @@ bool VAEMorphEngine::loadModel(const juce::File& onnxFile)
     latentDims_  = 16;
     modelLoaded_ = true;
 
-    DBG("VAEMorphEngine::loadModel — stub loaded (no ONNX runtime), latentDims="
+    // Runtime warning: this is a stub implementation
+    assert(false && "VAEMorphEngine::loadModel — STUB: ONNX Runtime not integrated. Using linear latent interpolation only.");
+    DBG("VAEMorphEngine::loadModel — WARNING: STUB IMPLEMENTATION (no ONNX runtime). Using linear latent interpolation only. latentDims="
         + juce::String(latentDims_));
     return true;
 }

@@ -202,7 +202,7 @@ void RouteRow::resized()
 void RouteRow::refresh()
 {
     auto& engine = proc_.getModulationEngine();
-    const int routeCount = engine.getActiveRouteCount();
+    const int routeCount = engine.getAssignedRouteCount();
 
     // Guard: route may have been removed since this row was created.
     if (routeId_ < 0 || routeId_ >= routeCount)
@@ -240,7 +240,7 @@ void RouteRow::onSourceChanged()
 
     // Changing the source on an existing route requires remove + re-add preserving dest/depth.
     auto& engine = proc_.getModulationEngine();
-    const int routeCount = engine.getActiveRouteCount();
+    const int routeCount = engine.getAssignedRouteCount();
     if (routeId_ < 0 || routeId_ >= routeCount) return;
 
     const ModRoute& existing = engine.getRoute(routeId_);
@@ -256,7 +256,7 @@ void RouteRow::onDestChanged()
     if (syncing_) return;
 
     auto& engine = proc_.getModulationEngine();
-    const int routeCount = engine.getActiveRouteCount();
+    const int routeCount = engine.getAssignedRouteCount();
     if (routeId_ < 0 || routeId_ >= routeCount) return;
 
     const ModRoute& existing = engine.getRoute(routeId_);
@@ -503,7 +503,7 @@ void ModulationMatrixPanel::resized()
 
 void ModulationMatrixPanel::timerCallback()
 {
-    const int engineCount = proc_.getModulationEngine().getActiveRouteCount();
+    const int engineCount = proc_.getModulationEngine().getAssignedRouteCount();
 
     if (engineCount != cachedRouteCount_)
     {
@@ -532,7 +532,7 @@ void ModulationMatrixPanel::rebuildRouteRows()
     routeRows_.clear();
 
     auto& engine    = proc_.getModulationEngine();
-    const int count = engine.getActiveRouteCount();
+    const int count = engine.getAssignedRouteCount();
 
     routeRows_.reserve(static_cast<size_t>(count));
 
@@ -563,7 +563,7 @@ void ModulationMatrixPanel::refreshRouteRows()
 
 void ModulationMatrixPanel::updateRouteCountLabel()
 {
-    const int count = proc_.getModulationEngine().getActiveRouteCount();
+    const int count = proc_.getModulationEngine().getAssignedRouteCount();
     routeCountLabel_.setText("Routes: " + juce::String(count) + "/128",
                              juce::dontSendNotification);
 }
@@ -576,7 +576,7 @@ void ModulationMatrixPanel::onAddRoute()
 {
     auto& engine = proc_.getModulationEngine();
 
-    if (engine.getActiveRouteCount() >= ModulationState::MAX_ROUTES)
+    if (engine.getAssignedRouteCount() >= ModulationState::MAX_ROUTES)
         return;  // Full — no-op
 
     // Default: LFO_1 → no destination, depth 0
@@ -597,7 +597,7 @@ void ModulationMatrixPanel::onRemoveRoute()
     if (selectedRouteId_ < 0)
     {
         // No explicit selection — remove the last route as a convenience.
-        const int count = proc_.getModulationEngine().getActiveRouteCount();
+        const int count = proc_.getModulationEngine().getAssignedRouteCount();
         if (count <= 0) return;
         selectedRouteId_ = count - 1;
     }

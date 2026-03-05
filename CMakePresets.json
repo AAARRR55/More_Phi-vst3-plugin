@@ -1,0 +1,312 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "MORPHSNAP_BUILD_TESTS": "ON",
+        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORPHSNAP_SAFE_BUILD_MODE": "ON",
+        "MORPHSNAP_MSVC_MP": "2",
+        "MORPHSNAP_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows x64 MSVC Release",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "MORPHSNAP_ENABLE_SANITIZERS": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows x64 MSVC Debug",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDebug"
+      }
+    },
+    {
+      "name": "windows-msvc-safe",
+      "displayName": "Windows x64 MSVC Safe Local Build",
+      "inherits": "windows-msvc-release",
+      "cacheVariables": {
+        "MORPHSNAP_BUILD_TESTS": "OFF",
+        "MORPHSNAP_SAFE_BUILD_MODE": "ON",
+        "MORPHSNAP_MSVC_MP": "2",
+        "MORPHSNAP_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-stress",
+      "displayName": "Windows x64 MSVC Stress Build",
+      "inherits": "windows-msvc-release",
+      "cacheVariables": {
+        "MORPHSNAP_BUILD_TESTS": "ON",
+        "MORPHSNAP_SAFE_BUILD_MODE": "OFF",
+        "MORPHSNAP_MSVC_MP": "2",
+        "MORPHSNAP_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "windows-clang-asan",
+      "displayName": "Windows x64 Clang-cl + ASAN/UBSAN",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "macos-universal-release",
+      "displayName": "macOS Universal Binary Release (x64 + arm64)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    },
+    {
+      "name": "macos-arm64-debug",
+      "displayName": "macOS Apple Silicon Debug",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "macos-x64-debug",
+      "displayName": "macOS Intel Debug",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
+        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux x64 GCC Release",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_COMPILER": "gcc"
+      }
+    },
+    {
+      "name": "linux-clang-asan",
+      "displayName": "Linux x64 Clang ASAN/TSAN",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "clang",
+        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "displayName": "CI: Windows (no GUI, tests only)",
+      "inherits": "windows-msvc-release",
+      "cacheVariables": {
+        "MORPHSNAP_BUILD_TESTS": "ON",
+        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORPHSNAP_SAFE_BUILD_MODE": "OFF",
+        "MORPHSNAP_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "ci-macos",
+      "displayName": "CI: macOS Universal (tests only)",
+      "inherits": "macos-universal-release",
+      "cacheVariables": {
+        "MORPHSNAP_BUILD_TESTS": "ON",
+        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-safe",
+      "configurePreset": "windows-msvc-safe",
+      "configuration": "Release",
+      "jobs": 2
+    },
+    {
+      "name": "windows-single",
+      "configurePreset": "windows-msvc-safe",
+      "configuration": "Release",
+      "jobs": 1
+    },
+    {
+      "name": "windows-stress-test",
+      "configurePreset": "windows-msvc-stress",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-msvc-safe",
+      "configuration": "Release",
+      "jobs": 2
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-msvc-debug",
+      "configuration": "Debug",
+      "jobs": 2
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-universal-release",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "macos-debug-arm64",
+      "configurePreset": "macos-arm64-debug",
+      "configuration": "Debug",
+      "jobs": 4
+    },
+    {
+      "name": "ci-windows-build",
+      "configurePreset": "ci-windows",
+      "configuration": "Release",
+      "jobs": 4
+    },
+    {
+      "name": "ci-macos-build",
+      "configurePreset": "ci-macos",
+      "configuration": "Release",
+      "jobs": 4
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-tests",
+      "configurePreset": "windows-msvc-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 120
+      }
+    },
+    {
+      "name": "macos-tests",
+      "configurePreset": "macos-universal-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 120
+      }
+    },
+    {
+      "name": "ci-windows-tests",
+      "configurePreset": "ci-windows",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "extra"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 180
+      }
+    },
+    {
+      "name": "ci-macos-tests",
+      "configurePreset": "ci-macos",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "extra"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 180
+      }
+    }
+  ]
+}

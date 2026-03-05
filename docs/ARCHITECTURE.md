@@ -1,371 +1,192 @@
-# Morphy Architecture Guide
+# MorphSnap - Architecture Document
 
-This document provides a detailed technical overview of Morphy's architecture for developers and contributors.
+**Date:** 2026-03-04
+**Version:** 3.3.0
+**Type:** Desktop Audio Plugin (VST3/AU)
+**Pattern:** Layered plugin architecture with strict thread-domain separation
 
-## System Architecture
+## Executive Summary
 
-### Audio Processing Pipeline
+MorphSnap is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Audio Thread                               │
-│  ┌────────────┐    ┌────────────┐    ┌────────────────┐         │
-│  │  Input     │───▶│  Morphing  │───▶│   Output       │         │
-│  │  Buffer    │    │   Engine   │    │   Buffer       │         │
-│  └────────────┘    └─────┬──────┘    └────────────────┘         │
-│                          │                                       │
-│                    ┌─────▼──────┐                               │
-│                    │  Analysis  │                               │
-│                    │  (RMS/FFT) │                               │
-│                    └─────┬──────┘                               │
-└──────────────────────────┼───────────────────────────────────────┘
-                           │
-                    Lock-Free Queue
-                           │
-┌──────────────────────────▼───────────────────────────────────────┐
-│                        UI Thread                                  │
-│  ┌────────────┐    ┌────────────┐    ┌────────────────┐         │
-│  │  Visual    │◀───│  Message   │◀───│   AI Client    │         │
-│  │  Feedback  │    │  Handler   │    │   (Optional)   │         │
-│  └────────────┘    └────────────┘    └────────────────┘         │
-└──────────────────────────────────────────────────────────────────┘
-```
+## Technology Stack
 
-### Thread Safety Model
+| Category | Technology | Version | Justification |
+|----------|-----------|---------|---------------|
+| Language | C++ | C++20 | Required by JUCE 8; provides constexpr, concepts, ranges |
+| Framework | JUCE | 8.0.4 | Industry-standard audio plugin framework; VST3/AU hosting |
+| Build | CMake | 3.24+ | Cross-platform builds with FetchContent for dependency management |
+| JSON | nlohmann/json | 3.11.3 | Header-only JSON for MCP server protocol |
+| Testing | Catch2 | v3.4.0 | Modern C++ test framework with BDD sections |
+| CI | GitHub Actions | — | Multi-platform: Windows MSVC, macOS Universal, Linux ASAN/UBSAN |
 
-Morphy uses a careful thread safety model to ensure reliable real-time audio processing:
+## Architecture Pattern
 
-1. **Audio Thread**: Never blocks, uses lock-free data structures
-2. **UI Thread**: Can block, handles all user interaction
-3. **AI Thread**: Separate thread for MCP communication
+MorphSnap follows a **layered plugin architecture** where:
 
-#### Thread-Safe Communication
-
-- `LockFreeQueue<T, Capacity>`: Single-producer, single-consumer queue
-- `std::atomic<T>`: For simple value updates
-- `juce::CriticalSection`: For non-real-time operations
-
-## Core Components
-
-### PluginProcessor
-
-The main audio processor handles:
-- Audio buffer processing
-- Parameter management
-- Plugin state persistence
-- Coordination between subsystems
-
-```cpp
-class MorphyAudioProcessor : public juce::AudioProcessor {
-    // Real-time processing
-    void processBlock(juce::AudioBuffer<float>& buffer) override;
-    
-    // Thread-safe parameter access
-    juce::AudioProcessorValueTreeState m_APVTS;
-    
-    // Morphing engine
-    MorphingEngine m_morphingEngine;
-    
-    // AI integration (optional)
-    std::unique_ptr<MCPClient> m_mcpClient;
-};
-```
-
-### MorphingEngine
-
-The morphing engine is responsible for:
-- Storing parameter snapshots
-- Interpolating between states
-- Managing morphing trajectories
-
-```cpp
-class MorphingEngine {
-    // Snapshot storage
-    std::array<SnapshotSlot, 4> m_slots;
-    
-    // Current position (atomic for thread safety)
-    std::atomic<float> m_morphX{0.5f};
-    std::atomic<float> m_morphY{0.5f};
-    
-    // Interpolation function
-    InterpolationCurves::InterpolationFunction m_interpolationFunc;
-};
-```
-
-### Interpolation System
-
-Multiple interpolation curves are supported:
-
-```cpp
-namespace InterpolationCurves {
-    float linear(float a, float b, float t);
-    float cosine(float a, float b, float t);
-    float cubic(float a, float b, float t);
-    float smoothstep(float a, float b, float t);
-    float bezier(float p0, float p1, float p2, float p3, float t);
-}
-```
-
-### MCP Client Architecture
-
-The MCP client enables AI integration:
+1. **Plugin layer** (entry point) owns all subsystem instances as member variables
+2. **Core layer** provides pure computation (audio-thread-safe, no I/O)
+3. **Host layer** manages the hosted plugin lifecycle and parameter I/O
+4. **AI layer** provides network I/O (MCP server) isolated on its own thread
+5. **UI layer** renders state and enqueues commands via the LockFreeQueue
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    MCP Client                        │
-│  ┌─────────────┐    ┌─────────────┐                │
-│  │  WebSocket  │◀──▶│   Message   │                │
-│  │   Layer     │    │   Handler   │                │
-│  └─────────────┘    └──────┬──────┘                │
-│                            │                        │
-│  ┌─────────────┐    ┌──────▼──────┐                │
-│  │   Request   │◀──▶│  Response   │                │
-│  │   Manager   │    │   Router    │                │
-│  └─────────────┘    └─────────────┘                │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│                  Plugin Layer                     │
+│         MorphSnapProcessor (owns all)             │
+├──────────┬──────────┬───────────┬────────────────┤
+│  Core    │  Host    │   AI      │   UI            │
+│ (DSP)    │ (VST3)   │  (MCP)    │  (JUCE GUI)     │
+│          │          │           │                  │
+│ Morph    │ PlugHost │ MCPServer │ MorphPad         │
+│ Physics  │ ParamBr. │ ToolHndlr│ SnapFader        │
+│ Genetic  │ Scanner  │ TokenOpt │ SnapshotRing     │
+│ Spectral │          │ InstReg  │ V2TabBar         │
+│ Granular │          │ LinkBcst │ ModMatrixPanel   │
+│ ModEng   │          │ Dataset  │ PresetBrowser    │
+├──────────┴──────────┴───────────┴────────────────┤
+│              MIDI Layer + Preset Layer             │
+│         MIDIRouter  │  MetaPresetManager          │
+└─────────────────────┴─────────────────────────────┘
 ```
 
-### UI Component Hierarchy
+## Threading Model
+
+Three thread domains with strict boundaries:
+
+### Audio Thread
+- **Entry:** `MorphSnapProcessor::processBlock()`
+- **Classes:** `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` (read side), `MIDIRouter`, `ModulationEngine`, `SpectralMorphEngine`, `GranularMorphEngine`
+- **Contract:** All methods `noexcept`, zero allocations after `prepare()`, no locks, no I/O
+- **Data flow:** Drains `LockFreeQueue` → processes MIDI → computes morph → applies to hosted plugin via `ParameterBridge`
+
+### Message Thread
+- **Entry:** JUCE message loop
+- **Classes:** All UI components, Timer callbacks, deferred plugin loading
+- **Contract:** Standard JUCE rules. May write to `SnapshotBank` (serialized via SpinLock), `ModulationMatrix` (double-buffer publish)
+
+### MCP Thread
+- **Entry:** `MCPServer::run()` (TCP accept loop)
+- **Classes:** `MCPServer`, `MCPToolHandler`, `MCPToolsExtended`
+- **Contract:** JSON-RPC I/O. Enqueues parameter changes to audio thread via `LockFreeQueue`. Reads snapshot data via seqlock.
+
+### Concurrency Primitives
+
+| Primitive | Location | Purpose |
+|-----------|----------|----------|
+| Seqlock | `SnapshotBank` | Lock-free audio reads with retry; UI/MCP writes via SpinLock |
+| SPSC LockFreeQueue | `MorphSnapProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio |
+| Double-buffer | `ModulationMatrix` | Atomic route publish with mirror-copy |
+| `std::atomic<bool>` | `GranularMorphEngine::active_` | Thread-safe enable/disable |
+| `std::atomic<int>` | `ModulationMatrix::readIndex_` | Buffer swap index |
+| `memory_order_relaxed` atomics | Various | Morph position, physics mode, toggle flags |
+
+## Processing Pipeline
 
 ```
-MorphyAudioProcessorEditor
-├── MorphingPadComponent (central 2D pad)
-│   ├── Grid overlay
-│   ├── Snapshot slots (4 corners)
-│   ├── Position indicator
-│   └── Trajectory display
-├── ParameterSnapshotComponent
-│   └── Snapshot slot buttons
-├── VisualFeedback (overlay)
-│   ├── Level meters
-│   └── Spectrum display
-├── WaveformDisplay
-├── Control panels
-│   ├── Left panel (morphing controls)
-│   └── Right panel (output + AI controls)
+                    ┌─ UI Thread ──────────┐     ┌─ MCP Thread ────────┐
+                    │  User drags MorphPad  │     │  AI sets parameter   │
+                    │  → enqueue ParamCmd   │     │  → enqueue ParamCmd  │
+                    └──────────┬───────────┘     └──────────┬──────────┘
+                               │                            │
+                               ▼                            ▼
+                    ┌─────── LockFreeQueue (SPSC, 8192) ──────────┐
+                               │
+                    ┌──────────▼───────────────────────────────────┐
+                    │            Audio Thread                       │
+                    │                                               │
+                    │  1. Drain LockFreeQueue commands              │
+                    │  2. MIDIRouter: note triggers → snapshots    │
+                    │     CC1 → fader position                      │
+                    │  3. MorphProcessor::process()                 │
+                    │     a. PhysicsEngine (elastic/drift/direct)   │
+                    │     b. InterpolationEngine (IDW or linear)    │
+                    │     c. DiscreteParameterHandler (snap steps)  │
+                    │     d. Smoothing filter                       │
+                    │  4. ModulationEngine (LFOs, env, sequencer)  │
+                    │  5. ParameterBridge → hosted plugin params    │
+                    │  6. HostManager.processBlock(buffer, midi)    │
+                    └──────────────────────────────────────────────┘
 ```
 
-## Parameter System
+## State Persistence
 
-### Parameter Layout
+`getStateInformation()` / `setStateInformation()` serialize:
 
-```cpp
-static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout() {
-    return {
-        // Morphing position
-        std::make_unique<juce::AudioParameterFloat>("morphX", "Morph X", 0.0f, 1.0f, 0.5f),
-        std::make_unique<juce::AudioParameterFloat>("morphY", "Morph Y", 0.0f, 1.0f, 0.5f),
-        
-        // Morphing settings
-        std::make_unique<juce::AudioParameterChoice>("morphMode", "Morph Mode", {...}),
-        std::make_unique<juce::AudioParameterFloat>("morphSpeed", "Morph Speed", 0.01f, 10.0f, 1.0f),
-        
-        // AI integration
-        std::make_unique<juce::AudioParameterBool>("aiEnabled", "AI Automation", false),
-        // ...
-    };
-}
-```
+1. **APVTS parameters** — JUCE AudioProcessorValueTreeState XML
+2. **Snapshot bank** — base64-encoded float arrays in XML
+3. **Hosted plugin description** — `PluginDescription` XML for re-loading
+4. **Hosted plugin state** — opaque VST3/AU state chunk (binary blob)
+5. **Modulation routes** — XML via `ModulationMatrix::toXml()`
 
-### State Persistence
+Plugin reload on state restore uses Timer-based deferred loading with retry logic (max 10 attempts) to handle DAW threading constraints.
 
-Plugin state is saved as XML:
+## Key Subsystem Details
 
-```xml
-<MORPHY_STATE>
-  <MORPHY_STATE param1="value1" .../>
-  <MORPHING_ENGINE>
-    <SNAPSHOTS>
-      <SLOT index="0" color="...">
-        {snapshot JSON data}
-      </SLOT>
-    </SNAPSHOTS>
-  </MORPHING_ENGINE>
-  <AI_INTEGRATION mode="0" automationActive="false"/>
-</MORPHY_STATE>
-```
+### SnapshotBank (Seqlock Pattern)
+- 12 slots, each holding a `ParameterState` (fixed `std::array<float, 2048>`)
+- Heap-allocated slot array (~384 KB) to avoid stack overflow
+- Audio thread reads via seqlock (retry on torn read)
+- UI/MCP writes serialize via SpinLock + sequence counter increment
 
-## MCP Protocol Implementation
+### Physics Modes
+- **Direct:** Raw cursor position → interpolation (no physics)
+- **Elastic:** Spring-damper system (`ElasticState` with position + velocity), three presets
+- **Drift:** Perlin noise wandering around target with speed/distance/chaos controls
 
-### Message Types
+### Genetic Engine
+- `breed()` crosses two snapshots with configurable crossover ratio and mutation
+- `SanityConfig` protects dangerous parameters (Volume, Pitch, Bypass)
+- `smartRandomize()` only mutates user-learned parameters
 
-1. **Request**: Requires response
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": "req_123",
-     "method": "tools/call",
-     "params": { ... }
-   }
-   ```
+### Parameter Classification (v3.3.0)
+- `ParameterClassifier` categorizes: Continuous, Discrete, Binary, Frequency, Decibel, Enumeration
+- `DiscreteParameterHandler` snaps discrete/binary params to valid steps during morphing
+- `TokenOptimizer` manages AI token budgets by selecting which parameters to expose
 
-2. **Response**: Answer to request
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": "req_123",
-     "result": { ... }
-   }
-   ```
+### ModulationMatrix (Double-Buffer)
+- Two `RouteBuffer` instances (up to 64 routes each)
+- Message thread mutates write buffer, then publishes via `readIndex_.store(release)`
+- Audio thread reads from `readIndex_.load(acquire)` — never writes
+- After publish, write buffer is mirrored from the just-published state
 
-3. **Notification**: No response expected
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "method": "notifications/initialized"
-   }
-   ```
+### V2 Audio Engines
+- **SpectralMorphEngine:** FFT-based overlap-add vocoder with magnitude/phase interpolation
+- **GranularMorphEngine:** Grain pool with position/size/density randomization
+- **FormantMorphEngine:** Formant-preserving spectral envelope morphing
+- **VAEMorphEngine:** Variational autoencoder latent-space morphing
+- **HybridBlend:** Coordinates multiple engines with configurable blend weights
 
-### Available AI Tools
+## Testing Strategy
 
-| Tool | Description |
-|------|-------------|
-| `analyze_audio` | Analyze current audio context |
-| `generate_morph_trajectory` | Create morphing path |
-| `suggest_parameters` | Get parameter suggestions |
-| `learn_pattern` | Learn from user gesture |
+- **Unit tests** (Catch2): Core engines, physics, genetics, sidechain, SIMD, spectral, granular, modulation
+- **Integration tests**: Plugin lifecycle (load/unload/state), MCP server tool invocations
+- **Performance benchmarks**: CPU usage, audio processing throughput
+- **DAW test matrix**: Manual test docs for Ableton, FL Studio, Logic, Reaper
+- **Automated scripts**: Audio quality, real-time safety, VST3 validator (pluginval strictness 5)
+- **Sanitizers**: ASAN + UBSAN via Clang on Linux CI
 
-### AI Command Types
+Tests compile with `MORPHSNAP_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 
-```cpp
-enum class AICommandType {
-    AnalyzeAudio,           // Request audio analysis
-    GenerateMorphPath,      // Generate trajectory
-    SuggestParameters,      // Parameter suggestions
-    AutomateMorphing,       // Take control
-    SetMorphPosition,       // Set pad position
-    StartTrajectory,        // Begin playback
-    StopTrajectory          // Stop playback
-};
-```
+## Deployment Architecture
 
-## Performance Considerations
+- **CI/CD:** GitHub Actions with 3 jobs:
+  1. `build-windows`: MSVC 2022 x64 → VST3 + pluginval + tests
+  2. `build-macos`: Universal Binary (x64+arm64) → VST3 + AU + pluginval + tests
+  3. `sanitizer-tests`: Linux Clang 17 with ASAN/UBSAN
+- **Release:** Automatic GitHub Release on `v*` tags with Windows and macOS zip artifacts
+- **Plugin locations:**
+  - Windows: `C:\Program Files\Common Files\VST3\`
+  - macOS: `/Library/Audio/Plug-Ins/VST3/` (VST3), `/Library/Audio/Plug-Ins/Components/` (AU)
 
-### Real-Time Safety
+## Platform Notes
 
-- No memory allocation in audio thread
-- Lock-free queues for cross-thread communication
-- Atomic operations for parameter updates
-- Pre-allocated buffers for analysis
+- Windows: `/STACK:4194304` (4 MB) for FL Studio plugin-in-plugin hosting
+- `cmake/PatchJuceForMSVC.cmake` patches JUCE headers conflicting with Windows macros
+- AU format only on macOS; Windows builds VST3 only
+- macOS deployment target: 11.0 (Big Sur)
+- macOS builds Universal Binary (x86_64 + arm64)
 
-### CPU Optimization
+---
 
-- SIMD-ready interpolation functions
-- Efficient FFT for spectrum analysis
-- Cached interpolation functions
-- Minimal UI repaint regions
-
-### Memory Management
-
-- Fixed-size ring buffers
-- Pre-allocated snapshot storage
-- Object pooling for messages
-- Smart pointers for owned objects
-
-## Build Configuration
-
-### Debug vs Release
-
-```cmake
-# Debug: Full logging, assertions enabled
-set(CMAKE_BUILD_TYPE Debug)
-
-# Release: Optimized, logging disabled
-set(CMAKE_BUILD_TYPE Release)
-```
-
-### Platform-Specific Notes
-
-**Windows**:
-- VST3 output to `C:/Program Files/Common Files/VST3`
-- Requires Visual Studio 2019+
-
-**macOS**:
-- AU output to `/Library/Audio/Plug-Ins/Components`
-- VST3 output to `/Library/Audio/Plug-Ins/VST3`
-- Requires Xcode 12+
-
-**Linux**:
-- VST3 output to `~/.vst3`
-- Requires GCC 10+ or Clang 12+
-
-## Testing
-
-### Unit Tests
-
-Located in `tests/` directory:
-
-```cpp
-TEST_CASE("MorphingEngine interpolation") {
-    MorphingEngine engine;
-    
-    // Set up snapshots
-    engine.setSnapshot(0, createTestSnapshot(0.0f));
-    engine.setSnapshot(1, createTestSnapshot(1.0f));
-    
-    // Test interpolation
-    engine.setMorphPosition(0.5f, 0.5f);
-    auto result = engine.captureCurrentState();
-    
-    REQUIRE(result.getParameter("test")->currentValue == Approx(0.5f));
-}
-```
-
-### Running Tests
-
-```bash
-cmake --build build --target MorphyTests
-./build/bin/MorphyTests
-```
-
-## Extending Morphy
-
-### Adding New Interpolation Modes
-
-1. Add mode to `InterpolationMode` enum
-2. Implement in `InterpolationCurves` namespace
-3. Update `getFunction()` switch
-4. Add to UI combo box
-
-### Adding New AI Tools
-
-1. Define tool in MCP server
-2. Add handling in `AIIntegration::handleMessage()`
-3. Implement response logic
-4. Update documentation
-
-### Creating New Themes
-
-1. Add theme type to `ThemeType` enum
-2. Implement `initializeXxxTheme()` method
-3. Update `setThemeType()` switch
-4. Add to theme selector
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Plugin not loading in DAW**
-   - Check plugin format compatibility
-   - Verify build architecture (x64/ARM)
-   - Check code signing (macOS)
-
-2. **AI connection fails**
-   - Verify MCP server is running
-   - Check WebSocket URI format
-   - Review firewall settings
-
-3. **Audio glitches**
-   - Increase buffer size in DAW
-   - Check for CPU overload
-   - Disable unnecessary analysis
-
-### Debug Logging
-
-Enable verbose logging:
-
-```cpp
-Logger::getInstance().setLogLevel(LogLevel::Debug);
-Logger::getInstance().setLogFile(juce::File::getSpecialLocation(
-    juce::File::tempDirectory).getChildFile("morphy.log"));
-```
+_Generated using BMAD Method `document-project` workflow_

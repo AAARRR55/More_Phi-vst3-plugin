@@ -14,6 +14,7 @@
 
 #include "ModulationTypes.h"
 #include <cmath>
+#include <cstdint>
 
 namespace morphsnap {
 
@@ -81,6 +82,13 @@ private:
     float       randTarget_  = 0.0f;       // next random target
 
     float       currentValue_= 0.0f;       // last computed output
+
+    // ── PRNG (xorshift32, lock-free, audio-thread safe) ───────────────────────
+
+    uint32_t    rngState_    = 0x12345678u; // non-zero seed
+
+    /** xorshift32 — returns a value in [0, 1). No heap, no locks. */
+    float nextRandom() noexcept;
 
     // ── Waveform generators (pure math, noexcept) ─────────────────────────────
 

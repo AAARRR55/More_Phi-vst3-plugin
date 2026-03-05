@@ -150,6 +150,10 @@ private:
     // Helper: Format compatibility report
     static juce::String formatCompatibilityReport(
         const SnapshotComparison& comparison);
+
+    // Tool: generate_dataset
+    // Renders multiple audio clips with random parameter settings to create a machine learning dataset
+    static juce::String generateDataset(const juce::var& params, MorphSnapProcessor& processor);
 };
 
 // Tool descriptions for MCP discovery

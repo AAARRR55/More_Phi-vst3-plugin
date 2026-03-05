@@ -5,6 +5,7 @@
 
 #include "V2PresetBrowserPanel.h"
 #include "Plugin/PluginProcessor.h"
+#include "Preset/PresetSerializer.h"
 
 #include <algorithm>
 #include <numeric>
@@ -473,10 +474,11 @@ void V2PresetBrowserPanel::onSaveClicked()
                 entry.createdTimestamp  = juce::Time::currentTimeMillis() / 1000LL;
                 entry.modifiedTimestamp = entry.createdTimestamp;
 
-                // TODO: Serialize current processor state into entry.jsonData.
-                // Example (to be wired when a serializer is available):
-                //   entry.jsonData = serializeProcessorState(proc_);
-                entry.jsonData = "";
+                // Serialize current processor state (snapshots + morph config) to JSON
+                juce::var stateJson = PresetSerializer::serialize(
+                    proc_.getSnapshotBank(),
+                    proc_.getAPVTS());
+                entry.jsonData = juce::JSON::toString(stateJson).toStdString();
 
                 if (presetLibrary_.save(entry))
                 {
@@ -518,12 +520,24 @@ void V2PresetBrowserPanel::onLoadClicked()
         return;
     }
 
-    // TODO: Apply the loaded preset's jsonData to the processor.
-    // Example (to be wired when a deserializer is available):
-    //   applyPresetToProcessor(proc_, loaded.jsonData);
-    //
-    // For now the entry is loaded into memory; wire state application here.
-    juce::ignoreUnused(loaded);
+    // Deserialize and apply the preset state
+    if (!loaded.jsonData.empty())
+    {
+        juce::var stateJson;
+        if (juce::JSON::parse(juce::String(loaded.jsonData), stateJson).wasOk())
+        {
+            if (!PresetSerializer::deserialize(stateJson,
+                                               proc_.getSnapshotBank(),
+                                               proc_.getAPVTS()))
+            {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Load Failed",
+                    "Could not parse preset data for \"" + juce::String(sel->name) + "\".");
+                return;
+            }
+        }
+    }
 }
 
 void V2PresetBrowserPanel::onDeleteClicked()

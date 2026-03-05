@@ -210,6 +210,8 @@ public:
     template<typename Fn>
     void forEachActive(Fn&& fn) noexcept
     {
+        static_assert(noexcept(fn(std::declval<Grain&>(), 0)),
+            "forEachActive callback must be noexcept for audio thread safety");
         for (int i = 0; i < MAX_GRAINS; ++i)
         {
             if (grains_[i].active)

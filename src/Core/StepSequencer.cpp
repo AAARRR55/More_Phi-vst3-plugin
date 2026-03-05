@@ -14,7 +14,6 @@
 #include "StepSequencer.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>  // std::rand, RAND_MAX
 
 namespace morphsnap {
 
@@ -38,6 +37,18 @@ void StepSequencer::reset() noexcept
     pingPongForward_= true;
     smoothedValue_  = 0.0f;
     targetValue_    = steps_[0];
+    rngState_       = 0xDEADBEEFu; // reset to deterministic seed
+}
+
+// ── PRNG ──────────────────────────────────────────────────────────────────────
+
+float StepSequencer::nextRandom() noexcept
+{
+    // xorshift32 — identical pattern to GranularMorphEngine::nextRandom()
+    rngState_ ^= rngState_ << 13;
+    rngState_ ^= rngState_ >> 17;
+    rngState_ ^= rngState_ << 5;
+    return static_cast<float>(rngState_) * 2.3283064365386963e-10f; // / 2^32
 }
 
 // ── Parameter setters ─────────────────────────────────────────────────────────
@@ -108,7 +119,7 @@ void StepSequencer::advanceStep() noexcept
             break;
 
         case Direction::Random:
-            currentStep_ = std::rand() % stepCount_;
+            currentStep_ = static_cast<int>(nextRandom() * static_cast<float>(stepCount_));
             break;
 
         default:

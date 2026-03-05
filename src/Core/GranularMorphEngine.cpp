@@ -135,12 +135,12 @@ void GranularMorphEngine::setPositionRandomization(float amount) noexcept
 
 void GranularMorphEngine::setActive(bool active) noexcept
 {
-    active_ = active;
+    active_.store(active, std::memory_order_relaxed);
 }
 
 bool GranularMorphEngine::isActive() const noexcept
 {
-    return active_;
+    return active_.load(std::memory_order_relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ void GranularMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
                                        const juce::AudioBuffer<float>& bufB,
                                        float alpha) noexcept
 {
-    if (!active_)
+    if (!active_.load(std::memory_order_relaxed))
         return;
 
     const int numChannelsA = bufA.getNumChannels();
@@ -322,7 +322,7 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
 
 void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
 {
-    pool_.forEachActive([&](Grain& g, int grainIdx)
+    pool_.forEachActive([&](Grain& g, int grainIdx) noexcept
     {
         const auto& sb = sourceBuffers_[static_cast<size_t>(g.sourceSelect)];
 

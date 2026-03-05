@@ -140,11 +140,11 @@ public:
     virtual void clearAllRoutes() = 0;
 
     /**
-     * Returns the number of currently active (added but not removed) routes.
+     * Returns the number of currently assigned (added but not removed) routes.
      *
      * Message-thread only (result may be stale by the time the caller uses it).
      */
-    virtual int getActiveRouteCount() const = 0;
+    virtual int getAssignedRouteCount() const = 0;
 
     /**
      * Returns a const reference to the route with the given ID.

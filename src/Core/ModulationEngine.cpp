@@ -18,8 +18,8 @@
  */
 #include "ModulationEngine.h"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <cstdlib>   // std::rand / RAND_MAX
 #include <stdexcept>
 
 namespace morphsnap {
@@ -67,6 +67,7 @@ void ModulationEngine::reset() noexcept
     morphX_         = 0.5f;
     morphY_         = 0.5f;
     faderPos_       = 0.0f;
+    rngState_       = 0xCAFEBABEu; // reset to deterministic seed
 }
 
 // ── Audio-thread setters ──────────────────────────────────────────────────────
@@ -114,6 +115,17 @@ void ModulationEngine::processMIDI(const juce::MidiBuffer& midi) noexcept
     }
 }
 
+// ── PRNG ──────────────────────────────────────────────────────────────────────
+
+float ModulationEngine::nextRandom() noexcept
+{
+    // xorshift32 — identical pattern to GranularMorphEngine::nextRandom()
+    rngState_ ^= rngState_ << 13;
+    rngState_ ^= rngState_ >> 17;
+    rngState_ ^= rngState_ << 5;
+    return static_cast<float>(rngState_) * 2.3283064365386963e-10f; // / 2^32
+}
+
 // ── Source-value accumulator ──────────────────────────────────────────────────
 
 void ModulationEngine::updateSourceValues(float dt) noexcept
@@ -153,8 +165,8 @@ void ModulationEngine::updateSourceValues(float dt) noexcept
 
     // ── Drift / random sources ────────────────────────────────────────────────
     // Simple per-block jitter — different seed offsets for each source
-    const float rand1 = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX)) * 2.0f - 1.0f;
-    const float rand2 = (static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX)) * 2.0f - 1.0f;
+    const float rand1 = nextRandom() * 2.0f - 1.0f;
+    const float rand2 = nextRandom() * 2.0f - 1.0f;
     sourceValues_[static_cast<int>(ModSourceId::DriftRandom_1)] = rand1;
     sourceValues_[static_cast<int>(ModSourceId::DriftRandom_2)] = rand2;
 
@@ -209,9 +221,9 @@ void ModulationEngine::setRouteEnabled(int routeId, bool enabled)
     matrix_.setRouteEnabled(routeId, enabled);
 }
 
-int ModulationEngine::getActiveRouteCount() const
+int ModulationEngine::getAssignedRouteCount() const
 {
-    return matrix_.getActiveRouteCount();
+    return matrix_.getAssignedRouteCount();
 }
 
 const ModRoute& ModulationEngine::getRoute(int routeId) const
@@ -287,6 +299,8 @@ void ModulationEngine::setStepCount(int seqIndex, int count)
 
 LFO& ModulationEngine::getLFO(int index)
 {
+    // Assert in debug builds for immediate feedback; throw for release safety
+    assert(index >= 0 && index < NUM_LFOS && "LFO index out of range");
     if (index < 0 || index >= NUM_LFOS)
         throw std::out_of_range("ModulationEngine::getLFO — index out of range");
     return lfos_[static_cast<size_t>(index)];
@@ -294,6 +308,7 @@ LFO& ModulationEngine::getLFO(int index)
 
 EnvelopeFollower& ModulationEngine::getEnvelope(int index)
 {
+    assert(index >= 0 && index < NUM_ENVELOPES && "Envelope index out of range");
     if (index < 0 || index >= NUM_ENVELOPES)
         throw std::out_of_range("ModulationEngine::getEnvelope — index out of range");
     return envelopes_[static_cast<size_t>(index)];
@@ -301,6 +316,7 @@ EnvelopeFollower& ModulationEngine::getEnvelope(int index)
 
 StepSequencer& ModulationEngine::getStepSequencer(int index)
 {
+    assert(index >= 0 && index < NUM_STEP_SEQS && "StepSequencer index out of range");
     if (index < 0 || index >= NUM_STEP_SEQS)
         throw std::out_of_range("ModulationEngine::getStepSequencer — index out of range");
     return stepSequencers_[static_cast<size_t>(index)];

@@ -181,7 +181,10 @@ void MorphProcessor::applySmoothing(std::vector<float>& output)
 
 void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
 {
-    if (!listenMode_ || discreteMap_.empty()) return;
+    if (!listenMode_) return;
+
+    const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
+    if (discreteMap_.empty()) return;
 
     const size_t count = std::min(output.size(), discreteMap_.size());
     for (size_t i = 0; i < count; ++i)

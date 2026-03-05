@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace morphsnap {
 
@@ -103,6 +104,13 @@ private:
     Direction direction_      = Direction::Forward;
     bool      pingPongForward_= true;
     double    sampleRate_     = 48000.0;
+
+    // ── PRNG (xorshift32, lock-free, audio-thread safe) ───────────────────────
+
+    uint32_t  rngState_       = 0xDEADBEEFu; // non-zero seed
+
+    /** xorshift32 — returns a value in [0, 1). No heap, no locks. */
+    float nextRandom() noexcept;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -11,16 +11,39 @@
  * - Only performs clamped arithmetic on vector elements
  * - vector::operator[] is noexcept when index is in range (guarded by prepare())
  *
- * Thread safety: apply() reads routes_/activeCount_ without a lock.
- * Route management methods must only be called from the message thread.
- * A future improvement could add a double-buffer swap for lock-free updates;
- * for now the contract mirrors ModulationState from ModulationTypes.h.
+ * Thread safety — double-buffer swap pattern:
+ *
+ *   Two RouteBuffer instances (buffers_[0] and buffers_[1]) are maintained.
+ *   readIndex_ (std::atomic<int>) names the buffer the audio thread reads.
+ *   writeIndex_ (int, message-thread-only) names the buffer being edited.
+ *
+ *   Message-thread write protocol (addRoute, removeRoute, setRouteDepth,
+ *   setRouteEnabled, clearAll):
+ *     1. Mutate buffers_[writeIndex_].
+ *     2. Publish: readIndex_.store(writeIndex_, memory_order_release).
+ *     3. Flip writeIndex_ = 1 - writeIndex_.
+ *     4. Mirror: copy the newly published buffer into the new write buffer so
+ *        the next edit starts from the current committed state.
+ *
+ *   Audio-thread read protocol (apply):
+ *     1. idx = readIndex_.load(memory_order_acquire).
+ *     2. Read buffers_[idx] — never writes to it.
+ *
+ *   Correctness guarantee: the audio thread only ever reads from the buffer
+ *   that was last published by the message thread. The message thread never
+ *   touches buffers_[readIndex_] after publishing, because it immediately
+ *   flips writeIndex_ to the other slot and copies state there.
+ *
+ *   Query methods (getRoute, getAssignedRouteCount, findFreeSlot,
+ *   isValidRouteId, toXml, fromXml) are message-thread-only and access
+ *   buffers_[writeIndex_] — the live "editor" view of the routes.
  */
 #pragma once
 
 #include "ModulationTypes.h"
 #include <juce_core/juce_core.h>
 #include <array>
+#include <atomic>
 #include <vector>
 #include <memory>
 
@@ -58,60 +81,90 @@ public:
     // ── Route management (message thread) ─────────────────────────────────────
 
     /**
-     * Add a new route. Returns the routeId (index into routes_) or -1 if full.
+     * Add a new route. Returns the routeId (slot index) or -1 if full.
      * Caller must validate that destParamIndex < maxParamCount.
+     * Publishes the updated buffer to the audio thread atomically.
      */
     int  addRoute(ModSourceId source, int destParamIndex, float depth);
 
     /**
      * Disable and free a route by its routeId.
      * No-op if routeId is out of range or already inactive.
+     * Publishes the updated buffer to the audio thread atomically.
      */
     void removeRoute(int routeId);
 
-    /** Update depth for an existing route. */
+    /** Update depth for an existing route.
+     *  Publishes the updated buffer to the audio thread atomically. */
     void setRouteDepth(int routeId, float depth);
 
-    /** Enable or disable a route without removing it. */
+    /** Enable or disable a route without removing it.
+     *  Publishes the updated buffer to the audio thread atomically. */
     void setRouteEnabled(int routeId, bool enabled);
 
-    /** Remove all routes. */
+    /** Remove all routes.
+     *  Publishes the updated buffer to the audio thread atomically. */
     void clearAll();
 
     // ── Query (message thread) ────────────────────────────────────────────────
 
-    /** Returns the number of currently assigned (enabled or disabled) routes. */
-    int getActiveRouteCount() const { return activeCount_; }
+    /** Returns the number of currently assigned (enabled or disabled) routes.
+     *  Reads from the write buffer — message thread only. */
+    int getAssignedRouteCount() const { return buffers_[writeIndex_].assignedCount; }
 
     /**
-     * Return a copy of the route at routeId.
+     * Return a const reference to the route at routeId.
+     * Reads from the write buffer — message thread only.
      * Throws std::out_of_range if routeId is invalid.
      */
     const ModRoute& getRoute(int routeId) const;
 
     // ── Serialization ─────────────────────────────────────────────────────────
 
-    /** Serialise all routes to an XML element. Caller owns the returned pointer. */
+    /** Serialise all routes to an XML element. Caller owns the returned pointer.
+     *  Reads from the write buffer — message thread only. */
     std::unique_ptr<juce::XmlElement> toXml() const;
 
     /**
      * Restore routes from a previously serialised XML element.
      * Invalid or out-of-range entries are silently skipped.
+     * Publishes the restored buffer to the audio thread atomically.
      */
     void fromXml(const juce::XmlElement& xml);
 
 private:
-    std::array<ModRoute, MAX_ROUTES> routes_{};
-    // Track which slots are occupied (enabled flag inside ModRoute serves as
-    // "assigned" flag; destParamIndex == -1 means unassigned).
-    int activeCount_   = 0;
+    // ── Double-buffer state ───────────────────────────────────────────────────
+
+    struct RouteBuffer
+    {
+        std::array<ModRoute, MAX_ROUTES> routes{};
+        // Track which slots are occupied (destParamIndex == -1 means unassigned).
+        int assignedCount = 0;
+    };
+
+    // Two buffers: audio thread reads buffers_[readIndex_],
+    // message thread writes to buffers_[writeIndex_].
+    RouteBuffer      buffers_[2];
+    std::atomic<int> readIndex_{ 0 };  // audio thread reads this index
+    int              writeIndex_ = 1;  // message thread writes this index (never 0 initially)
+
     int maxParamCount_ = 0;
 
-    /** Find the first unassigned slot; returns -1 if all slots are taken. */
+    // ── Helpers (message thread — operate on buffers_[writeIndex_]) ───────────
+
+    /** Find the first unassigned slot in the write buffer; returns -1 if full. */
     int findFreeSlot() const noexcept;
 
-    /** Return true if routeId names an assigned route slot. */
+    /** Return true if routeId names an assigned slot in the write buffer. */
     bool isValidRouteId(int routeId) const noexcept;
+
+    /**
+     * Atomically publish writeIndex_ as the new read buffer, then flip
+     * writeIndex_ to the other slot and copy the committed state into it so
+     * the next edit begins from a consistent baseline.
+     * Must be called at the end of every mutation on the message thread.
+     */
+    void publishAndMirror() noexcept;
 };
 
 } // namespace morphsnap

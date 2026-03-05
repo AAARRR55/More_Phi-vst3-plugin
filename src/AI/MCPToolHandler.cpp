@@ -67,6 +67,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "set_token_budget")               return MCPToolsExtended::setTokenBudget(params, p.getTokenOptimizer());
     if (method == "explain_parameter")              return MCPToolsExtended::explainParameter(params, p, p.getParameterClassifier());
     if (method == "find_related_parameters")        return MCPToolsExtended::findRelatedParameters(params, p, p.getParameterClassifier());
+    if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
 
     // Multi-instance tools
     if (method == "get_instance_info")    return getInstanceInfo(identity);
@@ -142,10 +143,12 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProc
     if (id < 0 || id >= bridge.getParameterCount())
         return toJString(json{{"success",false},{"error","invalid_param_id"}});
 
-    // Apply directly via ParameterBridge (uses setValueNotifyingHost)
-    // instead of the audio-thread command queue, so changes take
-    // effect immediately even when audio isn't playing.
-    bridge.setParameterNormalized(id, value);
+    // CRITICAL (Finding 2): Route through command queue for thread safety.
+    // This serializes MCP thread → audio thread, preventing data race with
+    // hosted plugin's setParameter() which is not thread-safe.
+    // Trade-off: Changes only apply when audio is playing, but this is
+    // better than crashing due to concurrent plugin API calls.
+    p.enqueueParameterSet(id, value);
 
     return toJString(json{{"success",true}});
 }
@@ -163,13 +166,16 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
     const int maxParamCount = bridge.getParameterCount();
     int applied = 0;
 
+    // CRITICAL (Finding 2): Route all parameter changes through the command queue
+    // for thread safety. This prevents concurrent plugin API calls from MCP thread
+    // and audio thread.
     for (const auto& item : *list)
     {
         const int id      = item.getProperty("id",    -1);
         const float value = static_cast<float>(item.getProperty("value", 0.0));
         if (id >= 0 && id < maxParamCount)
         {
-            bridge.setParameterNormalized(id, value);
+            p.enqueueParameterSet(id, value);
             ++applied;
         }
     }
@@ -196,15 +202,19 @@ juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapPr
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
         return toJString(json{{"success",false},{"error","invalid slot"}});
 
-    // Get snapshot values and apply directly via ParameterBridge
-    // (bypasses the audio-thread command queue so it works without playback)
+    // Get snapshot values and route through command queue for thread safety.
+    // CRITICAL (Finding 2): Must use enqueueParameterState() instead of direct
+    // applyParameterState() to prevent concurrent plugin API calls from
+    // MCP thread and audio thread (undefined behavior).
     std::vector<float> values;
     if (!p.getSnapshotBank().getSlotValuesCopy(slot, values))
         return toJString(json{{"success",false},{"error","empty_slot"}});
 
-    p.getParameterBridge().applyParameterState(values);
+    const int queued = p.enqueueParameterState(values);
+    if (queued == 0)
+        return toJString(json{{"success",false},{"error","queue_full"}});
 
-    return toJString(json{{"success",true},{"slot",slot}});
+    return toJString(json{{"success",true},{"slot",slot},{"queued",queued}});
 }
 
 juce::String MCPToolHandler::setMorphPosition(const juce::var& params, MorphSnapProcessor& p)

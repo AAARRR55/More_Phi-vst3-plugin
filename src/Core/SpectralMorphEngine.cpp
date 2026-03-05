@@ -73,6 +73,14 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
 
     hopSize_        = fftSize_ / 4;
     numBins_        = fftSize_ / 2 + 1;
+    // Latency = fftSize_ + hopSize_ samples.
+    // The theoretical minimum overlap-add latency for a hop-size-H vocoder is H
+    // samples (one hop of look-ahead). We report fftSize_ + hopSize_ because the
+    // output buffer must be pre-filled with one full FFT frame (fftSize_ samples)
+    // before useful output is available, plus one hop of ring-buffer fill time
+    // (hopSize_) before the first processFrame() fires. This correctly compensates
+    // the DAW's PDC (Plugin Delay Compensation) so the morphed signal aligns with
+    // the dry signal in the session timeline.
     latencySamples_ = fftSize_ + hopSize_;
 
     // JUCE FFT: fftSize = 2^order
@@ -486,14 +494,20 @@ void SpectralMorphEngine::interpolatePhase(const float* phaseA, const float* pha
         float deltaA = phaseA[k] - prevPhaseA[k];
         float deltaB = phaseB[k] - prevPhaseB[k];
 
-        // Phase unwrap into [-π, π]
-        while (deltaA >  kSMPi) deltaA -= kSMTwoPi;
-        while (deltaA < -kSMPi) deltaA += kSMTwoPi;
-        while (deltaB >  kSMPi) deltaB -= kSMTwoPi;
-        while (deltaB < -kSMPi) deltaB += kSMTwoPi;
+        // Phase unwrap into [-π, π].
+        // std::remainder(x, 2π) is equivalent to the while-loop unwrap but
+        // handles large differences in a single step with no loop overhead.
+        deltaA = std::remainder(deltaA, kSMTwoPi);
+        deltaB = std::remainder(deltaB, kSMTwoPi);
 
         const float ifMorph = oneMinusAlpha * deltaA + alpha * deltaB;
         synthPhase[k] += ifMorph;
+        // Normalize synthPhase to [-π, π] to prevent float precision loss
+        // after long playback sessions (~10 h at 86 hops/s the accumulator
+        // would reach ~3 million radians, where 32-bit float mantissa bits
+        // are exhausted and phase increments become indistinguishable from 0).
+        if (synthPhase[k] > kSMPi || synthPhase[k] < -kSMPi)
+            synthPhase[k] = std::remainder(synthPhase[k], kSMTwoPi);
 
         prevPhaseA[k] = phaseA[k];
         prevPhaseB[k] = phaseB[k];

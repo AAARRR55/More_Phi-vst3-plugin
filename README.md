@@ -231,6 +231,17 @@ MIDI mapping is automatic. Just enable MIDI input on the track hosting MorphSnap
 - Switch to Direct physics mode (least CPU)
 - Increase audio buffer size in DAW
 
+### PC Freezes During CMake Build
+- Use the safe local presets:
+  - `cmake --preset windows-msvc-safe`
+  - `cmake --build --preset windows-safe --parallel 2`
+- For maximum stability, run single job:
+  - `cmake --build --preset windows-single --parallel 1`
+- Run the diagnostics matrix script:
+  - `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+  - `.\scripts\diagnose-build-freeze.ps1 -BuildPreset windows-safe -ParallelJobs 1,2,4`
+- See full guide: [docs/BUILD_STABILITY_GUIDE.md](docs/BUILD_STABILITY_GUIDE.md)
+
 ---
 
 ## Building

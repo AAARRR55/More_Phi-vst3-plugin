@@ -47,8 +47,22 @@ public:
     // Listen Mode: when enabled, discrete parameters are excluded from morph output
     void setListenMode(bool enabled) { listenMode_ = enabled; }
     bool getListenMode() const { return listenMode_; }
-    void setDiscreteMap(const std::vector<bool>& map) { discreteMap_ = map; }
-    void setDiscreteMap(std::vector<bool>&& map) { discreteMap_ = std::move(map); }
+
+    // CRITICAL (Finding 5): setDiscreteMap() must ONLY be called while the audio
+    // thread is blocked (e.g., during isRestoring_ window). The std::vector<bool>
+    // move swaps internal pointers which races with audio thread reads in
+    // applyListenFilter(). Currently safe because only called from
+    // loadHostedPluginFromState() while isRestoring_=true.
+    void setDiscreteMap(const std::vector<bool>& map)
+    {
+        const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
+        discreteMap_ = map;
+    }
+    void setDiscreteMap(std::vector<bool>&& map)
+    {
+        const juce::SpinLock::ScopedLockType lock(discreteMapLock_);
+        discreteMap_ = std::move(map);
+    }
 
     // Sentinel value written to morph output for params that should NOT be applied
     static constexpr float SKIP_SENTINEL = -1.0f;
@@ -97,6 +111,7 @@ private:
     // Listen Mode
     bool listenMode_ = false;
     std::vector<bool> discreteMap_;
+    mutable juce::SpinLock discreteMapLock_;
     void applyListenFilter(std::vector<float>& output) noexcept;
 };
 

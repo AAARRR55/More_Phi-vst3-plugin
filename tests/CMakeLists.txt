@@ -53,6 +53,9 @@ target_compile_definitions(MorphSnapTests PRIVATE
     JUCE_UNIT_TESTS=1
     JUCE_STANDALONE_APPLICATION=0
 )
+if(COMMAND morphsnap_apply_build_tuning)
+    morphsnap_apply_build_tuning(MorphSnapTests)
+endif()
 
 # ── Stack size (MSVC: 4 MB, matches plugin build for V2 engine overhead) ─────
 if(MSVC)
@@ -97,6 +100,9 @@ if(MORPHSNAP_BUILD_BENCHMARKS)
         MORPHSNAP_TEST_MODE=1
         JUCE_STANDALONE_APPLICATION=0
     )
+    if(COMMAND morphsnap_apply_build_tuning)
+        morphsnap_apply_build_tuning(MorphSnapBenchmarks)
+    endif()
 endif()
 
 # VST3 validation (optional, needs vst3_validator on PATH)

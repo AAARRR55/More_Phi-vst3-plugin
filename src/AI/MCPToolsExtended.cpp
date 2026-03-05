@@ -7,6 +7,8 @@
 #include "../Core/ParameterClassifier.h"
 #include "../Core/DiscreteParameterHandler.h"
 #include "TokenOptimizer.h"
+#include "Dataset/DatasetGenerator.h"
+#include <nlohmann/json.hpp>
 
 namespace morphsnap {
 
@@ -932,3 +934,41 @@ std::vector<int> MCPToolsExtended::parseParameterList(const juce::var& params)
 }
 
 } // namespace morphsnap
+
+juce::String MCPToolsExtended::generateDataset(const juce::var& params, MorphSnapProcessor& processor)
+{
+    GenerationConfig config;
+    
+    // Parse parameters from MCP call
+    config.samplesPerState = static_cast<int>(params.getProperty("samples", 100));
+    config.renderDurationSeconds = static_cast<float>(params.getProperty("duration", 1.0));
+    
+    juce::String outputPath = params.getProperty("output_path", "");
+    if (outputPath.isEmpty())
+        config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MorphSnap_Datasets").getChildFile(processor.getName() + "_" + juce::Time::getCurrentTime().toString(true, true));
+    else
+        config.outputDirectory = juce::File(outputPath);
+
+    juce::String inputPath = params.getProperty("input_audio", "");
+    juce::File inputFile(inputPath);
+
+    config.respectsSanityConfig = static_cast<bool>(params.getProperty("respect_sanity", true));
+    // CRITICAL (Finding 3): Use thread-safe copy method to access SanityConfig from potentially
+    // concurrent MCP thread. The processor's getSanityConfigCopy() is properly protected.
+    config.sanityConfig = processor.getSanityConfigCopy();
+
+    DatasetGenerator generator(processor.getHostManager());
+    
+    bool success = generator.generate(config, inputFile);
+
+    nlohmann::json result;
+    result["success"] = success;
+    if (success) {
+        result["output_directory"] = config.outputDirectory.getFullPathName().toStdString();
+        result["sample_count"] = config.samplesPerState;
+    } else {
+        result["error"] = "Generation failed. Ensure a plugin is loaded and output path is writable.";
+    }
+
+    return juce::String(result.dump());
+}

@@ -23,7 +23,10 @@
 #include <atomic>
 
 // Forward declare for Full recall mode
-namespace juce { class AudioPluginInstance; }
+namespace juce { 
+    class AudioPluginInstance; 
+    class AudioProcessor;
+}
 
 // Platform-specific pause instruction for spin-wait loops
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -63,13 +66,15 @@ public:
 
     // Full mode: capture/recall opaque VST3 state chunks alongside parameters
     void captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
+    void captureStateChunk(int slot, const juce::MemoryBlock& chunk);
     void recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
+    void recallStateChunk(int slot, juce::AudioProcessor* plugin) const;
 
     void setRecallMode(RecallMode m)  { recallMode_ = m; }
     RecallMode getRecallMode() const  { return recallMode_; }
 
-    bool isOccupied(int slot) const;
-    bool hasAnyOccupied() const;
+    bool isOccupied(int slot) const noexcept;
+    bool hasAnyOccupied() const noexcept;
     int  getOccupiedSlots(std::array<int, NUM_SLOTS>& occupiedSlots) const;
     bool getSlotValuesCopy(int slot, std::vector<float>& outValues) const;
 
@@ -92,21 +97,32 @@ public:
 
                 bool occupied = (*slots_)[i].occupied;
                 int count = (*slots_)[i].parameterCount;
+                juce::MemoryBlock chunkCopy;
+                
+                if (occupied) {
+                     chunkCopy = stateChunks_[i]; // copy the state chunk while under lock-free read
+                }
 
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
                 if (seq1 != seq2) continue;
 
-                if (occupied && count > 0)
+                if (occupied)
                 {
                     auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
                     slotXml->setAttribute("id", i);
                     slotXml->setAttribute("paramCount", count);
                     slotXml->setAttribute("name", juce::String((*slots_)[i].name));
 
-                    // Encode float values as base64 for compact, lossless storage
-                    juce::MemoryBlock block((*slots_)[i].values.data(),
-                                           static_cast<size_t>(count) * sizeof(float));
-                    slotXml->setAttribute("values", block.toBase64Encoding());
+                    if (count > 0) {
+                        // Encode float values as base64 for compact, lossless storage
+                        juce::MemoryBlock block((*slots_)[i].values.data(),
+                                               static_cast<size_t>(count) * sizeof(float));
+                        slotXml->setAttribute("values", block.toBase64Encoding());
+                    }
+                    
+                    if (chunkCopy.getSize() > 0) {
+                        slotXml->setAttribute("stateChunk", chunkCopy.toBase64Encoding());
+                    }
 
                     xml->addChildElement(slotXml.release());
                 }
@@ -122,6 +138,7 @@ public:
         WriteScope write(*this);
 
         for (auto& s : *slots_) s.clear();
+        for (auto& chunk : stateChunks_) chunk.setSize(0, false);
 
         for (auto* child : xml.getChildIterator())
         {
@@ -129,12 +146,13 @@ public:
 
             int slot = child->getIntAttribute("id", -1);
             int count = child->getIntAttribute("paramCount", 0);
-            if (slot < 0 || slot >= NUM_SLOTS || count <= 0) continue;
+            if (slot < 0 || slot >= NUM_SLOTS) continue;
 
             juce::String name = child->getStringAttribute("name", "");
             juce::String base64 = child->getStringAttribute("values", "");
+            juce::String stateBase64 = child->getStringAttribute("stateChunk", "");
 
-            if (base64.isNotEmpty())
+            if (base64.isNotEmpty() && count > 0)
             {
                 juce::MemoryBlock block;
                 if (block.fromBase64Encoding(base64))
@@ -147,6 +165,18 @@ public:
                         (*slots_)[slot].setName(name.toRawUTF8());
                     }
                 }
+            }
+            else {
+                // if it's occupied but parameter count is 0, we still need to set name and occupied flag
+                (*slots_)[slot].setName(name.toRawUTF8());
+                (*slots_)[slot].occupied = true;
+            }
+            
+            if (stateBase64.isNotEmpty()) {
+                 juce::MemoryBlock chunkBlock;
+                 if (chunkBlock.fromBase64Encoding(stateBase64)) {
+                     stateChunks_[slot] = std::move(chunkBlock);
+                 }
             }
         }
     }
@@ -277,6 +307,36 @@ private:
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
             if (seq1 == seq2)
                 return true;
+        }
+        return false;
+    }
+    
+    // Helper to copy a state chunk safely
+    bool copyStateChunk(int slot, juce::MemoryBlock& outChunk) const
+    {
+        for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
+        {
+            uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
+            if ((seq1 & 1) != 0)
+            {
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+                _mm_pause();
+                #endif
+                continue;
+            }
+
+            if (!(*slots_)[slot].occupied)
+            {
+                uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+                if (seq1 == seq2) return false;
+                continue;
+            }
+            
+            // This is making a deep copy
+            outChunk = stateChunks_[slot];
+
+            uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+            if (seq1 == seq2) return true;
         }
         return false;
     }
