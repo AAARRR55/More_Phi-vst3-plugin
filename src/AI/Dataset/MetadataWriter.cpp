@@ -637,109 +637,85 @@ float MetadataWriter::calculateProcessingIntensity(const std::vector<ParameterVa
 
 void MetadataWriter::initializeSchema()
 {
-    schema_ = {
-        {"$schema", "https://json-schema.org/draft/2020-12/schema"},
-        {"$id", "https://morphsnap.ai/schemas/dataset-metadata.json"},
-        {"title", "MorphSnap Dataset Metadata"},
-        {"description", "Schema for synthetic audio dataset metadata"},
-        {"type", "object"},
-        {"required", {"sampleId", "timestamp", "source", "chain", "output"}},
-        {"properties", {
-            {"sampleId", {
-                {"type", "string"},
-                {"description", "Unique identifier for the sample"},
-                {"pattern", "^sample_[0-9]+_[0-9]+$"}
-            }},
-            {"timestamp", {
-                {"type", "integer"},
-                {"description", "Unix timestamp in milliseconds"},
-                {"minimum", 0}
-            }},
-            {"source", {
-                {"type", "object"},
-                {"required", {"filePath", "sampleRate", "numChannels"}},
-                {"properties", {
-                    {"filePath", {{"type", "string"}}},
-                    {"genre", {{"type", "string"}}},
-                    {"contentType", {{"type", "string"}}},
-                    {"originalLufs", {{"type", "number"}}},
-                    {"dynamicRangeDb", {{"type", "number"}}},
-                    {"sampleRate", {{"type", "number"}, {"exclusiveMinimum", 0}}},
-                    {"numChannels", {{"type", "integer"}, {"minimum", 1}}},
-                    {"numSamples", {{"type", "integer"}, {"minimum", 0}}},
-                    {"fileHash", {{"type", "string"}}}
-                }}
-            }},
-            {"chain", {
-                {"type", "object"},
-                {"required", {"plugins", "sampleRate", "blockSize"}},
-                {"properties", {
-                    {"chainType", {{"type", "string"}}},
-                    {"plugins", {
-                        {"type", "array"},
-                        {"items", {
-                            {"type", "object"},
-                            {"required", {"pluginId", "pluginName"}},
-                            {"properties", {
-                                {"pluginId", {{"type", "string"}}},
-                                {"pluginName", {{"type", "string"}}},
-                                {"vendor", {{"type", "string"}}},
-                                {"version", {{"type", "string"}}},
-                                {"format", {{"type", "string"}, {"enum", {"VST3", "AU"}}}},
-                                {"parameters", {
-                                    {"type", "array"},
-                                    {"items", {
-                                        {"type", "object"},
-                                        {"properties", {
-                                            {"name", {{"type", "string"}}},
-                                            {"index", {{"type", "integer"}}},
-                                            {"normalizedValue", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
-                                            {"rawValue", {{"type", "number"}}},
-                                            {"textValue", {{"type", "string"}}},
-                                            {"category", {{"type", "string"}}}
-                                        }}
-                                    }}
-                                }}
-                            }}
-                        }}
-                    }},
-                    {"sampleRate", {{"type", "number"}, {"exclusiveMinimum", 0}}},
-                    {"blockSize", {{"type", "integer"}, {"minimum", 1}}}
-                }}
-            }},
-            {"output", {
-                {"type", "object"},
-                {"properties", {
-                    {"lufs", {{"type", "number"}}},
-                    {"truePeakDb", {{"type", "number"}}},
-                    {"dynamicRangeDb", {{"type", "number"}}},
-                    {"spectralCentroidHz", {{"type", "number"}, {"minimum", 0}}},
-                    {"numSamples", {{"type", "integer"}, {"minimum", 0}}},
-                    {"durationSeconds", {{"type", "number"}, {"minimum", 0}}}
-                }}
-            }},
-            {"spectralFeatures", {{"type", "object"}}},
-            {"temporalFeatures", {{"type", "object"}}},
-            {"perceptualFeatures", {{"type", "object"}}},
-            {"targets", {
-                {"type", "object"},
-                {"properties", {
-                    {"parameterRegression", {{"type", "array"}, {"items", {{"type", "number"}}}}},
-                    {"styleClassification", {{"type", "string"}}},
-                    {"processingIntensity", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
-                    {"featureVector", {{"type", "array"}, {"items", {{"type", "number"}}}}}
-                }}
-            }},
-            {"split", {
-                {"type", "string"},
-                {"enum", {"train", "val", "test", ""}}
-            }},
-            {"tags", {
-                {"type", "array"},
-                {"items", {{"type", "string"}}}
-            }}
-        }}
-    };
+    // Built incrementally to avoid MSVC C1060 (out of heap space)
+    // from deeply nested nlohmann::json brace-initialization.
+
+    nlohmann::json paramSchema;
+    paramSchema["type"] = "object";
+    paramSchema["properties"]["name"]            = {{"type", "string"}};
+    paramSchema["properties"]["index"]           = {{"type", "integer"}};
+    paramSchema["properties"]["normalizedValue"] = {{"type", "number"}, {"minimum", 0}, {"maximum", 1}};
+    paramSchema["properties"]["rawValue"]        = {{"type", "number"}};
+    paramSchema["properties"]["textValue"]       = {{"type", "string"}};
+    paramSchema["properties"]["category"]        = {{"type", "string"}};
+
+    nlohmann::json pluginItemSchema;
+    pluginItemSchema["type"] = "object";
+    pluginItemSchema["required"] = {"pluginId", "pluginName"};
+    pluginItemSchema["properties"]["pluginId"]   = {{"type", "string"}};
+    pluginItemSchema["properties"]["pluginName"] = {{"type", "string"}};
+    pluginItemSchema["properties"]["vendor"]     = {{"type", "string"}};
+    pluginItemSchema["properties"]["version"]    = {{"type", "string"}};
+    pluginItemSchema["properties"]["format"]     = {{"type", "string"}, {"enum", {"VST3", "AU"}}};
+    pluginItemSchema["properties"]["parameters"] = {{"type", "array"}, {"items", paramSchema}};
+
+    nlohmann::json sourceSchema;
+    sourceSchema["type"] = "object";
+    sourceSchema["required"] = {"filePath", "sampleRate", "numChannels"};
+    sourceSchema["properties"]["filePath"]       = {{"type", "string"}};
+    sourceSchema["properties"]["genre"]          = {{"type", "string"}};
+    sourceSchema["properties"]["contentType"]    = {{"type", "string"}};
+    sourceSchema["properties"]["originalLufs"]   = {{"type", "number"}};
+    sourceSchema["properties"]["dynamicRangeDb"] = {{"type", "number"}};
+    sourceSchema["properties"]["sampleRate"]     = {{"type", "number"}, {"exclusiveMinimum", 0}};
+    sourceSchema["properties"]["numChannels"]    = {{"type", "integer"}, {"minimum", 1}};
+    sourceSchema["properties"]["numSamples"]     = {{"type", "integer"}, {"minimum", 0}};
+    sourceSchema["properties"]["fileHash"]       = {{"type", "string"}};
+
+    nlohmann::json chainSchema;
+    chainSchema["type"] = "object";
+    chainSchema["required"] = {"plugins", "sampleRate", "blockSize"};
+    chainSchema["properties"]["chainType"]  = {{"type", "string"}};
+    chainSchema["properties"]["plugins"]    = {{"type", "array"}, {"items", pluginItemSchema}};
+    chainSchema["properties"]["sampleRate"] = {{"type", "number"}, {"exclusiveMinimum", 0}};
+    chainSchema["properties"]["blockSize"]  = {{"type", "integer"}, {"minimum", 1}};
+
+    nlohmann::json outputSchema;
+    outputSchema["type"] = "object";
+    outputSchema["properties"]["lufs"]               = {{"type", "number"}};
+    outputSchema["properties"]["truePeakDb"]         = {{"type", "number"}};
+    outputSchema["properties"]["dynamicRangeDb"]     = {{"type", "number"}};
+    outputSchema["properties"]["spectralCentroidHz"] = {{"type", "number"}, {"minimum", 0}};
+    outputSchema["properties"]["numSamples"]         = {{"type", "integer"}, {"minimum", 0}};
+    outputSchema["properties"]["durationSeconds"]    = {{"type", "number"}, {"minimum", 0}};
+
+    nlohmann::json targetsSchema;
+    targetsSchema["type"] = "object";
+    targetsSchema["properties"]["parameterRegression"]  = {{"type", "array"}, {"items", {{"type", "number"}}}};
+    targetsSchema["properties"]["styleClassification"]  = {{"type", "string"}};
+    targetsSchema["properties"]["processingIntensity"]  = {{"type", "number"}, {"minimum", 0}, {"maximum", 1}};
+    targetsSchema["properties"]["featureVector"]        = {{"type", "array"}, {"items", {{"type", "number"}}}};
+
+    nlohmann::json props;
+    props["sampleId"]          = {{"type", "string"}, {"description", "Unique identifier for the sample"}, {"pattern", "^sample_[0-9]+_[0-9]+$"}};
+    props["timestamp"]         = {{"type", "integer"}, {"description", "Unix timestamp in milliseconds"}, {"minimum", 0}};
+    props["source"]            = sourceSchema;
+    props["chain"]             = chainSchema;
+    props["output"]            = outputSchema;
+    props["spectralFeatures"]  = {{"type", "object"}};
+    props["temporalFeatures"]  = {{"type", "object"}};
+    props["perceptualFeatures"]= {{"type", "object"}};
+    props["targets"]           = targetsSchema;
+    props["split"]             = {{"type", "string"}, {"enum", {"train", "val", "test", ""}}};
+    props["tags"]              = {{"type", "array"}, {"items", {{"type", "string"}}}};
+
+    schema_["$schema"]     = "https://json-schema.org/draft/2020-12/schema";
+    schema_["$id"]         = "https://morphsnap.ai/schemas/dataset-metadata.json";
+    schema_["title"]       = "MorphSnap Dataset Metadata";
+    schema_["description"] = "Schema for synthetic audio dataset metadata";
+    schema_["type"]        = "object";
+    schema_["required"]    = {"sampleId", "timestamp", "source", "chain", "output"};
+    schema_["properties"]  = props;
 }
 
 nlohmann::json MetadataWriter::sourceProvenanceToJson(const SourceProvenance& source) const

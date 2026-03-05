@@ -6,6 +6,7 @@
 #include "../Host/IPluginHostManager.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <sstream>
@@ -36,8 +37,7 @@ void ParameterClassifier::analyzeParameters(const IParameterBridge& host)
             (lowerName.contains("delay") || lowerName.contains("reverb") || lowerName.contains("mix") || lowerName.contains("width")) ? "Space" :
             "General";
 
-        std::strncpy(meta.category, category.toRawUTF8(), sizeof(meta.category) - 1);
-        meta.category[sizeof(meta.category) - 1] = '\0';
+        std::snprintf(meta.category, sizeof(meta.category), "%s", category.toRawUTF8());
     };
     
     for (uint32_t i = 0; i < clampedCount; ++i)
@@ -48,8 +48,7 @@ void ParameterClassifier::analyzeParameters(const IParameterBridge& host)
         const int paramIndex = static_cast<int>(i);
         juce::String name = host.getParameterName(paramIndex);
         const juce::String lowerName = name.toLowerCase();
-        std::strncpy(meta.name, name.toRawUTF8(), sizeof(meta.name) - 1);
-        meta.name[sizeof(meta.name) - 1] = '\0';
+        std::snprintf(meta.name, sizeof(meta.name), "%s", name.toRawUTF8());
         
         // Classify type
         meta.type = classifyParameter(paramIndex, host);
@@ -484,9 +483,7 @@ bool ParameterClassifier::shouldSkipForMorph(int index) const
 void ParameterClassifier::updateImportanceScores()
 {
     const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
-    
-    auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-    
+
     for (uint32_t i = 0; i < count; ++i)
     {
         auto& meta = metadata_[i];
@@ -504,10 +501,10 @@ float ParameterClassifier::calculateImportance(const ParameterMetadata& meta) co
     // Recency weight
     if (learnConfig_.prioritizeRecent && meta.lastModified > 0)
     {
-        auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-        auto age = now - meta.lastModified;
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto age = now - meta.lastModified;
         // Higher score for recent modifications (decay over time)
-        float recencyBonus = 0.2f * std::exp(-age / 3600000000000.0f); // 1 hour half-life
+        const float recencyBonus = 0.2f * std::exp(-static_cast<double>(age) / 3600000000000.0); // 1 hour half-life
         score += recencyBonus;
     }
     

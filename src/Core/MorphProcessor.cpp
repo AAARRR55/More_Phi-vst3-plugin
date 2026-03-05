@@ -183,7 +183,7 @@ void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
 {
     if (!listenMode_) return;
 
-    auto discreteMap = std::atomic_load_explicit(&discreteMapSnapshot_, std::memory_order_acquire);
+    auto discreteMap = discreteMapSnapshot_.load(std::memory_order_acquire);
     if (!discreteMap || discreteMap->empty()) return;
 
     const size_t count = std::min(output.size(), discreteMap->size());

@@ -317,6 +317,16 @@ target_sources(MorphSnap PRIVATE
     ${MORPHSNAP_UI_SOURCES}
 )
 
+# MSVC occasionally runs out of frontend heap on this large TU in Release builds.
+# Compile it with conservative settings to keep CI deterministic.
+if(MSVC)
+    set_source_files_properties(
+        src/AI/Dataset/MetadataWriter.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "/bigobj;/Od"
+    )
+endif()
+
 # ── Include Paths ─────────────────────────────────────────────────────────────
 target_include_directories(MorphSnap PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

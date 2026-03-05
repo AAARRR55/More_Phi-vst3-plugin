@@ -55,8 +55,7 @@ public:
         snapshot->reserve(map.size());
         for (bool value : map)
             snapshot->push_back(value ? 1u : 0u);
-        std::atomic_store_explicit(&discreteMapSnapshot_,
-                                   std::static_pointer_cast<const DiscreteMask>(snapshot),
+        discreteMapSnapshot_.store(std::static_pointer_cast<const DiscreteMask>(snapshot),
                                    std::memory_order_release);
     }
     void setDiscreteMap(std::vector<bool>&& map)
@@ -111,7 +110,7 @@ private:
     // Listen Mode
     bool listenMode_ = false;
     using DiscreteMask = std::vector<uint8_t>;
-    std::shared_ptr<const DiscreteMask> discreteMapSnapshot_;
+    std::atomic<std::shared_ptr<const DiscreteMask>> discreteMapSnapshot_{};
     void applyListenFilter(std::vector<float>& output) noexcept;
 };
 
