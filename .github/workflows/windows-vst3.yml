@@ -42,7 +42,6 @@ jobs:
             -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DMORPHSNAP_BUILD_TESTS=OFF `
-            -DMORPHSNAP_ENABLE_DATASET_V3=OFF `
             -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
 
       - name: Build MorphSnap_VST3

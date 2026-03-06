@@ -140,6 +140,14 @@ public:
     // Renders multiple audio clips with random parameter settings to create a machine learning dataset
     static juce::String generateDataset(const juce::var& params, MorphSnapProcessor& processor);
 
+    // Tool: generate_dataset_v2
+    // Full ML pipeline: Latin Hypercube Sampling, plugin chains, feature extraction, validation, train/val/test splitting
+    static juce::String generateDatasetV2(const juce::var& params, MorphSnapProcessor& processor);
+
+    // Tool: generate_dataset_v3
+    // Async pipeline with worker pool, adaptive throttling, crash recovery, and watchdog
+    static juce::String generateDatasetV3(const juce::var& params, MorphSnapProcessor& processor);
+
 private:
     // Helper: Build parameter JSON with metadata
     static juce::var buildParameterInfo(

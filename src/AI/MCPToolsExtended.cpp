@@ -232,6 +232,44 @@ const ExtendedToolInfo kExtendedTools[] = {
         })"
     },
     {
+        "generate_dataset",
+        "Dataset generation compatibility entry point. Use pipeline=legacy, v2, or v3 to select the generator.",
+        R"json({
+            "type": "object",
+            "properties": {
+                "pipeline": {"type": "string", "enum": ["legacy", "v2", "v3"], "default": "v3"},
+                "samples": {"type": "integer", "default": 1000},
+                "output_path": {"type": "string"},
+                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "source_audio_dir": {"type": "string"},
+                "sample_rate": {"type": "number", "default": 48000},
+                "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
+                "output_format": {"type": "string", "enum": ["wav32", "wav24", "flac24"], "default": "wav32"},
+                "duration": {"type": "number", "default": 1.0, "description": "Legacy pipeline render duration in seconds"},
+                "input_audio": {"type": "string", "description": "Legacy pipeline input audio file"},
+                "respect_sanity": {"type": "boolean", "default": true},
+                "full_duration": {"type": "number", "default": 30.0},
+                "transient_duration": {"type": "number", "default": 2.0},
+                "steady_state_duration": {"type": "number", "default": 5.0},
+                "use_augmentation": {"type": "boolean", "default": true},
+                "enable_validation": {"type": "boolean", "default": true},
+                "parallel_threads": {"type": "integer", "default": 4},
+                "train_ratio": {"type": "number", "default": 0.70},
+                "val_ratio": {"type": "number", "default": 0.15},
+                "test_ratio": {"type": "number", "default": 0.15},
+                "batch_size": {"type": "integer", "default": 2048},
+                "worker_threads": {"type": "integer", "default": 0},
+                "checkpoint_interval": {"type": "integer", "default": 100},
+                "enable_watchdog": {"type": "boolean", "default": true},
+                "memory_limit_mb": {"type": "integer", "default": 2048},
+                "resume_checkpoint": {"type": "boolean", "default": false},
+                "seed": {"type": "integer", "default": 42},
+                "dry_run": {"type": "boolean", "default": false},
+                "config_file": {"type": "string", "description": "Path to JSON config file (overrides compatible params)"}
+            }
+        })json"
+    },
+    {
         "generate_dataset_v2",
         "Full ML dataset pipeline with Latin Hypercube Sampling, multi-plugin chains, feature extraction, "
         "validation, and train/val/test splitting. Returns structured dataset with audio, metadata, and features.",
@@ -1031,6 +1069,22 @@ std::vector<int> MCPToolsExtended::parseParameterList(const juce::var& params)
 
 juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& params, morphsnap::MorphSnapProcessor& processor)
 {
+    const auto pipeline = params.getProperty("pipeline", "v3").toString().trim().toLowerCase();
+
+    if (pipeline == "v2")
+        return generateDatasetV2(params, processor);
+
+    if (pipeline == "v3")
+        return generateDatasetV3(params, processor);
+
+    if (pipeline != "legacy")
+    {
+        nlohmann::json result;
+        result["success"] = false;
+        result["error"] = "Invalid pipeline. Expected one of: legacy, v2, v3.";
+        return juce::String(result.dump());
+    }
+
     morphsnap::GenerationConfig config;
     
     // Parse parameters from MCP call

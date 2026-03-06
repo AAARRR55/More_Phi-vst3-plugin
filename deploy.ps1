@@ -1,7 +1,8 @@
 # MorphSnap — Deploy VST3 to system folder (requires admin)
 # Usage: Right-click → Run as Administrator, or run from elevated PowerShell
 
-$src = "d:\morphy\build\MorphSnap_artefacts\Release\VST3\MorphSnap.vst3"
+$repoRoot = Split-Path -Parent $PSCommandPath
+$src = Join-Path $repoRoot "build\windows-msvc-safe\MorphSnap_artefacts\Release\VST3\MorphSnap.vst3"
 $dst = "C:\Program Files\Common Files\VST3\MorphSnap.vst3"
 
 # Check admin
@@ -13,7 +14,7 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 if (-not (Test-Path $src)) {
     Write-Host "ERROR: Build not found at $src" -ForegroundColor Red
-    Write-Host "Run: cmake --build build --config Release" -ForegroundColor Yellow
+    Write-Host "Run: .\scripts\build-windows-safe.ps1" -ForegroundColor Yellow
     pause; exit 1
 }
 

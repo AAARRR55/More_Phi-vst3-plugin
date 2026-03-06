@@ -2,6 +2,8 @@
 :: MorphSnap — Deploy VST3 to system folder
 :: Double-click to run. Auto-elevates to admin.
 
+set REPO_ROOT=%~dp0
+
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Elevating to admin...
@@ -9,12 +11,12 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-set SRC=d:\morphy\build\MorphSnap_artefacts\Release\VST3\MorphSnap.vst3
+set SRC=%REPO_ROOT%build\windows-msvc-safe\MorphSnap_artefacts\Release\VST3\MorphSnap.vst3
 set DST=C:\Program Files\Common Files\VST3\MorphSnap.vst3
 
 if not exist "%SRC%" (
     echo ERROR: Build not found at %SRC%
-    echo Run: cmake --build build --config Release
+    echo Run: .\scripts\build-windows-safe.bat
     pause
     exit /b 1
 )

@@ -69,6 +69,8 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "explain_parameter")              return MCPToolsExtended::explainParameter(params, p, p.getParameterClassifier());
     if (method == "find_related_parameters")        return MCPToolsExtended::findRelatedParameters(params, p, p.getParameterClassifier());
     if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
+    if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
+    if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
 
     // Multi-instance tools
     if (method == "get_instance_info")    return getInstanceInfo(identity);

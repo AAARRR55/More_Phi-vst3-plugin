@@ -2,6 +2,7 @@
 
 > **Date**: February 24, 2026  
 > **Status**: All Critical Features Implemented
+> **Version**: 3.3.0
 
 ---
 
@@ -37,6 +38,29 @@ Successfully implemented all critical gaps identified from the video analysis:
 |------|---------|
 | `TokenOptimizer.h/cpp` | Cost estimation, budget management, and usage tracking |
 | `MCPToolsExtended.h/cpp` | 17 new MCP tools for AI integration |
+
+### Dataset Generation (src/AI/Dataset/)
+
+| File | Purpose |
+|------|---------|
+| `DatasetGeneratorV2.h/cpp` | V2 sequential pipeline orchestrator |
+| `DatasetGeneratorV3.h/cpp` | V3 modular pipeline (build-time gated) |
+| `ParameterSampler.h/cpp` | Latin Hypercube, stratified sampling |
+| `AudioContentLibrary.h/cpp` | Source audio with genre classification |
+| `PluginChainEngine.h/cpp` | Sequential multi-plugin chains |
+| `EnhancedRenderPipeline.h/cpp` | Multi-segment rendering |
+| `FeatureExtractor.h/cpp` | MFCC, LUFS, spectral/temporal/perceptual |
+| `MetadataWriter.h/cpp` | JSON/CSV/Parquet export |
+| `ValidationEngine.h/cpp` | KS test, MMD, coverage metrics |
+| `DatasetOrganizer.h/cpp` | Train/Val/Test splits |
+| `DatasetConfig.h/cpp` | CLI interface, JSON schema |
+| `Scheduling/TaskQueue.h` | MPMC priority queue |
+| `Scheduling/WorkerPool.h` | Parallel processing threads |
+| `Monitoring/ResourceMonitor.h` | Adaptive CPU/RAM throttling |
+| `Monitoring/ProgressTracker.h` | Real-time progress & ETA |
+| `Monitoring/GenerationLogger.h` | Structured JSON logging |
+| `Recovery/CheckpointManager.h` | Crash recovery |
+| `Recovery/WatchdogTimer.h` | Hung thread detection |
 
 ### Integration (src/)
 
@@ -96,6 +120,31 @@ auto result = MorphSafeAdvisor::compareSnapshots(a, b, classifier);
 ```
 
 **Video Evidence**: Addresses "discrete parameter clicking" (Video 3, 6:24)
+
+### Dataset Generation V2/V3 (v3.3.0)
+
+```cpp
+// V2: Sequential pipeline
+DatasetGeneratorV2 generator;
+generator.setConfig(config);
+generator.startGeneration();
+
+// V3: Modular pipeline (build-time gated)
+DatasetGeneratorV3 v3;
+v3.setConfig(v3Config);
+v3.startGeneration();
+```
+
+**Features:**
+- **ParameterSampler**: Latin Hypercube Sampling, stratified sampling by genre
+- **AudioContentLibrary**: Source audio with genre classification (Electronic, RockPop, Jazz, etc.)
+- **PluginChainEngine**: Sequential multi-plugin chains (EQ, Dynamics, Mastering)
+- **EnhancedRenderPipeline**: Multi-segment rendering (Full/Transient/SteadyState)
+- **FeatureExtractor**: MFCC, LUFS, spectral, temporal, perceptual features (31 dimensions)
+- **MetadataWriter**: JSON/CSV/Parquet export
+- **ValidationEngine**: KS test, MMD, Wasserstein, coverage metrics
+- **DatasetOrganizer**: Train/Val/Test splits with stratification
+- **V3**: TaskQueue (MPMC), WorkerPool, ResourceMonitor, ProgressTracker, CheckpointManager, WatchdogTimer
 
 ### 3. Token Optimization
 

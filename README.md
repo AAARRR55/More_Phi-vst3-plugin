@@ -51,7 +51,7 @@ git clone https://github.com/your-repo/morphsnap.git
 cd morphsnap
 
 # Configure and build
-cmake -B build -S . -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake -B build -S .
 cmake --build build --config Release
 
 # Output location
@@ -63,7 +63,7 @@ Common build options:
 
 - `-DMORPHSNAP_BUILD_TESTS=ON` (default `ON`)
 - `-DMORPHSNAP_BUILD_BENCHMARKS=ON` (tests/bench target opt-in)
-- `-DMORPHSNAP_ENABLE_DATASET_V3=ON` (defaults to `OFF` for production-safe builds)
+- `-DMORPHSNAP_ENABLE_DATASET_V3=ON|OFF` (deprecated compatibility flag; V3 sources are always compiled)
 
 ---
 
@@ -280,7 +280,7 @@ cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 ```
 
-### Optional Dataset V3 Compile Validation
+### Optional Dataset V3 Compatibility-Flag Validation
 ```bash
 cmake -B build-v3 -S . -DMORPHSNAP_ENABLE_DATASET_V3=ON -DMORPHSNAP_BUILD_TESTS=ON
 cmake --build build-v3 --parallel 2
@@ -317,6 +317,9 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [API Reference](docs/API_REFERENCE.md) - MCP tools and protocols
 - [Developer Guide](docs/DEVELOPER_GUIDE.md) - Building and contributing
 - [Architecture](docs/ARCHITECTURE.md) - Technical design details
+- [Dataset Generation](docs/DATASET_GENERATION.md) - V2 and V3 pipeline documentation
+- [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) - AI parameter optimization
+- [Audio Engine Specification](docs/AudioEngineSpec_v2.md) - Audio processing details
 
 ---
 

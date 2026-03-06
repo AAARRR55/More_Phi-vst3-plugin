@@ -88,6 +88,32 @@ Three thread domains with strict boundaries:
 
 `ParameterClassifier` categorizes hosted plugin parameters (Continuous, Discrete, Binary, Frequency, Decibel, Enumeration) for Learn Mode. `DiscreteParameterHandler` ensures discrete/binary parameters snap to valid steps during morphing rather than interpolating through invalid intermediate values. `TokenOptimizer` manages AI token budgets by selecting which parameters to expose.
 
+### Dataset Generation (V2/V3)
+
+MorphSnap includes a comprehensive dataset generation system for creating synthetic audio training data. **Dataset V3 is always compiled** (`MORPHSNAP_ENABLE_DATASET_V3` is retained as a deprecated compatibility flag/no-op).
+
+**V2 Components (Sequential Pipeline):**
+- `DatasetGeneratorV2` — Main orchestrator integrating all modules
+- `ParameterSampler` — Latin Hypercube Sampling, stratified sampling
+- `AudioContentLibrary` — Source audio management with genre classification
+- `PluginChainEngine` — Sequential multi-plugin chains (EQ, Dynamics, Mastering)
+- `EnhancedRenderPipeline` — Multi-segment rendering (Full/Transient/SteadyState)
+- `FeatureExtractor` — MFCC, LUFS, spectral, temporal, perceptual features
+- `MetadataWriter` — JSON/CSV/Parquet export
+- `ValidationEngine` — KS test, MMD, coverage metrics
+- `DatasetOrganizer` — Train/Val/Test splits, directory management
+- `DatasetConfig` — CLI interface, JSON schema validation
+
+**V3 Components (Optional Modular Pipeline):**
+- `DatasetGeneratorV3` — High-performance async pipeline orchestrator
+- `TaskQueue` — MPMC priority queue with backpressure
+- `WorkerPool` — Parallel batch processing threads
+- `ResourceMonitor` — Adaptive CPU/RAM throttling
+- `ProgressTracker` — Real-time progress & ETA
+- `CheckpointManager` — Crash recovery
+- `WatchdogTimer` — Hung thread detection
+- `GenerationLogger` — Structured JSON logging
+
 ### Genetic Engine
 
 `GeneticEngine::breed()` crosses two snapshots with configurable crossover ratio and mutation strength. `SanityConfig` protects dangerous parameters (Volume, Pitch, Bypass) from modification during breed/randomize. `smartRandomize()` only mutates user-learned parameters.

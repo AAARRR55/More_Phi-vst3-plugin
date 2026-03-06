@@ -9,7 +9,7 @@ option(MORPHSNAP_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC
 option(MORPHSNAP_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
 set(MORPHSNAP_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORPHSNAP_ENABLE_LTO "Enable LTO for Release builds" OFF)
-option(MORPHSNAP_ENABLE_DATASET_V3 "Enable Dataset V3 modular pipeline sources" OFF)
+option(MORPHSNAP_ENABLE_DATASET_V3 "Deprecated compatibility flag (no-op): Dataset V3 modular pipeline sources are always compiled" OFF)
 
 # Keep single-config generators deterministic when callers omit build type.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -239,11 +239,8 @@ set(MORPHSNAP_AI_SOURCES
     src/AI/MCPToolsExtended.h
     src/AI/MCPToolsExtended.cpp
     ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
+    ${MORPHSNAP_AI_DATASET_V3_SOURCES}
 )
-
-if(MORPHSNAP_ENABLE_DATASET_V3)
-    list(APPEND MORPHSNAP_AI_SOURCES ${MORPHSNAP_AI_DATASET_V3_SOURCES})
-endif()
 
 set(MORPHSNAP_MIDI_SOURCES
     src/MIDI/MIDIRouter.h
@@ -362,7 +359,7 @@ target_compile_definitions(MorphSnap
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_PLUGINHOST_VST3=1
-        MORPHSNAP_ENABLE_DATASET_V3=$<BOOL:${MORPHSNAP_ENABLE_DATASET_V3}>
+        MORPHSNAP_ENABLE_DATASET_V3=1
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
 

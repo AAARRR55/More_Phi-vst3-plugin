@@ -669,4 +669,21 @@ void PluginChainEngine::buildParameterIndexMap()
     }
 }
 
+// ── Factory Methods (forward to ChainConfig) ─────────────────────────────────
+
+ChainConfig PluginChainEngine::createMasteringChain()
+{
+    return ChainConfig::createMasteringChain();
+}
+
+ChainConfig PluginChainEngine::createEQChain()
+{
+    return ChainConfig::createEQChain();
+}
+
+ChainConfig PluginChainEngine::createDynamicsChain()
+{
+    return ChainConfig::createDynamicsChain();
+}
+
 } // namespace morphsnap

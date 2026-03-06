@@ -4,9 +4,28 @@
 # (none, small, large, min, max, normal, high from winnt.h / windef.h).
 # This causes MSVC parse errors in the juce_gui_extra module.
 # MorphSnap doesn't use PushNotifications, but the class is always parsed.
-# This script renames the offending identifiers to safe alternatives.
+# This script applies JUCE compatibility patches used by MorphSnap on Windows.
 # Must be called AFTER FetchContent_MakeAvailable(juce).
 # ---------------------------------------------------------------------------
+
+if(WIN32 AND MINGW)
+    set(_JUCE_CORE_H
+        "${juce_SOURCE_DIR}/modules/juce_core/juce_core.h"
+    )
+
+    if(EXISTS "${_JUCE_CORE_H}")
+        file(READ "${_JUCE_CORE_H}" _MORPHSNAP_JUCE_CORE_CONTENT)
+
+        if(NOT _MORPHSNAP_JUCE_CORE_CONTENT MATCHES "#include <cstring>")
+            message(STATUS "MorphSnap: Patching juce_core.h for MinGW cstring compatibility")
+            string(REPLACE "#pragma once" "#pragma once\n#include <cstring>" _MORPHSNAP_JUCE_CORE_CONTENT "${_MORPHSNAP_JUCE_CORE_CONTENT}")
+            file(WRITE "${_JUCE_CORE_H}" "${_MORPHSNAP_JUCE_CORE_CONTENT}")
+            message(STATUS "MorphSnap: juce_core.h patched successfully")
+        else()
+            message(STATUS "MorphSnap: juce_core.h already patched, skipping")
+        endif()
+    endif()
+endif()
 
 if(WIN32 AND MSVC)
     set(_JUCE_PUSH_NOTIF_H
