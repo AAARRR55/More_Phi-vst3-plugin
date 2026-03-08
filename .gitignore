@@ -81,6 +81,9 @@ morphsnap_connection_test.json
 .swarm/
 .mcp.json
 
+# Git worktrees
+.worktrees/
+
 # Generated datasets & BMAD output
 _bmad-output/
 dataset_manifest.json
@@ -98,6 +101,11 @@ melodic_techno_production_guide.md
 
 # Python venv
 .venv/
+
+# Security: Never commit environment files containing credentials
+.env
+.env.local
+.env.*.local
 
 # Misc temp
 temp_processor.h
