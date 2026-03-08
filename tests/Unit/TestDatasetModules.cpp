@@ -685,12 +685,18 @@ TEST_CASE("PhaseVocoder: time stretch changes duration", "[dataset][phasevocoder
     for (int i = 0; i < 48000; ++i)
         buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f));
 
+    const int originalSamples = buffer.getNumSamples();
+
     juce::Random rng(42);
     vocoder.processTimeStretch(buffer, 1.5f, rng);  // Speed up by 1.5x
 
-    // After stretch, buffer should still be valid audio
-    REQUIRE(buffer.getNumSamples() == 48000);
-    REQUIRE(buffer.getMagnitude(0, 0, 48000) > 0.0f);
+    // After stretch with ratio > 1, buffer should be shorter
+    // 48000 / 1.5 = 32000
+    REQUIRE(buffer.getNumSamples() < originalSamples);
+    REQUIRE(buffer.getNumSamples() > 0);
+
+    // Buffer should still contain valid audio (non-zero magnitude)
+    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
 }
 
 TEST_CASE("PhaseVocoder: time stretch preserves approximate energy", "[dataset][phasevocoder]")
@@ -706,6 +712,9 @@ TEST_CASE("PhaseVocoder: time stretch preserves approximate energy", "[dataset][
 
     juce::Random rng(42);
     vocoder.processTimeStretch(buffer, 1.0f, rng);  // No stretch
+
+    // Buffer size should remain unchanged for stretch ratio 1.0
+    REQUIRE(buffer.getNumSamples() == 48000);
 
     float newRMS = buffer.getRMSLevel(0, 0, 48000);
     REQUIRE(std::abs(newRMS - originalRMS) < 0.1f);  // Allow some tolerance
