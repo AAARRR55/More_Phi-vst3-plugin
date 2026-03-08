@@ -11,6 +11,7 @@
 #include "Core/SIMDAudio.h"
 #include "Core/PerformanceProfiler.h"
 #include "Host/IPluginHostManager.h"
+#include "Host/PluginHostManager.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
@@ -28,6 +29,7 @@ struct OfflineBatchConfig
     // Input/Output
     juce::File inputFile;                                           ///< Source audio file to process
     juce::File outputDirectory;                                    ///< Output directory for rendered files
+    juce::File pluginFile;                                         ///< VST3 plugin to use for processing
 
     // Batch settings
     int totalVariations = 100;                                     ///< Total number of parameter variations to render
@@ -48,6 +50,12 @@ struct OfflineBatchConfig
                outputDirectory.isDirectory() &&
                totalVariations > 0 &&
                parallelWorkers > 0;
+    }
+
+    /** Check if plugin file is specified and exists */
+    bool hasValidPlugin() const
+    {
+        return pluginFile.existsAsFile() && pluginFile.getFileExtension() == ".vst3";
     }
 };
 
@@ -237,6 +245,10 @@ private:
     // Thread pool and memory management
     std::unique_ptr<ThreadPool> threadPool_;
     std::unique_ptr<AudioBufferPool> bufferPool_;
+
+    // Plugin hosting
+    std::unique_ptr<PluginHostManager> pluginHost_;
+    bool pluginLoaded_ = false;
 
     // Rendering pipeline
     EnhancedRenderPipeline renderPipeline_;

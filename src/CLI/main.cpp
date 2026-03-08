@@ -163,10 +163,14 @@ int main(int argc, char* argv[])
     OfflineBatchConfig config;
     config.inputFile = juce::File(args.inputFile);
     config.outputDirectory = juce::File(args.outputDir);
+    config.pluginFile = juce::File(args.pluginPath);
     config.totalVariations = args.variations;
     config.parallelWorkers = args.workers;
     config.enableSIMD = args.enableSIMD;
     config.useMemoryPool = args.useMemoryPool;
+
+    // Set render config output directory (used by EnhancedRenderPipeline)
+    config.renderConfig.outputDirectory = config.outputDirectory;
 
     // Validate configuration
     if (!config.isValid())
@@ -175,7 +179,18 @@ int main(int argc, char* argv[])
         if (!config.inputFile.existsAsFile())
             std::cerr << "  - Input file does not exist: " << args.inputFile << "\n";
         if (!config.outputDirectory.isDirectory())
+        {
             std::cerr << "  - Output directory does not exist: " << args.outputDir << "\n";
+            std::cerr << "  - Creating output directory...\n";
+            config.outputDirectory.createDirectory();
+            if (!config.outputDirectory.isDirectory())
+            {
+                std::cerr << "  - Failed to create output directory\n";
+                return 1;
+            }
+        }
+        if (!config.hasValidPlugin())
+            std::cerr << "  - Plugin file does not exist or is not a VST3: " << args.pluginPath << "\n";
         return 1;
     }
 
@@ -194,6 +209,15 @@ int main(int argc, char* argv[])
                   << " (" << std::fixed << std::setprecision(1) << progress.percentage << "%)"
                   << " [" << progress.successfulRenders << " success, "
                   << progress.failedRenders << " failed]\r" << std::flush;
+    };
+
+    // Set up variation complete callback to log errors
+    renderer.onVariationComplete = [](int index, const RenderResult& result)
+    {
+        if (!result.success)
+        {
+            std::cerr << "\nVariation " << index << " failed: " << result.errorMessage << "\n";
+        }
     };
 
     renderer.onRenderComplete = [&args](bool success, const juce::String& message)
@@ -235,8 +259,8 @@ int main(int argc, char* argv[])
         for (const auto& [name, stats] : profiler.getAllStats())
         {
             std::cout << "  " << name << ": "
-                      << stats.averageMs << "ms avg, "
-                      << stats.totalMs << "ms total, "
+                      << stats.averageTimeMs << "ms avg, "
+                      << stats.totalTimeMs << "ms total, "
                       << stats.callCount << " calls\n";
         }
     }

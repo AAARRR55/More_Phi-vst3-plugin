@@ -1,23 +1,18 @@
 /*
  * MorphSnap - Core/WindowsCompat.h
  * Windows compatibility macros and workarounds for JUCE conflicts.
+ *
+ * IMPORTANT: Include this BEFORE any JUCE headers to ensure Windows macros
+ * don't interfere with C++ syntax. CMakeLists.txt sets WIN32_LEAN_AND_MEAN
+ * and NOMINMAX globally, but this header provides additional safety.
  */
 #pragma once
 
-#if JUCE_WINDOWS
+#ifdef _WIN32
 
-// Prevent Windows macros from interfering with JUCE
-#ifdef WIN32_LEAN_AND_MEAN
-#undef WIN32_LEAN_AND_MEAN
-#endif
-#define WIN32_LEAN_AND_MEAN
+// Undefine Windows macros that conflict with C++ and JUCE
+// These may have been defined by Windows.h included indirectly
 
-#ifdef NOMINMAX
-#undef NOMINMAX
-#endif
-#define NOMINMAX
-
-// Common Windows macro conflicts
 #ifdef small
 #undef small
 #endif
@@ -58,4 +53,31 @@
 #undef PlaySound
 #endif
 
-#endif // JUCE_WINDOWS
+// Prevent bcrypt.h conflicts with C++ keywords
+#ifdef interface
+#undef interface
+#endif
+
+// Additional Windows macro conflicts
+#ifdef CONST
+#undef CONST
+#endif
+
+#ifdef CALLBACK
+#undef CALLBACK
+#endif
+
+#ifdef WINAPI
+#undef WINAPI
+#endif
+
+// Ensure WIN32_LEAN_AND_MEAN and NOMINMAX are set for any late Windows.h includes
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#endif // _WIN32

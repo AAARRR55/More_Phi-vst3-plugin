@@ -18,6 +18,15 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
         "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
+# Windows: Global preprocessor definitions to prevent macro conflicts
+# Must be set BEFORE any Windows headers are included (via JUCE or otherwise)
+if(WIN32)
+    add_compile_definitions(
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+endif()
+
 if(MSVC AND NOT MORPHSNAP_MSVC_MP MATCHES "^[0-9]+$")
     message(FATAL_ERROR "MORPHSNAP_MSVC_MP must be numeric (for example: 0, 1, 2, 4).")
 endif()
@@ -121,14 +130,6 @@ juce_add_plugin(MorphSnap
     VST3_CATEGORIES          "Fx" "Tools"
 )
 
-# ── CLI Executable ────────────────────────────────────────────────────────────
-add_executable(MorphSnapCLI
-    src/CLI/main.cpp
-    ${MORPHSNAP_CORE_SOURCES}
-    ${MORPHSNAP_HOST_SOURCES}
-    ${MORPHSNAP_AI_SOURCES}
-)
-
 # ── Source Files ──────────────────────────────────────────────────────────────
 # Phase 1: Foundation
 set(MORPHSNAP_PLUGIN_SOURCES
@@ -226,6 +227,8 @@ set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetGeneratorV2.h
     src/AI/Dataset/DatasetGeneratorV2.cpp
     src/AI/Dataset/DatasetConfig.h
+    src/AI/Dataset/OfflineBatchRenderer.h
+    src/AI/Dataset/OfflineBatchRenderer.cpp
 )
 
 set(MORPHSNAP_AI_DATASET_V3_SOURCES
@@ -343,6 +346,20 @@ endif()
 # ── Include Paths ─────────────────────────────────────────────────────────────
 target_include_directories(MorphSnap PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# ── CLI Executable ────────────────────────────────────────────────────────────
+# CLI only needs core, host, and dataset sources - NOT MCP server code
+set(MORPHSNAP_CLI_SOURCES
+    src/CLI/main.cpp
+    ${MORPHSNAP_CORE_SOURCES}
+    ${MORPHSNAP_HOST_SOURCES}
+    ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
+    ${MORPHSNAP_AI_DATASET_V3_SOURCES}
+)
+
+add_executable(MorphSnapCLI
+    ${MORPHSNAP_CLI_SOURCES}
 )
 
 # ── CLI Configuration ─────────────────────────────────────────────────────────

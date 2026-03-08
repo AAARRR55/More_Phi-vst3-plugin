@@ -10,7 +10,14 @@
 #include <stdexcept>
 
 #if JUCE_WINDOWS
-    #include "Core/WindowsCompat.h"
+    // Must include windows.h BEFORE bcrypt.h - bcrypt.h requires NTSTATUS, ULONG, etc.
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
+    #include <windows.h>
     #include <bcrypt.h>
     #pragma comment(lib, "bcrypt.lib")
 #elif JUCE_MAC || JUCE_IOS

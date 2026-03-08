@@ -36,6 +36,30 @@ bool OfflineBatchRenderer::setConfig(const OfflineBatchConfig& config)
         config_.outputDirectory.createDirectory();
     }
 
+    // Load plugin if specified
+    if (config_.hasValidPlugin())
+    {
+        pluginHost_ = std::make_unique<PluginHostManager>();
+
+        // First, prepare the host manager with sample rate/block size
+        pluginHost_->prepare(config_.renderConfig.sampleRate, config_.renderConfig.blockSize, config_.renderConfig.numChannels);
+
+        // Create PluginDescription from the plugin file
+        // For VST3 plugins, we can create a minimal description
+        juce::PluginDescription pluginDesc;
+        pluginDesc.fileOrIdentifier = config_.pluginFile.getFullPathName();
+        pluginDesc.pluginFormatName = "VST3";
+        pluginDesc.name = config_.pluginFile.getFileNameWithoutExtension();
+
+        pluginLoaded_ = pluginHost_->loadPlugin(pluginDesc);
+
+        if (!pluginLoaded_)
+        {
+            // Log warning but continue - we can still render with gain-only processing
+            juce::Logger::writeToLog("Warning: Failed to load plugin, using fallback gain processing");
+        }
+    }
+
     // Initialize thread pool if using parallel workers
     if (config_.parallelWorkers > 1)
     {
@@ -335,12 +359,53 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
                 }
             }
 
-            // Apply parameter variation (this would integrate with plugin host in real implementation)
-            // For now, just apply a simple gain based on first parameter
-            if (!task.parameters.empty())
+            // Process through plugin if loaded
+            if (pluginLoaded_ && pluginHost_ && pluginHost_->hasPlugin())
             {
-                float gain = task.parameters[0];
-                workingBuffer.applyGain(gain);
+                // Apply parameter variation to plugin
+                auto* plugin = pluginHost_->getPlugin();
+                if (!task.parameters.empty() && plugin)
+                {
+                    // Set plugin parameters based on variation
+                    auto& params = plugin->getParameters();
+                    for (size_t i = 0; i < task.parameters.size() && i < static_cast<size_t>(params.size()); ++i)
+                    {
+                        if (auto* param = params[static_cast<int>(i)])
+                        {
+                            param->setValue(task.parameters[i]); // Normalized value 0.0-1.0
+                        }
+                    }
+                }
+
+                // Process audio through plugin in blocks
+                juce::MidiBuffer midiBuffer; // Empty MIDI buffer for offline processing
+                int blockSize = config_.renderConfig.blockSize;
+                int totalSamples = workingBuffer.getNumSamples();
+
+                for (int sampleOffset = 0; sampleOffset < totalSamples; sampleOffset += blockSize)
+                {
+                    int samplesThisBlock = juce::jmin(blockSize, totalSamples - sampleOffset);
+
+                    // Create sub-buffer view for this block
+                    juce::AudioBuffer<float> blockBuffer(
+                        workingBuffer.getArrayOfWritePointers(),
+                        workingBuffer.getNumChannels(),
+                        sampleOffset,
+                        samplesThisBlock
+                    );
+
+                    // Process through plugin (in-place processing)
+                    pluginHost_->processBlock(blockBuffer, midiBuffer);
+                }
+            }
+            else
+            {
+                // Fallback: apply simple gain based on first parameter
+                if (!task.parameters.empty())
+                {
+                    float gain = task.parameters[0];
+                    workingBuffer.applyGain(gain);
+                }
             }
         }
 
