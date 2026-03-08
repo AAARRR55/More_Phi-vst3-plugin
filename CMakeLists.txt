@@ -18,6 +18,15 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
         "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
+# Windows: Global preprocessor definitions to prevent macro conflicts
+# Must be set BEFORE any Windows headers are included (via JUCE or otherwise)
+if(WIN32)
+    add_compile_definitions(
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+endif()
+
 if(MSVC AND NOT MORPHSNAP_MSVC_MP MATCHES "^[0-9]+$")
     message(FATAL_ERROR "MORPHSNAP_MSVC_MP must be numeric (for example: 0, 1, 2, 4).")
 endif()
@@ -143,6 +152,14 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/MorphProcessor.h
     src/Core/MorphProcessor.cpp
     src/Core/LockFreeQueue.h
+    src/Core/ThreadPool.h
+    src/Core/ThreadPool.cpp
+    src/Core/AudioBufferPool.h
+    src/Core/AudioBufferPool.cpp
+    src/Core/SIMDAudio.h
+    src/Core/SIMDAudio.cpp
+    src/Core/PerformanceProfiler.h
+    src/Core/PerformanceProfiler.cpp
     src/Core/AllocationTracker.h
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
@@ -210,6 +227,8 @@ set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetGeneratorV2.h
     src/AI/Dataset/DatasetGeneratorV2.cpp
     src/AI/Dataset/DatasetConfig.h
+    src/AI/Dataset/OfflineBatchRenderer.h
+    src/AI/Dataset/OfflineBatchRenderer.cpp
 )
 
 set(MORPHSNAP_AI_DATASET_V3_SOURCES
@@ -329,6 +348,56 @@ target_include_directories(MorphSnap PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# ── CLI Executable ────────────────────────────────────────────────────────────
+# CLI only needs core, host, and dataset sources - NOT MCP server code
+set(MORPHSNAP_CLI_SOURCES
+    src/CLI/main.cpp
+    ${MORPHSNAP_CORE_SOURCES}
+    ${MORPHSNAP_HOST_SOURCES}
+    ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
+    ${MORPHSNAP_AI_DATASET_V3_SOURCES}
+)
+
+add_executable(MorphSnapCLI
+    ${MORPHSNAP_CLI_SOURCES}
+)
+
+# ── CLI Configuration ─────────────────────────────────────────────────────────
+target_include_directories(MorphSnapCLI PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(MorphSnapCLI
+    PRIVATE
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_core
+        juce::juce_cryptography
+        juce::juce_data_structures
+        juce::juce_dsp
+        juce::juce_events
+        nlohmann_json::nlohmann_json
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+target_compile_definitions(MorphSnapCLI
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1
+        JUCE_PLUGINHOST_VST3=1
+        MORPHSNAP_ENABLE_DATASET_V3=1
+        JUCE_PUSH_NOTIFICATIONS=0
+)
+
+if(APPLE)
+    target_compile_definitions(MorphSnapCLI PUBLIC JUCE_PLUGINHOST_AU=1)
+endif()
+
 # ── JUCE Modules ──────────────────────────────────────────────────────────────
 target_link_libraries(MorphSnap
     PRIVATE
@@ -369,11 +438,21 @@ endif()
 
 # Build-stability defaults are target-scoped so normal CMake options stay explicit.
 morphsnap_apply_build_tuning(MorphSnap)
+morphsnap_apply_build_tuning(MorphSnapCLI)
 if(TARGET MorphSnap_VST3)
     morphsnap_apply_build_tuning(MorphSnap_VST3)
 endif()
 if(TARGET MorphSnap_AU)
     morphsnap_apply_build_tuning(MorphSnap_AU)
+endif()
+
+# Add compiler flags for SIMD support
+if(MSVC)
+    target_compile_options(MorphSnap PRIVATE /arch:AVX2)
+    target_compile_options(MorphSnapCLI PRIVATE /arch:AVX2)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(MorphSnap PRIVATE -mavx2 -msse4.1)
+    target_compile_options(MorphSnapCLI PRIVATE -mavx2 -msse4.1)
 endif()
 
 if(MORPHSNAP_BUILD_TESTS)

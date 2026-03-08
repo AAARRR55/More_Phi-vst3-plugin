@@ -19,7 +19,12 @@
 #include <cstring>
 
 #if JUCE_WINDOWS
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
     #define NOMINMAX
+    #endif
     #include <windows.h>
 #elif JUCE_MAC || JUCE_LINUX
     #include <sys/mman.h>

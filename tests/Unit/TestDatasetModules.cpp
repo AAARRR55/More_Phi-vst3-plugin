@@ -19,7 +19,6 @@
 #include "AI/Dataset/ValidationEngine.h"
 #include "AI/Dataset/DatasetOrganizer.h"
 #include "AI/Dataset/PhaseVocoder.h"
-#include "AI/Dataset/ParameterNormalization.h"
 #include "AI/Dataset/AudioAugmentation.h"
 
 #include <juce_core/juce_core.h>
