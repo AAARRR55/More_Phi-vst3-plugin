@@ -39,8 +39,6 @@ class ThreadPool {
 public:
     /**
      * Create ThreadPool with specified number of worker threads.
-     * @param threads Number of worker threads to create (must be > 0)
-     * @throws std::invalid_argument if threads == 0
      */
     explicit ThreadPool(size_t threads);
 
@@ -48,12 +46,6 @@ public:
      * Destructor - calls shutdown() if not already called
      */
     ~ThreadPool();
-
-    // Non-copyable and non-movable
-    ThreadPool(const ThreadPool&) = delete;
-    ThreadPool& operator=(const ThreadPool&) = delete;
-    ThreadPool(ThreadPool&&) = delete;
-    ThreadPool& operator=(ThreadPool&&) = delete;
 
     /**
      * Enqueue a task for execution by worker threads.
@@ -63,7 +55,6 @@ public:
      * @param f Function/lambda to execute
      * @param args Arguments to pass to function
      * @return std::future<return_type> Future for retrieving result
-     * @throws std::runtime_error if ThreadPool has been shut down
      */
     template<class F, class... Args>
     auto enqueue(F&& f, Args&&... args)
@@ -88,28 +79,16 @@ public:
     /**
      * Get the number of worker threads.
      */
-    size_t getNumThreads() const noexcept { return workers.size(); }
-
-    /**
-     * Check if ThreadPool has been shut down.
-     */
-    bool isShutdown() const noexcept { return stop.load(); }
+    size_t getNumThreads() const;
 
 private:
-    // Worker threads
-    std::vector<std::thread> workers;
+    std::vector<std::thread> workers_;
+    std::queue<std::function<void()>> tasks_;
 
-    // Task queue
-    std::queue<std::function<void()>> tasks;
-
-    // Synchronization primitives
-    std::mutex queue_mutex;
-    std::condition_variable condition;
-    std::condition_variable finished_condition;
-
-    // Control flags
-    std::atomic<bool> stop{false};
-    std::atomic<size_t> active_tasks{0};
+    std::mutex queueMutex_;
+    std::condition_variable condition_;
+    std::atomic<bool> stop_{false};
+    std::atomic<size_t> activeTasks_{0};
 
     // Worker thread function
     void workerThread();
@@ -122,10 +101,6 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
 
     using return_type = typename std::invoke_result<F, Args...>::type;
 
-    if (stop.load()) {
-        throw std::runtime_error("ThreadPool has been shut down");
-    }
-
     auto task = std::make_shared<std::packaged_task<return_type()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
@@ -133,20 +108,16 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     std::future<return_type> result = task->get_future();
 
     {
-        std::unique_lock<std::mutex> lock(queue_mutex);
+        std::unique_lock<std::mutex> lock(queueMutex_);
 
-        // Double-check stop flag under lock
-        if (stop.load()) {
-            throw std::runtime_error("ThreadPool has been shut down");
-        }
-
-        // Increment active task count before enqueuing
-        active_tasks.fetch_add(1);
-
-        tasks.emplace([task]() { (*task)(); });
+        activeTasks_.fetch_add(1);
+        tasks_.emplace([task, this]() {
+            (*task)();
+            activeTasks_.fetch_sub(1);
+        });
     }
 
-    condition.notify_one();
+    condition_.notify_one();
     return result;
 }
 

@@ -3,20 +3,17 @@
  * Implementation of thread pool for parallel task execution.
  */
 #include "ThreadPool.h"
+#include <chrono>
 
 namespace morphsnap {
 
 ThreadPool::ThreadPool(size_t threads) {
-    if (threads == 0) {
-        throw std::invalid_argument("ThreadPool requires at least one thread");
-    }
-
     // Reserve space for worker threads
-    workers.reserve(threads);
+    workers_.reserve(threads);
 
     // Create worker threads
     for (size_t i = 0; i < threads; ++i) {
-        workers.emplace_back(&ThreadPool::workerThread, this);
+        workers_.emplace_back(&ThreadPool::workerThread, this);
     }
 }
 
@@ -29,20 +26,20 @@ void ThreadPool::workerThread() {
         std::function<void()> task;
 
         {
-            std::unique_lock<std::mutex> lock(queue_mutex);
+            std::unique_lock<std::mutex> lock(queueMutex_);
 
             // Wait for a task or stop signal
-            condition.wait(lock, [this] { return stop.load() || !tasks.empty(); });
+            condition_.wait(lock, [this] { return stop_.load() || !tasks_.empty(); });
 
             // Exit if stopping and no tasks left
-            if (stop.load() && tasks.empty()) {
+            if (stop_.load() && tasks_.empty()) {
                 return;
             }
 
             // Get next task
-            if (!tasks.empty()) {
-                task = std::move(tasks.front());
-                tasks.pop();
+            if (!tasks_.empty()) {
+                task = std::move(tasks_.front());
+                tasks_.pop();
             } else {
                 continue; // Spurious wakeup
             }
@@ -55,41 +52,42 @@ void ThreadPool::workerThread() {
             // Task exceptions are propagated through std::future
             // No need to handle here - just continue processing
         }
-
-        // Decrement active task count and notify waiters
-        size_t remaining = active_tasks.fetch_sub(1) - 1;
-        if (remaining == 0) {
-            finished_condition.notify_all();
-        }
     }
 }
 
 void ThreadPool::waitForAll() {
-    std::unique_lock<std::mutex> lock(queue_mutex);
-
-    // Wait until no active tasks and queue is empty
-    finished_condition.wait(lock, [this] {
-        return active_tasks.load() == 0 && tasks.empty();
-    });
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(queueMutex_);
+            if (activeTasks_.load() == 0 && tasks_.empty()) {
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 void ThreadPool::shutdown() {
     {
-        std::unique_lock<std::mutex> lock(queue_mutex);
+        std::unique_lock<std::mutex> lock(queueMutex_);
 
         // Set stop flag
-        stop.store(true);
+        stop_.store(true);
     }
 
     // Wake up all worker threads
-    condition.notify_all();
+    condition_.notify_all();
 
     // Join all worker threads
-    for (auto& worker : workers) {
+    for (auto& worker : workers_) {
         if (worker.joinable()) {
             worker.join();
         }
     }
+}
+
+size_t ThreadPool::getNumThreads() const {
+    return workers_.size();
 }
 
 } // namespace morphsnap
