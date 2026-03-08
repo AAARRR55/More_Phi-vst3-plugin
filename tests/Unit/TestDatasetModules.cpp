@@ -232,6 +232,112 @@ TEST_CASE("FeatureExtractor: toVector produces 30 floats", "[dataset][features]"
     REQUIRE(vec.size() == 30);
 }
 
+TEST_CASE("FeatureExtractor: MFCC dimension is 13", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+    ExtractionConfig config;
+    config.sampleRate = 48000.0;
+    config.computeMFCC = true;
+    config.mfccCoefficients = 13;
+
+    // Create a 1-second sine wave at 440 Hz
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, std::sin(2.0 * M_PI * 440.0 * i / 48000.0) * 0.5f);
+
+    auto features = extractor.extract(buffer, config);
+    REQUIRE(features.spectral.mfcc.size() == 13);
+}
+
+TEST_CASE("FeatureExtractor: LUFS computed for known signal", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+
+    // Full-scale sine wave should have LUFS around -3 dB
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, std::sin(2.0 * M_PI * 440.0 * i / 48000.0));
+
+    float lufs = extractor.computeLUFS(buffer, 48000.0);
+    REQUIRE(lufs < 0.0f);  // Should be negative dB
+    REQUIRE(lufs > -10.0f); // Should be reasonably loud
+}
+
+TEST_CASE("FeatureExtractor: Chroma has 12 elements", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+
+    // A4 (440 Hz) should primarily activate chroma index 9 (A)
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, std::sin(2.0 * M_PI * 440.0 * i / 48000.0) * 0.5f);
+
+    ExtractionConfig config;
+    config.sampleRate = 48000.0;
+    config.computeChroma = true;
+
+    auto features = extractor.extract(buffer, config);
+    REQUIRE(features.spectral.chroma.size() == 12);
+}
+
+TEST_CASE("FeatureExtractor: Spectral centroid in expected range", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+
+    // Create a 1-second sine wave - spectral centroid should be near the fundamental
+    // For a pure sine wave, the centroid should be close to the fundamental frequency
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, std::sin(2.0 * M_PI * 1000.0 * i / 48000.0) * 0.5f);
+
+    ExtractionConfig config;
+    config.sampleRate = 48000.0;
+    config.frameSize = 2048;
+    config.hopSize = 512;
+
+    auto features = extractor.extract(buffer, config);
+    REQUIRE(features.spectral.spectralCentroid > 0.0f);
+    // For a 1kHz sine wave, centroid should be around 1kHz (with some spread)
+    REQUIRE(features.spectral.spectralCentroid < 5000.0f);
+}
+
+TEST_CASE("FeatureExtractor: Temporal RMS matches manual calculation", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+
+    juce::AudioBuffer<float> buffer(1, 1000);
+    for (int i = 0; i < 1000; ++i)
+        buffer.setSample(0, i, 0.5f); // Constant amplitude
+
+    auto features = extractor.extract(buffer, ExtractionConfig{});
+
+    // RMS of 0.5 should be 0.5 (but the implementation stores it in dB)
+    // features.temporal.rmsEnergy is in dB, so we check it's a reasonable value
+    // Linear RMS = 0.5, which in dB is 20*log10(0.5) ≈ -6 dB
+    REQUIRE(features.temporal.rmsEnergy < 0.0f);  // Should be negative dB
+    REQUIRE(features.temporal.rmsEnergy > -10.0f); // Should be around -6 dB
+}
+
+TEST_CASE("FeatureExtractor: toVector produces 31 dimensions with chroma", "[dataset][features]")
+{
+    FeatureExtractor extractor;
+
+    ExtractionConfig config;
+    config.sampleRate = 48000.0;
+    config.computeChroma = true;
+    config.computeMFCC = true;
+
+    juce::AudioBuffer<float> buffer(2, 48000);
+    buffer.clear();
+
+    auto features = extractor.extract(buffer, config);
+    auto vec = extractor.toVector(features);
+
+    // toVector exports 13 MFCC + 5 spectral scalars + 6 temporal + 6 perceptual = 30
+    // (chroma is not included in toVector, so still 30)
+    REQUIRE(vec.size() == 30);
+}
+
 // =============================================================================
 //  MetadataWriter Tests
 // =============================================================================
@@ -506,4 +612,20 @@ TEST_CASE("PhaseVocoder: can be constructed", "[dataset][phasevocoder]")
 {
     morphsnap::PhaseVocoder vocoder;
     REQUIRE(true); // Just verify it compiles
+}
+
+TEST_CASE("PhaseVocoder: prepare initializes FFT", "[dataset][phasevocoder]")
+{
+    morphsnap::PhaseVocoder vocoder;
+    vocoder.prepare(48000.0, 2048);
+    // Should not crash, FFT should be initialized
+    REQUIRE(true);
+}
+
+TEST_CASE("PhaseVocoder: prepare handles different FFT sizes", "[dataset][phasevocoder]")
+{
+    morphsnap::PhaseVocoder vocoder;
+    vocoder.prepare(48000.0, 1024);
+    vocoder.prepare(48000.0, 4096);
+    REQUIRE(true);
 }

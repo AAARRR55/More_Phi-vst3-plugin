@@ -31,7 +31,18 @@ public:
      * @param sampleRate  Sample rate in Hz
      * @param fftSize     FFT size (must be power of 2, default 2048)
      */
-    void prepare(double sampleRate, int fftSize = 2048);
+    void prepare(double sampleRate, int fftSize = 2048)
+    {
+        sampleRate_ = sampleRate;
+        fftSize_ = fftSize;
+        hopSize_ = fftSize_ / 4;  // 75% overlap
+
+        // JUCE FFT order is log2(size)
+        const int order = static_cast<int>(std::log2(static_cast<double>(fftSize_)));
+        fft_ = std::make_unique<juce::dsp::FFT>(order);
+
+        prepared_ = true;
+    }
 
     /**
      * Apply time-stretching to the audio buffer.
