@@ -190,21 +190,25 @@ private:
                 break;
             }
             case AugmentationType::TimeStretch:
-            {
-                // intensity 0 -> 0.8x (slower), intensity 1 -> 1.5x (faster)
-                const float ratio = juce::jmap(config.intensity, 0.8f, 1.5f);
-                vocoder_.prepare(sampleRate);
-                vocoder_.processTimeStretch(buffer, ratio, rng);
-                break;
-            }
             case AugmentationType::PitchShift:
-            {
-                // intensity 0 -> -5 semitones, intensity 1 -> +5 semitones
-                const float semitones = juce::jmap(config.intensity, -5.0f, 5.0f);
-                vocoder_.prepare(sampleRate);
-                vocoder_.processPitchShift(buffer, semitones, rng);
+                // =====================================================================
+                // OPTIONAL: These augmentations require a phase vocoder implementation.
+                // Currently no-ops. For production time-stretching/pitch-shifting:
+                //
+                // Recommended external libraries:
+                //   - Rubber Band Library (GPL/commercial)
+                //   - SoundTouch (LGPL)
+                //   - JUCE's dsp::WindowedSincInterpolator (basic)
+                //
+                // To implement: Add PhaseVocoder class with:
+                //   - STFT analysis/synthesis
+                //   - Phase propagation (vocoder-style or identity)
+                //   - Resynthesis with overlap-add
+                //
+                // See AugmentationChainPreset::createCreative() which includes these
+                // with probability 0.2 - they will be skipped until implemented.
+                // =====================================================================
                 break;
-            }
         }
     }
 
@@ -597,8 +601,10 @@ struct AugmentationChainPreset
             { AugmentationType::DynamicProcessing, 0.4f, 0.5f, true },
             { AugmentationType::FrequencyMask,     0.3f, 0.5f, true },
             { AugmentationType::TimeMask,          0.3f, 0.4f, true },
-            { AugmentationType::TimeStretch,       0.2f, 0.4f, true },
-            { AugmentationType::PitchShift,        0.2f, 0.4f, true }
+            // NOTE: TimeStretch and PitchShift are currently no-ops (placeholders)
+            // Uncomment below when phase vocoder is implemented:
+            // { AugmentationType::TimeStretch,       0.2f, 0.4f, false },
+            // { AugmentationType::PitchShift,        0.2f, 0.4f, false },
         };
     }
 };
