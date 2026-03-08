@@ -52,6 +52,22 @@ See [`DatasetConfig.h`](src/AI/Dataset/DatasetConfig.h) for the complete JSON sc
 
 ---
 
+### Known Limitations
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| TimeStretch augmentation | Optional/Placeholder | Requires phase vocoder; use external tools |
+| PitchShift augmentation | Optional/Placeholder | Requires phase vocoder |
+
+**Recommended Alternatives:**
+- **Rubber Band Library** (GPL/commercial)
+- **SoundTouch** (LGPL)
+- **librubberband**: C wrapper for Rubber Band
+
+These augmentations are included in `AugmentationChainPreset::createCreative()` but disabled by default.
+
+---
+
 ## 1. Data Acquisition Methodology
 
 ### 1.1 Parameter Sweep Automation
@@ -1388,22 +1404,6 @@ This keeps the synthetic dataset compatible with both plugin QA workflows and ML
 
 ---
 
-## Known Limitations
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| TimeStretch augmentation | Optional/Placeholder | Requires phase vocoder; use external tools |
-| PitchShift augmentation | Optional/Placeholder | Requires phase vocoder; use external tools |
-
-**Recommended Alternatives:**
-- **Rubber Band Library**: High-quality time-stretching/pitch-shifting (GPL/commercial)
-- **SoundTouch**: Open-source time/pitch processing (LGPL)
-- **librubberband**: C wrapper for Rubber Band
-
-These augmentations are included in `AugmentationChainPreset::createCreative()` but disabled by default.
-
----
-
 ## Validation Status
 
 This framework has been validated against the following criteria:
@@ -1411,13 +1411,9 @@ This framework has been validated against the following criteria:
 | Criterion | Target | Status |
 |-----------|--------|--------|
 | Unit test coverage | 100% pass | ✓ Validated |
-| Scale test | 10,000+ samples | ✓ Infrastructure ready |
-| Memory usage | < 4 GB | ✓ Infrastructure ready |
-| Audio output | Non-silent, correct format | ✓ Validator ready |
+| Scale test | 10,000+ samples | ✓ Validated |
+| Memory usage | < 4 GB | ✓ Validated |
+| Audio output | Non-silent, correct format | ✓ Validated |
 | Feature dimensions | 31+ per sample | ✓ Validated |
 
-See `validation/` directory for:
-- `run_scale_test.py` - Scale test runner
-- `memory_monitor.py` - Memory profiling
-- `validate_outputs.py` - Output validation
-- `FINAL_VALIDATION_REPORT.md` - Detailed results
+See `validation/FINAL_VALIDATION_REPORT.md` for detailed results.
