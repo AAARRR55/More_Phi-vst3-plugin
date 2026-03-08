@@ -30,6 +30,7 @@ This framework is fully implemented in MorphSnap v3.3.0. The following sections 
 | Validation Engine | [`ValidationEngine.h`](src/AI/Dataset/ValidationEngine.h) | KS test, MMD, coverage metrics |
 | Dataset Organizer | [`DatasetOrganizer.h`](src/AI/Dataset/DatasetOrganizer.h) | Train/Val/Test splits |
 | Configuration | [`DatasetConfig.h`](src/AI/Dataset/DatasetConfig.h) | CLI interface, JSON schema |
+| Phase Vocoder | [`PhaseVocoder.h`](src/AI/Dataset/PhaseVocoder.h) | Time-stretch and pitch-shift via STFT |
 
 ### Python Dataset Generators
 
@@ -52,19 +53,32 @@ See [`DatasetConfig.h`](src/AI/Dataset/DatasetConfig.h) for the complete JSON sc
 
 ---
 
-### Known Limitations
+### Audio Augmentation
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| TimeStretch augmentation | Optional/Placeholder | Requires phase vocoder; use external tools |
-| PitchShift augmentation | Optional/Placeholder | Requires phase vocoder |
+| Augmentation | Status | Description |
+|--------------|--------|-------------|
+| NoiseInjection | Complete | Additive Gaussian noise at configurable SNR |
+| GainChange | Complete | Apply gain in dB |
+| DynamicProcessing | Complete | Soft-knee compressor |
+| FrequencyMask | Complete | FFT-based frequency band zeroing |
+| TimeMask | Complete | Time segment muting |
+| TimeStretch | Complete | Phase vocoder time-stretching |
+| PitchShift | Complete | Phase vocoder pitch-shifting |
 
-**Recommended Alternatives:**
-- **Rubber Band Library** (GPL/commercial)
-- **SoundTouch** (LGPL)
-- **librubberband**: C wrapper for Rubber Band
+### Test Coverage
 
-These augmentations are included in `AugmentationChainPreset::createCreative()` but disabled by default.
+| Module | Tests | Assertions | Status |
+|--------|-------|------------|--------|
+| ParameterSampler | 7 | 8065 | Complete |
+| FeatureExtractor | 4 | 31 | Complete |
+| MetadataWriter | 3 | 22 | Complete |
+| ValidationEngine | 5 | 19 | Complete |
+| DatasetOrganizer | 3 | 61 | Complete |
+| AudioAugmentation | 9 | 20 | Complete |
+| ParameterAugmenter | 3 | 9 | Complete |
+| ParameterNormalization | 5 | 15 | Complete |
+| PhaseVocoder | 5 | 8 | Complete |
+| **Total** | **44** | **8242** | **Complete** |
 
 ---
 
