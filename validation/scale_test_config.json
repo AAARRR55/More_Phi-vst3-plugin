@@ -1,0 +1,18 @@
+{
+  "outputDirectory": "./validation_output/",
+  "datasetName": "scale_test_10k",
+  "totalSamples": 10000,
+  "sampleRate": 48000,
+  "blockSize": 512,
+  "numChannels": 2,
+  "fullDuration": 5.0,
+  "transientDuration": 0.5,
+  "steadyStateDuration": 2.0,
+  "chainType": "Mastering",
+  "numParallelThreads": 4,
+  "pluginSettleTimeMs": 50,
+  "enableValidation": true,
+  "checkpointInterval": 500,
+  "randomSeed": 42,
+  "dryRun": false
+}
