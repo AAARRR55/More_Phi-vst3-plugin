@@ -27,12 +27,14 @@ add_executable(MorphSnapTests
     Unit/TestAIRegressions.cpp
     Integration/TestPluginLifecycle.cpp
     Integration/TestMCPIntegration.cpp
+    Integration/TestDatasetIntegration.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
     Unit/TestGranularEngine.cpp
     Unit/TestPresetLibrary.cpp
     Unit/TestV2Integration.cpp
+    Unit/TestDatasetModules.cpp
 )
 
 # Link the compiled plugin objects in (shared) so the test binary has access

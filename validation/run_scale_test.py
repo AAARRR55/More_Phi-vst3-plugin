@@ -44,7 +44,7 @@ def run_generation(config: dict) -> bool:
     print(f"Existing samples: {existing}")
 
     if existing >= total_samples:
-        print("OK - Already have enough samples")
+        print("✓ Already have enough samples")
         return True
 
     # Try to run the dataset generator

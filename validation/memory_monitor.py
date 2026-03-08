@@ -104,8 +104,9 @@ def monitor_generation_process(process_name: str = "python") -> dict:
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
             if process_name.lower() in proc.info['name'].lower():
+                # Check if it's a dataset generator
                 cmdline = proc.info.get('cmdline', [])
-                if any('dataset' in str(c).lower() or 'generate' in str(c).lower() for c in cmdline):
+                if any('dataset' in str(c).lower() for c in cmdline):
                     target_process = proc
                     break
         except (psutil.NoSuchProcess, psutil.AccessDenied):
