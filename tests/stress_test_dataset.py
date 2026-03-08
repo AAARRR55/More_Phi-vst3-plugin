@@ -1,45 +1,47 @@
 #!/usr/bin/env python3
 """
-Stress test for MorphSyn dataset generation framework.
+Stress test for MorphSnap dataset generation framework.
 Validates:
-- 10,000+ samples without crash
-- Memory under 4GB
-- All outputs valid
+- Dataset unit tests pass
+- Memory under 4GB (requires psutil for accurate measurement)
+- Build completes successfully
 """
 
 import subprocess
 import sys
-import time
 import os
 from pathlib import Path
 
+# Resolve paths relative to script location
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
+BUILD_DIR = PROJECT_ROOT / "build"
+
 def check_memory():
-    """Return current process memory usage in GB."""
+    """Return current process memory usage in GB, or None if psutil unavailable."""
     try:
         import psutil
         process = psutil.Process(os.getpid())
         return process.memory_info().rss / (1024 ** 3)
     except ImportError:
-        return 0.0
+        return None
 
 def run_stress_test():
     """Run the dataset generation stress test."""
     print("=" * 60)
-    print("MorphSyn Dataset Framework Stress Test")
+    print("MorphSnap Dataset Framework Stress Test")
     print("=" * 60)
 
     # Configuration
-    num_samples = 10000
     memory_limit_gb = 4.0
 
     print(f"\nConfiguration:")
-    print(f"  Samples: {num_samples}")
     print(f"  Memory limit: {memory_limit_gb} GB")
 
     # Build the test executable first
     print("\n[1/4] Building test executable...")
     build_result = subprocess.run(
-        ["cmake", "--build", "build", "--config", "Release", "--target", "MorphSnapTests"],
+        ["cmake", "--build", str(BUILD_DIR), "--config", "Release", "--target", "MorphSnapTests"],
         capture_output=True,
         text=True
     )
@@ -52,7 +54,7 @@ def run_stress_test():
     print("\n[2/4] Running unit tests...")
     test_result = subprocess.run(
         ["ctest", "--build-config", "Release", "-R", "dataset", "--output-on-failure"],
-        cwd="build",
+        cwd=str(BUILD_DIR),
         capture_output=True,
         text=True
     )
@@ -64,16 +66,23 @@ def run_stress_test():
     # Check memory usage
     print("\n[3/4] Checking memory usage...")
     mem_gb = check_memory()
-    print(f"  Current memory: {mem_gb:.2f} GB")
-    if mem_gb > memory_limit_gb:
-        print(f"  WARNING: Memory exceeds {memory_limit_gb} GB limit")
+    if mem_gb is None:
+        print("  WARNING: psutil not installed - cannot measure memory usage")
+        print("  Install with: pip install psutil")
     else:
-        print(f"  Memory OK (under {memory_limit_gb} GB)")
+        print(f"  Current memory: {mem_gb:.2f} GB")
+        if mem_gb > memory_limit_gb:
+            print(f"  WARNING: Memory exceeds {memory_limit_gb} GB limit")
+        else:
+            print(f"  Memory OK (under {memory_limit_gb} GB)")
 
     # Summary
     print("\n[4/4] Stress test summary:")
     print(f"  Status: PASSED")
-    print(f"  Memory: {mem_gb:.2f} GB / {memory_limit_gb} GB limit")
+    if mem_gb is not None:
+        print(f"  Memory: {mem_gb:.2f} GB / {memory_limit_gb} GB limit")
+    else:
+        print(f"  Memory: (psutil not available)")
 
     print("\n" + "=" * 60)
     print("STRESS TEST PASSED")
