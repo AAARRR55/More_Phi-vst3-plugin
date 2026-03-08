@@ -141,7 +141,7 @@ TEST_CASE("FeatureExtractor: full extraction pipeline", "[dataset][integration][
     // Verify all feature categories populated
     REQUIRE(features.spectral.mfcc.size() == 13);
     REQUIRE(features.spectral.chroma.size() == 12);
-    REQUIRE(features.temporal.rmsEnergy > 0.0f);
+    REQUIRE(features.temporal.rmsEnergy > -100.0f);  // dB value, non-silent audio
     REQUIRE(features.perceptual.lufs < 0.0f);
 
     // Verify frame-level features
