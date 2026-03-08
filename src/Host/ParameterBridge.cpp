@@ -68,19 +68,31 @@ float ParameterBridge::getParameterNormalized(int index) const
 
 void ParameterBridge::setParameterNormalized(int index, float value)
 {
-    withPlugin(host_, "setParameterNormalized", /* void → use int dummy */ 0,
-        [index, value](juce::AudioPluginInstance& plugin) -> int
+    withPlugin(host_, "setParameterNormalized", 0,
+        [this, index, value](juce::AudioPluginInstance& plugin) -> int
     {
-        if (index < 0 || index >= plugin.getParameters().size()) return 0;
+        auto& params = plugin.getParameters();
+        if (index < 0 || index >= (int)params.size()) return 0;
 
         const float clamped = juce::jlimit(0.0f, 1.0f, value);
+        const auto now = juce::Time::getMillisecondCounter();
 
-        // Use the deprecated setParameter() — it's the ONLY method that
-        // reliably pushes values through to the VST3 edit controller
-        // AND updates the hosted plugin's GUI (e.g. Pro-Q 4).
-        // The modern setValueNotifyingHost() only updates JUCE's cached
-        // value but doesn't trigger the VST3 controller's GUI refresh.
+        // High-density morphing can send thousands of updates per second.
+        // If we've updated this parameter too recently AND the value hasn't
+        // changed significantly, we throttle it to avoid CPU spikes in
+        // the hosted plugin's GUI/controller refresh code.
+        if (shouldThrottle(index, clamped, now))
+            return 0;
+
+        // Use the legacy setParameter() for reliable VST3/AU host compatibility.
         plugin.setParameter(index, clamped);
+
+        // Update tracking state
+        {
+            std::lock_guard<std::mutex> lock(throttleMutex_);
+            ensureThrottleSize((int)params.size());
+            throttleStates_[index] = {clamped, now};
+        }
 
         return 0;
     });
@@ -92,7 +104,7 @@ juce::String ParameterBridge::getParameterName(int index) const
         [index](juce::AudioPluginInstance& plugin) -> juce::String
     {
         auto& params = plugin.getParameters();
-        if (index < 0 || index >= params.size()) return {};
+        if (index < 0 || index >= (int)params.size()) return {};
         return params[index]->getName(128);
     });
 }
@@ -107,11 +119,26 @@ void ParameterBridge::applyParameterState(const float* values, int count)
     if (!values || count <= 0) return;
 
     withPlugin(host_, "applyParameterState", 0,
-        [values, count](juce::AudioPluginInstance& plugin) -> int
+        [this, values, count](juce::AudioPluginInstance& plugin) -> int
     {
-        const int safeCount = juce::jmin(count, static_cast<int>(plugin.getParameters().size()));
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, (int)params.size());
+        const auto now = juce::Time::getMillisecondCounter();
+
         for (int i = 0; i < safeCount; ++i)
-            plugin.setParameter(i, juce::jlimit(0.0f, 1.0f, values[i]));
+        {
+            const float clamped = juce::jlimit(0.0f, 1.0f, values[i]);
+            
+            // Apply throttling during batch updates
+            if (!shouldThrottle(i, clamped, now))
+            {
+                plugin.setParameter(i, clamped);
+                
+                std::lock_guard<std::mutex> lock(throttleMutex_);
+                ensureThrottleSize((int)params.size());
+                throttleStates_[i] = {clamped, now};
+            }
+        }
         return 0;
     });
 }
@@ -123,7 +150,7 @@ std::vector<float> ParameterBridge::captureParameterState() const
     {
         auto& params = plugin.getParameters();
         std::vector<float> state(params.size());
-        for (int i = 0; i < params.size(); ++i)
+        for (int i = 0; i < (int)params.size(); ++i)
             state[i] = params[i]->getValue();
         return state;
     });
@@ -135,7 +162,7 @@ bool ParameterBridge::isDiscrete(int index) const
         [index](juce::AudioPluginInstance& plugin) -> bool
     {
         auto& params = plugin.getParameters();
-        if (index < 0 || index >= params.size()) return false;
+        if (index < 0 || index >= (int)params.size()) return false;
         auto* p = params[index];
         // JUCE's isDiscrete() covers VST3 params with step counts.
         // Also treat params with very few steps (≤32) as discrete —
@@ -154,7 +181,7 @@ std::vector<bool> ParameterBridge::getDiscreteMap() const
     {
         auto& params = plugin.getParameters();
         std::vector<bool> map(params.size(), false);
-        for (int i = 0; i < params.size(); ++i)
+        for (int i = 0; i < (int)params.size(); ++i)
         {
             auto* p = params[i];
             if (p->isDiscrete()) { map[i] = true; continue; }
@@ -163,6 +190,47 @@ std::vector<bool> ParameterBridge::getDiscreteMap() const
         }
         return map;
     });
+}
+
+// ── Private Implementation ─────────────────────────────────────────────────────
+
+void ParameterBridge::ensureThrottleSize(int count) const
+{
+    if (throttleStates_.size() < (size_t)count)
+        throttleStates_.resize(count);
+}
+
+bool ParameterBridge::shouldThrottle(int index, float newValue, juce::uint32 now) const
+{
+    std::lock_guard<std::mutex> lock(throttleMutex_);
+    
+    if (index >= (int)throttleStates_.size())
+        return false;
+        
+    const auto& state = throttleStates_[index];
+    
+    // 1. Initial update (lastValue == -1.0f)
+    if (state.lastValue < 0.0f)
+        return false;
+        
+    // 2. Minimum time threshold (e.g., 2ms between updates)
+    // We allow 500 updates per second per parameter, which is more than enough
+    // for smooth visual morphing without saturating hosted plugin GUI threads.
+    const juce::uint32 delta = now - state.lastUpdateTime;
+    if (delta >= 2) 
+        return false;
+        
+    // 3. Significance guard: If the change is significant (> 1% of range), 
+    // allow it anyway to ensure accuracy during high-speed morphs.
+    if (std::abs(newValue - state.lastValue) > 0.01f)
+        return false;
+        
+    // 4. Finality guard: If it's the exact same value as before, it's likely
+    // the final "landing" value of a morph segment.
+    if (newValue == state.lastValue)
+        return true;
+        
+    return true;
 }
 
 } // namespace morphsnap

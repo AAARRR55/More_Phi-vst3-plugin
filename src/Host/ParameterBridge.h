@@ -7,6 +7,8 @@
 
 #include "IPluginHostManager.h"
 #include <vector>
+#include <unordered_map>
+#include <mutex>
 
 namespace morphsnap {
 
@@ -35,7 +37,23 @@ public:
     std::vector<bool> getDiscreteMap() const override;
 
 private:
+    struct ThrottleState
+    {
+        float lastValue = -1.0f;
+        juce::uint32 lastUpdateTime = 0;
+    };
+
     IPluginHostManager& host_;
+    
+    // Throttle tracking (per-parameter index)
+    mutable std::mutex throttleMutex_;
+    mutable std::vector<ThrottleState> throttleStates_;
+    
+    // Ensures throttleStates_ is sized correctly
+    void ensureThrottleSize(int count) const;
+    
+    // Core throttled update logic
+    bool shouldThrottle(int index, float newValue, juce::uint32 now) const;
 };
 
 } // namespace morphsnap
