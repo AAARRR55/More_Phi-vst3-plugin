@@ -33,6 +33,7 @@ add_executable(MorphSnapTests
     Integration/TestPluginLifecycle.cpp
     Integration/TestMCPIntegration.cpp
     Integration/TestDatasetIntegration.cpp
+    Integration/PerformanceTests.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
