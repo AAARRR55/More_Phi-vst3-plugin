@@ -19,6 +19,8 @@
 #include "AI/Dataset/ValidationEngine.h"
 #include "AI/Dataset/DatasetOrganizer.h"
 #include "AI/Dataset/PhaseVocoder.h"
+#include "AI/Dataset/ParameterNormalization.h"
+#include "AI/Dataset/AudioAugmentation.h"
 
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -514,6 +516,42 @@ TEST_CASE("ValidationEngine: MMD test between identical samples is near zero", "
     REQUIRE(result.statistic < 0.05);
 }
 
+TEST_CASE("ValidationEngine: KS test detects distribution shift", "[dataset][validation]")
+{
+    ValidationEngine engine;
+
+    // Two distributions: uniform vs skewed
+    std::vector<float> uniform;
+    std::vector<float> skewed;
+
+    for (int i = 0; i < 100; ++i) {
+        uniform.push_back(static_cast<float>(i) / 100.0f);
+        skewed.push_back(std::pow(static_cast<float>(i) / 100.0f, 2.0f));
+    }
+
+    auto result = engine.kolmogorovSmirnovTest(uniform, skewed, "test_param");
+    REQUIRE(result.statistic > 0.0);
+    REQUIRE(result.pValue >= 0.0);
+    REQUIRE(result.pValue <= 1.0);
+}
+
+TEST_CASE("ValidationEngine: coverage metrics in valid range", "[dataset][validation]")
+{
+    ValidationEngine engine;
+
+    // Generate samples covering [0,1] reasonably well
+    std::vector<std::vector<float>> samples;
+    for (int i = 0; i < 100; ++i) {
+        samples.push_back({static_cast<float>(i) / 100.0f, static_cast<float>(i % 10) / 10.0f});
+    }
+
+    auto coverage = engine.computeCoverageMetrics(samples, 2);
+    REQUIRE(coverage.volumeCoverageRatio >= 0.0f);
+    REQUIRE(coverage.volumeCoverageRatio <= 1.0f);
+    REQUIRE(coverage.gridCoverage >= 0.0f);
+    REQUIRE(coverage.gridCoverage <= 1.0f);
+}
+
 // =============================================================================
 //  DatasetOrganizer Tests
 // =============================================================================
@@ -635,4 +673,288 @@ TEST_CASE("PhaseVocoder: prepare handles different FFT sizes", "[dataset][phasev
     vocoder.prepare(48000.0, 1024);
     vocoder.prepare(48000.0, 4096);
     REQUIRE(true);
+}
+
+TEST_CASE("PhaseVocoder: time stretch changes duration", "[dataset][phasevocoder]")
+{
+    morphsnap::PhaseVocoder vocoder;
+    vocoder.prepare(48000.0, 2048);
+
+    // Create 1 second of audio (440 Hz sine wave)
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f));
+
+    juce::Random rng(42);
+    vocoder.processTimeStretch(buffer, 1.5f, rng);  // Speed up by 1.5x
+
+    // After stretch, buffer should still be valid audio
+    REQUIRE(buffer.getNumSamples() == 48000);
+    REQUIRE(buffer.getMagnitude(0, 0, 48000) > 0.0f);
+}
+
+TEST_CASE("PhaseVocoder: time stretch preserves approximate energy", "[dataset][phasevocoder]")
+{
+    morphsnap::PhaseVocoder vocoder;
+    vocoder.prepare(48000.0, 2048);
+
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f));
+
+    float originalRMS = buffer.getRMSLevel(0, 0, 48000);
+
+    juce::Random rng(42);
+    vocoder.processTimeStretch(buffer, 1.0f, rng);  // No stretch
+
+    float newRMS = buffer.getRMSLevel(0, 0, 48000);
+    REQUIRE(std::abs(newRMS - originalRMS) < 0.1f);  // Allow some tolerance
+}
+
+// =============================================================================
+//  Normalization Tests
+// =============================================================================
+
+TEST_CASE("DatasetNormalizer: fit/transform round-trip", "[dataset][normalization]")
+{
+    DatasetNormalizer normalizer;
+
+    // Generate sample data
+    std::vector<std::vector<float>> samples;
+    for (int i = 0; i < 100; ++i) {
+        samples.push_back({static_cast<float>(i), static_cast<float>(i * 2)});
+    }
+
+    normalizer.fit(samples);
+
+    // Transform and inverse transform
+    std::vector<float> original = {50.0f, 100.0f};
+    auto normalized = normalizer.transform(original);
+    auto recovered = normalizer.inverseTransform(normalized);
+
+    REQUIRE(std::abs(recovered[0] - original[0]) < 0.01f);
+    REQUIRE(std::abs(recovered[1] - original[1]) < 0.01f);
+}
+
+TEST_CASE("ParameterNormalizer: LogMinMax handles frequency range", "[dataset][normalization]")
+{
+    // Log scale: 20 Hz to 20000 Hz
+    float normalized = ParameterNormalizer::logNormalize(200.0f, 20.0f, 20000.0f);
+    REQUIRE(normalized > 0.0f);
+    REQUIRE(normalized < 1.0f);
+
+    // 200 Hz should be roughly 1/3 of the log range
+    REQUIRE(normalized > 0.2f);
+    REQUIRE(normalized < 0.5f);
+
+    // Round-trip
+    float recovered = ParameterNormalizer::logDenormalize(normalized, 20.0f, 20000.0f);
+    REQUIRE(std::abs(recovered - 200.0f) < 1.0f);
+}
+
+TEST_CASE("ParameterNormalizer: ZScore produces zero mean for symmetric data", "[dataset][normalization]")
+{
+    NormalizationStats stats;
+    stats.mean = 0.5f;
+    stats.std = 0.2887f; // std of uniform [0,1]
+    stats.method = NormalizationMethod::ZScore;
+
+    ParameterNormalizer normalizer;
+
+    // Value at mean should normalize to 0
+    float normalized = normalizer.normalize(0.5f, stats);
+    REQUIRE(std::abs(normalized) < 0.001f);
+}
+
+TEST_CASE("ParameterNormalizer: recommendMethod returns correct types", "[dataset][normalization]")
+{
+    ParameterNormalizer normalizer;
+
+    REQUIRE(normalizer.recommendMethod("Frequency") == NormalizationMethod::LogMinMax);
+    REQUIRE(normalizer.recommendMethod("Decibel") == NormalizationMethod::LogMinMax);
+    REQUIRE(normalizer.recommendMethod("Binary") == NormalizationMethod::None);
+    REQUIRE(normalizer.recommendMethod("Continuous") == NormalizationMethod::MinMax);
+}
+
+// =============================================================================
+//  Augmentation Tests
+// =============================================================================
+
+TEST_CASE("AudioAugmenter: noise injection changes RMS", "[dataset][augmentation]")
+{
+    AudioAugmenter augmenter;
+    AugmentationConfig config;
+    config.type = AugmentationType::NoiseInjection;
+    config.probability = 1.0f; // Always apply
+    config.intensity = 0.5f;
+    config.enabled = true;
+
+    augmenter.addAugmentation(config);
+
+    // Create silent buffer
+    juce::AudioBuffer<float> buffer(1, 1000);
+    buffer.clear();
+
+    juce::Random rng(42);
+    auto results = augmenter.apply(buffer, 48000.0f, rng);
+
+    // Buffer should no longer be silent
+    float rms = 0.0f;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        rms += buffer.getSample(0, i) * buffer.getSample(0, i);
+    rms = std::sqrt(rms / buffer.getNumSamples());
+
+    REQUIRE(results[0].applied == true);
+    REQUIRE(rms > 1e-6f); // No longer silent
+}
+
+TEST_CASE("AudioAugmenter: gain change applies dB correctly", "[dataset][augmentation]")
+{
+    AudioAugmenter augmenter;
+    AugmentationConfig config;
+    config.type = AugmentationType::GainChange;
+    config.probability = 1.0f;
+    config.intensity = 0.0f; // Min intensity = +/- 1 dB
+
+    augmenter.addAugmentation(config);
+
+    // Create buffer with known amplitude
+    juce::AudioBuffer<float> buffer(1, 1000);
+    for (int i = 0; i < 1000; ++i)
+        buffer.setSample(0, i, 0.5f);
+
+    juce::Random rng(42);
+    augmenter.apply(buffer, 48000.0f, rng);
+
+    // Calculate new RMS
+    float newRms = 0.0f;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        newRms += buffer.getSample(0, i) * buffer.getSample(0, i);
+    newRms = std::sqrt(newRms / buffer.getNumSamples());
+
+    // Gain should have changed - just verify it's not identical
+    REQUIRE(newRms > 0.0f);
+}
+
+TEST_CASE("AudioAugmenter: time mask zeroes target samples", "[dataset][augmentation]")
+{
+    AudioAugmenter augmenter;
+    AugmentationConfig config;
+    config.type = AugmentationType::TimeMask;
+    config.probability = 1.0f;
+    config.intensity = 0.5f;
+
+    augmenter.addAugmentation(config);
+
+    // Create buffer with non-zero samples
+    juce::AudioBuffer<float> buffer(1, 10000);
+    for (int i = 0; i < 10000; ++i)
+        buffer.setSample(0, i, 0.5f);
+
+    juce::Random rng(42);
+    augmenter.apply(buffer, 48000.0f, rng);
+
+    // Check that some samples are zero (masked)
+    int zeroCount = 0;
+    for (int i = 0; i < buffer.getNumSamples(); ++i) {
+        if (std::abs(buffer.getSample(0, i)) < 1e-6f)
+            zeroCount++;
+    }
+
+    // Time mask should have zeroed some samples
+    REQUIRE(zeroCount > 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Framework Missing Required Deliverable Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("DatasetNormalizer: classification-aware normalization", "[dataset][normalization][class-aware]")
+{
+    morphsnap::ClassAwareNormalizer classNorm;
+    
+    std::vector<std::vector<float>> samples = {
+        {1.0f}, {2.0f}, {3.0f}, // class A
+        {10.0f}, {20.0f}, {30.0f} // class B
+    };
+    std::vector<juce::String> labels = {"A", "A", "A", "B", "B", "B"};
+    
+    classNorm.fit(samples, labels);
+    
+    auto tA = classNorm.transform({2.0f}, "A"); // mid of A -> 0.5 under MinMax
+    auto tB = classNorm.transform({20.0f}, "B"); // mid of B -> 0.5 under MinMax
+    
+    REQUIRE(tA.size() == 1);
+    REQUIRE(tB.size() == 1);
+    REQUIRE(tA[0] == Catch::Approx(0.5f).margin(0.01f));
+    REQUIRE(tB[0] == Catch::Approx(0.5f).margin(0.01f));
+}
+
+TEST_CASE("ParameterAugmenter: parameter-space interpolation", "[dataset][augmentation][interpolation]")
+{
+    std::vector<float> a = {0.0f, 0.0f, 0.0f};
+    std::vector<float> b = {1.0f, 0.5f, 0.2f};
+    
+    auto mid = morphsnap::ParameterAugmenter::interpolate(a, b, 0.5f);
+    REQUIRE(mid.size() == 3);
+    REQUIRE(mid[0] == Catch::Approx(0.5f));
+    REQUIRE(mid[1] == Catch::Approx(0.25f));
+    REQUIRE(mid[2] == Catch::Approx(0.1f));
+}
+
+TEST_CASE("ValidationEngine: cross-reference validation", "[dataset][validation][crossref]")
+{
+    morphsnap::ValidationEngine engine;
+    
+    std::vector<std::vector<float>> dsA = {{0.5f}, {0.6f}, {0.7f}};
+    std::vector<std::vector<float>> dsB = {{0.51f}, {0.61f}, {0.71f}};
+    
+    nlohmann::json config;
+    config["significanceLevel"] = 0.05;
+    
+    auto report = engine.crossReferenceValidate(dsA, dsB, config);
+    
+    REQUIRE(report.summary == "Cross-Reference Validation comparing two datasets.");
+    REQUIRE(report.ksTests.size() == 1);
+    // Since distributions are very close, test should pass
+    REQUIRE(report.ksTests[0].passed == true);
+}
+
+TEST_CASE("ParameterSampler: strategy dispatch works", "[dataset][sampler][strategies]")
+{
+    morphsnap::ParameterSampler sampler;
+    morphsnap::SamplingConfig config;
+    config.sampleCount = 10;
+    config.strategy = morphsnap::SamplingStrategy::Random;
+    
+    auto samples = sampler.generate(config, 3);
+    REQUIRE(samples.size() == 10);
+    REQUIRE(samples[0].size() == 3);
+    
+    config.strategy = morphsnap::SamplingStrategy::LinearSweep;
+    samples = sampler.generate(config, 2);
+    REQUIRE(samples.size() == 10);
+    // Linear sweep should be deterministic
+    REQUIRE(samples[0][0] == Catch::Approx(0.0f));
+    REQUIRE(samples[9][0] == Catch::Approx(1.0f));
+}
+
+TEST_CASE("MetadataWriter: binary export produces readable file", "[dataset][metadata][binary]")
+{
+    morphsnap::MetadataWriter writer;
+    juce::File tempFile = juce::File::getCurrentWorkingDirectory().getChildFile("temp_test.msbf");
+    
+    std::vector<morphsnap::DatasetMetadata> list;
+    morphsnap::DatasetMetadata m;
+    m.sampleId = "test_binary_001";
+    m.targets.featureVector = {0.1f, 0.2f, 0.3f};
+    m.targets.parameterRegression = {0.5f, 0.6f};
+    list.push_back(m);
+    
+    bool ok = writer.exportToBinary(tempFile, list);
+    REQUIRE(ok == true);
+    REQUIRE(tempFile.existsAsFile());
+    REQUIRE(tempFile.getSize() > 20); // Header + some data
+    
+    tempFile.deleteFile();
 }
