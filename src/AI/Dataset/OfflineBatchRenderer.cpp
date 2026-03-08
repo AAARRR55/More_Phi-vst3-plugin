@@ -41,8 +41,15 @@ bool OfflineBatchRenderer::setConfig(const OfflineBatchConfig& config)
     {
         pluginHost_ = std::make_unique<PluginHostManager>();
 
+        // Some plugins require message-thread access during prepareToPlay().
+        juce::MessageManagerLock mmLock(juce::Thread::getCurrentThread());
+        if (!mmLock.lockWasGained())
+            return false;
+
         // First, prepare the host manager with sample rate/block size
-        pluginHost_->prepare(config_.renderConfig.sampleRate, config_.renderConfig.blockSize, config_.renderConfig.numChannels);
+        pluginHost_->prepare(config_.renderConfig.sampleRate,
+                             config_.renderConfig.blockSize,
+                             config_.renderConfig.numChannels);
 
         // Create PluginDescription from the plugin file
         // For VST3 plugins, we can create a minimal description
@@ -269,9 +276,8 @@ void OfflineBatchRenderer::renderVariationsParallel(const std::vector<RenderTask
             if (onProgressUpdate)
                 onProgressUpdate(getProgress());
         }
-        catch (const std::exception& e)
+        catch (const std::exception&)
         {
-            // Handle task exception
             {
                 juce::ScopedLock lock(progressLock_);
                 progress_.completed++;
@@ -396,6 +402,25 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
 
                     // Process through plugin (in-place processing)
                     pluginHost_->processBlock(blockBuffer, midiBuffer);
+                }
+            }
+            else if (hostManager != nullptr)
+            {
+                juce::MidiBuffer midiBuffer;
+                int blockSize = config_.renderConfig.blockSize;
+                int totalSamples = workingBuffer.getNumSamples();
+
+                for (int sampleOffset = 0; sampleOffset < totalSamples; sampleOffset += blockSize)
+                {
+                    int samplesThisBlock = juce::jmin(blockSize, totalSamples - sampleOffset);
+                    juce::AudioBuffer<float> blockBuffer(
+                        workingBuffer.getArrayOfWritePointers(),
+                        workingBuffer.getNumChannels(),
+                        sampleOffset,
+                        samplesThisBlock
+                    );
+
+                    hostManager->processBlock(blockBuffer, midiBuffer);
                 }
             }
             else
