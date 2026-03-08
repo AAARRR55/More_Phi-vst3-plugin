@@ -66,6 +66,7 @@ private:
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;
     int currentNumChannels = 2;
+    bool hasPreparedConfiguration_ = false;
 };
 
 } // namespace morphsnap

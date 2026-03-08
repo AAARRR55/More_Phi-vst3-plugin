@@ -23,14 +23,21 @@ PluginHostManager::~PluginHostManager()
 
 void PluginHostManager::prepare(double sampleRate, int blockSize, int numChannels)
 {
+    const bool configurationChanged = !hasPreparedConfiguration_
+        || currentSampleRate != sampleRate
+        || currentBlockSize != blockSize
+        || currentNumChannels != numChannels;
+
     currentSampleRate = sampleRate;
     currentBlockSize = blockSize;
     currentNumChannels = numChannels;
+    hasPreparedConfiguration_ = true;
 
-    if (hostedPlugin)
+    if (hostedPlugin && configurationChanged)
     {
         try
         {
+            hostedPlugin->disableNonMainBuses();
             hostedPlugin->prepareToPlay(sampleRate, blockSize);
         }
         catch (const std::exception& e)
@@ -79,8 +86,8 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
 
     try
     {
+        newPlugin->disableNonMainBuses();
         newPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
-        newPlugin->enableAllBuses();
     }
     catch (const std::exception& e)
     {
@@ -104,6 +111,7 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         lastDescription = desc;  // protected write
     }
 
+    hasPreparedConfiguration_ = true;
     exceptionCount_.store(0, std::memory_order_relaxed);
     suspended_.store(false, std::memory_order_relaxed);
     return true;
@@ -123,6 +131,8 @@ void PluginHostManager::unloadPlugin()
         }
         hostedPlugin.reset();
     }
+
+    hasPreparedConfiguration_ = false;
 }
 
 void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,

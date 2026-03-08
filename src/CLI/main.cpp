@@ -1,270 +1,483 @@
 /*
  * MorphSnap — CLI/main.cpp
- * Command-line interface for MorphSnap dataset generation.
- * Provides batch processing with performance optimization options.
+ * Command-line interface for hosted-plugin dataset smoke tests and renders.
  */
 
 #include "AI/Dataset/OfflineBatchRenderer.h"
 #include "Host/PluginHostManager.h"
-#include <juce_core/juce_core.h>
+
+#include <juce_events/juce_events.h>
+
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <thread>
-#include <iomanip>
 
 using namespace morphsnap;
 
-/** Print usage information for batch processing */
-static void printBatchUsage()
-{
-    std::cout <<
-        "MorphSnap Offline Batch Processor v3.3.0\n"
-        "Renders audio through VST3 plugins faster-than-real-time.\n\n"
-        "Usage:\n"
-        "  morphsnap-dataset --plugin <path.vst3> --input <dry.wav> [options]\n"
-        "  morphsnap-dataset --config <config.json>\n\n"
-        "Performance Options:\n"
-        "  --workers N             Number of parallel worker threads (default: auto-detect)\n"
-        "  --no-simd              Disable SIMD audio optimizations\n"
-        "  --no-memory-pool       Disable memory pool for audio buffers\n"
-        "  --profile              Enable performance profiling output\n\n"
-        "Basic Options:\n"
-        "  --plugin <path.vst3>   Path to VST3 plugin to process\n"
-        "  --input <audio.wav>    Input audio file to process\n"
-        "  --output <directory>   Output directory for rendered files\n"
-        "  --variations N         Number of parameter variations (default: 100)\n"
-        "  --help                 Show this help message\n\n"
-        "Examples:\n"
-        "  morphsnap-dataset --plugin MyPlugin.vst3 --input drum_loop.wav --output ./renders\n"
-        "  morphsnap-dataset --plugin MyPlugin.vst3 --input audio.wav --workers 8 --profile\n"
-        "  morphsnap-dataset --config batch_config.json --no-simd\n";
-}
+namespace {
 
-/** Parse command line arguments */
-struct CliArgs
+struct AudioFileInfo
 {
-    std::string pluginPath;
-    std::string inputFile;
-    std::string outputDir = "./output";
-    std::string configFile;
-    int variations = 100;
-    int workers = std::thread::hardware_concurrency();
-    bool enableSIMD = true;
-    bool useMemoryPool = true;
-    bool enableProfiling = false;
-    bool showHelp = false;
-    bool hasError = false;
-    std::string errorMessage;
+    double sampleRate = 48000.0;
+    int numChannels = 2;
+    juce::int64 lengthInSamples = 0;
 };
 
-static CliArgs parseArgs(int argc, char* argv[])
+struct CliOptions
 {
-    CliArgs args;
+    juce::File pluginFile;
+    juce::File inputFile;
+    juce::File outputDirectory = juce::File::getCurrentWorkingDirectory().getChildFile("output");
+    int variations = 100;
+    bool listParams = false;
+    bool dryRun = false;
+    bool verbose = false;
+    bool help = false;
+    bool hasError = false;
+    juce::String errorMessage;
+};
+
+void printUsage()
+{
+    std::cout
+        << "MorphSnap Offline Batch Processor v3.3.0\n"
+        << "Usage:\n"
+        << "  morphsnap-dataset --plugin <path.vst3> --input <dry.wav> [options]\n"
+        << "  morphsnap-dataset --plugin <path.vst3> --list-params\n\n"
+        << "Options:\n"
+        << "  --plugin <path.vst3>   Path to the hosted VST3 plugin\n"
+        << "  --input <audio.wav>    Input audio file to process\n"
+        << "  --list-params          List hosted plugin parameters and exit\n"
+        << "  --dry-run              Validate configuration without rendering audio\n"
+        << "  --verbose              Print plugin and render diagnostics\n"
+        << "  -o, --output <dir>     Output directory for rendered files\n"
+        << "  -n, --variations <N>   Number of rendered variations (default: 100)\n"
+        << "  -h, --help             Show this help message\n";
+}
+
+CliOptions parseArgs(int argc, char* argv[])
+{
+    CliOptions options;
 
     for (int i = 1; i < argc; ++i)
     {
-        std::string arg(argv[i]);
+        const juce::String arg(argv[i]);
 
-        if (arg == "--help" || arg == "-h")
+        if (arg == "-h" || arg == "--help")
         {
-            args.showHelp = true;
+            options.help = true;
         }
         else if (arg == "--plugin" && i + 1 < argc)
         {
-            args.pluginPath = argv[++i];
+            options.pluginFile = juce::File(argv[++i]);
         }
         else if (arg == "--input" && i + 1 < argc)
         {
-            args.inputFile = argv[++i];
+            options.inputFile = juce::File(argv[++i]);
         }
-        else if (arg == "--output" && i + 1 < argc)
+        else if ((arg == "-o" || arg == "--output") && i + 1 < argc)
         {
-            args.outputDir = argv[++i];
+            options.outputDirectory = juce::File(argv[++i]);
         }
-        else if (arg == "--config" && i + 1 < argc)
+        else if ((arg == "-n" || arg == "--variations") && i + 1 < argc)
         {
-            args.configFile = argv[++i];
+            options.variations = juce::String(argv[++i]).getIntValue();
         }
-        else if (arg == "--variations" && i + 1 < argc)
+        else if (arg == "--list-params")
         {
-            args.variations = std::stoi(argv[++i]);
+            options.listParams = true;
         }
-        else if (arg == "--workers" && i + 1 < argc)
+        else if (arg == "--dry-run")
         {
-            args.workers = std::stoi(argv[++i]);
+            options.dryRun = true;
         }
-        else if (arg == "--no-simd")
+        else if (arg == "--verbose")
         {
-            args.enableSIMD = false;
-        }
-        else if (arg == "--no-memory-pool")
-        {
-            args.useMemoryPool = false;
-        }
-        else if (arg == "--profile")
-        {
-            args.enableProfiling = true;
+            options.verbose = true;
         }
         else
         {
-            args.hasError = true;
-            args.errorMessage = "Unknown argument: " + arg;
-            break;
+            options.hasError = true;
+            options.errorMessage = "unknown argument: " + arg;
+            return options;
         }
     }
 
-    // Validate required arguments (if not showing help)
-    if (!args.showHelp && args.configFile.empty())
+    if (options.help)
+        return options;
+
+    if (options.pluginFile == juce::File())
     {
-        if (args.pluginPath.empty())
-        {
-            args.hasError = true;
-            args.errorMessage = "Missing required argument: --plugin";
-        }
-        else if (args.inputFile.empty())
-        {
-            args.hasError = true;
-            args.errorMessage = "Missing required argument: --input";
-        }
+        options.hasError = true;
+        options.errorMessage = "--plugin is required.";
+        return options;
     }
 
-    return args;
+    if (!options.pluginFile.existsAsFile())
+    {
+        options.hasError = true;
+        options.errorMessage = "plugin file not found: " + options.pluginFile.getFullPathName();
+        return options;
+    }
+
+    if (!options.listParams && options.inputFile == juce::File())
+    {
+        options.hasError = true;
+        options.errorMessage = "--input is required (unless using --list-params).";
+        return options;
+    }
+
+    if (!options.listParams && !options.inputFile.existsAsFile())
+    {
+        options.hasError = true;
+        options.errorMessage = "input file not found: " + options.inputFile.getFullPathName();
+        return options;
+    }
+
+    if (options.variations <= 0)
+    {
+        options.hasError = true;
+        options.errorMessage = "--variations must be greater than zero.";
+    }
+
+    return options;
 }
 
-/** Main entry point */
-int main(int argc, char* argv[])
+bool inspectInputFile(const juce::File& inputFile, AudioFileInfo& info, juce::String& errorMessage)
 {
-    auto args = parseArgs(argc, argv);
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
 
-    if (args.showHelp)
+    auto reader = std::unique_ptr<juce::AudioFormatReader>(formatManager.createReaderFor(inputFile));
+    if (!reader)
     {
-        printBatchUsage();
-        return 0;
+        errorMessage = "failed to open input audio: " + inputFile.getFullPathName();
+        return false;
     }
 
-    if (args.hasError)
+    info.sampleRate = reader->sampleRate;
+    info.numChannels = static_cast<int>(reader->numChannels);
+    info.lengthInSamples = reader->lengthInSamples;
+    return true;
+}
+
+bool discoverPluginDescription(PluginHostManager& hostManager,
+                               const juce::File& pluginFile,
+                               juce::PluginDescription& description,
+                               juce::String& errorMessage)
+{
+    const auto pluginPath = pluginFile.getFullPathName();
+
+    for (auto* format : hostManager.getFormatManager().getFormats())
     {
-        std::cerr << "Error: " << args.errorMessage << "\n\n";
-        printBatchUsage();
+        if (!format->fileMightContainThisPluginType(pluginPath))
+            continue;
+
+        juce::OwnedArray<juce::PluginDescription> descriptions;
+        format->findAllTypesForFile(descriptions, pluginPath);
+        if (!descriptions.isEmpty())
+        {
+            description = *descriptions.getFirst();
+            return true;
+        }
+    }
+
+    description.fileOrIdentifier = pluginPath;
+    description.pluginFormatName = pluginFile.hasFileExtension(".vst3") ? "VST3" : juce::String();
+    description.name = pluginFile.getFileNameWithoutExtension();
+    errorMessage = "failed to discover plugin metadata for: " + pluginPath;
+    return false;
+}
+
+bool loadPluginForInspection(PluginHostManager& hostManager,
+                             const juce::PluginDescription& description,
+                             const AudioFileInfo& audioInfo,
+                             juce::String& errorMessage)
+{
+    hostManager.prepare(audioInfo.sampleRate, 512, audioInfo.numChannels);
+
+    if (!hostManager.loadPlugin(description))
+    {
+        errorMessage = "failed to load plugin: " + description.fileOrIdentifier;
+        return false;
+    }
+
+    return hostManager.hasPlugin();
+}
+
+void printPluginSummary(const juce::PluginDescription& description,
+                        const juce::AudioPluginInstance* plugin,
+                        bool verbose)
+{
+    std::cout << "Plugin: " << description.name << "\n";
+    std::cout << "Manufacturer: " << description.manufacturerName << "\n";
+    std::cout << "Format: " << description.pluginFormatName << "\n";
+
+    if (plugin != nullptr)
+    {
+        std::cout << "Version: " << description.version << "\n";
+        std::cout << "Parameters: " << plugin->getParameters().size() << "\n";
+
+        if (verbose)
+        {
+            std::cout << "Input channels: " << plugin->getTotalNumInputChannels() << "\n";
+            std::cout << "Output channels: " << plugin->getTotalNumOutputChannels() << "\n";
+            std::cout << "Latency samples: " << plugin->getLatencySamples() << "\n";
+        }
+    }
+}
+
+void printProfilerSummary(const PerformanceProfiler& profiler)
+{
+    const auto stats = profiler.getAllStats();
+    if (stats.empty())
+        return;
+
+    std::cout << "Profiling:\n";
+    for (const auto& [name, stat] : stats)
+    {
+        std::cout << "  " << name
+                  << ": calls=" << stat.callCount
+                  << ", avgMs=" << stat.averageTimeMs
+                  << ", totalMs=" << stat.totalTimeMs << "\n";
+    }
+}
+
+int runListParams(const CliOptions& options)
+{
+    PluginHostManager hostManager;
+    juce::PluginDescription description;
+    juce::String errorMessage;
+
+    discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage);
+
+    AudioFileInfo audioInfo;
+    if (options.inputFile.existsAsFile())
+    {
+        if (!inspectInputFile(options.inputFile, audioInfo, errorMessage))
+        {
+            std::cerr << "Error: " << errorMessage << "\n";
+            return 1;
+        }
+    }
+
+    if (!loadPluginForInspection(hostManager, description, audioInfo, errorMessage))
+    {
+        std::cerr << "Error: " << errorMessage << "\n";
         return 1;
     }
 
-    // Initialize JUCE
-    juce::initialiseJuce_GUI();
+    const auto* plugin = hostManager.getPlugin();
+    printPluginSummary(description, plugin, options.verbose);
 
-    std::cout << "MorphSnap Dataset Generator v3.3.0\n";
-    std::cout << "Performance optimizations: ";
-    std::cout << "Workers=" << args.workers << ", ";
-    std::cout << "SIMD=" << (args.enableSIMD ? "ON" : "OFF") << ", ";
-    std::cout << "MemoryPool=" << (args.useMemoryPool ? "ON" : "OFF") << "\n\n";
+    if (plugin == nullptr)
+    {
+        std::cerr << "Error: hosted plugin instance is null\n";
+        return 1;
+    }
 
-    // Create configuration
+    const auto& parameters = plugin->getParameters();
+    for (int index = 0; index < parameters.size(); ++index)
+    {
+        auto* parameter = parameters[index];
+        if (parameter == nullptr)
+            continue;
+
+        std::cout << std::setw(4) << index << "  "
+                  << parameter->getName(256).toStdString() << "\n";
+    }
+
+    return 0;
+}
+
+int runDryRun(const CliOptions& options)
+{
+    AudioFileInfo audioInfo;
+    juce::String errorMessage;
+    if (!inspectInputFile(options.inputFile, audioInfo, errorMessage))
+    {
+        std::cerr << "Error: " << errorMessage << "\n";
+        return 1;
+    }
+
+    PluginHostManager hostManager;
+    juce::PluginDescription description;
+    discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage);
+
+    if (!loadPluginForInspection(hostManager, description, audioInfo, errorMessage))
+    {
+        std::cerr << "Error: " << errorMessage << "\n";
+        return 1;
+    }
+
+    if (options.verbose)
+    {
+        printPluginSummary(description, hostManager.getPlugin(), true);
+        std::cout << "Input: " << options.inputFile.getFullPathName() << "\n";
+        std::cout << "Output: " << options.outputDirectory.getFullPathName() << "\n";
+        std::cout << "Variations: " << options.variations << "\n";
+        std::cout << "Sample rate: " << audioInfo.sampleRate << "\n";
+        std::cout << "Channels: " << audioInfo.numChannels << "\n";
+        std::cout << "Length (samples): " << audioInfo.lengthInSamples << "\n";
+    }
+
     OfflineBatchConfig config;
-    config.inputFile = juce::File(args.inputFile);
-    config.outputDirectory = juce::File(args.outputDir);
-    config.pluginFile = juce::File(args.pluginPath);
-    config.totalVariations = args.variations;
-    config.parallelWorkers = args.workers;
-    config.enableSIMD = args.enableSIMD;
-    config.useMemoryPool = args.useMemoryPool;
+    config.inputFile = options.inputFile;
+    config.outputDirectory = options.outputDirectory;
+    config.pluginFile = options.pluginFile;
+    config.totalVariations = options.variations;
+    config.parallelWorkers = 1;
+    config.renderConfig.sampleRate = audioInfo.sampleRate;
+    config.renderConfig.blockSize = 512;
+    config.renderConfig.numChannels = audioInfo.numChannels;
+    config.renderConfig.outputDirectory = options.outputDirectory;
 
-    // Set render config output directory (used by EnhancedRenderPipeline)
-    config.renderConfig.outputDirectory = config.outputDirectory;
-
-    // Validate configuration
     if (!config.isValid())
     {
-        std::cerr << "Invalid configuration:\n";
-        if (!config.inputFile.existsAsFile())
-            std::cerr << "  - Input file does not exist: " << args.inputFile << "\n";
-        if (!config.outputDirectory.isDirectory())
-        {
-            std::cerr << "  - Output directory does not exist: " << args.outputDir << "\n";
-            std::cerr << "  - Creating output directory...\n";
-            config.outputDirectory.createDirectory();
-            if (!config.outputDirectory.isDirectory())
-            {
-                std::cerr << "  - Failed to create output directory\n";
-                return 1;
-            }
-        }
-        if (!config.hasValidPlugin())
-            std::cerr << "  - Plugin file does not exist or is not a VST3: " << args.pluginPath << "\n";
+        std::cerr << "Error: invalid render configuration\n";
         return 1;
     }
 
-    // Initialize renderer
+    std::cout << "[Dry Run] Configuration valid.\n";
+    return 0;
+}
+
+int runRender(const CliOptions& options)
+{
+    AudioFileInfo audioInfo;
+    juce::String errorMessage;
+    if (!inspectInputFile(options.inputFile, audioInfo, errorMessage))
+    {
+        std::cerr << "Error: " << errorMessage << "\n";
+        return 1;
+    }
+
+    if (!options.outputDirectory.exists() && !options.outputDirectory.createDirectory())
+    {
+        std::cerr << "Error: failed to create output directory: "
+                  << options.outputDirectory.getFullPathName() << "\n";
+        return 1;
+    }
+
+    OfflineBatchConfig config;
+    config.inputFile = options.inputFile;
+    config.outputDirectory = options.outputDirectory;
+    config.pluginFile = options.pluginFile;
+    config.totalVariations = options.variations;
+    config.parallelWorkers = 1;
+    config.renderConfig.sampleRate = audioInfo.sampleRate;
+    config.renderConfig.blockSize = 512;
+    config.renderConfig.numChannels = audioInfo.numChannels;
+    config.renderConfig.outputDirectory = options.outputDirectory;
+    config.renderConfig.validateOutput = true;
+
     OfflineBatchRenderer renderer;
     if (!renderer.setConfig(config))
     {
-        std::cerr << "Failed to initialize renderer with configuration\n";
+        std::cerr << "Error: failed to configure renderer\n";
         return 1;
     }
 
-    // Set up progress callback
+    juce::CriticalSection completionLock;
+    bool renderCompleted = false;
+    bool renderSucceeded = false;
+    juce::String renderMessage = "Rendering did not complete";
+
     renderer.onProgressUpdate = [](const OfflineBatchProgress& progress)
     {
-        std::cout << "Progress: " << progress.completed << "/" << progress.total
+        std::cout << "\rProgress: " << progress.completed << "/" << progress.total
                   << " (" << std::fixed << std::setprecision(1) << progress.percentage << "%)"
-                  << " [" << progress.successfulRenders << " success, "
-                  << progress.failedRenders << " failed]\r" << std::flush;
+                  << std::flush;
     };
 
-    // Set up variation complete callback to log errors
     renderer.onVariationComplete = [](int index, const RenderResult& result)
     {
         if (!result.success)
         {
-            std::cerr << "\nVariation " << index << " failed: " << result.errorMessage << "\n";
+            std::cout << "\nVariation " << index << " failed: "
+                      << result.errorMessage << "\n";
         }
     };
 
-    renderer.onRenderComplete = [&args](bool success, const juce::String& message)
+    renderer.onRenderComplete = [&](bool success, const juce::String& message)
     {
-        std::cout << "\n";
-        if (success)
-        {
-            std::cout << "Batch rendering completed successfully!\n";
-            if (args.enableProfiling)
-            {
-                std::cout << "Performance statistics available in profiler.\n";
-            }
-        }
-        else
-        {
-            std::cerr << "Batch rendering failed: " << message << "\n";
-        }
+        const juce::ScopedLock lock(completionLock);
+        renderCompleted = true;
+        renderSucceeded = success;
+        renderMessage = message;
     };
 
-    // Start rendering
-    std::cout << "Starting batch rendering...\n";
+    if (options.verbose)
+    {
+        std::cout << "Input: " << options.inputFile.getFullPathName() << "\n";
+        std::cout << "Output: " << options.outputDirectory.getFullPathName() << "\n";
+        std::cout << "Variations: " << options.variations << "\n";
+        std::cout << "Sample rate: " << audioInfo.sampleRate << "\n";
+        std::cout << "Channels: " << audioInfo.numChannels << "\n";
+    }
+
     if (!renderer.startRender())
     {
-        std::cerr << "Failed to start rendering process\n";
+        std::cerr << "Error: failed to start renderer\n";
         return 1;
     }
 
-    // Wait for completion
     while (renderer.isRendering())
+        juce::Thread::sleep(50);
+
+    renderer.stopRender();
+    std::cout << "\n";
+
     {
-        juce::Thread::sleep(100);
+        const juce::ScopedLock lock(completionLock);
+        if (!renderCompleted)
+            renderMessage = "Renderer stopped without a completion callback";
     }
 
-    // Print profiling results if enabled
-    if (args.enableProfiling)
+    if (options.verbose)
+        printProfilerSummary(renderer.getProfiler());
+
+    const auto progress = renderer.getProgress();
+    const bool success = renderSucceeded && progress.failedRenders == 0;
+
+    if (!success)
     {
-        std::cout << "\nPerformance Statistics:\n";
-        const auto& profiler = renderer.getProfiler();
-        for (const auto& [name, stats] : profiler.getAllStats())
-        {
-            std::cout << "  " << name << ": "
-                      << stats.averageTimeMs << "ms avg, "
-                      << stats.totalTimeMs << "ms total, "
-                      << stats.callCount << " calls\n";
-        }
+        std::cerr << "Error: " << renderMessage << "\n";
+        return 1;
     }
 
-    juce::shutdownJuce_GUI();
+    std::cout << "Rendered " << progress.successfulRenders
+              << " variation(s) to " << options.outputDirectory.getFullPathName() << "\n";
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    const auto options = parseArgs(argc, argv);
+
+    if (options.help)
+    {
+        printUsage();
+        return 0;
+    }
+
+    if (options.hasError)
+    {
+        std::cerr << "Error: " << options.errorMessage << "\n\n";
+        printUsage();
+        return 1;
+    }
+
+    juce::ScopedJuceInitialiser_GUI juceInitialiser;
+
+    if (options.listParams)
+        return runListParams(options);
+
+    if (options.dryRun)
+        return runDryRun(options);
+
+    return runRender(options);
 }

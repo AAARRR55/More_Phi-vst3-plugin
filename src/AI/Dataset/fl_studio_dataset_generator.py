@@ -3,36 +3,191 @@ import json
 import time
 import random
 import os
+import sys
 import sounddevice as sd
 import numpy as np
 import librosa
 
+# SECURITY FIX: Token loaded from environment variable, not hardcoded.
+# Set MORPHSNAP_TOKEN env var or create a .env file.
+TOKEN = os.environ.get("MORPHSNAP_TOKEN", "").strip()
+PORT = int(os.environ.get("MORPHSNAP_PORT", "30001"))
+
+# =====================================================================
+# FabFilter Pro-Q 4 Parameter Map — Safe Guardrails
+# =====================================================================
+# Pro-Q 4 has 24 bands × 24 params each = 576 band params, then globals.
+# Each band's 24 parameters follow the same layout at offset (band-1)*24:
+#   +0  Used              (binary)  — controls if band exists
+#   +1  Enabled           (binary)  — enables band processing
+#   +2  Frequency         (continuous 0-1, maps ~10Hz–30kHz)
+#   +3  Gain              (continuous 0-1, maps ~ -30dB to +30dB)
+#   +4  Q                 (continuous 0-1, maps ~0.025–40)
+#   +5  Shape             (discrete, filter type: Bell/LowShelf/HighShelf/etc.)
+#   +6  Slope             (discrete, filter slope: 6/12/24/48 dB/oct etc.)
+#   +7  Stereo Placement  (settings)
+#   +8  Speakers          (settings)
+#   +9  Dynamic Range     (continuous)
+#   +10 Dynamics Enabled  (binary)
+#   +11 Dynamics Auto     (binary)
+#   +12 Threshold         (continuous)
+#   +13 Attack            (continuous)
+#   +14 Release           (continuous)
+#   +15 External Side Chain (binary)
+#   +16 Side Chain Filtering (binary)
+#   +17 Side Chain Low Frequency
+#   +18 Side Chain High Frequency
+#   +19 Side Chain Audition (binary)
+#   +20 Spectral Enabled  (binary)
+#   +21 Spectral Density
+#   +22 Solo              (binary)
+#   +23 Spectral Tilt
+
+PARAMS_PER_BAND = 24
+NUM_BANDS = 24  # Pro-Q 4 supports up to 24 bands
+
+# Offsets within each band that are SAFE to randomize (core DSP)
+SAFE_OFFSETS = {
+    2: "Frequency",   # Continuous — the core EQ frequency
+    3: "Gain",        # Continuous — boost/cut amount
+    4: "Q",           # Continuous — bandwidth
+    5: "Shape",       # Discrete  — filter type (Bell=0, LowShelf, HighShelf, etc.)
+    6: "Slope",       # Discrete  — filter slope (6/12/24/48 dB/oct)
+}
+
+# Offsets that MUST be pinned to specific values to avoid silence/bypass
+PIN_VALUES = {
+    0:  1.0,  # Used        — band MUST be active
+    1:  1.0,  # Enabled     — band MUST be enabled
+    10: 0.0,  # Dynamics Enabled — OFF (avoids gating silence)
+    11: 0.0,  # Dynamics Auto    — OFF
+    15: 0.0,  # External Side Chain — OFF
+    16: 0.0,  # Side Chain Filtering — OFF
+    19: 0.0,  # Side Chain Audition — OFF (would mute main output)
+    20: 0.0,  # Spectral Enabled — OFF
+    22: 0.0,  # Solo — OFF (would mute other bands)
+}
+
+# Global parameter indices that MUST be pinned
+GLOBAL_PIN = {
+    583: 0.0,  # Bypass             — MUST be OFF
+    584: 0.0,  # Output Invert Phase — MUST be OFF
+    600: 0.0,  # Host Bypass        — MUST be OFF
+}
+
+# Global params that are safe to leave at default (don't touch)
+# 576: Processing Mode, 577: Processing Resolution, 578: Character
+# 579: Gain Scale, 580: Output Level, 581: Output Pan, 585: Auto Gain
+# 586+: Analyzer/UI/MIDI params — never touch
+
+# Pro-Q 4 Shape values (normalized 0-1 for the discrete steps):
+# The exact mapping depends on the parameter step count, but typical:
+#   Bell, Low Shelf, Low Cut, High Shelf, High Cut, Notch, Band Pass, Tilt Shelf, Flat Tilt
+SHAPE_VALUES = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+
+# Pro-Q 4 Slope values (normalized):
+# 6dB, 12dB, 18dB, 24dB, 30dB, 36dB, 48dB, 72dB, 96dB
+SLOPE_VALUES = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+
+
+def build_safe_random_params(num_active_bands=4, rng=None):
+    """
+    Build a parameter set that only randomizes safe DSP parameters
+    and pins all dangerous switches to safe values.
+
+    Returns:
+        params_array: list of {"index": int, "value": float} for MCP
+        human_readable: dict mapping param names to values for metadata
+    """
+    if rng is None:
+        rng = random.Random()
+
+    params_array = []
+    human_readable = {}
+
+    # Clamp active bands to valid range
+    num_active_bands = max(1, min(num_active_bands, NUM_BANDS))
+
+    for band_idx in range(NUM_BANDS):
+        base = band_idx * PARAMS_PER_BAND
+        band_num = band_idx + 1
+
+        if band_idx < num_active_bands:
+            # --- Active band: pin switches, randomize DSP ---
+            for offset, pin_val in PIN_VALUES.items():
+                params_array.append({"index": base + offset, "value": pin_val})
+
+            # Frequency: full range (0.0 = ~10Hz, 1.0 = ~30kHz)
+            freq = rng.uniform(0.05, 0.95)
+            params_array.append({"index": base + 2, "value": freq})
+            human_readable[f"Band {band_num} Frequency"] = freq
+
+            # Gain: limit to ±15dB range (0.25-0.75 in normalized, center=0.5=0dB)
+            gain = rng.uniform(0.25, 0.75)
+            params_array.append({"index": base + 3, "value": gain})
+            human_readable[f"Band {band_num} Gain"] = gain
+
+            # Q: moderate range to avoid extreme resonance
+            q = rng.uniform(0.15, 0.85)
+            params_array.append({"index": base + 4, "value": q})
+            human_readable[f"Band {band_num} Q"] = q
+
+            # Shape: pick a random filter type
+            shape = rng.choice(SHAPE_VALUES)
+            params_array.append({"index": base + 5, "value": shape})
+            human_readable[f"Band {band_num} Shape"] = shape
+
+            # Slope: pick a random slope
+            slope = rng.choice(SLOPE_VALUES)
+            params_array.append({"index": base + 6, "value": slope})
+            human_readable[f"Band {band_num} Slope"] = slope
+
+        else:
+            # --- Inactive band: turn it off ---
+            params_array.append({"index": base + 0, "value": 0.0})  # Used = OFF
+            params_array.append({"index": base + 1, "value": 0.0})  # Enabled = OFF
+
+    # Pin critical global parameters
+    for idx, val in GLOBAL_PIN.items():
+        params_array.append({"index": idx, "value": val})
+
+    return params_array, human_readable
+
+
 class MorphSnapMCPClient:
-    def __init__(self, port=30001, token="79 65 a0 4d 9f f0 70 ba 7d 3f 03 31 f2 0a 8d c1"):
-        self.port = port
-        self.token = token
+    def __init__(self, port=None, token=None):
+        self.port = port or PORT
+        self.token = (token or TOKEN).strip()
         self.sock = None
         self.req_id = 1
-        
+
+        if not self.token:
+            print("[!] ERROR: No bearer token configured!")
+            print("    Set MORPHSNAP_TOKEN env var or create a .env file.")
+            sys.exit(1)
+
     def connect(self):
         """Connects to the MorphSnap MCP Server running in FL Studio"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.sock.connect(('127.0.0.1', self.port))
             print(f"Connected to MorphSnap MCP server on port {self.port}.")
-            
-            # Send initialization packet
+
             resp = self.send_request("initialize", {"bearer_token": self.token})
-            if resp:
+            if resp and "result" in resp:
                 print("Successfully authenticated with MorphSnap.")
+            else:
+                err = resp.get("error", {}).get("message", "Unknown") if resp else "No response"
+                print(f"Authentication FAILED: {err}")
+                sys.exit(1)
         except ConnectionRefusedError:
             print("CONNECTION FAILED: Ensure FL Studio is open, MorphSnap is loaded, and 'MCP: ON' is visible.")
-            exit(1)
+            sys.exit(1)
 
     def send_request(self, method, params=None):
         if params is None:
             params = {}
-            
+
         req = {
             "jsonrpc": "2.0",
             "method": method,
@@ -40,32 +195,35 @@ class MorphSnapMCPClient:
             "id": self.req_id
         }
         self.req_id += 1
-        
+
         message = json.dumps(req) + "\n"
         self.sock.sendall(message.encode('utf-8'))
-        
-        # Simple blocking receive loop
+
         buffer = ""
-        while True:
-            data = self.sock.recv(4096).decode('utf-8')
-            if not data:
-                break
-            buffer += data
-            if '\n' in buffer:
-                line = buffer.split('\n')[0]
-                try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    return {"error": "Invalid JSON response"}
-                    
+        self.sock.settimeout(10)
+        try:
+            while True:
+                data = self.sock.recv(4096).decode('utf-8')
+                if not data:
+                    break
+                buffer += data
+                if '\n' in buffer:
+                    line = buffer.split('\n')[0]
+                    try:
+                        return json.loads(line)
+                    except json.JSONDecodeError:
+                        return {"error": "Invalid JSON response"}
+        except socket.timeout:
+            return {"error": "Timeout waiting for response"}
+
     def get_parameters(self):
         """Fetch all exposed parameters from the hosted plugin"""
         return self.send_request("list_parameters")
-        
+
     def set_parameters(self, params_array):
         """
-        Uses the extended MCP tool to batch set parameters without UI lag.
-        params_array format: [{"index": 0, "value": 0.5}, {"index": 1, "value": 0.8}]
+        Batch set parameters via MCP.
+        params_array format: [{"index": 0, "value": 0.5}, ...]
         """
         return self.send_request("tools/call", {
             "name": "set_parameters_optimized",
@@ -73,100 +231,180 @@ class MorphSnapMCPClient:
                 "parameters": params_array
             }
         })
-        
+
     def close(self):
         if self.sock:
-            self.sock.close()
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+
 
 # =====================================================================
 # Audio Recording & Feature Extraction
 # =====================================================================
-def record_audio(duration_sec=1.0, sample_rate=44100):
+def record_audio(duration_sec=1.5, sample_rate=44100):
     """
-    Records audio via system loopback 'Stereo Mix' or default recording device.
-    Make sure your default Windows Recording Device captures desktop audio.
+    Records audio via system loopback (Stereo Mix or WASAPI loopback).
+    IMPORTANT: Your Windows default recording device must capture desktop audio.
     """
     print(f"  [Recording {duration_sec}s of audio...]")
-    recording = sd.rec(int(duration_sec * sample_rate), samplerate=sample_rate, channels=2, dtype='float32')
+    recording = sd.rec(int(duration_sec * sample_rate), samplerate=sample_rate,
+                       channels=2, dtype='float32')
     sd.wait()
     return recording
 
+
 def extract_features(audio_data, sample_rate=44100):
-    """
-    Extracts 13 MFCCs averaged across the duration.
-    """
-    print("  [Extracting MFCC features...]")
-    # Librosa expects mono, so we mean across channels first (axis 1 if shape is samples, channels)
-    # sounddevice returns shape: (frames, channels)
+    """Extracts 13 MFCCs averaged across the duration."""
     mono_audio = np.mean(audio_data, axis=1)
     mfccs = librosa.feature.mfcc(y=mono_audio, sr=sample_rate, n_mfcc=13)
     return np.mean(mfccs, axis=1).tolist()
 
+
+def check_audio_quality(audio_data):
+    """Check if recorded audio is silent or clipping."""
+    peak = np.max(np.abs(audio_data))
+    rms = np.sqrt(np.mean(audio_data ** 2))
+
+    if peak < 0.001:
+        return "silent"
+    if peak > 0.999:
+        return "clipping"
+    if rms < 0.0005:
+        return "near_silent"
+    return "ok"
+
+
 # =====================================================================
 # Main Generation Loop
 # =====================================================================
-def generate_dataset(num_samples=50, output_file="dataset_manifest.json"):
+def generate_dataset(num_samples=50, num_bands=4, output_file="dataset_manifest.json"):
+    """
+    Generate a dataset by randomizing ONLY safe Pro-Q 4 DSP parameters
+    (Frequency, Gain, Q, Shape, Slope) while pinning all dangerous switches
+    (Bypass, Solo, Mute, Phase Invert) to safe values.
+
+    PREREQUISITES:
+    1. FL Studio running with MorphSnap loaded, hosting FabFilter Pro-Q 4
+    2. Pink noise (or a full drum break) playing on a loop through the plugin
+       - Generate pink noise: python generate_pink_noise.py
+    3. Windows recording device set to Stereo Mix / WASAPI loopback
+    4. MORPHSNAP_TOKEN env var set to your bearer token
+    """
+    print("=" * 65)
+    print("FabFilter Pro-Q 4 Dataset Generator — Safe Parameter Mode")
+    print("=" * 65)
+    print()
+    print(f"  Samples to generate: {num_samples}")
+    print(f"  Active EQ bands:     {num_bands}")
+    print(f"  Output file:         {output_file}")
+    print()
+    print("  SAFETY: Only Frequency/Gain/Q/Shape/Slope are randomized.")
+    print("  PINNED: Bypass=OFF, Solo=OFF, Mute=OFF, Phase=OFF")
+    print()
+
     mcp = MorphSnapMCPClient()
     mcp.connect()
-    
-    dataset = []
-    
-    print("\n--- Starting Data Generation ---")
-    for i in range(num_samples):
-        print(f"\nSample {i+1}/{num_samples}")
-        
-        # 1. Randomize 5 parameters (indices 0 through 4 as an example)
-        p0 = random.random()
-        p1 = random.random()
-        p2 = random.random()
-        p3 = random.random()
-        p4 = random.random()
 
-        random_params = [
-            {"index": 0, "value": p0},
-            {"index": 1, "value": p1},
-            {"index": 2, "value": p2},
-            {"index": 3, "value": p3},
-            {"index": 4, "value": p4}
-        ]
-        
-        # 2. Tell MorphSnap in FL Studio to apply these values
-        print(f"  [Setting plugin parameters to random values]")
-        mcp.set_parameters(random_params)
-        
-        # Wait for the plugin to settle its audio buffer
+    rng = random.Random()
+    dataset = []
+    silent_count = 0
+    retry_limit = 3
+
+    print("\n--- Starting Data Generation ---")
+    print("    (Feed PINK NOISE through the plugin for best results!)")
+    print()
+
+    for i in range(num_samples):
+        print(f"Sample {i+1}/{num_samples}")
+
+        # Pick random number of active bands (2 to num_bands) for variety
+        active_bands = rng.randint(max(1, num_bands // 2), num_bands)
+
+        # Build safe parameter set
+        params_array, human_readable = build_safe_random_params(
+            num_active_bands=active_bands, rng=rng
+        )
+
+        # Apply parameters to the plugin
+        print(f"  [Setting {active_bands} EQ bands with safe random values]")
+        resp = mcp.set_parameters(params_array)
+        if resp and "error" in resp:
+            print(f"  [WARN] Parameter set error: {resp['error']}")
+
+        # Wait for plugin to settle
         time.sleep(0.5)
-        
-        # 3. Capture audio output from FL Studio
-        audio = record_audio(duration_sec=1.5)
-        
-        # 4. Extract data
+
+        # Record audio with retry on silence
+        audio = None
+        quality = "silent"
+        for attempt in range(retry_limit):
+            audio = record_audio(duration_sec=1.5)
+            quality = check_audio_quality(audio)
+            if quality == "ok":
+                break
+            if quality == "silent" or quality == "near_silent":
+                print(f"  [WARN] Audio is {quality} — attempt {attempt+1}/{retry_limit}")
+                if attempt < retry_limit - 1:
+                    time.sleep(1.0)  # Wait and retry
+
+        if quality != "ok":
+            print(f"  [SKIP] Audio quality: {quality} after {retry_limit} attempts")
+            silent_count += 1
+            continue
+
+        # Extract features
         features = extract_features(audio)
-        
-        # 5. Append to local dataset in Colab format
+
         dataset.append({
             "sample_id": i,
-            "parameters": {
-                "Param0": p0,
-                "Param1": p1,
-                "Param2": p2,
-                "Param3": p3,
-                "Param4": p4
-            },
-            "audio_features": features
+            "active_bands": active_bands,
+            "parameters": human_readable,
+            "audio_features": features,
+            "audio_quality": quality
         })
-        
+        print(f"  [OK] Captured (peak={np.max(np.abs(audio)):.3f})")
+
     mcp.close()
-    
-    # Save the output file
+
+    # Save manifest
     with open(output_file, 'w') as f:
         json.dump(dataset, f, indent=4)
-        
-    print(f"\nSuccess! Dataset generation complete. Metadata saved to {output_file}")
-    print("Next step: Upload this file to your Google Drive 'MorphSnap' folder!")
-    
+
+    # Summary
+    print()
+    print("=" * 65)
+    print("GENERATION COMPLETE")
+    print("=" * 65)
+    print(f"  Captured: {len(dataset)}/{num_samples} samples")
+    print(f"  Silent/skipped: {silent_count}")
+    print(f"  Manifest: {output_file}")
+    if silent_count > num_samples * 0.1:
+        print()
+        print("  [!] High silent rate — check that:")
+        print("      1. Pink noise (not a test tone!) is playing in FL Studio")
+        print("      2. FL Studio transport is running (play button)")
+        print("      3. Windows recording device = Stereo Mix / loopback")
+
+
 if __name__ == "__main__":
-    # Ensure FL Studio is playing a loop of dry audio before running this!
-    # And make sure your PC's default recording device is "Stereo Mix" / Loopback
-    generate_dataset(num_samples=50, output_file="dataset_manifest.json")
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate EQ dataset with safe Pro-Q 4 parameter randomization"
+    )
+    parser.add_argument("--samples", type=int, default=50,
+                        help="Number of samples to generate (default: 50)")
+    parser.add_argument("--bands", type=int, default=4,
+                        help="Max active EQ bands per sample (default: 4)")
+    parser.add_argument("--output", type=str, default="dataset_manifest.json",
+                        help="Output manifest file (default: dataset_manifest.json)")
+    args = parser.parse_args()
+
+    generate_dataset(
+        num_samples=args.samples,
+        num_bands=args.bands,
+        output_file=args.output
+    )
 

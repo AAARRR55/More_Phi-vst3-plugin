@@ -96,6 +96,8 @@ private:
 /**
  * Convenience macro for creating RAII timers.
  */
-#define MORPHSNAP_PROFILE(profiler, name) auto timer = profiler.createTimer(name)
+#define MORPHSNAP_PROFILE_CONCAT_IMPL(a, b) a##b
+#define MORPHSNAP_PROFILE_CONCAT(a, b) MORPHSNAP_PROFILE_CONCAT_IMPL(a, b)
+#define MORPHSNAP_PROFILE(profiler, name) auto MORPHSNAP_PROFILE_CONCAT(morphsnapProfileTimer_, __LINE__) = profiler.createTimer(name)
 
 } // namespace morphsnap

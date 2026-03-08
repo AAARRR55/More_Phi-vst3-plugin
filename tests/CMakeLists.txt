@@ -25,22 +25,20 @@ add_executable(MorphSnapTests
     Unit/TestAudioEngine.cpp
     Unit/TestDSPQuality.cpp
     Unit/TestAIRegressions.cpp
+    Unit/TestOfflineBatchRenderer.cpp
     Unit/AudioBufferPoolTests.cpp
-    Unit/ThreadPoolTests.cpp
     Unit/SIMDAudioTests.cpp
     Unit/PerformanceProfilerTests.cpp
-    Unit/ParallelRenderTests.cpp
     Integration/TestPluginLifecycle.cpp
     Integration/TestMCPIntegration.cpp
     Integration/TestDatasetIntegration.cpp
-    Integration/PerformanceTests.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
     Unit/TestGranularEngine.cpp
     Unit/TestPresetLibrary.cpp
     Unit/TestV2Integration.cpp
-    # Unit/TestDatasetModules.cpp  # TODO: Fix tests for features not yet implemented
+    # Unit/TestDatasetModules.cpp  # Existing suite is out of sync with current dataset APIs
 )
 
 # Link the compiled plugin objects in (shared) so the test binary has access

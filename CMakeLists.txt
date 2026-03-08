@@ -229,6 +229,8 @@ set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetConfig.h
     src/AI/Dataset/OfflineBatchRenderer.h
     src/AI/Dataset/OfflineBatchRenderer.cpp
+    src/AI/Dataset/ParameterSafetyConfig.h
+    src/AI/Dataset/ParameterSafetyConfig.cpp
 )
 
 set(MORPHSNAP_AI_DATASET_V3_SOURCES
@@ -446,13 +448,22 @@ if(TARGET MorphSnap_AU)
     morphsnap_apply_build_tuning(MorphSnap_AU)
 endif()
 
-# Add compiler flags for SIMD support
-if(MSVC)
-    target_compile_options(MorphSnap PRIVATE /arch:AVX2)
-    target_compile_options(MorphSnapCLI PRIVATE /arch:AVX2)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(MorphSnap PRIVATE -mavx2 -msse4.1)
-    target_compile_options(MorphSnapCLI PRIVATE -mavx2 -msse4.1)
+# Keep SIMD tuning scoped to the dedicated implementation file so the rest of
+# the build keeps the current compatibility envelope.
+set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
+    if(MSVC)
+        set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS "/arch:AVX2")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS "-mavx2;-msse4.1")
+    endif()
+endif()
+
+if(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS)
+    set_source_files_properties(
+        src/Core/SIMDAudio.cpp
+        PROPERTIES COMPILE_OPTIONS "${MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS}"
+    )
 endif()
 
 if(MORPHSNAP_BUILD_TESTS)
