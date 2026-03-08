@@ -269,6 +269,8 @@ void OfflineBatchRenderer::renderVariationsParallel(const std::vector<RenderTask
 
 RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task, IPluginHostManager* hostManager)
 {
+    MORPHSNAP_PROFILE(profiler_, "render_variation");
+
     RenderResult result;
     result.sampleIndex = task.variationIndex;
 
@@ -278,74 +280,87 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
     try
     {
         // Load source audio
-        auto sourceAudio = loadSourceAudio();
-        if (sourceAudio.getNumSamples() == 0)
+        juce::AudioBuffer<float> sourceAudio;
         {
-            result.errorMessage = "Failed to load source audio";
-            return result;
+            MORPHSNAP_PROFILE(profiler_, "plugin_load");
+            sourceAudio = loadSourceAudio();
+            if (sourceAudio.getNumSamples() == 0)
+            {
+                result.errorMessage = "Failed to load source audio";
+                return result;
+            }
         }
 
         // Get buffer from pool if available, otherwise create new one
         juce::AudioBuffer<float> workingBuffer;
-
-        if (bufferPool_ && config_.useMemoryPool)
         {
-            pooledBuffer = bufferPool_->acquireBuffer();
-            if (pooledBuffer && pooledBuffer->getNumChannels() >= sourceAudio.getNumChannels() &&
-                pooledBuffer->getNumSamples() >= sourceAudio.getNumSamples())
+            MORPHSNAP_PROFILE(profiler_, "parameter_apply");
+
+            if (bufferPool_ && config_.useMemoryPool)
             {
-                workingBuffer.setDataToReferTo(pooledBuffer->getArrayOfWritePointers(),
-                                               sourceAudio.getNumChannels(),
-                                               sourceAudio.getNumSamples());
+                pooledBuffer = bufferPool_->acquireBuffer();
+                if (pooledBuffer && pooledBuffer->getNumChannels() >= sourceAudio.getNumChannels() &&
+                    pooledBuffer->getNumSamples() >= sourceAudio.getNumSamples())
+                {
+                    workingBuffer.setDataToReferTo(pooledBuffer->getArrayOfWritePointers(),
+                                                   sourceAudio.getNumChannels(),
+                                                   sourceAudio.getNumSamples());
+                }
+                else
+                {
+                    workingBuffer.setSize(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
+                }
             }
             else
             {
                 workingBuffer.setSize(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
             }
-        }
-        else
-        {
-            workingBuffer.setSize(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
-        }
 
-        // Copy source audio to working buffer
-        for (int channel = 0; channel < sourceAudio.getNumChannels(); ++channel)
-        {
-            if (config_.enableSIMD)
+            // Copy source audio to working buffer
+            for (int channel = 0; channel < sourceAudio.getNumChannels(); ++channel)
             {
-                // Use SIMD multiplication with 1.0f for copying
-                SIMDAudio::multiplyScalar(
-                    sourceAudio.getReadPointer(channel),
-                    1.0f,
-                    workingBuffer.getWritePointer(channel),
-                    sourceAudio.getNumSamples()
-                );
+                if (config_.enableSIMD)
+                {
+                    // Use SIMD multiplication with 1.0f for copying
+                    SIMDAudio::multiplyScalar(
+                        sourceAudio.getReadPointer(channel),
+                        1.0f,
+                        workingBuffer.getWritePointer(channel),
+                        sourceAudio.getNumSamples()
+                    );
+                }
+                else
+                {
+                    workingBuffer.copyFrom(channel, 0, sourceAudio, channel, 0, sourceAudio.getNumSamples());
+                }
             }
-            else
-            {
-                workingBuffer.copyFrom(channel, 0, sourceAudio, channel, 0, sourceAudio.getNumSamples());
-            }
-        }
 
-        // Apply parameter variation (this would integrate with plugin host in real implementation)
-        // For now, just apply a simple gain based on first parameter
-        if (!task.parameters.empty())
-        {
-            float gain = task.parameters[0];
-            workingBuffer.applyGain(gain);
+            // Apply parameter variation (this would integrate with plugin host in real implementation)
+            // For now, just apply a simple gain based on first parameter
+            if (!task.parameters.empty())
+            {
+                float gain = task.parameters[0];
+                workingBuffer.applyGain(gain);
+            }
         }
 
         // Render using enhanced render pipeline
-        auto renderResult = renderPipeline_.render(task.variationIndex, workingBuffer, config_.renderConfig);
-
-        // Copy render result
-        result = renderResult;
-        result.outputFile = task.outputFile;
-
-        // Return buffer to pool if we acquired it
-        if (pooledBuffer)
         {
-            bufferPool_->releaseBuffer(std::move(pooledBuffer));
+            MORPHSNAP_PROFILE(profiler_, "audio_process");
+            auto renderResult = renderPipeline_.render(task.variationIndex, workingBuffer, config_.renderConfig);
+
+            // Copy render result
+            result = renderResult;
+            result.outputFile = task.outputFile;
+        }
+
+        {
+            MORPHSNAP_PROFILE(profiler_, "file_write");
+            // Return buffer to pool if we acquired it
+            if (pooledBuffer)
+            {
+                bufferPool_->releaseBuffer(std::move(pooledBuffer));
+            }
         }
 
         return result;

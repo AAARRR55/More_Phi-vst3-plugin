@@ -9,6 +9,7 @@
 #include "Core/ThreadPool.h"
 #include "Core/AudioBufferPool.h"
 #include "Core/SIMDAudio.h"
+#include "Core/PerformanceProfiler.h"
 #include "Host/IPluginHostManager.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -148,6 +149,20 @@ public:
      */
     double getEstimatedTimeRemaining() const;
 
+    /**
+     * Get access to the performance profiler.
+     *
+     * @return Reference to the performance profiler
+     */
+    PerformanceProfiler& getProfiler() { return profiler_; }
+
+    /**
+     * Get read-only access to the performance profiler.
+     *
+     * @return Const reference to the performance profiler
+     */
+    const PerformanceProfiler& getProfiler() const { return profiler_; }
+
     // Event callbacks
     std::function<void(const OfflineBatchProgress&)> onProgressUpdate;
     std::function<void(int, const RenderResult&)> onVariationComplete;
@@ -225,6 +240,9 @@ private:
 
     // Rendering pipeline
     EnhancedRenderPipeline renderPipeline_;
+
+    // Performance profiling
+    PerformanceProfiler profiler_;
 
     // Timing
     juce::int64 startTime_ = 0;

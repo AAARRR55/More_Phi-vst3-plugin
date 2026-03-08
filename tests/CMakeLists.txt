@@ -28,6 +28,7 @@ add_executable(MorphSnapTests
     Unit/AudioBufferPoolTests.cpp
     Unit/ThreadPoolTests.cpp
     Unit/SIMDAudioTests.cpp
+    Unit/PerformanceProfilerTests.cpp
     Unit/ParallelRenderTests.cpp
     Integration/TestPluginLifecycle.cpp
     Integration/TestMCPIntegration.cpp
