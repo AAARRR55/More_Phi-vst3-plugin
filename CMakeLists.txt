@@ -143,6 +143,8 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/MorphProcessor.h
     src/Core/MorphProcessor.cpp
     src/Core/LockFreeQueue.h
+    src/Core/ThreadPool.h
+    src/Core/ThreadPool.cpp
     src/Core/AllocationTracker.h
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
