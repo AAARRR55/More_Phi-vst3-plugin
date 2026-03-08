@@ -147,6 +147,8 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/ThreadPool.cpp
     src/Core/AudioBufferPool.h
     src/Core/AudioBufferPool.cpp
+    src/Core/SIMDAudio.h
+    src/Core/SIMDAudio.cpp
     src/Core/AllocationTracker.h
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
