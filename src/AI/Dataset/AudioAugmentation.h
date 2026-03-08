@@ -25,8 +25,8 @@ namespace morphsnap {
 /** Types of audio augmentation that can be applied to buffers */
 enum class AugmentationType
 {
-    TimeStretch,        ///< Time-domain stretching (placeholder -- requires phase vocoder)
-    PitchShift,         ///< Pitch shifting (placeholder -- requires phase vocoder)
+    TimeStretch,        ///< Time-domain stretching via phase vocoder (0.8x to 1.2x)
+    PitchShift,         ///< Pitch shifting via phase vocoder (-6 to +6 semitones)
     NoiseInjection,     ///< Additive Gaussian noise at configurable SNR
     FrequencyMask,      ///< Zero out a frequency band via FFT
     TimeMask,           ///< Zero out a time segment
@@ -190,25 +190,21 @@ private:
                 break;
             }
             case AugmentationType::TimeStretch:
-            case AugmentationType::PitchShift:
-                // =====================================================================
-                // OPTIONAL: These augmentations require a phase vocoder implementation.
-                // Currently no-ops. For production time-stretching/pitch-shifting:
-                //
-                // Recommended external libraries:
-                //   - Rubber Band Library (GPL/commercial)
-                //   - SoundTouch (LGPL)
-                //   - JUCE's dsp::WindowedSincInterpolator (basic)
-                //
-                // To implement: Add PhaseVocoder class with:
-                //   - STFT analysis/synthesis
-                //   - Phase propagation (vocoder-style or identity)
-                //   - Resynthesis with overlap-add
-                //
-                // See AugmentationChainPreset::createCreative() which includes these
-                // with probability 0.2 - they will be skipped until implemented.
-                // =====================================================================
+            {
+                // intensity 0 -> 0.8x (slower/longer), 1 -> 1.2x (faster/shorter)
+                const float stretchRatio = juce::jmap(config.intensity, 0.8f, 1.2f);
+                vocoder_.prepare(sampleRate);
+                vocoder_.processTimeStretch(buffer, stretchRatio, rng);
                 break;
+            }
+            case AugmentationType::PitchShift:
+            {
+                // intensity 0 -> -6 semitones, 1 -> +6 semitones
+                const float semitones = juce::jmap(config.intensity, -6.0f, 6.0f);
+                vocoder_.prepare(sampleRate);
+                vocoder_.processPitchShift(buffer, semitones, rng);
+                break;
+            }
         }
     }
 
@@ -235,13 +231,21 @@ private:
         }
         signalPower /= static_cast<float>(numChannels * numSamples);
 
-        if (signalPower < 1e-20f)
-            return; // Silence -- nothing to do
-
         // Desired noise standard deviation from SNR
         // SNR_dB = 10 * log10(signalPower / noisePower)
         // noisePower = signalPower / 10^(SNR_dB / 10)
-        const float noisePower = signalPower / std::pow(10.0f, snrDb / 10.0f);
+        
+        float noisePower = 0.0f;
+        if (signalPower < 1e-20f)
+        {
+            // For silent buffers, use a default noise floor (e.g. -60 dB)
+            noisePower = std::pow(10.0f, -60.0f / 10.0f);
+        }
+        else
+        {
+            noisePower = signalPower / std::pow(10.0f, snrDb / 10.0f);
+        }
+
         const float noiseSigma = std::sqrt(noisePower);
 
         for (int ch = 0; ch < numChannels; ++ch)
@@ -601,10 +605,8 @@ struct AugmentationChainPreset
             { AugmentationType::DynamicProcessing, 0.4f, 0.5f, true },
             { AugmentationType::FrequencyMask,     0.3f, 0.5f, true },
             { AugmentationType::TimeMask,          0.3f, 0.4f, true },
-            // NOTE: TimeStretch and PitchShift are currently no-ops (placeholders)
-            // Uncomment below when phase vocoder is implemented:
-            // { AugmentationType::TimeStretch,       0.2f, 0.4f, false },
-            // { AugmentationType::PitchShift,        0.2f, 0.4f, false },
+            { AugmentationType::TimeStretch,       0.2f, 0.4f, true },
+            { AugmentationType::PitchShift,        0.2f, 0.4f, true },
         };
     }
 };

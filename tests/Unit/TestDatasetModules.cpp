@@ -952,18 +952,92 @@ TEST_CASE("MetadataWriter: binary export produces readable file", "[dataset][met
 {
     morphsnap::MetadataWriter writer;
     juce::File tempFile = juce::File::getCurrentWorkingDirectory().getChildFile("temp_test.msbf");
-    
+
     std::vector<morphsnap::DatasetMetadata> list;
     morphsnap::DatasetMetadata m;
     m.sampleId = "test_binary_001";
     m.targets.featureVector = {0.1f, 0.2f, 0.3f};
     m.targets.parameterRegression = {0.5f, 0.6f};
     list.push_back(m);
-    
+
     bool ok = writer.exportToBinary(tempFile, list);
     REQUIRE(ok == true);
     REQUIRE(tempFile.existsAsFile());
     REQUIRE(tempFile.getSize() > 20); // Header + some data
-    
+
     tempFile.deleteFile();
+}
+
+// =============================================================================
+//  PhaseVocoder Integration with AudioAugmenter Tests
+// =============================================================================
+
+TEST_CASE("AudioAugmenter: time stretch augmentation applies", "[dataset][augmentation]")
+{
+    morphsnap::AudioAugmenter augmenter;
+    augmenter.addAugmentation({morphsnap::AugmentationType::TimeStretch, 1.0f, 0.5f, true});
+
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
+
+    const int originalSamples = buffer.getNumSamples();
+    float originalRms = buffer.getRMSLevel(0, 0, originalSamples);
+
+    juce::Random rng(42);
+    auto results = augmenter.apply(buffer, 48000.0f, rng);
+
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].applied == true);
+    REQUIRE(results[0].augmentationType == "TimeStretch");
+
+    // Time stretch with intensity 0.5 should change the buffer size
+    // (stretch ratio is mapped from intensity 0->0.8x, 1->1.2x, so 0.5->1.0x)
+    // At intensity 0.5, stretch ratio is 1.0, so no size change expected
+    // But the vocoder should still have been called (buffer has valid content)
+    REQUIRE(buffer.getNumSamples() > 0);
+    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
+}
+
+TEST_CASE("AudioAugmenter: pitch shift augmentation applies", "[dataset][augmentation]")
+{
+    morphsnap::AudioAugmenter augmenter;
+    augmenter.addAugmentation({morphsnap::AugmentationType::PitchShift, 1.0f, 0.5f, true});
+
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
+
+    const int originalSamples = buffer.getNumSamples();
+
+    juce::Random rng(42);
+    auto results = augmenter.apply(buffer, 48000.0f, rng);
+
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].applied == true);
+    REQUIRE(results[0].augmentationType == "PitchShift");
+
+    // Pitch shift should keep the same buffer size but modify the content
+    REQUIRE(buffer.getNumSamples() == originalSamples);
+    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
+}
+
+TEST_CASE("AudioAugmenter: time stretch with high intensity shortens buffer", "[dataset][augmentation]")
+{
+    morphsnap::AudioAugmenter augmenter;
+    augmenter.addAugmentation({morphsnap::AugmentationType::TimeStretch, 1.0f, 1.0f, true}); // intensity 1.0 = 1.2x faster
+
+    juce::AudioBuffer<float> buffer(1, 48000);
+    for (int i = 0; i < 48000; ++i)
+        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
+
+    const int originalSamples = buffer.getNumSamples();
+
+    juce::Random rng(123);
+    augmenter.apply(buffer, 48000.0f, rng);
+
+    // With intensity 1.0, stretch ratio is 1.2 (faster), so buffer should be shorter
+    // 48000 / 1.2 = 40000
+    REQUIRE(buffer.getNumSamples() < originalSamples);
+    REQUIRE(buffer.getNumSamples() > static_cast<int>(originalSamples * 0.7)); // Allow some tolerance
 }
