@@ -7,6 +7,7 @@
 #include "ParameterBridge.h"
 #include "PluginHostManager.h"
 #include <exception>
+#include <cmath>
 
 // Suppress deprecation warning for setParameter — it's the only way
 // that reliably works for setting hosted VST3 plugin parameters.
