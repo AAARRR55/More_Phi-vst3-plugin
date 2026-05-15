@@ -320,6 +320,7 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
             authenticated = true;
 
             json result = {
+                {"protocolVersion", "2024-11-05"},
                 {"serverInfo", {{"name","More-Phi MCP"},{"version","1.0"}}},
                 {"capabilities", {{"tools", {{"listChanged", false}}}}},
                 {"instanceId", identity_.instanceId.toStdString()},
@@ -327,8 +328,15 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
                 {"port",       port_}
             };
 
-            return juce::String(
-                json{{"jsonrpc","2.0"},{"result",result},{"id",reqId}}.dump());
+            // MCP spec §3.2: after initialize response, send notifications/initialized.
+            // Return both messages as two newline-separated lines; ConnectionThread
+            // appends a final '\n', yielding two properly-framed JSON-RPC messages.
+            const std::string initResponse =
+                json{{"jsonrpc","2.0"},{"result",result},{"id",reqId}}.dump();
+            const std::string initNotification =
+                json{{"jsonrpc","2.0"},{"method","notifications/initialized"},{"params",json::object()}}.dump();
+
+            return juce::String(initResponse + "\n" + initNotification);
         }
 
         return errResponse(-32600, "Unauthorized: invalid bearer_token");

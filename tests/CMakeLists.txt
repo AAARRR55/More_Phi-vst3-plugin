@@ -59,6 +59,9 @@ add_executable(MorePhiTests
     Unit/TestMCPServerUnit.cpp
     # Ozone 11 mastering integration
     Unit/TestOzoneIntegration.cpp
+    # Realtime mastering analysis
+    Unit/TestSpectrumAnalyzer.cpp
+    Unit/TestStereoFieldAnalyzer.cpp
 )
 
 # Link the compiled plugin objects in (shared) so the test binary has access
@@ -106,6 +109,39 @@ endif()
 # ── CTest registration ─────────────────────────────────────────────────────────
 include(Catch)
 catch_discover_tests(MorePhiTests
+    TEST_SPEC "*"
+)
+
+# ── Standalone stdio MCP server tests ────────────────────────────────────────
+add_executable(MorePhiMcpServerTests
+    Unit/TestStandaloneMcpServer.cpp
+)
+
+target_link_libraries(MorePhiMcpServerTests PRIVATE
+    Catch2::Catch2WithMain
+    MorePhiMcpCore
+    juce::juce_core
+    juce::juce_audio_formats
+    juce::juce_audio_processors
+    nlohmann_json::nlohmann_json
+)
+
+target_include_directories(MorePhiMcpServerTests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_definitions(MorePhiMcpServerTests PRIVATE
+    MORE_PHI_TEST_MODE=1
+    JUCE_UNIT_TESTS=1
+    JUCE_STANDALONE_APPLICATION=1
+)
+
+if(COMMAND more_phi_apply_build_tuning)
+    more_phi_apply_build_tuning(MorePhiMcpServerTests)
+endif()
+
+catch_discover_tests(MorePhiMcpServerTests
     TEST_SPEC "*"
 )
 

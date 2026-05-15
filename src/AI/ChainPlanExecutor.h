@@ -73,14 +73,23 @@ public:
      */
     void setOzonePlanApplicator(OzonePlanApplicatorBase* applicator) noexcept
     {
+        const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
         ozoneApplicator_ = applicator;
     }
 
     /** Remove the registered applicator (call before Ozone unload). */
-    void clearOzonePlanApplicator() noexcept { ozoneApplicator_ = nullptr; }
+    void clearOzonePlanApplicator() noexcept
+    {
+        const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+        ozoneApplicator_ = nullptr;
+    }
 
     /** True when an Ozone applicator is registered. */
-    bool hasOzoneApplicator() const noexcept { return ozoneApplicator_ != nullptr; }
+    bool hasOzoneApplicator() const noexcept
+    {
+        const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+        return ozoneApplicator_ != nullptr;
+    }
 
     /**
      * Execute the 5-step CoT chain on the calling thread.
@@ -123,6 +132,7 @@ private:
 
     PlanCallback  callback_;
     MultiEffectPlan lastPlan_;
+    mutable juce::SpinLock ozoneApplicatorLock_;
     OzonePlanApplicatorBase* ozoneApplicator_ = nullptr;
 
     // Genre LUFS targets (matching mastering_profiles.json)

@@ -87,6 +87,25 @@ bool containsEnableWord(const juce::String& text)
         || text.contains("active") || containsWholeWord(text, "on");
 }
 
+bool isNonMainEQModuleParameter(const juce::String& text)
+{
+    return containsAny(text, {
+        "dynamic eq", "dynamic equalizer",
+        "vintage eq", "vintage equalizer",
+        "match eq", "match equalizer"
+    });
+}
+
+bool isMainEQParameterName(const juce::String& text)
+{
+    if (isNonMainEQModuleParameter(text))
+        return false;
+
+    return text.contains("eq band")
+        || text.contains("equalizer")
+        || text.contains("main eq");
+}
+
 int extractBandNumber(const juce::String& lowerName)
 {
     auto parseSingleDigitAfter = [&lowerName](const char* token) -> int
@@ -207,7 +226,7 @@ OzoneParameterMap OzoneParameterMap::buildForOzone11()
 
 OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridge& bridge)
 {
-    OzoneParameterMap m = buildForOzone11();
+    OzoneParameterMap m;
     const int totalParams = bridge.getParameterCount();
 
     for (int index = 0; index < totalParams; ++index)
@@ -216,7 +235,7 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
         if (name.isEmpty())
             continue;
 
-        if (containsAny(name, { "eq band", "eq ", " eq", "equalizer" }))
+        if (isMainEQParameterName(name))
         {
             const int bandNumber = extractBandNumber(name);
             if (bandNumber >= 1 && bandNumber <= kEQBands)
@@ -268,7 +287,7 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
                 m.maximizer.outputLevelIdx = index;
             }
             else if (m.maximizer.ceilingIdx < 0
-                     && (containsAny(name, { "ceiling", "true peak" }) || containsWholeWord(name, "tp")))
+                     && containsAny(name, { "ceiling", "true peak ceiling", "tp ceiling" }))
             {
                 m.maximizer.ceilingIdx = index;
             }

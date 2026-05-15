@@ -162,6 +162,7 @@ void PluginBrowserPanel::loadSelectedPlugin(const juce::PluginDescription& desc)
         showBtn_.setEnabled(true);
         captureBtn_.setEnabled(true);
         proc_.reportLatencyToHost();
+        proc_.refreshHostedMasteringApplicators(desc);
 
         // Clear old snapshots since parameter layout changed
         proc_.getSnapshotBank().clearAll();

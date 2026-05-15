@@ -40,12 +40,32 @@
 #endif
 
 #include "Plugin/PluginProcessor.h"
+#include "AI/TrackAssistantStore.h"
 
 using Catch::Approx;
 using json = nlohmann::json;
 using namespace more_phi;
 
 namespace {
+
+struct ScopedTrackAssistantStore
+{
+    explicit ScopedTrackAssistantStore(const char* suffix)
+    {
+        directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getNonexistentChildFile(juce::String("morephi_track_assistant_store_") + suffix, "");
+        directory.createDirectory();
+        TrackAssistantStore::setStoreDirectoryOverrideForTests(directory);
+    }
+
+    ~ScopedTrackAssistantStore()
+    {
+        TrackAssistantStore::clearStoreDirectoryOverrideForTests();
+        directory.deleteRecursively();
+    }
+
+    juce::File directory;
+};
 
 class SocketClient
 {
@@ -365,6 +385,8 @@ TEST_CASE("MCP mastering render job can be started, polled, and selected", "[int
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
+    ScopedTrackAssistantStore scopedStore("render");
+
     const auto inputFile = createMCPRenderInputFile();
     REQUIRE(inputFile.existsAsFile());
 
@@ -403,7 +425,9 @@ TEST_CASE("MCP mastering render job can be started, polled, and selected", "[int
 
     REQUIRE(startResponse.contains("result"));
     const auto jobId = startResponse["result"]["structuredContent"]["job_id"].get<std::string>();
+    const auto trackId = startResponse["result"]["structuredContent"]["track_id"].get<std::string>();
     REQUIRE_FALSE(jobId.empty());
+    REQUIRE(TrackAssistantStore::isValidTrackId(juce::String(trackId)));
 
     json statusResponse;
     bool completed = false;
@@ -443,6 +467,63 @@ TEST_CASE("MCP mastering render job can be started, polled, and selected", "[int
     REQUIRE(selectResponse.contains("result"));
     REQUIRE(selectResponse["result"]["structuredContent"]["selected"].get<bool>());
     REQUIRE(selectResponse["result"]["structuredContent"]["output_path"].get<std::string>() == outputPath);
+    REQUIRE(selectResponse["result"]["structuredContent"]["track_id"].get<std::string>() == trackId);
+    REQUIRE(selectResponse["result"]["structuredContent"]["track_status"].get<std::string>() == "mastering_complete");
+
+    const auto searchResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "ozone_track_search"},
+            {"arguments", {{"query", inputFile.getFileNameWithoutExtension().toStdString()}}}
+        },
+        201));
+
+    REQUIRE(searchResponse.contains("result"));
+    const auto& search = searchResponse["result"]["structuredContent"];
+    REQUIRE(search["success"].get<bool>());
+    REQUIRE(search["total"].get<int>() == 1);
+    REQUIRE(search["results"][0]["track_id"].get<std::string>() == trackId);
+
+    const auto infoResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "ozone_track_get_info"},
+            {"arguments", {{"track_id", trackId}, {"include_history", true}}}
+        },
+        202));
+
+    REQUIRE(infoResponse.contains("result"));
+    const auto& info = infoResponse["result"]["structuredContent"];
+    REQUIRE(info["success"].get<bool>());
+    REQUIRE(info["status"].get<std::string>() == "mastering_complete");
+    REQUIRE(info["history"].is_array());
+
+    const auto invalidUpdateResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "ozone_track_update_status"},
+            {"arguments", {{"track_id", trackId}, {"new_status", "on_hold"}}}
+        },
+        204));
+
+    REQUIRE(invalidUpdateResponse.contains("result"));
+    REQUIRE(invalidUpdateResponse["result"]["isError"].get<bool>());
+    REQUIRE(invalidUpdateResponse["result"]["structuredContent"]["error"].get<std::string>() == "reason_required");
+
+    const auto analyzeResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "ozone_track_analyze"},
+            {"arguments", {{"track_id", trackId}, {"analysis_profile", "streaming"}}}
+        },
+        205));
+
+    REQUIRE(analyzeResponse.contains("result"));
+    const auto& analysis = analyzeResponse["result"]["structuredContent"];
+    REQUIRE(analysis["success"].get<bool>());
+    REQUIRE(analysis["track_id"].get<std::string>() == trackId);
+    REQUIRE(analysis["analysis"]["profile"].get<std::string>() == "streaming");
+    REQUIRE(analysis["analysis"]["selected_candidate_id"].get<std::string>() == candidateId);
 
     processor.releaseResources();
     outputDirectory.deleteRecursively();

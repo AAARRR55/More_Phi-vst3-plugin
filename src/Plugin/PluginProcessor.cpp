@@ -125,10 +125,7 @@ MorePhiProcessor::~MorePhiProcessor()
     linkBroadcaster_.detach();
     mcpServer.stopServer();
     InstanceRegistry::getInstance().deregisterInstance(instanceIdentity_.instanceId);
-    // Unregister Ozone applicator before tearing down hosted plugin
-    autoMasteringEngine_.getChainPlanner().clearOzonePlanApplicator();
-    ozonePlanApplicator_.reset();
-    ozoneParamMap_.reset();
+    clearHostedMasteringApplicators();
     hostManager.unloadPlugin();
 }
 
@@ -1621,6 +1618,26 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
 
 // ── Deferred Plugin Loading (Timer fallback) ────────────────────────────────
 
+void MorePhiProcessor::clearHostedMasteringApplicators() noexcept
+{
+    autoMasteringEngine_.getChainPlanner().clearOzonePlanApplicator();
+    ozonePlanApplicator_.reset();
+    ozoneParamMap_.reset();
+}
+
+void MorePhiProcessor::refreshHostedMasteringApplicators(const juce::PluginDescription& desc)
+{
+    clearHostedMasteringApplicators();
+
+    if (!OzoneParameterMap::isOzone11(desc.name))
+        return;
+
+    ozoneParamMap_ = std::make_unique<OzoneParameterMap>(OzoneParameterMap::buildFromHostedPlugin(paramBridge));
+    ozonePlanApplicator_ = std::make_unique<OzonePlanApplicator>(*this, *ozoneParamMap_);
+    autoMasteringEngine_.getChainPlanner().setOzonePlanApplicator(ozonePlanApplicator_.get());
+    DBG("refreshHostedMasteringApplicators: Ozone 11 detected — OzonePlanApplicator registered");
+}
+
 bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& desc)
 {
     auto& host = getHostManager();
@@ -1677,6 +1694,7 @@ bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& 
         // The release store below ensures audio thread sees updated discreteMap_
         // when it observes isRestoring_==false.
         refreshDiscreteMap();
+        refreshHostedMasteringApplicators(desc);
 
         // Unblock the morph engine on success
         // Release semantics ensure all prior writes (including discreteMap_ update)
@@ -1902,15 +1920,6 @@ void MorePhiProcessor::timerCallback()
         pendingLoadAttempts_.store(0, std::memory_order_relaxed);
         DBG("timerCallback: Plugin loaded successfully");
         latencyConfigDirty_.store(true, std::memory_order_release);
-
-        // Wire up Ozone 11 mastering integration if applicable
-        if (OzoneParameterMap::isOzone11(pendingPluginDesc_.name))
-        {
-            ozoneParamMap_         = std::make_unique<OzoneParameterMap>(OzoneParameterMap::buildFromHostedPlugin(paramBridge));
-            ozonePlanApplicator_   = std::make_unique<OzonePlanApplicator>(*this, *ozoneParamMap_);
-            autoMasteringEngine_.getChainPlanner().setOzonePlanApplicator(ozonePlanApplicator_.get());
-            DBG("timerCallback: Ozone 11 detected — OzonePlanApplicator registered");
-        }
     }
     else if (pendingLoadAttempts_.fetch_add(1, std::memory_order_relaxed) + 1 >= MAX_PLUGIN_LOAD_RETRIES)
     {

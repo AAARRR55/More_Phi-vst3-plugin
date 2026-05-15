@@ -756,6 +756,7 @@ juce::String MCPToolHandler::loadHostedPlugin(const juce::var& params, MorePhiPr
     if (loaded)
     {
         p.refreshDiscreteMap();
+        p.refreshHostedMasteringApplicators(description);
         p.getParameterClassifier().analyzeParameters(p.getParameterBridge());
         p.getDiscreteHandler().initialize(p.getParameterClassifier());
         p.reportLatencyToHost();

@@ -216,6 +216,10 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/BrickwallLimiter.cpp
     src/Core/LUFSMeter.h
     src/Core/LUFSMeter.cpp
+    src/Core/RealtimeSpectrumAnalyzer.h
+    src/Core/RealtimeSpectrumAnalyzer.cpp
+    src/Core/StereoFieldAnalyzer.h
+    src/Core/StereoFieldAnalyzer.cpp
     src/Core/LoudnessNormalizer.h
     src/Core/LoudnessNormalizer.cpp
     src/Core/MonoCompatibilityChecker.h
@@ -300,6 +304,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/ParameterContextBuilder.cpp
     src/AI/PluginProfileDB.h
     src/AI/PluginProfileDB.cpp
+    src/AI/TrackAssistantStore.h
+    src/AI/TrackAssistantStore.cpp
     src/AI/OSKeychain.h
     src/AI/OSKeychain.cpp
     src/AI/MCPEQTool.h
@@ -429,8 +435,35 @@ add_executable(MorePhiCLI
     ${MORE_PHI_CLI_SOURCES}
 )
 
+set(MORE_PHI_STANDALONE_MCP_CORE_SOURCES
+    src/AI/StandaloneMcp/JsonRpc.h
+    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
+    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
+    src/AI/StandaloneMcp/OzonePluginBackend.h
+    src/AI/StandaloneMcp/OzonePluginBackend.cpp
+    src/AI/StandaloneMcp/StandaloneMcpServer.h
+    src/AI/StandaloneMcp/StandaloneMcpServer.cpp
+    ${MORE_PHI_HOST_SOURCES}
+)
+
+add_library(MorePhiMcpCore STATIC
+    ${MORE_PHI_STANDALONE_MCP_CORE_SOURCES}
+)
+
+add_executable(MorePhiMcpServer
+    src/AI/StandaloneMcp/StandaloneMcpMain.cpp
+)
+
 # ── CLI Configuration ─────────────────────────────────────────────────────────
 target_include_directories(MorePhiCLI PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_include_directories(MorePhiMcpCore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_include_directories(MorePhiMcpServer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -451,6 +484,24 @@ target_link_libraries(MorePhiCLI
         juce::juce_recommended_warning_flags
 )
 
+target_link_libraries(MorePhiMcpCore
+    PUBLIC
+        juce::juce_audio_basics
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_core
+        juce::juce_events
+        nlohmann_json::nlohmann_json
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+target_link_libraries(MorePhiMcpServer
+    PRIVATE
+        MorePhiMcpCore
+        juce::juce_gui_basics
+)
+
 target_compile_definitions(MorePhiCLI
     PUBLIC
         JUCE_WEB_BROWSER=0
@@ -461,8 +512,18 @@ target_compile_definitions(MorePhiCLI
         JUCE_PUSH_NOTIFICATIONS=0
 )
 
+target_compile_definitions(MorePhiMcpCore
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PUSH_NOTIFICATIONS=0
+)
+
 if(APPLE)
     target_compile_definitions(MorePhiCLI PUBLIC JUCE_PLUGINHOST_AU=1)
+    target_compile_definitions(MorePhiMcpCore PUBLIC JUCE_PLUGINHOST_AU=1)
 endif()
 
 # ── JUCE Modules ──────────────────────────────────────────────────────────────
@@ -506,6 +567,8 @@ endif()
 # Build-stability defaults are target-scoped so normal CMake options stay explicit.
 more_phi_apply_build_tuning(MorePhi)
 more_phi_apply_build_tuning(MorePhiCLI)
+more_phi_apply_build_tuning(MorePhiMcpCore)
+more_phi_apply_build_tuning(MorePhiMcpServer)
 if(TARGET MorePhi_VST3)
     more_phi_apply_build_tuning(MorePhi_VST3)
 endif()

@@ -20,8 +20,11 @@ MultiEffectPlan ChainPlanExecutor::executePlan(int   genreIndex,
 
     if (callback_) callback_(plan);
 
-    // Apply to Ozone 11 if a hosted instance is registered
-    if (ozoneApplicator_) ozoneApplicator_->apply(plan);
+    {
+        const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+        if (ozoneApplicator_ != nullptr)
+            ozoneApplicator_->apply(plan);
+    }
 
     return plan;
 }

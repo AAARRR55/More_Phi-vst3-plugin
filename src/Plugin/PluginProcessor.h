@@ -250,6 +250,7 @@ public:
 
     // Refresh discrete parameter map (call after plugin load/change)
     void refreshDiscreteMap();
+    void refreshHostedMasteringApplicators(const juce::PluginDescription& desc);
 
     // ── Link Mode: cross-instance morph synchronization ─────────────────────
     void setLinkEnabled(bool v)  { linkEnabled_.store(v, std::memory_order_relaxed); }
@@ -432,7 +433,8 @@ private:
      *  Returns true if plugin was successfully loaded and state applied.
      */
     bool loadHostedPluginFromState(const juce::PluginDescription& desc);
-    
+    void clearHostedMasteringApplicators() noexcept;
+
     /** Attempts to ensure plugin format manager is ready for loading.
      *  Returns true if we can attempt plugin loading.
      */
