@@ -18,6 +18,7 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
     bool foundToolsCallAlias = false;
     bool foundProfileAudit = false;
     bool foundPlanPreview = false;
+    bool foundRenderStatus = false;
 
     for (const auto& tool : listed["tools"])
     {
@@ -32,9 +33,12 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
             foundProfileAudit = true;
         if (name == "mastering.plan_preview")
             foundPlanPreview = true;
+        if (name == "mastering.render_status")
+            foundRenderStatus = true;
     }
 
     REQUIRE(foundToolsCallAlias);
     REQUIRE(foundProfileAudit);
     REQUIRE(foundPlanPreview);
+    REQUIRE(foundRenderStatus);
 }

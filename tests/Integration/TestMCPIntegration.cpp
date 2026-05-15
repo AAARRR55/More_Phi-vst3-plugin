@@ -20,9 +20,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cmath>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -232,6 +235,40 @@ void initializeSession(SocketClient& client, const juce::String& token)
     REQUIRE(response["result"].contains("instanceId"));
 }
 
+juce::File createMCPRenderInputFile()
+{
+    auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("morephi_mcp_render_input", ".wav");
+
+    juce::AudioBuffer<float> buffer(2, 2048);
+    constexpr double sampleRate = 48000.0;
+    constexpr double frequency = 440.0;
+    constexpr double twoPi = 6.28318530717958647692;
+
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        const auto value = static_cast<float>(0.15 * std::sin(twoPi * frequency * static_cast<double>(sample) / sampleRate));
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            buffer.setSample(channel, sample, value);
+    }
+
+    juce::WavAudioFormat wavFormat;
+    auto stream = std::unique_ptr<juce::FileOutputStream>(file.createOutputStream());
+    if (stream == nullptr)
+        return {};
+
+    auto writer = std::unique_ptr<juce::AudioFormatWriter>(
+        wavFormat.createWriterFor(stream.release(), sampleRate, 2, 24, {}, 0));
+    if (writer == nullptr)
+        return {};
+
+    if (!writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples()))
+        return {};
+
+    writer.reset();
+    return file;
+}
+
 } // namespace
 
 TEST_CASE("MCP initialize rejects missing bearer token", "[integration][mcp]")
@@ -321,6 +358,95 @@ TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[
     REQUIRE_FALSE(callResponse["result"]["isError"].get<bool>());
 
     processor.releaseResources();
+}
+
+TEST_CASE("MCP mastering render job can be started, polled, and selected", "[integration][mcp]")
+{
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    const auto inputFile = createMCPRenderInputFile();
+    REQUIRE(inputFile.existsAsFile());
+
+    const auto outputDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("morephi_mcp_render_output", "");
+    REQUIRE(outputDirectory.createDirectory());
+
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    REQUIRE(waitForDeferredMCPServer(processor));
+    const int port = processor.getMCPServer().getPort();
+    const auto token = processor.getMCPServer().getAuthToken();
+
+    SocketClient client;
+    REQUIRE(client.connectTo(port));
+    initializeSession(client, token);
+
+    const auto startResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "mastering.render_batch"},
+            {"arguments", {
+                {"dry_run", false},
+                {"allow_passthrough", true},
+                {"input_path", inputFile.getFullPathName().toStdString()},
+                {"output_path", outputDirectory.getFullPathName().toStdString()},
+                {"candidate_count", 1},
+                {"duration_seconds", 0.05},
+                {"block_size", 128},
+                {"channels", 2},
+                {"parallel_workers", 1}
+            }}
+        },
+        4));
+
+    REQUIRE(startResponse.contains("result"));
+    const auto jobId = startResponse["result"]["structuredContent"]["job_id"].get<std::string>();
+    REQUIRE_FALSE(jobId.empty());
+
+    json statusResponse;
+    bool completed = false;
+    for (int attempt = 0; attempt < 100 && !completed; ++attempt)
+    {
+        statusResponse = sendRpc(client, rpcRequest(
+            "tools/call",
+            {
+                {"name", "mastering.render_status"},
+                {"arguments", {{"job_id", jobId}}}
+            },
+            5 + attempt));
+
+        REQUIRE(statusResponse.contains("result"));
+        completed = statusResponse["result"]["structuredContent"]["completed"].get<bool>();
+        if (!completed)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    REQUIRE(completed);
+    const auto& status = statusResponse["result"]["structuredContent"];
+    REQUIRE(status["candidates"].is_array());
+    REQUIRE(status["candidates"].size() == 1);
+
+    const auto candidateId = status["candidates"][0]["id"].get<std::string>();
+    const auto outputPath = status["candidates"][0]["output_path"].get<std::string>();
+    REQUIRE(juce::File(outputPath).existsAsFile());
+
+    const auto selectResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "mastering.select_candidate"},
+            {"arguments", {{"candidate_id", candidateId}}}
+        },
+        200));
+
+    REQUIRE(selectResponse.contains("result"));
+    REQUIRE(selectResponse["result"]["structuredContent"]["selected"].get<bool>());
+    REQUIRE(selectResponse["result"]["structuredContent"]["output_path"].get<std::string>() == outputPath);
+
+    processor.releaseResources();
+    outputDirectory.deleteRecursively();
+    inputFile.deleteFile();
 }
 
 TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors", "[integration][mcp]")

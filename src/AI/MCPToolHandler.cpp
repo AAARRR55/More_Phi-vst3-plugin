@@ -17,6 +17,7 @@
 #include "PluginProfileDB.h"
 #include "Dataset/OfflineBatchRenderer.h"
 #include <nlohmann/json.hpp>
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -855,40 +856,201 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
     const int candidateCount = juce::jlimit(1, 8, static_cast<int>(params.getProperty("candidate_count", 3)));
     const bool dryRun = params.getProperty("dry_run", true);
 
-    if (!dryRun)
+    if (dryRun)
     {
+        const int   genreIndex    = static_cast<int>  (params.getProperty("genre_index",    0));
+        const float dynamicRange  = static_cast<float>(params.getProperty("dynamic_range",  6.0f));
+        const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
+        const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
+
+        json candidates = json::array();
+        for (int i = 0; i < candidateCount; ++i)
+        {
+            const float offset = static_cast<float>(i) - static_cast<float>(candidateCount - 1) * 0.5f;
+            const auto plan = p.getAutoMasteringEngine().getChainPlanner().previewPlan(
+                genreIndex,
+                dynamicRange + offset,
+                spectralTilt + offset * 0.25f,
+                std::clamp(correlationMS + offset * 0.05f, -1.0f, 1.0f));
+            json candidate = planToJson(plan);
+            candidate["id"] = "dry_run_" + std::to_string(i + 1);
+            candidate["score"] = 1.0f / static_cast<float>(i + 1);
+            candidates.push_back(candidate);
+        }
+
         return toJString(json{
-            {"success", false},
-            {"error", "offline_render_requires_file_job"},
-            {"details", "Use dry_run=true for plan candidates; file-backed offline render job wiring is not enabled in this MCP tool yet."}
+            {"success", true},
+            {"mode", "dry_run_plan_candidates"},
+            {"candidates", candidates}
         });
     }
 
-    const int   genreIndex    = static_cast<int>  (params.getProperty("genre_index",    0));
-    const float dynamicRange  = static_cast<float>(params.getProperty("dynamic_range",  6.0f));
-    const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
-    const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
+    const auto inputPath = params.getProperty("input_path",
+                           params.getProperty("input_file", "")).toString();
+    const auto outputPath = params.getProperty("output_path",
+                            params.getProperty("output_directory", "")).toString();
+    const auto pluginPath = params.getProperty("plugin_path",
+                            params.getProperty("plugin_file", "")).toString();
+    const bool allowPassthrough = params.getProperty("allow_passthrough", false);
 
-    json candidates = json::array();
-    for (int i = 0; i < candidateCount; ++i)
+    if (inputPath.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_input_path"}});
+    if (outputPath.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_output_path"}});
+    if (pluginPath.isEmpty() && !allowPassthrough)
     {
-        const float offset = static_cast<float>(i) - static_cast<float>(candidateCount - 1) * 0.5f;
-        const auto plan = p.getAutoMasteringEngine().getChainPlanner().previewPlan(
-            genreIndex,
-            dynamicRange + offset,
-            spectralTilt + offset * 0.25f,
-            std::clamp(correlationMS + offset * 0.05f, -1.0f, 1.0f));
-        json candidate = planToJson(plan);
-        candidate["id"] = "dry_run_" + std::to_string(i + 1);
-        candidate["score"] = 1.0f / static_cast<float>(i + 1);
-        candidates.push_back(candidate);
+        return toJString(json{
+            {"success", false},
+            {"error", "missing_plugin_path"},
+            {"details", "Offline hosted mastering renders require plugin_path unless allow_passthrough=true."}
+        });
     }
+
+    const juce::File inputFile(inputPath);
+    const juce::File outputDirectory(outputPath);
+    const juce::File pluginFile(pluginPath);
+
+    if (!inputFile.existsAsFile())
+        return toJString(json{{"success", false}, {"error", "input_not_found"}});
+    if (pluginPath.isNotEmpty() && !(pluginFile.existsAsFile() || pluginFile.isDirectory()))
+        return toJString(json{{"success", false}, {"error", "plugin_not_found"}});
+
+    const auto jobId = "render_" + juce::String(static_cast<int64_t>(gNextRenderJobId.fetch_add(1)));
+    auto job = std::make_shared<RenderJobRecord>();
+    job->id = jobId;
+    job->inputPath = inputFile.getFullPathName();
+    job->outputDirectory = outputDirectory.getFullPathName();
+    job->pluginPath = pluginFile.getFullPathName();
+    job->progress.total = candidateCount;
+
+    {
+        const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
+        gRenderJobs[jobId.toStdString()] = job;
+    }
+
+    const int blockSize = juce::jlimit(64, 8192, static_cast<int>(params.getProperty("block_size", 512)));
+    const int channels = juce::jlimit(1, 16, static_cast<int>(params.getProperty("channels", 2)));
+    const int workers = juce::jlimit(1, 8, static_cast<int>(params.getProperty("parallel_workers", 1)));
+    const double sampleRate = static_cast<double>(params.getProperty("sample_rate", 48000.0));
+    const float durationSeconds = static_cast<float>(params.getProperty("duration_seconds", 30.0f));
+    const int maxInputFileSizeMB = juce::jlimit(1, 4096, static_cast<int>(params.getProperty("max_input_file_size_mb", 500)));
+
+    std::thread([job, inputFile, outputDirectory, pluginFile, candidateCount,
+                 blockSize, channels, workers, sampleRate, durationSeconds, maxInputFileSizeMB]()
+    {
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->status = "configuring";
+            job->message = "Configuring offline renderer";
+        }
+
+        OfflineBatchConfig config;
+        config.inputFile = inputFile;
+        config.outputDirectory = outputDirectory;
+        config.pluginFile = pluginFile;
+        config.totalVariations = candidateCount;
+        config.parallelWorkers = workers;
+        config.enableSIMD = true;
+        config.useMemoryPool = true;
+        config.maxInputFileSizeMB = maxInputFileSizeMB;
+        config.renderConfig.sampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
+        config.renderConfig.blockSize = blockSize;
+        config.renderConfig.numChannels = channels;
+        config.renderConfig.outputDirectory = outputDirectory;
+        config.renderConfig.validateOutput = true;
+        if (durationSeconds > 0.0f)
+        {
+            config.renderConfig.fullDuration = durationSeconds;
+            config.renderConfig.transientDuration = durationSeconds;
+            config.renderConfig.steadyStateDuration = durationSeconds;
+            config.renderConfig.customDuration = durationSeconds;
+        }
+
+        auto renderer = std::make_unique<OfflineBatchRenderer>();
+        renderer->onProgressUpdate = [job](const OfflineBatchProgress& progress)
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->progress = progress;
+            job->status = "running";
+            job->message = progress.currentStatus;
+        };
+
+        renderer->onVariationComplete = [job](int index, const RenderResult& result)
+        {
+            RenderCandidateRecord candidate;
+            candidate.index = index;
+            candidate.success = result.success;
+            candidate.id = makeRenderCandidateId(job->id, index);
+            candidate.outputPath = result.outputFile.getFullPathName();
+            candidate.peakDb = result.peakDb;
+            candidate.rmsDb = result.rmsDb;
+            candidate.hasSilence = result.hasSilence;
+            candidate.hasClipping = result.hasClipping;
+            candidate.renderTimeMs = result.renderTimeMs;
+            candidate.errorMessage = result.errorMessage;
+
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->candidates.push_back(std::move(candidate));
+        };
+
+        renderer->onRenderComplete = [job](bool success, const juce::String& message)
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->success = success;
+            job->message = message;
+            job->status = success ? "completed" : "completed_with_errors";
+            job->completed = true;
+        };
+
+        if (!renderer->setConfig(config))
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->success = false;
+            job->completed = true;
+            job->status = "failed";
+            job->message = "Failed to configure offline renderer";
+            return;
+        }
+
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->status = "running";
+            job->message = "Rendering variations";
+        }
+
+        if (!renderer->startRender(nullptr))
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->success = false;
+            job->completed = true;
+            job->status = "failed";
+            job->message = "Failed to start offline renderer";
+        }
+    }).detach();
 
     return toJString(json{
         {"success", true},
-        {"mode", "dry_run_plan_candidates"},
-        {"candidates", candidates}
+        {"mode", "offline_file_render"},
+        {"job_id", jobId.toStdString()},
+        {"status", "queued"},
+        {"input_path", inputFile.getFullPathName().toStdString()},
+        {"output_directory", outputDirectory.getFullPathName().toStdString()},
+        {"plugin_path", pluginFile.getFullPathName().toStdString()},
+        {"total_variations", candidateCount}
     });
+}
+
+juce::String MCPToolHandler::getMasteringRenderStatus(const juce::var& params)
+{
+    const auto jobId = params.getProperty("job_id", "").toString();
+    if (jobId.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_job_id"}});
+
+    const auto job = findRenderJob(jobId);
+    if (job == nullptr)
+        return toJString(json{{"success", false}, {"error", "job_not_found"}});
+
+    return toJString(renderJobToJson(*job));
 }
 
 juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, MorePhiProcessor& /*p*/)
@@ -896,6 +1058,38 @@ juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, M
     const auto candidateId = params.getProperty("candidate_id", "").toString();
     if (candidateId.isEmpty())
         return toJString(json{{"success", false}, {"error", "missing_candidate_id"}});
+
+    const int separator = candidateId.indexOfChar(':');
+    if (separator > 0)
+    {
+        const auto jobId = candidateId.substring(0, separator);
+        const auto job = findRenderJob(jobId);
+        if (job == nullptr)
+            return toJString(json{{"success", false}, {"error", "job_not_found"}});
+
+        const std::lock_guard<std::mutex> jobGuard(job->mutex);
+        for (const auto& candidate : job->candidates)
+        {
+            if (candidate.id == candidateId)
+            {
+                return toJString(json{
+                    {"success", true},
+                    {"candidate_id", candidateId.toStdString()},
+                    {"selected", true},
+                    {"applied", false},
+                    {"output_path", candidate.outputPath.toStdString()},
+                    {"render_success", candidate.success},
+                    {"peak_db", candidate.peakDb},
+                    {"rms_db", candidate.rmsDb},
+                    {"warnings", candidate.errorMessage.isNotEmpty()
+                        ? json::array({candidate.errorMessage.toStdString()})
+                        : json::array()}
+                });
+            }
+        }
+
+        return toJString(json{{"success", false}, {"error", "candidate_not_found"}});
+    }
 
     return toJString(json{
         {"success", true},

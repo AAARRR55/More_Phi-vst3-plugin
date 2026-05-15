@@ -1906,7 +1906,7 @@ void MorePhiProcessor::timerCallback()
         // Wire up Ozone 11 mastering integration if applicable
         if (OzoneParameterMap::isOzone11(pendingPluginDesc_.name))
         {
-            ozoneParamMap_         = std::make_unique<OzoneParameterMap>(OzoneParameterMap::buildForOzone11());
+            ozoneParamMap_         = std::make_unique<OzoneParameterMap>(OzoneParameterMap::buildFromHostedPlugin(paramBridge));
             ozonePlanApplicator_   = std::make_unique<OzonePlanApplicator>(*this, *ozoneParamMap_);
             autoMasteringEngine_.getChainPlanner().setOzonePlanApplicator(ozonePlanApplicator_.get());
             DBG("timerCallback: Ozone 11 detected — OzonePlanApplicator registered");

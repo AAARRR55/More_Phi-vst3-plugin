@@ -83,6 +83,12 @@ public:
     static OzoneParameterMap buildForOzone11();
 
     /**
+     * Construct the map by discovering Ozone 11 parameter indices from the
+     * currently hosted plugin's exposed parameter names.
+     */
+    static OzoneParameterMap buildFromHostedPlugin(const IParameterBridge& bridge);
+
+    /**
      * Return true if the given plugin display name appears to be iZotope Ozone 11.
      * Checked case-insensitively; matches "Ozone 11" or "iZotope Ozone 11".
      */
