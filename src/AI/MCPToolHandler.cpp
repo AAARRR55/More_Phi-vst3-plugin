@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/MCPToolHandler.cpp
+ * More-Phi — AI/MCPToolHandler.cpp
  * Instance-aware MCP tool dispatch.
  *
  * All JSON responses are constructed with nlohmann::json so that special
@@ -11,10 +11,14 @@
 #include "InstanceRegistry.h"
 #include "Plugin/PluginProcessor.h"
 #include "MCPToolsExtended.h"
+#include "MCPEQTool.h"
+#include "OzoneParameterMap.h"
+#include "ChainPlanExecutor.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <optional>
 
-namespace morphsnap {
+namespace more_phi {
 
 using json = nlohmann::json;
 
@@ -25,19 +29,25 @@ static juce::String toJString(const json& j)
 }
 
 // Extract a parameter index from a request that may use either "id" or "index" as key.
-// Returns -1 if neither key is present.
-static int extractParamId(const juce::var& params) noexcept
+// B-9 FIX: Returns std::optional<int> — callers can't accidentally use -1 as a valid index.
+// If maxParamCount > 0, the result is also bounds-checked against it.
+static std::optional<int> extractParamId(const juce::var& params, int maxParamCount = 0) noexcept
 {
-    if (params.hasProperty("id"))    return static_cast<int>(params.getProperty("id",    -1));
-    if (params.hasProperty("index")) return static_cast<int>(params.getProperty("index", -1));
-    return -1;
+    int id = -1;
+    if (params.hasProperty("id"))         id = static_cast<int>(params.getProperty("id",    -1));
+    else if (params.hasProperty("index")) id = static_cast<int>(params.getProperty("index", -1));
+    else                                  return std::nullopt;
+
+    if (id < 0) return std::nullopt;
+    if (maxParamCount > 0 && id >= maxParamCount) return std::nullopt;
+    return id;
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 juce::String MCPToolHandler::handle(const juce::String& method,
                                      const juce::var& params,
-                                     MorphSnapProcessor& p,
+                                     MorePhiProcessor& p,
                                      const InstanceIdentity& identity)
 {
     if (method == "get_plugin_info")      return getPluginInfo(p);
@@ -72,19 +82,33 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
     if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
 
+    // EQ Assistant Tools (Natural Language EQ Control)
+    if (method == "eq_adjust")                      return MCPEQTool::adjustEQ(params, p, p.getAIAssistant()).jsonResult;
+    if (method == "eq_preview")                     return MCPEQTool::previewEQ(params, p, p.getAIAssistant()).jsonResult;
+    if (method == "eq_apply")                       return MCPEQTool::applyEQ(params, p).jsonResult;
+    if (method == "eq_reject")                      return MCPEQTool::rejectEQ(params, p).jsonResult;
+    if (method == "eq_context")                     return MCPEQTool::getContext(params, p).jsonResult;
+    if (method == "eq_reset_context")               return MCPEQTool::resetContext(params, p).jsonResult;
+    if (method == "eq_validate")                    return MCPEQTool::validateEQ(params, p).jsonResult;
+    if (method == "eq_suggest")                     return MCPEQTool::suggestEQ(params, p, p.getAIAssistant()).jsonResult;
+
     // Multi-instance tools
     if (method == "get_instance_info")    return getInstanceInfo(identity);
     if (method == "list_instances")       return listInstances();
+
+    // Ozone mastering tools
+    if (method == "get_mastering_state")  return getMasteringState(p);
+    if (method == "apply_mastering_plan") return applyMasteringPlan(params, p);
 
     return toJString(json{{"error","unknown_method"}});
 }
 
 // ── Tool implementations ──────────────────────────────────────────────────────
 
-juce::String MCPToolHandler::getPluginInfo(MorphSnapProcessor& p)
+juce::String MCPToolHandler::getPluginInfo(MorePhiProcessor& p)
 {
     json result = {
-        {"name",    "MorphSnap"},
+        {"name",    "More-Phi"},
         {"type",    "effect"},
         {"version", "3.3.0"}
     };
@@ -106,52 +130,90 @@ juce::String MCPToolHandler::getPluginInfo(MorphSnapProcessor& p)
     return toJString(result);
 }
 
-juce::String MCPToolHandler::listParameters(const juce::var& /*params*/, MorphSnapProcessor& p)
+juce::String MCPToolHandler::listParameters(const juce::var& /*params*/, MorePhiProcessor& p)
 {
     auto& bridge = p.getParameterBridge();
-    const int count = bridge.getParameterCount();
+    const auto descriptors = bridge.getParameterDescriptors();
 
     json arr = json::array();
-    for (int i = 0; i < count; ++i)
+    for (const auto& descriptor : descriptors)
     {
         arr.push_back({
-            {"id",    i},
-            {"name",  bridge.getParameterName(i).toStdString()},
-            {"value", bridge.getParameterNormalized(i)}
+            {"id",           descriptor.index},
+            {"index",        descriptor.index},
+            {"stableId",     descriptor.stableId.toStdString()},
+            {"name",         descriptor.name.toStdString()},
+            {"value",        descriptor.value},
+            {"displayValue", descriptor.displayValue.toStdString()},
+            {"label",        descriptor.label.toStdString()},
+            {"discrete",     descriptor.discrete},
+            {"boolean",      descriptor.boolean},
+            {"numSteps",     descriptor.numSteps},
+            {"defaultValue", descriptor.defaultValue}
         });
     }
     return toJString(arr);
 }
 
-juce::String MCPToolHandler::getParameter(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::getParameter(const juce::var& params, MorePhiProcessor& p)
 {
-    const int id = extractParamId(params);
     auto& bridge = p.getParameterBridge();
-    if (id < 0 || id >= bridge.getParameterCount())
+    const auto stableId = params.getProperty("stableId",
+                          params.getProperty("stable_id", "")).toString();
+    const auto idOpt = extractParamId(params);
+    const auto name = params.getProperty("name", "").toString();
+    const auto resolution = bridge.resolveParameter(stableId, idOpt.value_or(-1), name);
+    if (!resolution.success)
         return toJString(json{{"error","invalid_param_id"}});
+    const auto descriptor = bridge.getParameterDescriptor(resolution.index);
 
     return toJString(json{
-        {"id",    id},
-        {"name",  bridge.getParameterName(id).toStdString()},
-        {"value", bridge.getParameterNormalized(id)}
+        {"id",           descriptor.index},
+        {"index",        descriptor.index},
+        {"stableId",     descriptor.stableId.toStdString()},
+        {"name",         descriptor.name.toStdString()},
+        {"value",        descriptor.value},
+        {"displayValue", descriptor.displayValue.toStdString()},
+        {"label",        descriptor.label.toStdString()},
+        {"discrete",     descriptor.discrete},
+        {"boolean",      descriptor.boolean},
+        {"numSteps",     descriptor.numSteps},
+        {"defaultValue", descriptor.defaultValue}
     });
 }
 
-juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProcessor& p)
 {
-    const int id = extractParamId(params);
-    const float value = static_cast<float>(params.getProperty("value", 0.0));
-
     auto& bridge = p.getParameterBridge();
-    if (id < 0 || id >= bridge.getParameterCount())
-        return toJString(json{{"success",false},{"error","invalid_param_id"}});
+    const auto stableId = params.getProperty("stableId",
+                          params.getProperty("stable_id", "")).toString();
+    const auto idOpt = extractParamId(params);
+    const auto name = params.getProperty("name", "").toString();
+    const auto resolution = bridge.resolveParameter(stableId, idOpt.value_or(-1), name);
+    if (!resolution.success)
+        return toJString(json{
+            {"success", false},
+            {"error", resolution.error.toStdString()},
+            {"queued", 0},
+            {"rejected", 1}
+        });
+    const int id = resolution.index;
+    const float value = static_cast<float>(params.getProperty("value", 0.0));
 
     // CRITICAL (Finding 2): Route through command queue for thread safety.
     // This serializes MCP thread → audio thread, preventing data race with
     // hosted plugin's setParameter() which is not thread-safe.
     // Trade-off: Changes only apply when audio is playing, but this is
     // better than crashing due to concurrent plugin API calls.
-    p.enqueueParameterSet(id, value);
+    if (!p.enqueueParameterSet(id, value, MorePhiProcessor::ParameterEditSource::MCP, true))
+        return toJString(json{
+            {"success", false},
+            {"error", "queue_full"},
+            {"index", id},
+            {"value", value},
+            {"queued", 0},
+            {"rejected", 0}
+        });
 
     auto& optimizer = p.getTokenOptimizer();
     const auto estimate = optimizer.estimateSetParameter(1);
@@ -163,10 +225,16 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorphSnapProc
     usage.operation = "set_parameter";
     optimizer.recordUsage(usage);
 
-    return toJString(json{{"success",true}});
+    return toJString(json{
+        {"success", true},
+        {"index", id},
+        {"value", value},
+        {"queued", 1},
+        {"rejected", 0}
+    });
 }
 
-juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhiProcessor& p)
 {
     const juce::var batchPayload = params.hasProperty("params")
         ? params.getProperty("params", juce::var())
@@ -176,20 +244,36 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
         return toJString(json{{"success",false},{"error","missing params/parameters array"}});
 
     auto& bridge = p.getParameterBridge();
-    const int maxParamCount = bridge.getParameterCount();
+    const int requested = list->size();
     int applied = 0;
+    int rejected = 0;
+    int queueFailures = 0;
 
     // CRITICAL (Finding 2): Route all parameter changes through the command queue
     // for thread safety. This prevents concurrent plugin API calls from MCP thread
     // and audio thread.
     for (const auto& item : *list)
     {
-        const int id      = item.getProperty("id",    -1);
+        const int rawId   = item.hasProperty("index")
+            ? static_cast<int>(item.getProperty("index", -1))
+            : static_cast<int>(item.getProperty("id", -1));
+        const auto stableId = item.getProperty("stableId",
+                              item.getProperty("stable_id", "")).toString();
+        const auto name = item.getProperty("name", "").toString();
         const float value = static_cast<float>(item.getProperty("value", 0.0));
-        if (id >= 0 && id < maxParamCount)
+        const auto resolution = bridge.resolveParameter(stableId, rawId, name);
+        if (resolution.success)
         {
-            p.enqueueParameterSet(id, value);
-            ++applied;
+            if (p.enqueueParameterSet(resolution.index, value,
+                                      MorePhiProcessor::ParameterEditSource::MCP,
+                                      true))
+                ++applied;
+            else
+                ++queueFailures;
+        }
+        else
+        {
+            ++rejected;
         }
     }
 
@@ -203,23 +287,52 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorphSn
     usage.operation = "set_parameters_batch";
     optimizer.recordUsage(usage);
 
-    return toJString(json{
-        {"success", true},
-        {"applied", applied}
-    });
+    const bool allQueued = requested > 0
+        && applied == requested
+        && rejected == 0
+        && queueFailures == 0;
+
+    json response{
+        {"success", allQueued},
+        {"queued", applied},
+        {"applied", applied},
+        {"requested", requested},
+        {"rejected", rejected},
+        {"queueFailures", queueFailures}
+    };
+
+    if (queueFailures > 0)
+        response["error"] = "queue_full";
+    else if (requested == 0)
+        response["error"] = "empty_batch";
+    else if (applied == 0)
+        response["error"] = "no_parameters_queued";
+    else if (rejected > 0)
+        response["error"] = "partial_rejected";
+
+    return toJString(response);
 }
 
-juce::String MCPToolHandler::captureSnapshot(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::captureSnapshot(const juce::var& params, MorePhiProcessor& p)
 {
     const int slot = params.getProperty("slot", -1);
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
         return toJString(json{{"success",false},{"error","invalid slot"}});
 
-    p.getSnapshotBank().capture(slot, p.getParameterBridge());
-    return toJString(json{{"success",true},{"slot",slot}});
+    const bool includeState = params.getProperty("includeState",
+                              params.getProperty("include_state", true));
+    if (!p.captureSnapshotToSlot(slot, includeState))
+        return toJString(json{{"success",false},{"error","capture_failed"},{"slot",slot}});
+
+    return toJString(json{
+        {"success", true},
+        {"slot", slot},
+        {"includeState", includeState},
+        {"stateChunk", p.getSnapshotBank().hasStateChunk(slot)}
+    });
 }
 
-juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorePhiProcessor& p)
 {
     const int slot = params.getProperty("slot", -1);
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
@@ -233,9 +346,17 @@ juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapPr
     if (!p.getSnapshotBank().getSlotValuesCopy(slot, values))
         return toJString(json{{"success",false},{"error","empty_slot"}});
 
-    const int queued = p.enqueueParameterState(values);
-    if (queued == 0)
+    auto mode = MorePhiProcessor::SnapshotRecallMode::FastParamsOnly;
+    const auto modeText = params.getProperty("mode", "").toString().trim().toLowerCase();
+    const bool requestFull = params.getProperty("full",
+                             params.getProperty("includeState",
+                             params.getProperty("include_state", false)));
+    if (requestFull || modeText == "full" || p.getRecallMode() == 1)
+        mode = MorePhiProcessor::SnapshotRecallMode::FullStateAndParams;
+
+    if (!p.recallSnapshot(slot, mode))
         return toJString(json{{"success",false},{"error","queue_full"}});
+    const int queued = static_cast<int>(values.size());
 
     auto& optimizer = p.getTokenOptimizer();
     const auto estimate = optimizer.estimateSetParameter(queued);
@@ -247,10 +368,15 @@ juce::String MCPToolHandler::recallSnapshot(const juce::var& params, MorphSnapPr
     usage.operation = "recall_snapshot";
     optimizer.recordUsage(usage);
 
-    return toJString(json{{"success",true},{"slot",slot},{"queued",queued}});
+    return toJString(json{
+        {"success", true},
+        {"slot", slot},
+        {"queued", queued},
+        {"mode", mode == MorePhiProcessor::SnapshotRecallMode::FullStateAndParams ? "full" : "fast"}
+    });
 }
 
-juce::String MCPToolHandler::setMorphPosition(const juce::var& params, MorphSnapProcessor& p)
+juce::String MCPToolHandler::setMorphPosition(const juce::var& params, MorePhiProcessor& p)
 {
     bool sourceExplicitlySet = false;
 
@@ -273,33 +399,28 @@ juce::String MCPToolHandler::setMorphPosition(const juce::var& params, MorphSnap
         }
     }
 
-    if (params.hasProperty("x"))
-    {
-        p.setMorphX(juce::jlimit(0.0f, 1.0f,
-                    static_cast<float>(params.getProperty("x", 0.5))));
-        if (!sourceExplicitlySet)
-            p.setMorphSource(0);
-    }
+    const bool hasX = params.hasProperty("x");
+    const bool hasY = params.hasProperty("y");
+    const bool hasFader = params.hasProperty("fader");
 
-    if (params.hasProperty("y"))
-    {
-        p.setMorphY(juce::jlimit(0.0f, 1.0f,
-                    static_cast<float>(params.getProperty("y", 0.5))));
-        if (!sourceExplicitlySet)
-            p.setMorphSource(0);
-    }
+    int source = p.getMorphSource();
+    if (!sourceExplicitlySet && (hasX || hasY))
+        source = 0;
+    if (hasFader)
+        source = 1;
+    if (sourceExplicitlySet)
+        source = p.getMorphSource();
 
-    if (params.hasProperty("fader"))
-    {
-        p.setFaderPos(juce::jlimit(0.0f, 1.0f,
-                      static_cast<float>(params.getProperty("fader", 0.0))));
-        p.setMorphSource(1);
-    }
+    p.setMorphPositionExternal(
+        static_cast<float>(params.getProperty("x", p.getMorphX())), hasX,
+        static_cast<float>(params.getProperty("y", p.getMorphY())), hasY,
+        static_cast<float>(params.getProperty("fader", p.getFaderPos())), hasFader,
+        source);
 
     return toJString(json{{"success",true}});
 }
 
-juce::String MCPToolHandler::getMorphState(MorphSnapProcessor& p)
+juce::String MCPToolHandler::getMorphState(MorePhiProcessor& p)
 {
     return toJString(json{
         {"x",      p.getMorphX()},
@@ -317,7 +438,6 @@ juce::String MCPToolHandler::getInstanceInfo(const InstanceIdentity& id)
         {"instanceId",  id.instanceId.toStdString()},
         {"morphCode",   id.morphCode.toStdString()},
         {"port",        id.port},
-        {"bearerToken", id.bearerToken.toStdString()},
         {"createdAt",   id.createdAt}
     });
 }
@@ -340,4 +460,71 @@ juce::String MCPToolHandler::listInstances()
     return toJString(arr);
 }
 
-} // namespace morphsnap
+// ── Ozone mastering tools ─────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::getMasteringState(MorePhiProcessor& p)
+{
+    auto& ame = p.getAutoMasteringEngine();
+    const bool ozoneHosted = p.getHostManager().hasPlugin() &&
+        OzoneParameterMap::isOzone11(
+            p.getHostManager().getPlugin()->getName());
+
+    json result;
+    result["lufs_momentary"]  = ame.getLUFSMomentary();
+    result["lufs_short_term"] = ame.getLUFSShortTerm();
+    result["lufs_integrated"] = ame.getLUFSIntegrated();
+    result["lra"]             = ame.getLRA();
+    result["true_peak_dbtp"]  = ame.getTruePeak_dBTP();
+    result["ozone_hosted"]    = ozoneHosted;
+    result["ozone_applicator_active"] = ame.getChainPlanner().hasOzoneApplicator();
+
+    // Per-band dynamics gain reduction
+    json grArr = json::array();
+    for (int i = 0; i < 4; ++i)
+        grArr.push_back(ame.getGainReductionDB(i));
+    result["dynamics_gr_db"] = grArr;
+
+    // Last mastering plan (if any)
+    const MultiEffectPlan& plan = ame.getChainPlanner().getLastPlan();
+    if (plan.valid)
+    {
+        result["last_plan"] = {
+            {"compression_need",  plan.compressionNeed},
+            {"use_neural_comp",   plan.useNeuralComp},
+            {"target_lufs",       plan.targetLUFS},
+            {"ceiling_dbtp",      plan.ceilingDBTP},
+            {"exciter_enabled",   plan.exciterEnabled},
+            {"width_curve",       { plan.widthCurve[0], plan.widthCurve[1],
+                                    plan.widthCurve[2], plan.widthCurve[3] }},
+        };
+    }
+
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::applyMasteringPlan(const juce::var& params, MorePhiProcessor& p)
+{
+    const int   genreIndex    = static_cast<int>  (params.getProperty("genre_index",    0));
+    const float dynamicRange  = static_cast<float>(params.getProperty("dynamic_range",  6.0f));
+    const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
+    const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
+
+    auto& planner = p.getAutoMasteringEngine().getChainPlanner();
+    const MultiEffectPlan plan = planner.executePlan(
+        genreIndex, dynamicRange, spectralTilt, correlationMS);
+
+    json result;
+    result["success"]           = plan.valid;
+    result["ozone_applied"]     = planner.hasOzoneApplicator();
+    result["compression_need"]  = plan.compressionNeed;
+    result["use_neural_comp"]   = plan.useNeuralComp;
+    result["target_lufs"]       = plan.targetLUFS;
+    result["ceiling_dbtp"]      = plan.ceilingDBTP;
+    result["exciter_enabled"]   = plan.exciterEnabled;
+    result["width_curve"]       = { plan.widthCurve[0], plan.widthCurve[1],
+                                    plan.widthCurve[2], plan.widthCurve[3] };
+    result["eq_prescription"]   = plan.eqPrescriptionJSON.toStdString();
+    return toJString(result);
+}
+
+} // namespace more_phi

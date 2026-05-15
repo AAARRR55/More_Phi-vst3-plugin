@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/MCPToolHandler.h
+ * More-Phi — AI/MCPToolHandler.h
  * Dispatches MCP tool calls to plugin subsystems.
  * Instance-aware: includes identity context in responses.
  */
@@ -7,9 +7,9 @@
 
 #include <juce_core/juce_core.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 struct InstanceIdentity;
 
 class MCPToolHandler
@@ -17,23 +17,32 @@ class MCPToolHandler
 public:
     static juce::String handle(const juce::String& method,
                                const juce::var& params,
-                               MorphSnapProcessor& processor,
+                               MorePhiProcessor& processor,
                                const InstanceIdentity& identity);
 
 private:
-    static juce::String getPluginInfo(MorphSnapProcessor& p);
-    static juce::String listParameters(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String getParameter(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String setParameter(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String setParametersBatch(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String captureSnapshot(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String recallSnapshot(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String setMorphPosition(const juce::var& params, MorphSnapProcessor& p);
-    static juce::String getMorphState(MorphSnapProcessor& p);
+    static juce::String getPluginInfo(MorePhiProcessor& p);
+    static juce::String listParameters(const juce::var& params, MorePhiProcessor& p);
+    static juce::String getParameter(const juce::var& params, MorePhiProcessor& p);
+    static juce::String setParameter(const juce::var& params, MorePhiProcessor& p);
+    static juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p);
+    static juce::String captureSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String recallSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String setMorphPosition(const juce::var& params, MorePhiProcessor& p);
+    static juce::String getMorphState(MorePhiProcessor& p);
+
+    // ── Ozone mastering tools ────────────────────────────────────────────────
+
+    /** Tool: get_mastering_state — returns LUFS meters, Ozone hosting status, and key parameter values. */
+    static juce::String getMasteringState(MorePhiProcessor& p);
+
+    /** Tool: apply_mastering_plan — runs ChainPlanExecutor with provided analysis inputs.
+     *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
+    static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
 
     // Multi-instance tools
     static juce::String getInstanceInfo(const InstanceIdentity& id);
     static juce::String listInstances();
 };
 
-} // namespace morphsnap
+} // namespace more_phi

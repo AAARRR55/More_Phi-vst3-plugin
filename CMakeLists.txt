@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.24)
-project(MorphSnap VERSION 3.3.0 LANGUAGES C CXX)
+project(MorePhi VERSION 3.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(MORPHSNAP_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder after build" OFF)
-option(MORPHSNAP_BUILD_TESTS "Configure and build tests in tests/." ON)
-option(MORPHSNAP_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
-option(MORPHSNAP_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
-set(MORPHSNAP_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
-option(MORPHSNAP_ENABLE_LTO "Enable LTO for Release builds" OFF)
-option(MORPHSNAP_ENABLE_DATASET_V3 "Deprecated compatibility flag (no-op): Dataset V3 modular pipeline sources are always compiled" OFF)
+option(MORE_PHI_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder after build" OFF)
+option(MORE_PHI_BUILD_TESTS "Configure and build tests in tests/." ON)
+option(MORE_PHI_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
+option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
+set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
+option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
+option(MORE_PHI_ENABLE_DATASET_V3 "Deprecated compatibility flag (no-op): Dataset V3 modular pipeline sources are always compiled" OFF)
 
 # Keep single-config generators deterministic when callers omit build type.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -27,8 +27,8 @@ if(WIN32)
     )
 endif()
 
-if(MSVC AND NOT MORPHSNAP_MSVC_MP MATCHES "^[0-9]+$")
-    message(FATAL_ERROR "MORPHSNAP_MSVC_MP must be numeric (for example: 0, 1, 2, 4).")
+if(MSVC AND NOT MORE_PHI_MSVC_MP MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "MORE_PHI_MSVC_MP must be numeric (for example: 0, 1, 2, 4).")
 endif()
 
 # Windows: 4 MB stack for plugin-in-plugin hosting (FL Studio compat)
@@ -40,47 +40,49 @@ if(WIN32)
     endif()
 endif()
 
-function(morphsnap_apply_build_tuning target_name)
+function(more_phi_apply_build_tuning target_name)
     if(NOT TARGET ${target_name})
         message(FATAL_ERROR "Cannot tune build target '${target_name}' because it does not exist.")
     endif()
 
-    get_target_property(_morphsnap_target_type ${target_name} TYPE)
-    if(_morphsnap_target_type STREQUAL "INTERFACE_LIBRARY" OR _morphsnap_target_type STREQUAL "UTILITY")
+    get_target_property(_more_phi_target_type ${target_name} TYPE)
+    if(_more_phi_target_type STREQUAL "INTERFACE_LIBRARY" OR _more_phi_target_type STREQUAL "UTILITY")
         return()
     endif()
 
     if(MSVC)
+        # Ensure source files are interpreted as UTF-8 (required for Unicode literals)
+        target_compile_options(${target_name} PRIVATE /utf-8)
         # Keep PCH memory and CL internal workers explicit so local machines can tune safely.
         target_compile_options(${target_name} PRIVATE /Zm200)
-        if(NOT MORPHSNAP_MSVC_MP STREQUAL "0")
-            target_compile_options(${target_name} PRIVATE "/MP${MORPHSNAP_MSVC_MP}")
+        if(NOT MORE_PHI_MSVC_MP STREQUAL "0")
+            target_compile_options(${target_name} PRIVATE "/MP${MORE_PHI_MSVC_MP}")
         endif()
 
-        if(MORPHSNAP_ENABLE_LTO)
+        if(MORE_PHI_ENABLE_LTO)
             target_compile_options(${target_name} PRIVATE $<$<CONFIG:Release>:/GL>)
         endif()
 
         if(
-            _morphsnap_target_type STREQUAL "EXECUTABLE"
-            OR _morphsnap_target_type STREQUAL "SHARED_LIBRARY"
-            OR _morphsnap_target_type STREQUAL "MODULE_LIBRARY"
+            _more_phi_target_type STREQUAL "EXECUTABLE"
+            OR _more_phi_target_type STREQUAL "SHARED_LIBRARY"
+            OR _more_phi_target_type STREQUAL "MODULE_LIBRARY"
         )
-            if(MORPHSNAP_SAFE_BUILD_MODE)
+            if(MORE_PHI_SAFE_BUILD_MODE)
                 target_link_options(${target_name} PRIVATE /cgthreads:2)
             endif()
 
-            if(MORPHSNAP_ENABLE_LTO)
+            if(MORE_PHI_ENABLE_LTO)
                 target_link_options(${target_name} PRIVATE $<$<CONFIG:Release>:/LTCG>)
             endif()
         endif()
-    elseif(MORPHSNAP_ENABLE_LTO)
+    elseif(MORE_PHI_ENABLE_LTO)
         include(CheckIPOSupported)
-        check_ipo_supported(RESULT morphsnap_ipo_supported OUTPUT morphsnap_ipo_output)
-        if(morphsnap_ipo_supported)
+        check_ipo_supported(RESULT more_phi_ipo_supported OUTPUT more_phi_ipo_output)
+        if(more_phi_ipo_supported)
             set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         else()
-            message(WARNING "LTO requested but IPO is not supported for ${target_name}: ${morphsnap_ipo_output}")
+            message(WARNING "LTO requested but IPO is not supported for ${target_name}: ${more_phi_ipo_output}")
         endif()
     endif()
 endfunction()
@@ -109,37 +111,37 @@ include(cmake/PatchJuceForMSVC.cmake)
 
 # Plugin formats: AU is macOS-only, do not emit it on other platforms
 if(APPLE)
-    set(MORPHSNAP_PLUGIN_FORMATS VST3 AU)
+    set(MORE_PHI_PLUGIN_FORMATS VST3 AU)
 else()
-    set(MORPHSNAP_PLUGIN_FORMATS VST3)
+    set(MORE_PHI_PLUGIN_FORMATS VST3)
 endif()
 
 # ── Plugin Target ─────────────────────────────────────────────────────────────
-juce_add_plugin(MorphSnap
-    COMPANY_NAME            "MorphSnap"
+juce_add_plugin(MorePhi
+    COMPANY_NAME            "MorePhi"
     PLUGIN_MANUFACTURER_CODE Mrph
     PLUGIN_CODE              Mrps
-    FORMATS                  ${MORPHSNAP_PLUGIN_FORMATS}
-    PRODUCT_NAME             "MorphSnap"
+    FORMATS                  ${MORE_PHI_PLUGIN_FORMATS}
+    PRODUCT_NAME             "MorePhi"
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
     IS_MIDI_EFFECT           FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-    COPY_PLUGIN_AFTER_BUILD  ${MORPHSNAP_COPY_PLUGIN_AFTER_BUILD}
+    COPY_PLUGIN_AFTER_BUILD  ${MORE_PHI_COPY_PLUGIN_AFTER_BUILD}
     VST3_CATEGORIES          "Fx" "Tools"
 )
 
 # ── Source Files ──────────────────────────────────────────────────────────────
 # Phase 1: Foundation
-set(MORPHSNAP_PLUGIN_SOURCES
+set(MORE_PHI_PLUGIN_SOURCES
     src/Plugin/PluginProcessor.h
     src/Plugin/PluginProcessor.cpp
     src/Plugin/PluginEditor.h
     src/Plugin/PluginEditor.cpp
 )
 
-set(MORPHSNAP_CORE_SOURCES
+set(MORE_PHI_CORE_SOURCES
     src/Core/ParameterState.h
     src/Core/SnapshotBank.h
     src/Core/SnapshotBank.cpp
@@ -195,7 +197,35 @@ set(MORPHSNAP_CORE_SOURCES
     src/Core/VAEMorphEngine.cpp
 )
 
-set(MORPHSNAP_HOST_SOURCES
+# ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
+set(MORE_PHI_MASTERING_SOURCES
+    src/Core/MSMatrix.h
+    src/Core/MultibandSplitter.h
+    src/Core/MultibandSplitter.cpp
+    src/Core/MultibandDynamicsProcessor.h
+    src/Core/MultibandDynamicsProcessor.cpp
+    src/Core/AdaptiveEQ.h
+    src/Core/AdaptiveEQ.cpp
+    src/Core/StereoImager.h
+    src/Core/StereoImager.cpp
+    src/Core/HarmonicExciter.h
+    src/Core/HarmonicExciter.cpp
+    src/Core/TruePeakEstimator.h
+    src/Core/TruePeakEstimator.cpp
+    src/Core/BrickwallLimiter.h
+    src/Core/BrickwallLimiter.cpp
+    src/Core/LUFSMeter.h
+    src/Core/LUFSMeter.cpp
+    src/Core/LoudnessNormalizer.h
+    src/Core/LoudnessNormalizer.cpp
+    src/Core/MonoCompatibilityChecker.h
+    src/Core/NeuralCompressor.h
+    src/Core/NeuralCompressor.cpp
+    src/Core/AutoMasteringEngine.h
+    src/Core/AutoMasteringEngine.cpp
+)
+
+set(MORE_PHI_HOST_SOURCES
     src/Host/PluginScanner.h
     src/Host/PluginScanner.cpp
     src/Host/IPluginHostManager.h
@@ -205,7 +235,7 @@ set(MORPHSNAP_HOST_SOURCES
     src/Host/ParameterBridge.cpp
 )
 
-set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
+set(MORE_PHI_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetGenerator.h
     src/AI/Dataset/DatasetGenerator.cpp
     src/AI/Dataset/ParameterSampler.h
@@ -220,6 +250,7 @@ set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/FeatureExtractor.cpp
     src/AI/Dataset/MetadataWriter.h
     src/AI/Dataset/MetadataWriter.cpp
+    src/AI/Dataset/MetadataSchema.cpp
     src/AI/Dataset/ValidationEngine.h
     src/AI/Dataset/ValidationEngine.cpp
     src/AI/Dataset/DatasetOrganizer.h
@@ -233,7 +264,7 @@ set(MORPHSNAP_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/ParameterSafetyConfig.cpp
 )
 
-set(MORPHSNAP_AI_DATASET_V3_SOURCES
+set(MORE_PHI_AI_DATASET_V3_SOURCES
     src/AI/Dataset/DatasetGeneratorV3.h
     src/AI/Dataset/DatasetGeneratorV3.cpp
     src/AI/Dataset/Scheduling/TaskQueue.h
@@ -245,10 +276,34 @@ set(MORPHSNAP_AI_DATASET_V3_SOURCES
     src/AI/Dataset/Recovery/WatchdogTimer.h
 )
 
-set(MORPHSNAP_AI_SOURCES
+set(MORE_PHI_AI_SOURCES
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
+    src/AI/LLMProvider.h
+    src/AI/LLMProvider.cpp
+    src/AI/LLMSettings.h
+    src/AI/LLMSettings.cpp
+    src/AI/LLMSettingsStore.h
+    src/AI/LLMSettingsStore.cpp
+    src/AI/AIAssistant.h
+    src/AI/AIAssistant.cpp
+    src/AI/EQParameterTranslator.h
+    src/AI/EQParameterTranslator.cpp
+    src/AI/GenreClassifier.h
+    src/AI/GenreClassifier.cpp
+    src/AI/ChainPlanExecutor.h
+    src/AI/ChainPlanExecutor.cpp
+    src/AI/StyleEncoder.h
+    src/AI/StyleEncoder.cpp
+    src/AI/ParameterContextBuilder.h
+    src/AI/ParameterContextBuilder.cpp
+    src/AI/PluginProfileDB.h
+    src/AI/PluginProfileDB.cpp
+    src/AI/OSKeychain.h
+    src/AI/OSKeychain.cpp
+    src/AI/MCPEQTool.h
+    src/AI/MCPEQTool.cpp
     src/AI/MCPServer.h
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
@@ -259,16 +314,20 @@ set(MORPHSNAP_AI_SOURCES
     src/AI/TokenOptimizer.cpp
     src/AI/MCPToolsExtended.h
     src/AI/MCPToolsExtended.cpp
-    ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
-    ${MORPHSNAP_AI_DATASET_V3_SOURCES}
+    src/AI/OzoneParameterMap.h
+    src/AI/OzoneParameterMap.cpp
+    src/AI/OzonePlanApplicator.h
+    src/AI/OzonePlanApplicator.cpp
+    ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
+    ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )
 
-set(MORPHSNAP_MIDI_SOURCES
+set(MORE_PHI_MIDI_SOURCES
     src/MIDI/MIDIRouter.h
     src/MIDI/MIDIRouter.cpp
 )
 
-set(MORPHSNAP_PRESET_SOURCES
+set(MORE_PHI_PRESET_SOURCES
     src/Preset/MetaPresetManager.h
     src/Preset/MetaPresetManager.cpp
     src/Preset/PresetSerializer.h
@@ -282,9 +341,13 @@ set(MORPHSNAP_PRESET_SOURCES
     src/Preset/CloudSyncClient.cpp
 )
 
-set(MORPHSNAP_UI_SOURCES
-    src/UI/MorphSnapLookAndFeel.h
-    src/UI/MorphSnapLookAndFeel.cpp
+set(MORE_PHI_UI_SOURCES
+    src/UI/MorePhiLookAndFeel.h
+    src/UI/MorePhiLookAndFeel.cpp
+    src/UI/ChatDisplay.h
+    src/UI/ChatDisplay.cpp
+    src/UI/AIChatPanel.h
+    src/UI/AIChatPanel.cpp
     src/UI/MorphPad.h
     src/UI/MorphPad.cpp
     src/UI/SnapFader.h
@@ -325,51 +388,53 @@ set(MORPHSNAP_UI_SOURCES
     src/UI/V2PresetBrowserPanel.cpp
 )
 
-target_sources(MorphSnap PRIVATE
-    ${MORPHSNAP_PLUGIN_SOURCES}
-    ${MORPHSNAP_CORE_SOURCES}
-    ${MORPHSNAP_HOST_SOURCES}
-    ${MORPHSNAP_AI_SOURCES}
-    ${MORPHSNAP_MIDI_SOURCES}
-    ${MORPHSNAP_PRESET_SOURCES}
-    ${MORPHSNAP_UI_SOURCES}
+target_sources(MorePhi PRIVATE
+    ${MORE_PHI_PLUGIN_SOURCES}
+    ${MORE_PHI_CORE_SOURCES}
+    ${MORE_PHI_MASTERING_SOURCES}
+    ${MORE_PHI_HOST_SOURCES}
+    ${MORE_PHI_AI_SOURCES}
+    ${MORE_PHI_MIDI_SOURCES}
+    ${MORE_PHI_PRESET_SOURCES}
+    ${MORE_PHI_UI_SOURCES}
 )
 
-# MSVC occasionally runs out of frontend heap on this large TU in Release builds.
-# Compile it with conservative settings to keep CI deterministic.
+# MSVC occasionally runs out of frontend heap on these large dataset translation units.
+# Compile them with conservative settings to keep CI deterministic.
 if(MSVC)
     set_source_files_properties(
         src/AI/Dataset/MetadataWriter.cpp
+        src/AI/Dataset/MetadataSchema.cpp
         PROPERTIES
             COMPILE_OPTIONS "/bigobj;/Od"
     )
 endif()
 
 # ── Include Paths ─────────────────────────────────────────────────────────────
-target_include_directories(MorphSnap PRIVATE
+target_include_directories(MorePhi PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # ── CLI Executable ────────────────────────────────────────────────────────────
 # CLI only needs core, host, and dataset sources - NOT MCP server code
-set(MORPHSNAP_CLI_SOURCES
+set(MORE_PHI_CLI_SOURCES
     src/CLI/main.cpp
-    ${MORPHSNAP_CORE_SOURCES}
-    ${MORPHSNAP_HOST_SOURCES}
-    ${MORPHSNAP_AI_DATASET_STABLE_SOURCES}
-    ${MORPHSNAP_AI_DATASET_V3_SOURCES}
+    ${MORE_PHI_CORE_SOURCES}
+    ${MORE_PHI_HOST_SOURCES}
+    ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
+    ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )
 
-add_executable(MorphSnapCLI
-    ${MORPHSNAP_CLI_SOURCES}
+add_executable(MorePhiCLI
+    ${MORE_PHI_CLI_SOURCES}
 )
 
 # ── CLI Configuration ─────────────────────────────────────────────────────────
-target_include_directories(MorphSnapCLI PRIVATE
+target_include_directories(MorePhiCLI PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(MorphSnapCLI
+target_link_libraries(MorePhiCLI
     PRIVATE
         juce::juce_audio_basics
         juce::juce_audio_formats
@@ -386,22 +451,22 @@ target_link_libraries(MorphSnapCLI
         juce::juce_recommended_warning_flags
 )
 
-target_compile_definitions(MorphSnapCLI
+target_compile_definitions(MorePhiCLI
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_STANDALONE_APPLICATION=1
         JUCE_PLUGINHOST_VST3=1
-        MORPHSNAP_ENABLE_DATASET_V3=1
+        MORE_PHI_ENABLE_DATASET_V3=1
         JUCE_PUSH_NOTIFICATIONS=0
 )
 
 if(APPLE)
-    target_compile_definitions(MorphSnapCLI PUBLIC JUCE_PLUGINHOST_AU=1)
+    target_compile_definitions(MorePhiCLI PUBLIC JUCE_PLUGINHOST_AU=1)
 endif()
 
 # ── JUCE Modules ──────────────────────────────────────────────────────────────
-target_link_libraries(MorphSnap
+target_link_libraries(MorePhi
     PRIVATE
         juce::juce_audio_basics
         juce::juce_audio_formats
@@ -423,50 +488,50 @@ target_link_libraries(MorphSnap
 )
 
 # ── Compile Definitions ──────────────────────────────────────────────────────
-target_compile_definitions(MorphSnap
+target_compile_definitions(MorePhi
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_PLUGINHOST_VST3=1
-        MORPHSNAP_ENABLE_DATASET_V3=1
+        MORE_PHI_ENABLE_DATASET_V3=1
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
 
 if(APPLE)
-    target_compile_definitions(MorphSnap PUBLIC JUCE_PLUGINHOST_AU=1)
+    target_compile_definitions(MorePhi PUBLIC JUCE_PLUGINHOST_AU=1)
 endif()
 
 # Build-stability defaults are target-scoped so normal CMake options stay explicit.
-morphsnap_apply_build_tuning(MorphSnap)
-morphsnap_apply_build_tuning(MorphSnapCLI)
-if(TARGET MorphSnap_VST3)
-    morphsnap_apply_build_tuning(MorphSnap_VST3)
+more_phi_apply_build_tuning(MorePhi)
+more_phi_apply_build_tuning(MorePhiCLI)
+if(TARGET MorePhi_VST3)
+    more_phi_apply_build_tuning(MorePhi_VST3)
 endif()
-if(TARGET MorphSnap_AU)
-    morphsnap_apply_build_tuning(MorphSnap_AU)
+if(TARGET MorePhi_AU)
+    more_phi_apply_build_tuning(MorePhi_AU)
 endif()
 
 # Keep SIMD tuning scoped to the dedicated implementation file so the rest of
 # the build keeps the current compatibility envelope.
-set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS)
+set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
     if(MSVC)
-        set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS "/arch:AVX2")
+        set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS "/arch:AVX2")
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-        set(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS "-mavx2;-msse4.1")
+        set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS "-mavx2;-msse4.1")
     endif()
 endif()
 
-if(MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS)
+if(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS)
     set_source_files_properties(
         src/Core/SIMDAudio.cpp
-        PROPERTIES COMPILE_OPTIONS "${MORPHSNAP_SIMD_SOURCE_COMPILE_OPTIONS}"
+        PROPERTIES COMPILE_OPTIONS "${MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS}"
     )
 endif()
 
-if(MORPHSNAP_BUILD_TESTS)
+if(MORE_PHI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
