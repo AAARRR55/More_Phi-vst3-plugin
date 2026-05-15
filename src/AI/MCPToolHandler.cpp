@@ -15,10 +15,13 @@
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"
 #include "PluginProfileDB.h"
+#include "TrackAssistantStore.h"
 #include "Dataset/OfflineBatchRenderer.h"
 #include <nlohmann/json.hpp>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -119,7 +122,42 @@ static const ToolDefinition kCoreTools[] = {
     {"mastering.select_candidate", "Select a candidate ID returned by mastering.render_batch.", R"({"type":"object","properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"]})"},
     {"plugin_profile.audit_parameters", "Audit hosted plugin parameters into a versioned profile JSON object.", R"({"type":"object","properties":{}})"},
     {"plugin_profile.get", "Load a saved profile by ID, or audit the current hosted plugin when omitted.", R"({"type":"object","properties":{"profile_id":{"type":"string"}}})"},
-    {"plugin_profile.save", "Audit and save the current hosted plugin profile under the user app-data directory.", R"({"type":"object","properties":{}})"}
+    {"plugin_profile.save", "Audit and save the current hosted plugin profile under the user app-data directory.", R"({"type":"object","properties":{}})"},
+    // ── Ozone Track Assistant tools (guide-aligned) ──────────────────────────
+    {"ozone.track.get_info",
+     "Retrieve session metadata and current mastering status for the hosted Ozone instance. "
+     "Returns track_id (instance-scoped), plugin name, workflow status, current LUFS metrics, "
+     "and created_at timestamp. Optionally includes full status-transition history.",
+     R"({"type":"object","properties":{"track_id":{"type":"string","description":"Optional — session track ID returned by previous ozone.track calls. Omit to query the current hosted instance."},"include_history":{"type":"boolean","default":false}}})"},
+    {"ozone.track.update_status",
+     "Transition the hosted Ozone mastering session through workflow states. "
+     "Valid states: pending_review, in_mastering, mastering_complete, approved, rejected, on_hold. "
+     "A 'reason' is required when setting status to 'rejected' or 'on_hold'.",
+     R"({"type":"object","properties":{"track_id":{"type":"string"},"new_status":{"type":"string","enum":["pending_review","in_mastering","mastering_complete","approved","rejected","on_hold"]},"reason":{"type":"string","maxLength":500}},"required":["new_status"]})"},
+    {"ozone.track.analyze",
+     "Return an audio analysis report for the current mastering session using More-Phi's "
+     "built-in LUFSMeter, TruePeakEstimator, and AutoMasteringEngine. Returns LUFS integrated/"
+     "short-term/momentary, true peak dBTP, dynamic range LRA, per-band gain reduction, "
+     "streaming-target delta, and an AI-generated mastering recommendation. "
+     "analysis_profile: standard | streaming | vinyl_master | broadcast",
+     R"({"type":"object","properties":{"track_id":{"type":"string"},"force_reanalyze":{"type":"boolean","default":false},"analysis_profile":{"type":"string","enum":["standard","streaming","vinyl_master","broadcast"],"default":"standard"}}})"},
+    {"ozone.track.search",
+     "Search More-Phi snapshot slots and mastering sessions by title/status/date. "
+     "Returns a paginated list of tracks compatible with the Ozone Track Assistant JSON schema. "
+     "Each result includes snapshot slot data, current status, and LUFS snapshot if available.",
+     R"({"type":"object","properties":{"query":{"type":"string","maxLength":200},"status_filter":{"type":"array","items":{"type":"string"}},"date_from":{"type":"string","format":"date"},"date_to":{"type":"string","format":"date"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":50,"default":20}}})"},
+    {"ozone_track_get_info",
+     "Retrieve local Track Assistant metadata and status for a More-Phi track.",
+     R"({"type":"object","properties":{"track_id":{"type":"string","pattern":"^trk_[A-Za-z0-9]{20}$"},"include_history":{"type":"boolean","default":false}},"required":["track_id"]})"},
+    {"ozone_track_update_status",
+     "Update a local Track Assistant workflow status.",
+     R"({"type":"object","properties":{"track_id":{"type":"string","pattern":"^trk_[A-Za-z0-9]{20}$"},"new_status":{"type":"string","enum":["pending_review","in_mastering","mastering_complete","approved","rejected","on_hold"]},"reason":{"type":"string","maxLength":500}},"required":["track_id","new_status"]})"},
+    {"ozone_track_analyze",
+     "Analyze a local More-Phi track using current metering and cached render context.",
+     R"({"type":"object","properties":{"track_id":{"type":"string","pattern":"^trk_[A-Za-z0-9]{20}$"},"force_reanalyze":{"type":"boolean","default":false},"analysis_profile":{"type":"string","enum":["standard","streaming","vinyl_master","broadcast"],"default":"standard"}},"required":["track_id"]})"},
+    {"ozone_track_search",
+     "Search local Track Assistant records by title, artist, status, or date range.",
+     R"({"type":"object","properties":{"query":{"type":"string","maxLength":200},"status_filter":{"type":"array","items":{"type":"string","enum":["pending_review","in_mastering","mastering_complete","approved","rejected","on_hold"]}},"date_from":{"type":"string","format":"date"},"date_to":{"type":"string","format":"date"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":50,"default":20}}})"}
 };
 
 static json planToJson(const MultiEffectPlan& plan)
@@ -321,6 +359,16 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     // Ozone mastering tools
     if (method == "get_mastering_state")  return getMasteringState(p);
     if (method == "apply_mastering_plan") return applyMasteringPlan(params, p);
+
+    // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
+    if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
+        return ozoneTrackGetInfo(params, p, identity);
+    if (method == "ozone.track.update_status" || method == "ozone_track_update_status")
+        return ozoneTrackUpdateStatus(params, identity);
+    if (method == "ozone.track.analyze" || method == "ozone_track_analyze")
+        return ozoneTrackAnalyze(params, p, identity);
+    if (method == "ozone.track.search" || method == "ozone_track_search")
+        return ozoneTrackSearch(params, p, identity);
 
     return toJString(json{{"error","unknown_method"}});
 }
@@ -928,6 +976,9 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         gRenderJobs[jobId.toStdString()] = job;
     }
 
+    const auto track = TrackAssistantStore::upsertFileTrack(inputFile, jobId);
+    const auto trackId = track.value("track_id", "");
+
     const int blockSize = juce::jlimit(64, 8192, static_cast<int>(params.getProperty("block_size", 512)));
     const int channels = juce::jlimit(1, 16, static_cast<int>(params.getProperty("channels", 2)));
     const int workers = juce::jlimit(1, 8, static_cast<int>(params.getProperty("parallel_workers", 1)));
@@ -1033,6 +1084,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         {"mode", "offline_file_render"},
         {"job_id", jobId.toStdString()},
         {"status", "queued"},
+        {"track_id", trackId},
         {"input_path", inputFile.getFullPathName().toStdString()},
         {"output_directory", outputDirectory.getFullPathName().toStdString()},
         {"plugin_path", pluginFile.getFullPathName().toStdString()},
@@ -1072,11 +1124,16 @@ juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, M
         {
             if (candidate.id == candidateId)
             {
+                const auto track = TrackAssistantStore::selectCandidateForRenderJob(
+                    job->id, candidateId, candidate.outputPath);
+
                 return toJString(json{
                     {"success", true},
                     {"candidate_id", candidateId.toStdString()},
                     {"selected", true},
                     {"applied", false},
+                    {"track_id", track.value("track_id", "")},
+                    {"track_status", track.value("status", "")},
                     {"output_path", candidate.outputPath.toStdString()},
                     {"render_success", candidate.success},
                     {"peak_db", candidate.peakDb},
@@ -1252,6 +1309,273 @@ juce::String MCPToolHandler::applyMasteringPlan(const juce::var& params, MorePhi
                                     plan.widthCurve[2], plan.widthCurve[3] };
     result["eq_prescription"]   = plan.eqPrescriptionJSON.toStdString();
     return toJString(result);
+}
+
+// ── Ozone Track Assistant helpers ─────────────────────────────────────────────
+
+struct AnalysisProfile { float targetLUFS; float maxTruePeak; const char* name; };
+static AnalysisProfile profileForName(const juce::String& name) noexcept
+{
+    const auto profile = name.toLowerCase();
+    if (profile == "streaming")      return { -14.0f, -1.0f, "streaming" };
+    if (profile == "vinyl_master")   return { -18.0f, -3.0f, "vinyl_master" };
+    if (profile == "broadcast")      return { -23.0f, -1.0f, "broadcast" };
+    return                                  { -14.0f, -1.0f, "standard" };
+}
+
+static double finiteOr(double value, double fallback) noexcept
+{
+    return std::isfinite(value) ? value : fallback;
+}
+
+static std::string makeOzoneRecommendation(const AnalysisProfile& profile,
+                                           double lufsIntegrated,
+                                           double truePeak,
+                                           double dynamicRange)
+{
+    std::string recommendation;
+    const double lufsDelta = lufsIntegrated - profile.targetLUFS;
+    const double peakMargin = truePeak - profile.maxTruePeak;
+
+    if (std::abs(lufsDelta) > 0.5)
+    {
+        char buf[160] = {};
+        std::snprintf(buf, sizeof(buf),
+            "Track is %.1f LUFS %s than the %s target of %.1f LUFS.",
+            std::abs(lufsDelta),
+            lufsDelta > 0.0 ? "louder" : "quieter",
+            profile.name,
+            profile.targetLUFS);
+        recommendation += buf;
+        recommendation += lufsDelta > 0.0
+            ? " Reduce output gain or limiter drive."
+            : " Increase output level or reduce conservative limiting.";
+    }
+
+    if (peakMargin > 0.0)
+    {
+        char buf[160] = {};
+        std::snprintf(buf, sizeof(buf),
+            "%sTrue peak %.1f dBTP exceeds the %.1f dBTP ceiling; reduce limiter ceiling.",
+            recommendation.empty() ? "" : " ",
+            truePeak,
+            profile.maxTruePeak);
+        recommendation += buf;
+    }
+
+    if (dynamicRange < 3.0)
+        recommendation += recommendation.empty()
+            ? "Dynamic range is very low; review compression and limiter drive."
+            : " Dynamic range is very low; review compression and limiter drive.";
+
+    if (recommendation.empty())
+        recommendation = "Track meets the local target levels for the selected profile.";
+
+    return recommendation;
+}
+
+static std::vector<juce::String> statusFilterFromParams(const juce::var& params)
+{
+    std::vector<juce::String> statuses;
+    const auto filterVar = params.getProperty("status_filter", juce::var());
+    if (const auto* array = filterVar.getArray())
+    {
+        for (const auto& value : *array)
+            statuses.push_back(value.toString().trim().toLowerCase());
+    }
+    return statuses;
+}
+
+static juce::String requireTrackId(const juce::var& params, const InstanceIdentity& identity)
+{
+    const auto explicitId = params.getProperty("track_id", "").toString();
+    if (explicitId.isNotEmpty())
+        return explicitId;
+
+    const auto current = TrackAssistantStore::ensureCurrentSessionTrack(identity.instanceId);
+    return juce::String(current.value("track_id", ""));
+}
+
+// ── ozone.track.get_info ─────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::ozoneTrackGetInfo(const juce::var& params,
+                                                MorePhiProcessor& p,
+                                                const InstanceIdentity& identity)
+{
+    const bool includeHistory = params.getProperty("include_history", false);
+    const auto trackId = requireTrackId(params, identity);
+
+    if (!TrackAssistantStore::isValidTrackId(trackId))
+        return toJString(json{{"success", false}, {"error", "invalid_track_id"}});
+
+    auto result = TrackAssistantStore::getInfo(trackId, includeHistory);
+    if (result.value("success", false))
+    {
+        auto* plugin = p.getHostManager().getPlugin();
+        auto& ame = p.getAutoMasteringEngine();
+
+        result["instance_id"] = identity.instanceId.toStdString();
+        result["ozone_hosted"] = plugin != nullptr && OzoneParameterMap::isOzone11(plugin->getName());
+        result["lufs_integrated"] = finiteOr(ame.getLUFSIntegrated(), -100.0);
+        result["lufs_momentary"] = finiteOr(ame.getLUFSMomentary(), -100.0);
+        result["lufs_short_term"] = finiteOr(ame.getLUFSShortTerm(), -100.0);
+        result["true_peak_dbtp"] = finiteOr(ame.getTruePeak_dBTP(), -100.0);
+        result["lra"] = finiteOr(ame.getLRA(), 0.0);
+
+        if (plugin != nullptr)
+        {
+            result["plugin_name"] = plugin->getName().toStdString();
+            result["param_count"] = static_cast<int>(plugin->getParameters().size());
+            result["latency_samples"] = plugin->getLatencySamples();
+        }
+    }
+
+    return toJString(result);
+}
+
+// ── ozone.track.update_status ─────────────────────────────────────────────────
+
+juce::String MCPToolHandler::ozoneTrackUpdateStatus(const juce::var& params,
+                                                     const InstanceIdentity& identity)
+{
+    const auto trackId = requireTrackId(params, identity);
+    const auto newStatusStr = params.getProperty("new_status", "").toString();
+    const auto reason       = params.getProperty("reason", "").toString();
+
+    if (!TrackAssistantStore::isValidTrackId(trackId))
+        return toJString(json{{"success", false}, {"error", "invalid_track_id"}});
+
+    if (!TrackAssistantStore::isValidStatus(newStatusStr))
+        return toJString(json{
+            {"success", false},
+            {"error",   "invalid_status"},
+            {"details", "Valid values: pending_review, in_mastering, mastering_complete, "
+                        "approved, rejected, on_hold"}
+        });
+
+    const auto normalizedStatus = newStatusStr.trim().toLowerCase();
+    if ((normalizedStatus == "rejected" || normalizedStatus == "on_hold")
+         && reason.isEmpty())
+    {
+        return toJString(json{
+            {"success", false},
+            {"error",   "reason_required"},
+            {"details", "A 'reason' must be supplied when setting status to '"
+                        + normalizedStatus.toStdString() + "'."}
+        });
+    }
+
+    return toJString(TrackAssistantStore::updateStatus(trackId, normalizedStatus, reason));
+}
+
+// ── ozone.track.analyze ───────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::ozoneTrackAnalyze(const juce::var& params,
+                                                MorePhiProcessor& p,
+                                                const InstanceIdentity& identity)
+{
+    const auto trackId = requireTrackId(params, identity);
+    const auto profileName    = params.getProperty("analysis_profile", "standard").toString();
+    const bool forceReanalyze = params.getProperty("force_reanalyze", false);
+
+    if (!TrackAssistantStore::isValidTrackId(trackId))
+        return toJString(json{{"success", false}, {"error", "invalid_track_id"}});
+    if (!TrackAssistantStore::isValidAnalysisProfile(profileName))
+        return toJString(json{{"success", false}, {"error", "invalid_analysis_profile"}});
+
+    auto& ame = p.getAutoMasteringEngine();
+
+    if (forceReanalyze)
+    {
+        constexpr int genreIdx = 0;
+        const auto plan = ame.getChainPlanner().executePlan(
+            genreIdx,
+            static_cast<float>(std::max(1.0, finiteOr(ame.getLRA(), 6.0))),
+            0.0f,
+            0.5f);
+        (void)plan;
+    }
+
+    const AnalysisProfile profile = profileForName(profileName);
+    const double lufsInteg = finiteOr(ame.getLUFSIntegrated(), -100.0);
+    const double shortTerm = finiteOr(ame.getLUFSShortTerm(), -100.0);
+    const double momentary = finiteOr(ame.getLUFSMomentary(), -100.0);
+    const double truePeak = finiteOr(ame.getTruePeak_dBTP(), -100.0);
+    const double lra = finiteOr(ame.getLRA(), 0.0);
+    const double dynamicRange = lra;
+    const double lufsDelta = lufsInteg - profile.targetLUFS;
+    const double peakMargin = truePeak - profile.maxTruePeak;
+
+    json grArr = json::array();
+    for (int i = 0; i < 4; ++i)
+        grArr.push_back(finiteOr(ame.getGainReductionDB(i), 0.0));
+
+    auto trackInfo = TrackAssistantStore::getInfo(trackId, true);
+    if (!trackInfo.value("success", false))
+        return toJString(trackInfo);
+
+    json result{
+        {"success", true},
+        {"track_id", trackId.toStdString()},
+        {"title", trackInfo.value("title", "")},
+        {"analysis", {
+            {"source", "more_phi_local_analysis"},
+            {"lufs_integrated", lufsInteg},
+            {"lufs_short_term_max", shortTerm},
+            {"lufs_momentary", momentary},
+            {"true_peak_dbtp", truePeak},
+            {"dynamic_range_db", dynamicRange},
+            {"dynamic_range_lra_db", dynamicRange},
+            {"lra", lra},
+            {"per_band_gr_db", grArr},
+            {"target_lufs", profile.targetLUFS},
+            {"target_true_peak_dbtp", profile.maxTruePeak},
+            {"lufs_delta", lufsDelta},
+            {"peak_margin", peakMargin},
+            {"profile", profile.name},
+            {"ozone_recommendation", makeOzoneRecommendation(profile, lufsInteg, truePeak, dynamicRange)},
+            {"ozone_applicator_active", ame.getChainPlanner().hasOzoneApplicator()},
+            {"analyzed_at", juce::Time::getCurrentTime().toISO8601(true).toStdString()}
+        }}
+    };
+
+    if (trackInfo.contains("latest_render_job_id"))
+        result["analysis"]["latest_render_job_id"] = trackInfo["latest_render_job_id"];
+    if (trackInfo.contains("selected_candidate_id"))
+        result["analysis"]["selected_candidate_id"] = trackInfo["selected_candidate_id"];
+    if (trackInfo.contains("selected_output_path"))
+        result["analysis"]["selected_output_path"] = trackInfo["selected_output_path"];
+
+    TrackAssistantStore::setAnalysis(trackId, result["analysis"]);
+    return toJString(result);
+}
+
+// ── ozone.track.search ────────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::ozoneTrackSearch(const juce::var& params,
+                                               MorePhiProcessor& p,
+                                               const InstanceIdentity& identity)
+{
+    (void)p;
+    TrackAssistantStore::ensureCurrentSessionTrack(identity.instanceId);
+
+    const auto query = params.getProperty("query", "").toString();
+    const auto dateFrom = params.getProperty("date_from", "").toString();
+    const auto dateTo = params.getProperty("date_to", "").toString();
+    const int page = juce::jmax(1, static_cast<int>(params.getProperty("page", 1)));
+    const int pageSize = juce::jlimit(1, 50, static_cast<int>(params.getProperty("page_size", 20)));
+
+    if (!TrackAssistantStore::isValidDate(dateFrom) || !TrackAssistantStore::isValidDate(dateTo))
+        return toJString(json{{"success", false}, {"error", "invalid_date"}});
+
+    const auto statuses = statusFilterFromParams(params);
+    for (const auto& status : statuses)
+    {
+        if (!TrackAssistantStore::isValidStatus(status))
+            return toJString(json{{"success", false}, {"error", "invalid_status_filter"}});
+    }
+
+    return toJString(TrackAssistantStore::search(query, statuses, dateFrom, dateTo, page, pageSize));
 }
 
 } // namespace more_phi

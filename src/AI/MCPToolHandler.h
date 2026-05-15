@@ -43,6 +43,27 @@ private:
      *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
     static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
 
+    // ── Ozone Track Assistant tools (guide-aligned) ──────────────────────────
+
+    /** Tool: ozone.track.get_info — session metadata, mastering status, current LUFS. */
+    static juce::String ozoneTrackGetInfo(const juce::var& params, MorePhiProcessor& p,
+                                          const InstanceIdentity& identity);
+
+    /** Tool: ozone.track.update_status — transition mastering workflow state.
+     *  Valid transitions enforced; reason required for rejected/on_hold. */
+    static juce::String ozoneTrackUpdateStatus(const juce::var& params,
+                                               const InstanceIdentity& identity);
+
+    /** Tool: ozone.track.analyze — return LUFS/dBTP/DR metrics with streaming-target
+     *  comparison and Ozone mastering plan recommendation. */
+    static juce::String ozoneTrackAnalyze(const juce::var& params, MorePhiProcessor& p,
+                                          const InstanceIdentity& identity);
+
+    /** Tool: ozone.track.search — search loaded snapshots/sessions by title or status.
+     *  Returns paginated list compatible with the Track Assistant JSON schema. */
+    static juce::String ozoneTrackSearch(const juce::var& params, MorePhiProcessor& p,
+                                         const InstanceIdentity& identity);
+
     // MCP v1 workflow tools
     static juce::String scanHostedPlugin(const juce::var& params, MorePhiProcessor& p);
     static juce::String loadHostedPlugin(const juce::var& params, MorePhiProcessor& p);
