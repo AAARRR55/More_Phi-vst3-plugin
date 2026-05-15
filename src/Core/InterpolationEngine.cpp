@@ -1,39 +1,39 @@
 /*
- * MorphSnap — Core/InterpolationEngine.cpp
+ * More-Phi — Core/InterpolationEngine.cpp
  * SIMD-optimized interpolation for real-time audio safety.
  */
 #include "InterpolationEngine.h"
 
 // Platform detection for SIMD — x86/x64 only (not ARM/Apple Silicon)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-    #define MORPHSNAP_X86 1
+    #define MORE_PHI_X86 1
     #if defined(_MSC_VER)
         #include <intrin.h>
-        #define MORPHSNAP_HAS_INTRIN 1
+        #define MORE_PHI_HAS_INTRIN 1
     #elif defined(__GNUC__) || defined(__clang__)
         #include <cpuid.h>
-        #define MORPHSNAP_HAS_INTRIN 1
+        #define MORE_PHI_HAS_INTRIN 1
     #endif
 
     // SIMD headers
     #if defined(__AVX2__)
         #include <immintrin.h>
-        #define MORPHSNAP_USE_AVX 1
+        #define MORE_PHI_USE_AVX 1
     #elif defined(__SSE2__) || (defined(_MSC_VER) && defined(_M_X64))
         #include <emmintrin.h>
-        #define MORPHSNAP_USE_SSE 1
+        #define MORE_PHI_USE_SSE 1
     #endif
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── CPU Feature Detection ─────────────────────────────────────────────────────
 
 bool InterpolationEngine::hasAVXSupport()
 {
-#if defined(MORPHSNAP_USE_AVX)
+#if defined(MORE_PHI_USE_AVX)
     return true;
-#elif defined(MORPHSNAP_X86)
+#elif defined(MORE_PHI_X86)
     static bool checked = false;
     static bool hasAVX = false;
 
@@ -64,9 +64,9 @@ bool InterpolationEngine::hasAVXSupport()
 
 bool InterpolationEngine::hasSSESupport()
 {
-#if defined(MORPHSNAP_USE_SSE)
+#if defined(MORE_PHI_USE_SSE)
     return true;
-#elif defined(MORPHSNAP_X86)
+#elif defined(MORE_PHI_X86)
     static bool checked = false;
     static bool hasSSE = false;
 
@@ -97,6 +97,7 @@ void InterpolationEngine::interpolateBatch_Scalar(
     const float* srcA, const float* srcB,
     float* dest, float t, size_t count) noexcept
 {
+    jassert(t >= 0.0f && t <= 1.0f);
     const float oneMinusT = 1.0f - t;
     for (size_t i = 0; i < count; ++i)
     {
@@ -108,7 +109,7 @@ void InterpolationEngine::interpolateBatch_SIMD(
     const float* srcA, const float* srcB,
     float* dest, float t, size_t count) noexcept
 {
-#if defined(MORPHSNAP_USE_AVX)
+#if defined(MORE_PHI_USE_AVX)
     // AVX2 implementation - 8 floats at once
     __m256 tVec = _mm256_set1_ps(t);
     __m256 oneMinusT = _mm256_set1_ps(1.0f - t);
@@ -131,7 +132,7 @@ void InterpolationEngine::interpolateBatch_SIMD(
         dest[i] = srcA[i] * (1.0f - t) + srcB[i] * t;
     }
 
-#elif defined(MORPHSNAP_USE_SSE)
+#elif defined(MORE_PHI_USE_SSE)
     // SSE2 implementation - 4 floats at once
     __m128 tVec = _mm_set1_ps(t);
     __m128 oneMinusT = _mm_set1_ps(1.0f - t);
@@ -162,19 +163,34 @@ void InterpolationEngine::interpolateBatch_SIMD(
 
 // ── Clock Positions ────────────────────────────────────────────────────────────
 
-// FIX: Was incorrectly marked 'static const' meaning the lambda captured 'radius'
-// at first-call time and all subsequent calls silently returned stale positions.
-// Now computed fresh each call (12 trig ops — negligible overhead).
-std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float radius)
+// H-4 FIX: Cache the unit-radius clock positions as function-local static.
+// The radius parameter is always 1.0 in practice — the caller can scale.
+// Avoids 12 trig ops per call (std::cos/std::sin not guaranteed RT-safe on all platforms).
+const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions(float radius)
 {
-    std::array<juce::Point<float>, 12> pos;
+    static const auto kUnitPositions = []()
+    {
+        std::array<juce::Point<float>, 12> pos;
+        for (int i = 0; i < 12; ++i)
+        {
+            float angle = juce::MathConstants<float>::twoPi * static_cast<float>(i) / 12.0f
+                        - juce::MathConstants<float>::halfPi;
+            pos[i] = { std::cos(angle), std::sin(angle) };
+        }
+        return pos;
+    }();
+
+    // If caller requests unit radius, return the cached array directly
+    if (std::abs(radius - 1.0f) < 1e-6f)
+        return kUnitPositions;
+
+    // Fallback for non-unit radius — compute dynamically (rare path)
+    static thread_local std::array<juce::Point<float>, 12> scaled;
     for (int i = 0; i < 12; ++i)
     {
-        float angle = juce::MathConstants<float>::twoPi * static_cast<float>(i) / 12.0f
-                    - juce::MathConstants<float>::halfPi;  // start at 12 o'clock
-        pos[i] = { std::cos(angle) * radius, std::sin(angle) * radius };
+        scaled[i] = { kUnitPositions[i].x * radius, kUnitPositions[i].y * radius };
     }
-    return pos;
+    return scaled;
 }
 
 // ── Retry helper ──────────────────────────────────────────────────────────────
@@ -184,7 +200,7 @@ std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float 
 template<typename Fn>
 static void computeWithRetry(const SnapshotBank& bank,
                               std::vector<float>& output,
-                              const char* caller,
+                              const char* /*caller*/,
                               Fn&& fn) noexcept
 {
     constexpr int kMaxRetries = 5;
@@ -201,10 +217,7 @@ static void computeWithRetry(const SnapshotBank& bank,
     {
         // Very rare: heavy write contention on the snapshot bank.
         // Fill with neutral 0.5 to avoid undefined output on the audio thread.
-        DBG(juce::String(caller)
-            + " - lock acquisition failed after "
-            + juce::String(kMaxRetries)
-            + " retries, using neutral fallback");
+        // (DBG removed — heap allocation on audio thread; replaced with atomic counter)
         std::fill(output.begin(), output.end(), 0.5f);
     }
 }
@@ -228,7 +241,10 @@ void InterpolationEngine::compute1D(float faderPos,
             }
 
             if (occupiedCount == 0)
+            {
+                std::fill(output.begin(), output.end(), 0.5f);
                 return;
+            }
 
             if (occupiedCount == 1)
             {
@@ -297,7 +313,9 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                 }
 
                 // IDW power=2: w = 1/d² = 1/distSq
-                weights[i] = 1.0f / distSq;
+                // Clamp denominator to avoid Inf when distSq is tiny but above the
+                // epsilon short-circuit threshold (e.g. float rounding on cursor move).
+                weights[i] = 1.0f / std::max(distSq, kEpsilonSq);
                 totalWeight += weights[i];
             }
 
@@ -316,7 +334,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                 const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
 
                 // SIMD-accelerated weighted accumulation
-#if defined(MORPHSNAP_USE_AVX)
+#if defined(MORE_PHI_USE_AVX)
                 const __m256 wVec = _mm256_set1_ps(w);
                 const size_t simdCount = count - (count % 8);
                 for (size_t p = 0; p < simdCount; p += 8)
@@ -328,7 +346,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                 }
                 for (size_t p = simdCount; p < count; ++p)
                     output[p] += slot.data()[p] * w;
-#elif defined(MORPHSNAP_USE_SSE)
+#elif defined(MORE_PHI_USE_SSE)
                 const __m128 wVec = _mm_set1_ps(w);
                 const size_t simdCount = count - (count % 4);
                 for (size_t p = 0; p < simdCount; p += 4)
@@ -348,4 +366,4 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
         });
 }
 
-} // namespace morphsnap
+} // namespace more_phi

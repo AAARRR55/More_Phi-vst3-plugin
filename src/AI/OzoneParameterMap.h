@@ -22,6 +22,8 @@
 
 namespace more_phi {
 
+class IParameterBridge;
+
 /** Per-band EQ parameter index bundle for one Ozone EQ band. */
 struct OzoneEQBandMap
 {

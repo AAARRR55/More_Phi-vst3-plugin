@@ -19,7 +19,7 @@
 #include <windows.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * WorkerPool — Configurable thread pool that drains a TaskQueue.
@@ -154,4 +154,4 @@ private:
     std::function<void(const std::string&)> errorHandler_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

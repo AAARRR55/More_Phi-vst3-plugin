@@ -1,4 +1,4 @@
-/* MorphSnap — UI/V2PresetBrowserPanel.cpp
+/* More-Phi — UI/V2PresetBrowserPanel.cpp
  * Implementation of V2PresetBrowserPanel and its PresetListModel.
  * MESSAGE THREAD ONLY — all public methods must be called on the JUCE
  * message thread. PresetLibrary is non-reentrant. */
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PresetListModel
@@ -78,10 +78,14 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
                                            : juce::String("  " + entry->author);
 
         // Measure name width to position author inline
-        juce::Font boldFont(juce::FontOptions(12.5f, juce::Font::bold));
-        juce::Font dimFont (juce::FontOptions(11.0f, juce::Font::plain));
+        juce::Font boldFont(juce::FontOptions("Segoe UI", 12.5f, juce::Font::bold));
+        juce::Font dimFont (juce::FontOptions("Segoe UI", 11.0f, juce::Font::plain));
 
-        const int nameW = static_cast<int>(boldFont.getStringWidthFloat(nameStr)) + 1;
+        juce::GlyphArrangement ga;
+        ga.addLineOfText(boldFont, nameStr, 0.0f, 0.0f);
+        const int nameW = ga.getNumGlyphs() > 0
+            ? static_cast<int>(ga.getBoundingBox(0, ga.getNumGlyphs(), true).getWidth()) + 1
+            : 0;
         const int availW = textRight - kPadLeft;
 
         g.setFont(boldFont);
@@ -119,7 +123,7 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
             joined += entry->tags[i];
         }
 
-        juce::Font tagFont(juce::FontOptions(10.0f, juce::Font::plain));
+        juce::Font tagFont(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain));
         g.setFont(tagFont);
         g.setColour(juce::Colour(colTags));
         g.drawText(juce::String(joined),
@@ -173,13 +177,13 @@ void PresetListModel::drawStars(juce::Graphics& g, int rating,
 // V2PresetBrowserPanel — Construction / Destruction
 // ═══════════════════════════════════════════════════════════════════════════════
 
-V2PresetBrowserPanel::V2PresetBrowserPanel(MorphSnapProcessor& processor)
+V2PresetBrowserPanel::V2PresetBrowserPanel(MorePhiProcessor& processor)
     : proc_(processor)
 {
     // ── Initialise library ────────────────────────────────────────────────────
     presetLibrary_.initialize(
         juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-            .getChildFile("MorphSnap").getChildFile("Presets"));
+            .getChildFile("More-Phi").getChildFile("Presets"));
 
     // ── Pass colours to the list model ────────────────────────────────────────
     listModel_.colBackground = juce::Colour(kBackground);
@@ -654,4 +658,4 @@ void V2PresetBrowserPanel::onExportClicked()
         });
 }
 
-} // namespace morphsnap
+} // namespace more_phi

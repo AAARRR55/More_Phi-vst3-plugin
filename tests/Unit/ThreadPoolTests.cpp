@@ -6,7 +6,7 @@
 
 TEST_CASE("ThreadPool executes tasks concurrently", "[ThreadPool]")
 {
-    morphsnap::ThreadPool pool(4);
+    more_phi::ThreadPool pool(4);
     std::atomic<int> counter{0};
 
     // Submit 8 tasks that increment counter

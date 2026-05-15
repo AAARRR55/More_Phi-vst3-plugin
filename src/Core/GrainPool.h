@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/GrainPool.h
+ * More-Phi — Core/GrainPool.h
  *
  * Pre-allocated pool of granular synthesis grains with a pre-computed
  * Hann envelope. Designed for zero-allocation use on the audio thread
@@ -34,7 +34,7 @@
   #define M_PI 3.14159265358979323846
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * A single granular synthesis grain.
@@ -260,4 +260,4 @@ private:
     int maxGrainSamples_ = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests: Granular Morph Engine (V2)
+ * More-Phi — Unit Tests: Granular Morph Engine (V2)
  *
  * Catch2 v3 test suite for V2 granular processing subsystems.
  *
@@ -32,7 +32,7 @@
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
-using namespace morphsnap::test;
+using namespace more_phi::test;
 
 // =============================================================================
 //  DSP Helpers

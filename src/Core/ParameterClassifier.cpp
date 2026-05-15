@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ParameterClassifier.cpp
+ * More-Phi — Core/ParameterClassifier.cpp
  * Parameter classification and Learn Mode implementation.
  */
 #include "ParameterClassifier.h"
@@ -11,7 +11,7 @@
 #include <chrono>
 #include <sstream>
 
-namespace morphsnap {
+namespace more_phi {
 
 ParameterClassifier::ParameterClassifier()
 {
@@ -501,10 +501,10 @@ float ParameterClassifier::calculateImportance(const ParameterMetadata& meta) co
     // Recency weight
     if (learnConfig_.prioritizeRecent && meta.lastModified > 0)
     {
-        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-        const auto age = now - meta.lastModified;
+        const auto now = static_cast<int64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        const auto age = static_cast<int64_t>(now - meta.lastModified);
         // Higher score for recent modifications (decay over time)
-        const float recencyBonus = 0.2f * std::exp(-static_cast<double>(age) / 3600000000000.0); // 1 hour half-life
+        const float recencyBonus = 0.2f * std::exp(-static_cast<double>(age) / 3600000000000.0f); // 1 hour half-life
         score += recencyBonus;
     }
     
@@ -638,4 +638,4 @@ void ParameterClassifier::deserialize(const uint8_t* data, size_t size)
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,10 +1,10 @@
-/* MorphSnap — UI/MacroKnobStrip.cpp */
+/* More-Phi — UI/MacroKnobStrip.cpp */
 #include "MacroKnobStrip.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-MacroKnobStrip::MacroKnobStrip(MorphSnapProcessor& p) : proc_(p)
+MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
 {
     for (int i = 0; i < 8; ++i)
     {
@@ -15,12 +15,21 @@ MacroKnobStrip::MacroKnobStrip(MorphSnapProcessor& p) : proc_(p)
         knobs_[i].onValueChange = [this, i]()
         {
             if (!syncing_)
-                proc_.enqueueParameterSet(
+            {
+                const bool success = proc_.enqueueParameterSet(
                     i, static_cast<float>(knobs_[i].getValue()));
+
+                // Warn if command queue is full (parameter change dropped)
+                if (!success)
+                {
+                    DBG("MorePhi: WARNING - Command queue overflow, macro knob " +
+                        juce::String(i) + " change dropped");
+                }
+            }
         };
         addAndMakeVisible(knobs_[i]);
 
-        labels_[i].setFont(juce::Font(juce::FontOptions(9.0f)));
+        labels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 8.0f, juce::Font::plain)));
         labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff888888));
         labels_[i].setJustificationType(juce::Justification::centred);
         labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);
@@ -37,7 +46,7 @@ void MacroKnobStrip::resized()
     for (int i = 0; i < 8; ++i)
     {
         auto col = b.removeFromLeft(w);
-        labels_[i].setBounds(col.removeFromBottom(14));
+        labels_[i].setBounds(col.removeFromBottom(16));
         knobs_[i].setBounds(col.reduced(2));
     }
 }
@@ -67,17 +76,17 @@ void MacroKnobStrip::syncKnobsToPlugin()
         {
             knobs_[i].setValue(bridge.getParameterNormalized(i),
                                juce::dontSendNotification);
-            labels_[i].setText(bridge.getParameterName(i).substring(0, 10),
+            labels_[i].setText(bridge.getParameterName(i),
                                 juce::dontSendNotification);
             knobs_[i].setEnabled(true);
         }
         else
         {
             knobs_[i].setEnabled(false);
-            labels_[i].setText("—", juce::dontSendNotification);
+            labels_[i].setText("-", juce::dontSendNotification);
         }
     }
     syncing_ = false;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,7 +1,7 @@
 /*
- * MorphSnap — AI/InstanceRegistry.h
+ * More-Phi — AI/InstanceRegistry.h
  * Thread-safe singleton managing active plugin instances.
- * Handles port allocation and instance lifecycle across all MorphSnap instances.
+ * Handles port allocation and instance lifecycle across all MorePhi instances.
  */
 #pragma once
 
@@ -11,7 +11,7 @@
 #include <optional>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 class InstanceRegistry
 {
@@ -54,4 +54,4 @@ private:
     std::map<juce::String, InstanceIdentity> instances_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

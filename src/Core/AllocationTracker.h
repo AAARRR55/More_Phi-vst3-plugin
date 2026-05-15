@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/AllocationTracker.h
+ * More-Phi — Core/AllocationTracker.h
  * Debug-only allocation tracking for audio thread safety verification.
  *
  * USAGE:
@@ -13,20 +13,19 @@
 #pragma once
 
 #include <atomic>
-#include <cstdio>
 
-#if JUCE_DEBUG && MORPHSNAP_TRACK_ALLOCATIONS
-    #define MORPHSNAP_TRACK_ALLOC 1
+#if JUCE_DEBUG && MORE_PHI_TRACK_ALLOCATIONS
+    #define MORE_PHI_TRACK_ALLOC 1
 #else
-    #define MORPHSNAP_TRACK_ALLOC 0
+    #define MORE_PHI_TRACK_ALLOC 0
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 class AllocationTracker
 {
 public:
-#if MORPHSNAP_TRACK_ALLOC
+#if MORE_PHI_TRACK_ALLOC
 
     static void beginAudioCallback()
     {
@@ -43,13 +42,10 @@ public:
         return inAudioCallback_.load(std::memory_order_relaxed);
     }
 
-    static void recordAllocation(size_t size, const char* location)
+    static void recordAllocation(size_t /*size*/, const char* /*location*/)
     {
         if (isInAudioCallback())
         {
-            std::fprintf(stderr,
-                "[ALLOCATION WARNING] Audio thread allocated %zu bytes at %s\n",
-                size, location ? location : "unknown");
             allocationCount_.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -84,7 +80,7 @@ public:
 
 // ── Custom new/delete operators (debug only) ────────────────────────────────────
 
-#if MORPHSNAP_TRACK_ALLOC
+#if MORE_PHI_TRACK_ALLOC
 
 // Override global new/delete to track allocations
 // Note: This is intrusive and may conflict with JUCE's memory management
@@ -102,20 +98,8 @@ inline void tracked_delete(void* ptr)
 }
 
 // Macros for location-aware allocation
-#define MORPHSNAP_NEW new(__FILE__, __LINE__)
+#define MORE_PHI_NEW tracked_new(__FILE__, __LINE__)
 
-// Placement new overloads (optional)
-inline void* operator new(size_t size, const char* file, int line)
-{
-    AllocationTracker::recordAllocation(size, file);
-    return std::malloc(size);
-}
+#endif // MORE_PHI_TRACK_ALLOC
 
-inline void operator delete(void* ptr, const char*, int)
-{
-    std::free(ptr);
-}
-
-#endif // MORPHSNAP_TRACK_ALLOC
-
-} // namespace morphsnap
+} // namespace more_phi

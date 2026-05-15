@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/ModeBar.h
+ * More-Phi — UI/ModeBar.h
  * Physics mode toggles: Direct | Elastic | Drift + physics knobs.
  */
 #pragma once
@@ -7,15 +7,15 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class ModeBar : public juce::Component,
                 private juce::Button::Listener
 {
 public:
-    explicit ModeBar(MorphSnapProcessor& p);
+    explicit ModeBar(MorePhiProcessor& p);
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -28,12 +28,13 @@ private:
     void buttonClicked(juce::Button* b) override;
     void updateSelection();
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     std::array<juce::TextButton, 3> modeButtons_;
     int currentMode_ = 0;
 
     juce::Slider smoothSlider_;
     juce::Label  smoothLabel_;
+    bool smoothingGestureActive_ = false;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

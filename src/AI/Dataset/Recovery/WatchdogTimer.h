@@ -8,7 +8,7 @@
 #include <condition_variable>
 #include <string>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * WatchdogTimer — Detects and recovers from hung worker threads.
@@ -132,4 +132,4 @@ private:
     Clock::time_point lastKick_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

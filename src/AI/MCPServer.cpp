@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/MCPServer.cpp
+ * More-Phi — AI/MCPServer.cpp
  * Multi-instance MCP server with bearer auth, morph identity,
  * and automatic error recovery.
  *
@@ -13,12 +13,12 @@
 #include <nlohmann/json.hpp>
 #include <exception>
 
-namespace morphsnap {
+namespace more_phi {
 
 using json = nlohmann::json;
 
-MCPServer::MCPServer(MorphSnapProcessor& processor)
-    : juce::Thread("MorphSnap-MCP"), processor_(processor)
+MCPServer::MCPServer(MorePhiProcessor& processor)
+    : juce::Thread("MorePhi-MCP"), processor_(processor)
 {
     // Identity will be fully set via setIdentity() before startServer()
 }
@@ -34,177 +34,97 @@ void MCPServer::startServer(int port)
     port_ = (identity_.port > 0) ? identity_.port : port;
     errorCount_.store(0);
     healthy_.store(false);
+
+    if (port_ <= 0)
+    {
+        recordStartupFailure("No valid MCP port assigned");
+        return;
+    }
+
+    if (!startThread())
+        recordStartupFailure("Failed to start MCP server thread");
+}
+
+void MCPServer::recordStartupFailure(const juce::String& details)
+{
+    healthy_.store(false);
+    logError("startup", details);
+}
+
+MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingSocket* socket)
+    : Thread("MCP-Connection"), owner_(owner), socket_(socket)
+{
     startThread();
 }
 
-void MCPServer::stopServer()
+MCPServer::ConnectionThread::~ConnectionThread()
 {
-    healthy_.store(false);
-    signalThreadShouldExit();
-    serverSocket_.close();
-    stopThread(3000);
-}
-
-void MCPServer::run()
-{
-    int bindAttempts = 0;
-    constexpr int MAX_BIND_ATTEMPTS = 3;
-
-    while (!threadShouldExit())
+    signalExit();
+    // m-4 FIX: Reduce timeout from 1000ms to 500ms, and force socket close
+    // if the thread doesn't exit to avoid blocking plugin unload.
+    if (!stopThread(500))
     {
-        // Attempt to create listener with retry
-        if (!serverSocket_.createListener(port_, "127.0.0.1"))
-        {
-            bindAttempts++;
-            logError("bind", "Failed to bind port " + juce::String(port_) +
-                     " (attempt " + juce::String(bindAttempts) + "/" +
-                     juce::String(MAX_BIND_ATTEMPTS) + ")");
-
-            if (bindAttempts >= MAX_BIND_ATTEMPTS)
-            {
-                DBG("MCP Instance [" + identity_.morphCode + "]: port binding failed after " +
-                    juce::String(MAX_BIND_ATTEMPTS) + " attempts, giving up");
-                return;
-            }
-
-            // Wait before retry
-            wait(RECOVERY_DELAY_MS);
-            continue;
-        }
-
-        // Successfully bound
-        bindAttempts = 0;
-        healthy_.store(true);
-
-        DBG("MCP Instance [" + identity_.morphCode + "] listening on port " + juce::String(port_));
-
-        // Main accept loop
-        int consecutiveErrors = 0;
-
-        while (!threadShouldExit())
-        {
-            try
-            {
-                // Poll with timeout so we can respond to threadShouldExit() promptly.
-                // waitUntilReady(true, 500) blocks at most 500 ms before returning:
-                //   > 0 : socket is readable — a connection is pending
-                //   = 0 : timeout expired, no connection yet
-                //   < 0 : error
-                const int readyResult = serverSocket_.waitUntilReady(true, 500);
-
-                if (threadShouldExit())
-                    break;
-
-                if (readyResult < 0)
-                {
-                    // Socket error — treat as disconnection and attempt recovery
-                    logError("accept", "Server socket error during poll, attempting recovery");
-                    healthy_.store(false);
-                    break;
-                }
-
-                if (readyResult == 0)
-                    continue;  // Timeout: no connection yet, loop & re-check exit flag
-
-                // A connection is pending — accept it
-                auto* client = serverSocket_.waitForNextConnection();
-                if (threadShouldExit())
-                {
-                    delete client;
-                    break;
-                }
-
-                if (client)
-                {
-                    handleConnection(client);
-                    consecutiveErrors = 0;  // Reset on successful connection
-                }
-                else if (!serverSocket_.isConnected())
-                {
-                    // Socket was closed, need to rebind
-                    logError("accept", "Server socket disconnected, attempting recovery");
-                    healthy_.store(false);
-                    break;
-                }
-            }
-            catch (const std::exception& e)
-            {
-                consecutiveErrors++;
-                logError("connection", juce::String("Exception: ") + e.what());
-
-                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
-                {
-                    logError("connection", "Too many consecutive errors, restarting listener");
-                    healthy_.store(false);
-                    break;
-                }
-            }
-            catch (...)
-            {
-                consecutiveErrors++;
-                logError("connection", "Unknown exception in accept loop");
-
-                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
-                {
-                    healthy_.store(false);
-                    break;
-                }
-            }
-        }
-
-        // Cleanup before potential retry
-        serverSocket_.close();
-
-        if (!threadShouldExit())
-        {
-            // Wait before attempting to rebind
-            wait(RECOVERY_DELAY_MS);
-        }
+        // Force socket close to unblock any pending read
+        if (socket_) socket_->close();
+        stopThread(100);  // Brief final wait
     }
-
-    healthy_.store(false);
 }
 
-void MCPServer::handleConnection(juce::StreamingSocket* client)
+void MCPServer::ConnectionThread::signalExit()
 {
-    connectedClients_++;
-    std::unique_ptr<juce::StreamingSocket> conn(client);
+    signalThreadShouldExit();
+    if (socket_) socket_->close();
+}
 
+void MCPServer::ConnectionThread::run()
+{
+    owner_.connectedClients_++;
     juce::String buffer;
     char chunk[4096];
     bool writeError = false;
-    bool authenticated = false;  // Per-connection auth state
     int readErrors = 0;
     constexpr int MAX_READ_ERRORS = 3;
+    constexpr int MAX_REQUEST_BYTES = 256 * 1024;
 
-    while (!threadShouldExit() && conn->isConnected() && !writeError)
+    while (!threadShouldExit() && socket_->isConnected() && !writeError)
     {
         try
         {
-            const int ready = conn->waitUntilReady(true, 500);
+            const int ready = socket_->waitUntilReady(true, 500);
             if (ready < 0)
             {
                 readErrors++;
-                if (readErrors >= MAX_READ_ERRORS)
-                    break;
+                if (readErrors >= MAX_READ_ERRORS) break;
                 continue;
             }
             if (ready == 0)
             {
-                readErrors = 0;  // Reset on successful poll
+                readErrors = 0;
                 continue;
             }
 
-            const int bytesRead = conn->read(chunk, sizeof(chunk) - 1, false);
-            if (bytesRead <= 0)
+            const int bytesRead = socket_->read(chunk, sizeof(chunk) - 1, false);
+            if (bytesRead == 0) break;   // Graceful close
+            if (bytesRead < 0)
             {
-                // Connection closed or error
+                owner_.logError("connection", "Socket read error; closing connection");
                 break;
             }
 
-            readErrors = 0;  // Reset on successful read
+            readErrors = 0;
             chunk[bytesRead] = '\0';
             buffer += juce::String::fromUTF8(chunk, bytesRead);
+
+            if (buffer.getNumBytesAsUTF8() > MAX_REQUEST_BYTES)
+            {
+                owner_.logError("request", "Request exceeded max size; closing connection");
+                juce::String response = juce::String(
+                    json{{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Request too large"}}},{"id",nullptr}}.dump());
+                response += "\n";
+                socket_->write(response.toRawUTF8(), static_cast<int>(response.getNumBytesAsUTF8()));
+                writeError = true;
+                break;
+            }
 
             while (buffer.isNotEmpty())
             {
@@ -219,9 +139,7 @@ void MCPServer::handleConnection(juce::StreamingSocket* client)
                 else
                 {
                     auto testParse = juce::JSON::parse(buffer);
-                    if (testParse.isVoid())
-                        break;
-
+                    if (testParse.isVoid()) break;
                     message = buffer.trim();
                     buffer.clear();
                 }
@@ -229,44 +147,138 @@ void MCPServer::handleConnection(juce::StreamingSocket* client)
                 if (message.isEmpty()) continue;
 
                 juce::String response;
-                try
-                {
-                    response = processRequest(message, authenticated);
-                }
-                catch (const std::exception& e)
-                {
-                    logError("request", juce::String("Exception processing request: ") + e.what());
-                    response = juce::String(
-                        json{{"jsonrpc","2.0"},{"error",{{"code",-32603},{"message","Internal error"}}},{"id",nullptr}}.dump());
-                }
-                catch (...)
-                {
-                    logError("request", "Unknown exception processing request");
-                    response = juce::String(
-                        json{{"jsonrpc","2.0"},{"error",{{"code",-32603},{"message","Internal error"}}},{"id",nullptr}}.dump());
+                try {
+                    response = owner_.processRequest(message, authenticated_);
+                } catch (const std::exception& e) {
+                    owner_.logError("request", juce::String("Exception processing request: ") + e.what());
+                    response = juce::String(json{{"jsonrpc","2.0"},{"error",{{"code",-32603},{"message","Internal error"}}},{"id",nullptr}}.dump());
                 }
 
                 response += "\n";
+                {
+                    const char* ptr = response.toRawUTF8();
+                    int remaining = static_cast<int>(response.getNumBytesAsUTF8());
+                    while (remaining > 0)
+                    {
+                        const int n = socket_->write(ptr, remaining);
+                        if (n < 0) { writeError = true; break; }
+                        ptr += n;
+                        remaining -= n;
+                    }
+                }
 
-                const int written = conn->write(
-                    response.toRawUTF8(),
-                    static_cast<int>(response.getNumBytesAsUTF8()));
-
-                if (written < 0) { writeError = true; break; }
+                if (threadShouldExit()) break;
             }
         }
-        catch (const std::exception& e)
-        {
-            logError("handleConnection", juce::String("Exception: ") + e.what());
-            break;
-        }
-        catch (...)
-        {
-            logError("handleConnection", "Unknown exception");
-            break;
-        }
+        catch (...) { break; }
     }
-    connectedClients_--;
+    owner_.connectedClients_--;
+}
+
+void MCPServer::stopServer()
+{
+    healthy_.store(false);
+    signalThreadShouldExit();
+    serverSocket_.close();
+
+    // Signal all connections to exit
+    {
+        const juce::ScopedLock lock(connectionsLock_);
+        for (auto* conn : activeConnections_)
+            conn->signalExit();
+    }
+
+    // H-8 FIX: Reduced from 3000ms to 500ms. If called from message thread
+    // during plugin shutdown, a 3s block freezes the host. Force-close the
+    // socket above already unblocks any blocking accept() call.
+    stopThread(500);
+
+    // Final cleanup of remaining connections
+    const juce::ScopedLock lock(connectionsLock_);
+    activeConnections_.clear();
+}
+
+void MCPServer::run()
+{
+    int bindAttempts = 0;
+    while (!threadShouldExit())
+    {
+        if (!createServerListener())
+        {
+            bindAttempts++;
+            logError("bind", "Failed to bind port " + juce::String(port_));
+            if (bindAttempts >= MAX_BIND_ATTEMPTS)
+            {
+                healthy_.store(false);
+                return;
+            }
+            wait(RECOVERY_DELAY_MS);
+            continue;
+        }
+
+        bindAttempts = 0;
+        healthy_.store(true);
+        int consecutiveErrors = 0;
+
+        while (!threadShouldExit())
+        {
+            // 1. Periodic cleanup of disconnected threads
+            {
+                const juce::ScopedLock lock(connectionsLock_);
+                for (int i = activeConnections_.size(); --i >= 0;)
+                {
+                    if (!activeConnections_[i]->isThreadRunning())
+                        activeConnections_.remove(i);
+                }
+            }
+
+            try
+            {
+                const int readyResult = serverSocket_.waitUntilReady(true, 500);
+                if (threadShouldExit()) break;
+                if (readyResult < 0) break;
+                if (readyResult == 0) continue;
+
+                auto* client = serverSocket_.waitForNextConnection();
+                if (client)
+                {
+                    if (!client->isLocal())
+                    {
+                        delete client;
+                        logError("connection", "Rejected non-local MCP client");
+                        continue;
+                    }
+
+                    const juce::ScopedLock lock(connectionsLock_);
+                    // M-6 FIX: Enforce max connection limit to prevent resource exhaustion.
+                    if (activeConnections_.size() >= MAX_CONNECTIONS)
+                    {
+                        delete client;  // Reject connection
+                        logError("connection",
+                            "Rejected: max connections reached (" + juce::String(MAX_CONNECTIONS) + ")");
+                        continue;
+                    }
+                    activeConnections_.add(new ConnectionThread(*this, client));
+                    consecutiveErrors = 0;
+                }
+            }
+            catch (...)
+            {
+                if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) break;
+            }
+        }
+        serverSocket_.close();
+        if (!threadShouldExit()) wait(RECOVERY_DELAY_MS);
+    }
+    healthy_.store(false);
+}
+
+bool MCPServer::createServerListener()
+{
+    if (serverSocket_.createListener(port_, "127.0.0.1"))
+        return true;
+
+    return serverSocket_.createListener(port_, {});
 }
 
 juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& authenticated)
@@ -308,7 +320,8 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
             authenticated = true;
 
             json result = {
-                {"serverInfo", {{"name","MorphSnap MCP"},{"version","1.0"}}},
+                {"serverInfo", {{"name","More-Phi MCP"},{"version","1.0"}}},
+                {"capabilities", {{"tools", {{"listChanged", false}}}}},
                 {"instanceId", identity_.instanceId.toStdString()},
                 {"morphCode",  identity_.morphCode.toStdString()},
                 {"port",       port_}
@@ -331,9 +344,26 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
 
     // ── Dispatch to tool handler ──────────────────────────────────────────────
     juce::String toolResult;
+    const bool isToolsCall = method == "tools/call";
     try
     {
-        toolResult = dispatchTool(method, params);
+        if (method == "tools/list")
+        {
+            toolResult = MCPToolHandler::getToolList();
+        }
+        else if (isToolsCall)
+        {
+            const auto toolName = params.getProperty("name", "").toString();
+            if (toolName.isEmpty())
+                return errResponse(-32602, "tools/call missing tool name");
+
+            const auto arguments = params.getProperty("arguments", juce::var(new juce::DynamicObject()));
+            toolResult = dispatchTool(toolName, arguments);
+        }
+        else
+        {
+            toolResult = dispatchTool(method, params);
+        }
     }
     catch (const std::exception& e)
     {
@@ -352,15 +382,48 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
 
     // Embed the tool result (valid JSON from MCPToolHandler) into the JSON-RPC envelope.
     // Parsing it back avoids double-escaping and ensures correct structural embedding.
+    // M-3 FIX: If parse fails, log the error and return a proper error response instead
+    // of silently embedding a raw string that the client can't interpret.
     json resultEmbedded;
     try
     {
         resultEmbedded = json::parse(toolResult.toStdString());
     }
+    catch (const json::parse_error& e)
+    {
+        logError("JSON embed",
+            juce::String("Tool handler returned invalid JSON for ") + method
+            + ": " + juce::String(e.what()).substring(0, 200));
+        // Return a proper error response rather than silently embedding bad data.
+        // This helps clients detect and report handler bugs.
+        return errResponse(-32603,
+            std::string("Tool handler returned invalid JSON: ") + method.toStdString());
+    }
     catch (...)
     {
-        // Shouldn't happen — treat as raw string if parse fails
-        resultEmbedded = toolResult.toStdString();
+        logError("JSON embed", juce::String("Unexpected error parsing tool result for ") + method);
+        return errResponse(-32603, std::string("Internal error processing tool result: ") + method.toStdString());
+    }
+
+    if (isToolsCall)
+    {
+        const bool isError = resultEmbedded.contains("error")
+            || (resultEmbedded.contains("success") && resultEmbedded["success"].is_boolean()
+                && !resultEmbedded["success"].get<bool>());
+
+        json toolEnvelope{
+            {"content", json::array({
+                {
+                    {"type", "text"},
+                    {"text", resultEmbedded.dump()}
+                }
+            })},
+            {"structuredContent", resultEmbedded},
+            {"isError", isError}
+        };
+
+        return juce::String(
+            json{{"jsonrpc","2.0"},{"result",toolEnvelope},{"id",reqId}}.dump());
     }
 
     return juce::String(
@@ -374,17 +437,27 @@ bool MCPServer::validateAuth(const juce::var& params)
         auto token = params.getProperty("bearer_token", "").toString();
         if (token.isEmpty()) return false;
 
-        // Constant-time comparison: always compare all bytes regardless of
-        // where a mismatch occurs, preventing timing-based token enumeration.
         const std::string candidate = token.toStdString();
         const std::string expected  = identity_.bearerToken.toStdString();
 
-        volatile uint8_t diff = static_cast<uint8_t>(candidate.size() ^ expected.size());
-        const size_t len = std::min(candidate.size(), expected.size());
-        for (size_t i = 0; i < len; ++i)
-            diff |= static_cast<uint8_t>(candidate[i] ^ expected[i]);
+        // M-11 FIX: Constant-time comparison — always compare to the longer of
+        // the two strings so timing doesn't leak the expected token length.
+        // If lengths differ, xor the extra bytes with a non-zero constant so
+        // the loop always runs the same number of iterations for a given expected length.
+        const size_t compareLen = std::max(candidate.size(), expected.size());
 
-        return (diff == 0) && (candidate.size() == expected.size());
+        volatile uint8_t diff = 0;
+        for (size_t i = 0; i < compareLen; ++i)
+        {
+            const uint8_t c = (i < candidate.size()) ? static_cast<uint8_t>(candidate[i]) : 0xFF;
+            const uint8_t e = (i < expected.size())  ? static_cast<uint8_t>(expected[i])  : 0xFF;
+            diff = static_cast<uint8_t>(diff | (c ^ e));
+        }
+
+        // Explicit volatile read prevents the compiler from forwarding
+        // the last written value without a load.
+        const volatile uint8_t result = diff;
+        return result == 0;
     }
     catch (...)
     {
@@ -406,4 +479,4 @@ void MCPServer::logError(const juce::String& context, const juce::String& detail
         ": " + details + " (total errors: " + juce::String(errorCount_.load()) + ")");
 }
 
-} // namespace morphsnap
+} // namespace more_phi

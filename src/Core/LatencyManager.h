@@ -1,10 +1,10 @@
 /*
- * MorphSnap — docs/AudioEngineSpec_v2.md (rendered as a header for
+ * More-Phi — docs/AudioEngineSpec_v2.md (rendered as a header for
  * discoverability; actual spec text is in docs/AudioEngineSpec_v2.md)
  *
- * MorphSnap — Core/LatencyManager.h
+ * More-Phi — Core/LatencyManager.h
  *
- * Centralizes all latency bookkeeping for MorphSnapProcessor.
+ * Centralizes all latency bookkeeping for MorePhiProcessor.
  * Reports the correct total latency to the DAW via setLatencySamples().
  *
  * Total latency equation:
@@ -21,7 +21,7 @@
 #include <atomic>
 #include <algorithm>
 
-namespace morphsnap {
+namespace more_phi {
 
 class LatencyManager
 {
@@ -58,6 +58,17 @@ public:
         recompute();
     }
 
+    /**
+     * Latency introduced by the mastering chain lookahead (BrickwallLimiter).
+     * = 4 ms lookahead in samples at the current sample rate.
+     * E.g. 192 samples @ 48 kHz.
+     */
+    void setMasteringChainLatency(int samples) noexcept
+    {
+        masteringChainLatency_.store(std::max(0, samples), std::memory_order_relaxed);
+        recompute();
+    }
+
     // ─── Getter (any thread) ──────────────────────────────────────────────
 
     /** Total reported latency in samples. Feed directly to setLatencySamples(). */
@@ -66,23 +77,26 @@ public:
         return total_.load(std::memory_order_relaxed);
     }
 
-    [[nodiscard]] int getOversamplingLatency()  const noexcept { return oversamplingLatency_.load(std::memory_order_relaxed); }
-    [[nodiscard]] int getFFTWindowLatency()     const noexcept { return fftWindowLatency_.load(std::memory_order_relaxed); }
-    [[nodiscard]] int getHostedPluginLatency()  const noexcept { return hostedPluginLatency_.load(std::memory_order_relaxed); }
+    [[nodiscard]] int getOversamplingLatency()   const noexcept { return oversamplingLatency_.load(std::memory_order_relaxed); }
+    [[nodiscard]] int getFFTWindowLatency()      const noexcept { return fftWindowLatency_.load(std::memory_order_relaxed); }
+    [[nodiscard]] int getHostedPluginLatency()   const noexcept { return hostedPluginLatency_.load(std::memory_order_relaxed); }
+    [[nodiscard]] int getMasteringChainLatency() const noexcept { return masteringChainLatency_.load(std::memory_order_relaxed); }
 
 private:
     void recompute() noexcept
     {
         int total = oversamplingLatency_.load(std::memory_order_relaxed)
                   + fftWindowLatency_.load(std::memory_order_relaxed)
-                  + hostedPluginLatency_.load(std::memory_order_relaxed);
+                  + hostedPluginLatency_.load(std::memory_order_relaxed)
+                  + masteringChainLatency_.load(std::memory_order_relaxed);
         total_.store(total, std::memory_order_relaxed);
     }
 
-    std::atomic<int> oversamplingLatency_ { 0 };
-    std::atomic<int> fftWindowLatency_    { 0 };
-    std::atomic<int> hostedPluginLatency_ { 0 };
-    std::atomic<int> total_               { 0 };
+    std::atomic<int> oversamplingLatency_   { 0 };
+    std::atomic<int> fftWindowLatency_      { 0 };
+    std::atomic<int> hostedPluginLatency_   { 0 };
+    std::atomic<int> masteringChainLatency_ { 0 };
+    std::atomic<int> total_                 { 0 };
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/LFO.h
+ * More-Phi — Core/LFO.h
  * Low-frequency oscillator with 6 waveform shapes.
  *
  * noexcept guarantee: All process/math methods are noexcept because:
@@ -16,7 +16,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 class LFO
 {
@@ -101,4 +101,4 @@ private:
     float effectiveRate() const noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

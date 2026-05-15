@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ============================================================================
 // Construction / Destruction
@@ -470,4 +470,4 @@ CheckpointManager& DatasetGeneratorV3::getCheckpointManager()
     return *checkpointMgr_;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

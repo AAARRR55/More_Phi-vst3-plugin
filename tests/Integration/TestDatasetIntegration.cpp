@@ -1,5 +1,5 @@
 /*
- * MorphSnap -- tests/Integration/TestDatasetIntegration.cpp
+ * More-Phi -- tests/Integration/TestDatasetIntegration.cpp
  * Integration tests for dataset generation pipeline.
  */
 
@@ -16,7 +16,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // =============================================================================
 //  V2 Pipeline Integration Tests
@@ -28,7 +28,7 @@ TEST_CASE("DatasetGeneratorV2: initialization succeeds", "[dataset][integration]
 
     DatasetGeneratorConfig config;
     config.outputDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                .getChildFile("morphsnap_test_dataset");
+                                .getChildFile("morephi_test_dataset");
     config.totalSamples = 10;
     config.randomSeed = 42;
     config.sampleRate = 48000.0;

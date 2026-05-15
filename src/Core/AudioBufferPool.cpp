@@ -1,6 +1,6 @@
 #include "AudioBufferPool.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 AudioBufferPool::AudioBufferPool(int numChannels, int numSamples, double sampleRate)
     : numChannels_(numChannels)
@@ -72,4 +72,4 @@ AudioBufferPool::AudioBufferPtr AudioBufferPool::createBuffer() const
     return std::make_unique<juce::AudioBuffer<float>>(numChannels_, numSamples_);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

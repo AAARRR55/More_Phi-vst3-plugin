@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ParameterClassifier.h
+ * More-Phi — Core/ParameterClassifier.h
  * Parameter classification system for Learn Mode.
  * Classifies parameters as continuous, discrete, or binary for AI exposure control.
  */
@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 constexpr int MAX_PARAMS = 2048;
 
@@ -167,4 +167,4 @@ private:
     static constexpr uint32_t BASE_SYSTEM_TOKENS = 200;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

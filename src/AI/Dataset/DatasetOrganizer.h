@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/DatasetOrganizer.h
+ * More-Phi — AI/Dataset/DatasetOrganizer.h
  * Manages dataset directory structure, stratified splitting, integrity verification,
  * and deduplication for synthetic audio datasets used in ML training.
  */
@@ -11,7 +11,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Configuration for train/validation/test splitting. */
 struct SplitConfig
@@ -210,4 +210,4 @@ private:
     void logError(const juce::String& message);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

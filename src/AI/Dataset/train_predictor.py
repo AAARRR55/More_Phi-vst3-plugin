@@ -7,31 +7,56 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import os
 
-class MorphSnapDataset(Dataset):
+class MorePhiDataset(Dataset):
     def __init__(self, audio_path, metadata_path, sample_rate=44100, clip_duration=1.0):
-        self.audio, _ = librosa.load(audio_path, sr=sample_rate)
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
-        
+
         self.sample_rate = sample_rate
         self.clip_samples = int(clip_duration * sample_rate)
+
+        self.features_key = None
+        if self.metadata and isinstance(self.metadata[0], dict):
+            if 'features_mfcc' in self.metadata[0]:
+                self.features_key = 'features_mfcc'
+            elif 'audio_features' in self.metadata[0]:
+                self.features_key = 'audio_features'
+
+        self.use_precomputed_features = self.features_key is not None
+
+        if self.use_precomputed_features:
+            self.audio = None
+        else:
+            if not audio_path or not os.path.exists(audio_path):
+                raise ValueError("Audio file not found and no precomputed features in metadata.")
+            self.audio, _ = librosa.load(audio_path, sr=sample_rate)
         
     def __len__(self):
         return len(self.metadata)
     
     def __getitem__(self, idx):
-        start = idx * self.clip_samples
-        end = start + self.clip_samples
-        audio_clip = self.audio[start:end]
-        
-        # Feature Extraction: MFCC
-        mfccs = librosa.feature.mfcc(y=audio_clip, sr=self.sample_rate, n_mfcc=13)
-        mfccs_mean = np.mean(mfccs, axis=1)
-        
+        sample = self.metadata[idx]
+
+        if self.use_precomputed_features:
+            features = np.array(sample[self.features_key], dtype=np.float32)
+        else:
+            start = idx * self.clip_samples
+            end = start + self.clip_samples
+            audio_clip = self.audio[start:end]
+            if len(audio_clip) < self.clip_samples:
+                audio_clip = np.pad(audio_clip, (0, self.clip_samples - len(audio_clip)))
+
+            # Feature Extraction: MFCC
+            mfccs = librosa.feature.mfcc(y=audio_clip, sr=self.sample_rate, n_mfcc=13)
+            features = np.mean(mfccs, axis=1).astype(np.float32)
+
         # Labels: Parameter Vector
-        params = np.array(self.metadata[idx]['parameters'], dtype=np.float32)
-        
-        return torch.tensor(mfccs_mean, dtype=torch.float32), torch.tensor(params, dtype=torch.float32)
+        params = sample.get('parameters')
+        if isinstance(params, dict):
+            raise ValueError("Metadata 'parameters' must be a numeric vector, not a dict.")
+        params = np.array(params, dtype=np.float32)
+
+        return torch.tensor(features, dtype=torch.float32), torch.tensor(params, dtype=torch.float32)
 
 class ParameterPredictor(nn.Module):
     def __init__(self, input_size, output_size):
@@ -52,8 +77,11 @@ class ParameterPredictor(nn.Module):
 def train_model(dataset_dir):
     audio_path = os.path.join(dataset_dir, "dataset_audio.wav")
     metadata_path = os.path.join(dataset_dir, "dataset_metadata.json")
-    
-    dataset = MorphSnapDataset(audio_path, metadata_path)
+
+    if not os.path.exists(audio_path):
+        audio_path = None
+
+    dataset = MorePhiDataset(audio_path, metadata_path)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
     
     # Get vector sizes from first sample
@@ -77,8 +105,8 @@ def train_model(dataset_dir):
         if epoch % 10 == 0:
             print(f"Epoch {epoch}, Loss: {total_loss/len(dataloader):.4f}")
     
-    torch.save(model.state_state(), "morphsnap_model.pth")
-    print("Training Complete. Model saved as morphsnap_model.pth")
+    torch.save(model.state_dict(), "morephi_model.pth")
+    print("Training Complete. Model saved as morephi_model.pth")
 
 if __name__ == "__main__":
     # Point this to your generated folder

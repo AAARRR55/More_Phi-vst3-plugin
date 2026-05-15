@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stress test for MorphSnap dataset generation framework.
+Stress test for MorePhi dataset generation framework.
 Validates:
 - Dataset unit tests pass
 - Memory under 4GB (requires psutil for accurate measurement)
@@ -29,7 +29,7 @@ def check_memory():
 def run_stress_test():
     """Run the dataset generation stress test."""
     print("=" * 60)
-    print("MorphSnap Dataset Framework Stress Test")
+    print("MorePhi Dataset Framework Stress Test")
     print("=" * 60)
 
     # Configuration
@@ -41,7 +41,7 @@ def run_stress_test():
     # Build the test executable first
     print("\n[1/4] Building test executable...")
     build_result = subprocess.run(
-        ["cmake", "--build", str(BUILD_DIR), "--config", "Release", "--target", "MorphSnapTests"],
+        ["cmake", "--build", str(BUILD_DIR), "--config", "Release", "--target", "MorePhiTests"],
         capture_output=True,
         text=True
     )

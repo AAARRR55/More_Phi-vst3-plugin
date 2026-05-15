@@ -1,12 +1,12 @@
 /*
- * MorphSnap — Core/LFO.cpp
+ * More-Phi — Core/LFO.cpp
  * LFO implementation: 6 shapes, tempo-sync, S&H and smoothed-random.
  */
 #include "LFO.h"
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -185,4 +185,4 @@ float LFO::process(float dt) noexcept
     return output;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

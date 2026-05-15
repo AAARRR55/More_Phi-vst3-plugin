@@ -1,11 +1,11 @@
 /*
- * MorphSnap — Core/ThreadPool.cpp
+ * More-Phi — Core/ThreadPool.cpp
  * Implementation of thread pool for parallel task execution.
  */
 #include "ThreadPool.h"
 #include <chrono>
 
-namespace morphsnap {
+namespace more_phi {
 
 ThreadPool::ThreadPool(size_t threads) {
     // Reserve space for worker threads
@@ -90,4 +90,4 @@ size_t ThreadPool::getNumThreads() const {
     return workers_.size();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

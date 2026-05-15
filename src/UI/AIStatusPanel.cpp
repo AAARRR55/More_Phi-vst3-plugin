@@ -1,10 +1,10 @@
-/* MorphSnap — UI/AIStatusPanel.cpp */
+/* More-Phi — UI/AIStatusPanel.cpp */
 #include "AIStatusPanel.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-AIStatusPanel::AIStatusPanel(MorphSnapProcessor& p) : proc_(p)
+AIStatusPanel::AIStatusPanel(MorePhiProcessor& p) : proc_(p)
 {
     addAndMakeVisible(statusLabel_);
     addAndMakeVisible(portLabel_);
@@ -79,4 +79,4 @@ void AIStatusPanel::buttonClicked(juce::Button* b)
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

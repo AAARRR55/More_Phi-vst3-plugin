@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests: Preset Library (V2)
+ * More-Phi — Unit Tests: Preset Library (V2)
  *
  * Catch2 v3 test suite for V2 preset management subsystems.
  *
@@ -40,7 +40,7 @@
 #include <functional>
 
 using Catch::Approx;
-using namespace morphsnap::test;
+using namespace more_phi::test;
 using json = nlohmann::json;
 
 // =============================================================================
@@ -889,7 +889,7 @@ TEST_CASE("PresetLibrary import/export: export creates valid JSON file", "[prese
     lib.save(e1);
     lib.save(e2);
 
-    juce::File tmpFile = juce::File::createTempFile("morphsnap_export_test");
+    juce::File tmpFile = juce::File::createTempFile("morephi_export_test");
     REQUIRE(lib.exportToFile(tmpFile));
 
     // Verify file exists and contains valid JSON
@@ -917,7 +917,7 @@ TEST_CASE("PresetLibrary import/export: import reads exported file", "[preset][i
     lib.save(e1);
     lib.save(e2);
 
-    juce::File tmpFile = juce::File::createTempFile("morphsnap_ei_test");
+    juce::File tmpFile = juce::File::createTempFile("morephi_ei_test");
     REQUIRE(lib.exportToFile(tmpFile));
 
     // Import into a fresh library
@@ -938,7 +938,7 @@ TEST_CASE("PresetLibrary import/export: import reads exported file", "[preset][i
 TEST_CASE("PresetLibrary import/export: import from directory finds all JSON files", "[preset][io]")
 {
     // Create a temp directory with individual preset JSON files
-    juce::File tmpDir = juce::File::createTempFile("morphsnap_dir_test");
+    juce::File tmpDir = juce::File::createTempFile("morephi_dir_test");
     tmpDir.deleteFile();  // remove the temp file
     tmpDir.createDirectory();
 

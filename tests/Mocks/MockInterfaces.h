@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Tests/Mocks/MockInterfaces.h
+ * More-Phi — Tests/Mocks/MockInterfaces.h
  * Mock implementations for testing - enables unit testing without real plugins.
  */
 #pragma once
@@ -8,7 +8,7 @@
 #include "AI/InstanceIdentity.h"
 #include <gmock/gmock.h>
 
-namespace morphsnap {
+namespace more_phi {
 namespace mocks {
 
 /**
@@ -124,4 +124,4 @@ public:
 };
 
 } // namespace mocks
-} // namespace morphsnap
+} // namespace more_phi

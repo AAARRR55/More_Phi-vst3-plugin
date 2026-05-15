@@ -1,12 +1,12 @@
 /*
- * MorphSnap — Version.h
- * Version tracking and changelog for MorphSnap VST plugin.
+ * More-Phi — Version.h
+ * Version tracking and changelog for MorePhi VST plugin.
  */
 #pragma once
 
 #include <string>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Current version - matching SnappySnap video evidence (3.3.0)
 constexpr int VERSION_MAJOR = 3;
@@ -165,4 +165,4 @@ inline const char* getEditionString()
     return "Unknown";
 }
 
-} // namespace morphsnap
+} // namespace more_phi

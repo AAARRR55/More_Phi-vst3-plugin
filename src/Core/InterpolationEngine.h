@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/InterpolationEngine.h
+ * More-Phi — Core/InterpolationEngine.h
  * 1D linear + 2D inverse-distance weighted interpolation.
  * SIMD-optimized for real-time audio safety.
  *
@@ -17,13 +17,14 @@
 #include <array>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 class InterpolationEngine
 {
 public:
     // Clock-layout positions for 12 snapshots
-    static std::array<juce::Point<float>, 12> getClockPositions(float radius = 0.85f);
+    // H-4 FIX: Returns const ref to cached positions for unit radius
+    static const std::array<juce::Point<float>, 12>& getClockPositions(float radius = 1.0f);
 
     // 1D: faderPos ∈ [0,1] → linearly segments across occupied snapshots
     // noexcept: Only arithmetic on pre-allocated output vector
@@ -58,4 +59,4 @@ private:
         float* dest, float t, size_t count) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

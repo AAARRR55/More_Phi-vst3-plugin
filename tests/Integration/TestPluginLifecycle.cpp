@@ -1,6 +1,6 @@
 /*
- * MorphSnap — Integration Tests
- * Tests the full MorphSnapProcessor lifecycle:
+ * More-Phi — Integration Tests
+ * Tests the full MorePhiProcessor lifecycle:
  *   - Construction / destruction
  *   - prepareToPlay / releaseResources
  *   - processBlock (empty, with MIDI, live audio)
@@ -17,7 +17,7 @@
 #include "Plugin/PluginProcessor.h"
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Lifecycle
@@ -26,7 +26,7 @@ using namespace morphsnap;
 TEST_CASE("Processor: construction and destruction do not crash", "[integration][lifecycle]")
 {
     // Mimics DAW instantiation
-    auto proc = std::make_unique<MorphSnapProcessor>();
+    auto proc = std::make_unique<MorePhiProcessor>();
     REQUIRE(proc->getName().isNotEmpty());
     REQUIRE(proc->getTotalNumInputChannels() >= 2);
     REQUIRE(proc->getTotalNumOutputChannels() >= 2);
@@ -35,7 +35,7 @@ TEST_CASE("Processor: construction and destruction do not crash", "[integration]
 
 TEST_CASE("Processor: prepareToPlay and releaseResources cycle", "[integration][lifecycle]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(44100.0, 512);
     proc.releaseResources();
 
@@ -51,7 +51,7 @@ TEST_CASE("Processor: prepareToPlay and releaseResources cycle", "[integration][
 
 TEST_CASE("Processor: processBlock with empty buffer does not crash", "[integration][process]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(44100.0, 512);
 
     juce::AudioBuffer<float> buffer(2, 512);
@@ -64,7 +64,7 @@ TEST_CASE("Processor: processBlock with empty buffer does not crash", "[integrat
 
 TEST_CASE("Processor: processBlock with live audio preserves buffer integrity", "[integration][process]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(48000.0, 256);
 
     juce::AudioBuffer<float> buffer(2, 256);
@@ -86,7 +86,7 @@ TEST_CASE("Processor: processBlock with live audio preserves buffer integrity", 
 
 TEST_CASE("Processor: multiple processBlock calls simulate sustained playback", "[integration][process]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(44100.0, 128);
 
     juce::AudioBuffer<float> buffer(2, 128);
@@ -109,7 +109,7 @@ TEST_CASE("Processor: state save/restore round-trip preserves APVTS values", "[i
     // Save state from first instance
     juce::MemoryBlock stateData;
     {
-        MorphSnapProcessor proc;
+        MorePhiProcessor proc;
         proc.prepareToPlay(44100.0, 512);
 
         // Set some parameter values via APVTS
@@ -124,7 +124,7 @@ TEST_CASE("Processor: state save/restore round-trip preserves APVTS values", "[i
 
     // Restore into a fresh instance
     {
-        MorphSnapProcessor proc2;
+        MorePhiProcessor proc2;
         proc2.prepareToPlay(44100.0, 512);
         proc2.setStateInformation(stateData.getData(),
                                    static_cast<int>(stateData.getSize()));
@@ -139,7 +139,7 @@ TEST_CASE("Processor: state save/restore round-trip preserves APVTS values", "[i
 
 TEST_CASE("Processor: empty state data does not crash setStateInformation", "[integration][state]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(44100.0, 512);
 
     // Must not crash with empty/null data
@@ -158,7 +158,7 @@ TEST_CASE("Processor: empty state data does not crash setStateInformation", "[in
 
 TEST_CASE("Processor: all new APVTS parameters exist", "[integration][params]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
 
     REQUIRE(proc.getAPVTS().getParameter("sanityEnabled") != nullptr);
     REQUIRE(proc.getAPVTS().getParameter("recallMode") != nullptr);
@@ -168,7 +168,7 @@ TEST_CASE("Processor: all new APVTS parameters exist", "[integration][params]")
 
 TEST_CASE("Processor: parameter automation does not crash during processBlock", "[integration][params]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
     proc.prepareToPlay(44100.0, 256);
 
     juce::AudioBuffer<float> buffer(2, 256);
@@ -193,7 +193,7 @@ TEST_CASE("Processor: parameter automation does not crash during processBlock", 
 
 TEST_CASE("Processor: supports stereo in/out layout", "[integration][buses]")
 {
-    MorphSnapProcessor proc;
+    MorePhiProcessor proc;
 
     auto layout = proc.getBusesLayout();
     REQUIRE(layout.getMainInputChannelSet() == juce::AudioChannelSet::stereo());

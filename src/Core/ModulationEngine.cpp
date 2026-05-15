@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ModulationEngine.cpp
+ * More-Phi — Core/ModulationEngine.cpp
  * V2 Modulation Engine implementation.
  *
  * updateSourceValues() inner loop (per block):
@@ -22,7 +22,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -400,7 +400,7 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
     // ── LFOs ──────────────────────────────────────────────────────────────────
     if (auto* lfosEl = xml.getChildByName("LFOs"))
     {
-        forEachXmlChildElementWithTagName(*lfosEl, lfoEl, "LFO")
+        for (auto* lfoEl : lfosEl->getChildWithTagNameIterator("LFO"))
         {
             const int i = lfoEl->getIntAttribute("index", -1);
             if (i < 0 || i >= NUM_LFOS) continue;
@@ -417,7 +417,7 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
     // ── Envelope followers ────────────────────────────────────────────────────
     if (auto* envsEl = xml.getChildByName("Envelopes"))
     {
-        forEachXmlChildElementWithTagName(*envsEl, envEl, "Envelope")
+        for (auto* envEl : envsEl->getChildWithTagNameIterator("Envelope"))
         {
             const int i = envEl->getIntAttribute("index", -1);
             if (i < 0 || i >= NUM_ENVELOPES) continue;
@@ -431,7 +431,7 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
     // ── Macro knobs ───────────────────────────────────────────────────────────
     if (auto* macrosEl = xml.getChildByName("Macros"))
     {
-        forEachXmlChildElementWithTagName(*macrosEl, macroEl, "Macro")
+        for (auto* macroEl : macrosEl->getChildWithTagNameIterator("Macro"))
         {
             const int i = macroEl->getIntAttribute("index", -1);
             if (i < 0 || i >= NUM_MACROS) continue;
@@ -443,7 +443,7 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
     // ── Step sequencers ───────────────────────────────────────────────────────
     if (auto* seqsEl = xml.getChildByName("StepSequencers"))
     {
-        forEachXmlChildElementWithTagName(*seqsEl, seqEl, "StepSequencer")
+        for (auto* seqEl : seqsEl->getChildWithTagNameIterator("StepSequencer"))
         {
             const int i = seqEl->getIntAttribute("index", -1);
             if (i < 0 || i >= NUM_STEP_SEQS) continue;
@@ -453,7 +453,7 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
             seq.setSmoothing (static_cast<float>(seqEl->getDoubleAttribute("smoothing", 0.0)));
             seq.setDirection (static_cast<StepSequencer::Direction>(seqEl->getIntAttribute("direction", 0)));
 
-            forEachXmlChildElementWithTagName(*seqEl, stepEl, "Step")
+            for (auto* stepEl : seqEl->getChildWithTagNameIterator("Step"))
             {
                 const int s = stepEl->getIntAttribute("index", -1);
                 if (s < 0 || s >= StepSequencer::MAX_STEPS) continue;
@@ -467,4 +467,4 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
         matrix_.fromXml(*matrixEl);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

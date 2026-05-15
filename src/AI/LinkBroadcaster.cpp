@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/LinkBroadcaster.cpp
+ * More-Phi — AI/LinkBroadcaster.cpp
  *
  * Platform-native shared memory for cross-instance morph sync.
  * Windows: CreateFileMappingW / MapViewOfFile
@@ -16,7 +16,7 @@
 #include <immintrin.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 LinkBroadcaster::LinkBroadcaster() = default;
 
@@ -73,11 +73,19 @@ bool LinkBroadcaster::attach(uint32_t groupId)
 
 void LinkBroadcaster::detach()
 {
+    // H-10 FIX: Disable flags BEFORE unmapping to prevent other threads
+    // from accessing shared memory during teardown. The release fence
+    // ensures the flag writes are visible before the unmap proceeds.
+    enabled_ = false;
+    isLeader_ = false;
+    std::atomic_thread_fence(std::memory_order_release);
+
     if (sharedMem_)
     {
         // If we were the leader, clear the leader hash
-        if (isLeader_ && sharedMem_->leaderHash == instanceHash_)
-            sharedMem_->leaderHash = 0;
+        uint32_t expected = instanceHash_;
+        sharedMem_->leaderHash.compare_exchange_strong(expected, 0u,
+            std::memory_order_release, std::memory_order_relaxed);
 
         UnmapViewOfFile(sharedMem_);
         sharedMem_ = nullptr;
@@ -87,7 +95,6 @@ void LinkBroadcaster::detach()
         CloseHandle(hMapFile_);
         hMapFile_ = nullptr;
     }
-    isLeader_ = false;
 }
 
 // ── Platform: macOS / Linux ───────────────────────────────────────────────────
@@ -140,10 +147,16 @@ bool LinkBroadcaster::attach(uint32_t groupId)
 
 void LinkBroadcaster::detach()
 {
+    // H-10 FIX: Disable flags BEFORE unmapping
+    enabled_ = false;
+    isLeader_ = false;
+    std::atomic_thread_fence(std::memory_order_release);
+
     if (sharedMem_)
     {
-        if (isLeader_ && sharedMem_->leaderHash == instanceHash_)
-            sharedMem_->leaderHash = 0;
+        uint32_t expected = instanceHash_;
+        sharedMem_->leaderHash.compare_exchange_strong(expected, 0u,
+            std::memory_order_release, std::memory_order_relaxed);
 
         munmap(sharedMem_, sizeof(LinkStateBlock));
         sharedMem_ = nullptr;
@@ -153,7 +166,6 @@ void LinkBroadcaster::detach()
         close(shmFd_);
         shmFd_ = -1;
     }
-    isLeader_ = false;
 }
 
 #endif  // Platform selection
@@ -166,44 +178,58 @@ void LinkBroadcaster::setLeader(bool isLeader, uint32_t instanceHash)
     instanceHash_ = instanceHash;
 
     if (sharedMem_ && isLeader)
-        sharedMem_->leaderHash = instanceHash;
+        sharedMem_->leaderHash.store(instanceHash, std::memory_order_release);
 }
 
 void LinkBroadcaster::broadcast(float x, float y) noexcept
 {
     if (!enabled_ || !isLeader_ || !sharedMem_) return;
 
-    // Seqlock write: increment to odd (signals write in progress)
+    // 1. Update heartbeat (using thread-safe millisecond counter)
+    sharedMem_->lastActivity.store(
+        static_cast<uint64_t>(juce::Time::currentTimeMillis()), 
+        std::memory_order_relaxed);
+
+    // 2. Seqlock write: increment to odd (signals write in progress)
     sharedMem_->seqlock.fetch_add(1, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
 
-    sharedMem_->morphX = x;
-    sharedMem_->morphY = y;
+    sharedMem_->morphX.store(x, std::memory_order_relaxed);
+    sharedMem_->morphY.store(y, std::memory_order_relaxed);
 
-    // Increment to even (signals write complete)
+    // 3. Increment to even (signals write complete)
+    std::atomic_thread_fence(std::memory_order_release);
     sharedMem_->seqlock.fetch_add(1, std::memory_order_release);
 }
 
 bool LinkBroadcaster::receive(float& x, float& y) const noexcept
 {
     if (!enabled_ || isLeader_ || !sharedMem_) return false;
-    if (sharedMem_->leaderHash == 0) return false;  // No leader active
+    if (sharedMem_->leaderHash.load(std::memory_order_acquire) == 0) return false;
 
-    // Seqlock read with retry (real-time safe, no mutexes)
-    for (int retry = 0; retry < 8; ++retry)
+    // Check heartbeat: if leader hasn't updated in 100ms, assume stale
+    const uint64_t now = static_cast<uint64_t>(juce::Time::currentTimeMillis());
+    const uint64_t last = sharedMem_->lastActivity.load(std::memory_order_relaxed);
+    if (now > last + 100) return false;
+
+    // Seqlock read with retry
+    for (int retry = 0; retry < 16; ++retry)
     {
         uint32_t seq1 = sharedMem_->seqlock.load(std::memory_order_acquire);
         if ((seq1 & 1) != 0)
         {
-            // Write in progress — spin
-            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
             _mm_pause();
-            #endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            __asm__ volatile("yield");
+#endif
             continue;
         }
 
-        // Copy data
-        float rx = sharedMem_->morphX;
-        float ry = sharedMem_->morphY;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        float rx = sharedMem_->morphX.load(std::memory_order_relaxed);
+        float ry = sharedMem_->morphY.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
 
         uint32_t seq2 = sharedMem_->seqlock.load(std::memory_order_acquire);
         if (seq1 == seq2)
@@ -214,7 +240,7 @@ bool LinkBroadcaster::receive(float& x, float& y) const noexcept
         }
     }
 
-    return false;  // Failed after retries (very rare)
+    return false;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

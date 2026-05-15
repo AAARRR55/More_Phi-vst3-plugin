@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace morphsnap
+namespace more_phi
 {
     /**
      * SIMD-accelerated audio operations with runtime CPU capability detection

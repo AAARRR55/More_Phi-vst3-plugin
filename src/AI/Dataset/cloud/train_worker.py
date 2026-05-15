@@ -12,7 +12,7 @@ import numpy as np
 # =====================================================================
 # Model Architecture (identical to local)
 # =====================================================================
-class MorphSnapDataset(Dataset):
+class MorePhiDataset(Dataset):
     def __init__(self, metadata_path):
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
@@ -24,7 +24,8 @@ class MorphSnapDataset(Dataset):
         sample = self.metadata[idx]
         
         # Audio feature vector (e.g. MFCCs extracted locally and sent to cloud)
-        features = np.array(sample['features_mfcc'], dtype=np.float32)
+        features_key = 'features_mfcc' if 'features_mfcc' in sample else 'audio_features'
+        features = np.array(sample[features_key], dtype=np.float32)
         
         # Labels: Parameter Vector that caused that audio change
         params = np.array(sample['parameters'], dtype=np.float32)
@@ -73,7 +74,7 @@ def process_training_job(s3, message, input_bucket, output_bucket):
         s3.download_file(input_bucket, metadata_key, local_json_path)
 
         # 2. Setup Dataset & Dataloader
-        dataset = MorphSnapDataset(local_json_path)
+        dataset = MorePhiDataset(local_json_path)
         dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
         
         # Determine tensor sizes from the first index dynamically
@@ -101,11 +102,11 @@ def process_training_job(s3, message, input_bucket, output_bucket):
                 print(f"[{job_id}] Epoch {epoch}, Loss: {total_loss/len(dataloader):.4f}")
 
         # 4. Save locally
-        local_model_path = f"/tmp/{job_id}_morphsnap_model.pth"
+        local_model_path = f"/tmp/{job_id}_morephi_model.pth"
         torch.save(model.state_dict(), local_model_path)
 
         # 5. Upload trained model back to output bucket
-        output_key = f"models/{job_id}/morphsnap_model.pth"
+        output_key = f"models/{job_id}/morephi_model.pth"
         s3.upload_file(local_model_path, output_bucket, output_key)
         
         # Cleanup

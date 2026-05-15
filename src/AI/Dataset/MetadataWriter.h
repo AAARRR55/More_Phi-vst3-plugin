@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/MetadataWriter.h
+ * More-Phi — AI/Dataset/MetadataWriter.h
  * Comprehensive metadata management for synthetic audio dataset generation.
  * Supports JSON schema validation, Parquet export, and ML feature extraction.
  */
@@ -11,7 +11,7 @@
 #include <optional>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Source audio provenance information */
 struct SourceProvenance
@@ -228,4 +228,4 @@ private:
     nlohmann::json flattenFeatures(const DatasetMetadata& metadata) const;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

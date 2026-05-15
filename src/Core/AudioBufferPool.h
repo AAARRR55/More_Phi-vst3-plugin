@@ -5,7 +5,7 @@
 #include <stack>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * @brief Memory pool for reusing JUCE AudioBuffer instances to eliminate allocation overhead.
@@ -75,4 +75,4 @@ private:
     std::stack<AudioBufferPtr> availableBuffers_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

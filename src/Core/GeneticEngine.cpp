@@ -1,10 +1,10 @@
 /*
- * MorphSnap — Core/GeneticEngine.cpp
+ * More-Phi — Core/GeneticEngine.cpp
  * SanityMode-aware breeding and randomization.
  */
 #include "GeneticEngine.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 ParameterState GeneticEngine::breed(const ParameterState& parentA,
                                      const ParameterState& parentB,
@@ -18,7 +18,7 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
     const int count = juce::jmin(parentA.parameterCount, parentB.parameterCount);
     if (parentA.parameterCount != parentB.parameterCount)
     {
-        DBG("GeneticEngine::breed() - Parameter count mismatch: "
+        juce::Logger::writeToLog("GeneticEngine::breed() - Parameter count mismatch: "
             + juce::String(parentA.parameterCount) + " vs "
             + juce::String(parentB.parameterCount) + ", using min: "
             + juce::String(count));
@@ -46,10 +46,10 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
 }
 
 void GeneticEngine::smartRandomize(ParameterState& state,
-                                    float amount,
-                                    const std::set<int>& learnedParams,
-                                    juce::Random& rng,
-                                    const SanityConfig& sanity)
+                                     float amount,
+                                     const std::unordered_set<int>& learnedParams,
+                                     juce::Random& rng,
+                                     const SanityConfig& sanity)
 {
     for (int i : learnedParams)
     {
@@ -64,4 +64,4 @@ void GeneticEngine::smartRandomize(ParameterState& state,
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

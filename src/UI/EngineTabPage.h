@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/EngineTabPage.h
+ * More-Phi — UI/EngineTabPage.h
  * Container component that arranges the three V2 engine sub-panels
  * (SpectralControlPanel, GranularControlPanel, HybridBlendPanel) inside
  * the "Engine" tab of the main editor.
@@ -9,10 +9,10 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Forward declarations — full types resolved in EngineTabPage.cpp
-class MorphSnapProcessor;
+class MorePhiProcessor;
 class SpectralControlPanel;
 class GranularControlPanel;
 class HybridBlendPanel;
@@ -20,14 +20,14 @@ class HybridBlendPanel;
 class EngineTabPage : public juce::Component
 {
 public:
-    explicit EngineTabPage(MorphSnapProcessor& proc);
+    explicit EngineTabPage(MorePhiProcessor& proc);
     ~EngineTabPage() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // Sub-panels owned by this container
     std::unique_ptr<SpectralControlPanel> spectralPanel_;
@@ -37,4 +37,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EngineTabPage)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/PresetLibrary.cpp
+/* More-Phi — Preset/PresetLibrary.cpp
  * Full-featured V2 preset library: JSON file storage, in-memory index,
  * full-text search, tagging, ratings, import/export.
  * MESSAGE THREAD ONLY. */
@@ -10,7 +10,7 @@
 #include <sstream>
 #include <iomanip>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
 
@@ -448,4 +448,4 @@ bool PresetLibrary::importFromDirectory(const juce::File& dir, int& importedCoun
     return importedCount > 0;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

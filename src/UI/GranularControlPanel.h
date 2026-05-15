@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/GranularControlPanel.h
+ * More-Phi — UI/GranularControlPanel.h
  *
  * Horizontal strip panel exposing GranularMorphEngine controls.
  * Placed in the "Engine" tab of the main tabbed interface.
@@ -15,14 +15,14 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class GranularControlPanel : public juce::Component
 {
 public:
-    explicit GranularControlPanel(MorphSnapProcessor& proc);
+    explicit GranularControlPanel(MorePhiProcessor& proc);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -36,7 +36,7 @@ private:
                           juce::Rectangle<int> bounds) const;
 
     // ── Processor reference ──────────────────────────────────────────────────
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // ── Left section ──────────────────────────────────────────────────────────
     juce::TextButton activeToggle_ { "Granular" };
@@ -49,4 +49,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GranularControlPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

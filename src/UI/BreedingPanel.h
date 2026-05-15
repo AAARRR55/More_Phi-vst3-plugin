@@ -1,19 +1,19 @@
 /*
- * MorphSnap - UI/BreedingPanel.h
+ * More-Phi - UI/BreedingPanel.h
  * Snapshot breeding/mutation utilities.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class BreedingPanel : public juce::Component
 {
 public:
-    explicit BreedingPanel(MorphSnapProcessor& processor);
+    explicit BreedingPanel(MorePhiProcessor& processor);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -24,7 +24,7 @@ private:
     void randomizeMorphPosition();
     int findNextEmptySlot() const;
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     juce::TextButton breedButton_ { "Breed" };
     juce::TextButton mutateButton_ { "Mutate" };
     juce::TextButton randomizeButton_ { "Randomize" };
@@ -34,4 +34,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BreedingPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

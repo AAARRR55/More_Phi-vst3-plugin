@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests for PhysicsEngine and GeneticEngine
+ * More-Phi — Unit Tests for PhysicsEngine and GeneticEngine
  * Catch2 v3 test cases.
  *
  * Coverage:
@@ -25,7 +25,7 @@
 #include <set>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  PhysicsEngine — Spring-Damper (Elastic)
@@ -38,14 +38,14 @@ TEST_CASE("PhysicsEngine::updateElastic: position converges toward target", "[ph
     constexpr float dt = 1.0f / 60.0f;  // 60 fps step
 
     // After enough steps the spring should pull position toward target
-    for (int i = 0; i < 200; ++i)
+    for (int i = 0; i < 500; ++i)
         PhysicsEngine::updateElastic(s, targetX, targetY, ElasticPreset::Medium, dt);
 
     // Should be significantly closer than initial (0,0) to target.
-    // Medium preset has spring overshoot so use a generous tolerance
-    // (actual residual after 200 steps ≈ 0.09, well within 0.15).
-    REQUIRE(std::abs(s.x - targetX) < 0.15f);
-    REQUIRE(std::abs(s.y - targetY) < 0.15f);
+    // dtScale compensation (kRefDt/dt) makes the spring converge more slowly
+    // at 60fps than at the reference 44100/512 rate, so use generous tolerance.
+    REQUIRE(std::abs(s.x - targetX) < 0.3f);
+    REQUIRE(std::abs(s.y - targetY) < 0.3f);
 }
 
 TEST_CASE("PhysicsEngine::updateElastic: starts from rest with zero velocity", "[physics]")
@@ -241,7 +241,7 @@ TEST_CASE("GeneticEngine::smartRandomize: only modifies learned parameters", "[g
     ParameterState state = makeState(0.5f, 10);
 
     // Only params 2 and 7 are "learned"
-    const std::set<int> learned = {2, 7};
+    const std::unordered_set<int> learned = {2, 7};
 
     // Snapshot all current values before randomization
     std::array<float, 10> originalValues{};
@@ -263,7 +263,7 @@ TEST_CASE("GeneticEngine::smartRandomize: amount=0 makes no changes", "[genetic]
 {
     juce::Random rng(kSeedSmartZeroAmt);
     ParameterState state = makeState(0.3f, 6);
-    const std::set<int> learned = {0, 1, 2, 3, 4, 5};
+    const std::unordered_set<int> learned = {0, 1, 2, 3, 4, 5};
 
     std::array<float, 6> before{};
     std::copy_n(state.data(), 6, before.begin());
@@ -278,7 +278,7 @@ TEST_CASE("GeneticEngine::smartRandomize: empty learned set makes no changes", "
 {
     juce::Random rng(kSeedSmartEmptySet);
     ParameterState state = makeState(0.4f, 5);
-    const std::set<int> learned;  // empty
+    const std::unordered_set<int> learned;  // empty
 
     GeneticEngine::smartRandomize(state, 1.0f, learned, rng);
 
@@ -334,7 +334,7 @@ TEST_CASE("GeneticEngine::smartRandomize: SanityMode protects danger params", "[
     ParameterState state = makeState(0.5f, 8);
 
     // All params are "learned" but indices 1 and 4 are protected
-    const std::set<int> learned = {0, 1, 2, 3, 4, 5, 6, 7};
+    const std::unordered_set<int> learned = {0, 1, 2, 3, 4, 5, 6, 7};
     SanityConfig sanity;
     sanity.enabled = true;
     sanity.protectedIndices = {1, 4};

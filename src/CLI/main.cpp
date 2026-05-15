@@ -1,5 +1,5 @@
 /*
- * MorphSnap — CLI/main.cpp
+ * More-Phi — CLI/main.cpp
  * Command-line interface for hosted-plugin dataset smoke tests and renders.
  */
 
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-using namespace morphsnap;
+using namespace more_phi;
 
 namespace {
 
@@ -28,31 +28,49 @@ struct CliOptions
 {
     juce::File pluginFile;
     juce::File inputFile;
+    juce::File configDirectory;
     juce::File outputDirectory = juce::File::getCurrentWorkingDirectory().getChildFile("output");
     int variations = 100;
+    int workers = 1;
+    bool enableSimd = true;
+    bool usePool = true;
+    double durationSeconds = 0.0;  // 0.0 means use full input duration
     bool listParams = false;
     bool dryRun = false;
     bool verbose = false;
     bool help = false;
+    bool version = false;
     bool hasError = false;
     juce::String errorMessage;
+
+    static constexpr int MAX_VARIATIONS = 10000;  // Prevent DoS via excessive variations
 };
+
+static constexpr const char* kVersion = "v3.3.0";
+static constexpr int kDefaultBlockSize = 512;
+static constexpr int kFallbackParamCount = 100;  // Safe default when plugin param count is unknown
 
 void printUsage()
 {
     std::cout
-        << "MorphSnap Offline Batch Processor v3.3.0\n"
+        << "MorePhi Offline Batch Processor " << kVersion << "\n"
         << "Usage:\n"
-        << "  morphsnap-dataset --plugin <path.vst3> --input <dry.wav> [options]\n"
-        << "  morphsnap-dataset --plugin <path.vst3> --list-params\n\n"
+        << "  morephi-dataset --plugin <path.vst3> --input <dry.wav> [options]\n"
+        << "  morephi-dataset --plugin <path.vst3> --list-params\n\n"
         << "Options:\n"
         << "  --plugin <path.vst3>   Path to the hosted VST3 plugin\n"
         << "  --input <audio.wav>    Input audio file to process\n"
+        << "  --duration <seconds>   Maximum duration to render in seconds (default: 0 = full file)\n"
         << "  --list-params          List hosted plugin parameters and exit\n"
+        << "  --config-dir <dir>     Directory containing JSON parameter configs to render\n"
         << "  --dry-run              Validate configuration without rendering audio\n"
         << "  --verbose              Print plugin and render diagnostics\n"
         << "  -o, --output <dir>     Output directory for rendered files\n"
         << "  -n, --variations <N>   Number of rendered variations (default: 100)\n"
+        << "  -j, --workers <N>      Number of parallel worker threads (default: 1)\n"
+        << "  --no-simd              Disable SIMD-accelerated processing\n"
+        << "  --no-pool              Disable memory pool for audio buffers\n"
+        << "  --version              Print version and exit\n"
         << "  -h, --help             Show this help message\n";
 }
 
@@ -68,21 +86,30 @@ CliOptions parseArgs(int argc, char* argv[])
         {
             options.help = true;
         }
-        else if (arg == "--plugin" && i + 1 < argc)
+        else if (arg == "--plugin")
         {
-            options.pluginFile = juce::File(argv[++i]);
+            if (i + 1 < argc) options.pluginFile = juce::File(argv[++i]);
+            else { options.hasError = true; options.errorMessage = "--plugin requires a file path"; return options; }
         }
-        else if (arg == "--input" && i + 1 < argc)
+        else if (arg == "--input")
         {
-            options.inputFile = juce::File(argv[++i]);
+            if (i + 1 < argc) options.inputFile = juce::File(argv[++i]);
+            else { options.hasError = true; options.errorMessage = "--input requires a file path"; return options; }
         }
-        else if ((arg == "-o" || arg == "--output") && i + 1 < argc)
+        else if (arg == "-o" || arg == "--output")
         {
-            options.outputDirectory = juce::File(argv[++i]);
+            if (i + 1 < argc) options.outputDirectory = juce::File(argv[++i]);
+            else { options.hasError = true; options.errorMessage = "--output requires a directory path"; return options; }
         }
-        else if ((arg == "-n" || arg == "--variations") && i + 1 < argc)
+        else if (arg == "-n" || arg == "--variations")
         {
-            options.variations = juce::String(argv[++i]).getIntValue();
+            if (i + 1 < argc) options.variations = juce::String(argv[++i]).getIntValue();
+            else { options.hasError = true; options.errorMessage = "--variations requires a number"; return options; }
+        }
+        else if (arg == "--duration")
+        {
+            if (i + 1 < argc) options.durationSeconds = juce::String(argv[++i]).getDoubleValue();
+            else { options.hasError = true; options.errorMessage = "--duration requires a number"; return options; }
         }
         else if (arg == "--list-params")
         {
@@ -92,9 +119,31 @@ CliOptions parseArgs(int argc, char* argv[])
         {
             options.dryRun = true;
         }
-        else if (arg == "--verbose")
+        else if (arg == "-v" || arg == "--verbose")
         {
             options.verbose = true;
+        }
+        else if (arg == "-j" || arg == "--workers")
+        {
+            if (i + 1 < argc) options.workers = juce::String(argv[++i]).getIntValue();
+            else { options.hasError = true; options.errorMessage = "--workers requires a number"; return options; }
+        }
+        else if (arg == "--no-simd")
+        {
+            options.enableSimd = false;
+        }
+        else if (arg == "--no-pool")
+        {
+            options.usePool = false;
+        }
+        else if (arg == "--version")
+        {
+            options.version = true;
+        }
+        else if (arg == "--config-dir")
+        {
+            if (i + 1 < argc) options.configDirectory = juce::File(argv[++i]);
+            else { options.hasError = true; options.errorMessage = "--config-dir requires a directory path"; return options; }
         }
         else
         {
@@ -114,7 +163,7 @@ CliOptions parseArgs(int argc, char* argv[])
         return options;
     }
 
-    if (!options.pluginFile.existsAsFile())
+    if (!options.pluginFile.existsAsFile() && !options.pluginFile.isDirectory())
     {
         options.hasError = true;
         options.errorMessage = "plugin file not found: " + options.pluginFile.getFullPathName();
@@ -139,6 +188,56 @@ CliOptions parseArgs(int argc, char* argv[])
     {
         options.hasError = true;
         options.errorMessage = "--variations must be greater than zero.";
+        return options;
+    }
+
+    if (options.durationSeconds < 0.0)
+    {
+        options.hasError = true;
+        options.errorMessage = "--duration cannot be negative.";
+        return options;
+    }
+
+    // Security: Prevent DoS via excessive variations
+    if (options.variations > CliOptions::MAX_VARIATIONS)
+    {
+        options.hasError = true;
+        options.errorMessage = "--variations exceeds maximum limit of " +
+                               juce::String(CliOptions::MAX_VARIATIONS) + ".";
+        return options;
+    }
+
+    // Security: Prevent writing to system directories
+    {
+        // M1: Resolve symlinks before comparison to prevent bypass via
+        // symlinked paths (e.g., ./safe_dir → C:\Windows\System32)
+        const auto resolvedOutput = options.outputDirectory.isSymbolicLink()
+            ? options.outputDirectory.getLinkedTarget()
+            : options.outputDirectory;
+        const auto outputPath = resolvedOutput.getFullPathName();
+        const juce::StringArray protectedPaths = {
+            "/", "/usr", "/bin", "/sbin", "/etc", "/root", "/var", "/lib",
+            "/boot", "/dev", "/proc", "/sys", "/run", "/opt", "/srv",
+            "C:\\", "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
+            "C:\\Users", "C:\\ProgramData", "C:\\System Volume Information"
+        };
+
+        for (const auto& protectedPath : protectedPaths)
+        {
+            // Check if output is exactly or is a child of a protected path
+            if (outputPath == protectedPath ||
+                outputPath.startsWithIgnoreCase(protectedPath + "/") ||
+                outputPath.startsWithIgnoreCase(protectedPath + "\\"))
+            {
+                // Allow /dev/shm (tmpfs RAM disk) for high-performance temp file operations
+                if (outputPath.startsWithIgnoreCase("/dev/shm"))
+                    continue;
+
+                options.hasError = true;
+                options.errorMessage = "output directory cannot be a system directory: " + outputPath;
+                return options;
+            }
+        }
     }
 
     return options;
@@ -165,29 +264,11 @@ bool inspectInputFile(const juce::File& inputFile, AudioFileInfo& info, juce::St
 bool discoverPluginDescription(PluginHostManager& hostManager,
                                const juce::File& pluginFile,
                                juce::PluginDescription& description,
-                               juce::String& errorMessage)
+                               juce::String& errorMessage,
+                               bool verbose = false)
 {
-    const auto pluginPath = pluginFile.getFullPathName();
-
-    for (auto* format : hostManager.getFormatManager().getFormats())
-    {
-        if (!format->fileMightContainThisPluginType(pluginPath))
-            continue;
-
-        juce::OwnedArray<juce::PluginDescription> descriptions;
-        format->findAllTypesForFile(descriptions, pluginPath);
-        if (!descriptions.isEmpty())
-        {
-            description = *descriptions.getFirst();
-            return true;
-        }
-    }
-
-    description.fileOrIdentifier = pluginPath;
-    description.pluginFormatName = pluginFile.hasFileExtension(".vst3") ? "VST3" : juce::String();
-    description.name = pluginFile.getFileNameWithoutExtension();
-    errorMessage = "failed to discover plugin metadata for: " + pluginPath;
-    return false;
+    return PluginHostManager::discoverPlugin(
+        hostManager.getFormatManager(), pluginFile, description, errorMessage, verbose);
 }
 
 bool loadPluginForInspection(PluginHostManager& hostManager,
@@ -195,7 +276,7 @@ bool loadPluginForInspection(PluginHostManager& hostManager,
                              const AudioFileInfo& audioInfo,
                              juce::String& errorMessage)
 {
-    hostManager.prepare(audioInfo.sampleRate, 512, audioInfo.numChannels);
+    hostManager.prepare(audioInfo.sampleRate, kDefaultBlockSize, audioInfo.numChannels);
 
     if (!hostManager.loadPlugin(description))
     {
@@ -250,7 +331,10 @@ int runListParams(const CliOptions& options)
     juce::PluginDescription description;
     juce::String errorMessage;
 
-    discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage);
+    if (!discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage, options.verbose))
+    {
+        std::cerr << "Warning: " << errorMessage << "\n";
+    }
 
     AudioFileInfo audioInfo;
     if (options.inputFile.existsAsFile())
@@ -303,7 +387,7 @@ int runDryRun(const CliOptions& options)
 
     PluginHostManager hostManager;
     juce::PluginDescription description;
-    discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage);
+    discoverPluginDescription(hostManager, options.pluginFile, description, errorMessage, options.verbose);
 
     if (!loadPluginForInspection(hostManager, description, audioInfo, errorMessage))
     {
@@ -320,18 +404,32 @@ int runDryRun(const CliOptions& options)
         std::cout << "Sample rate: " << audioInfo.sampleRate << "\n";
         std::cout << "Channels: " << audioInfo.numChannels << "\n";
         std::cout << "Length (samples): " << audioInfo.lengthInSamples << "\n";
+        if (options.durationSeconds > 0.0)
+            std::cout << "Duration limit: " << options.durationSeconds << " seconds\n";
     }
 
     OfflineBatchConfig config;
     config.inputFile = options.inputFile;
     config.outputDirectory = options.outputDirectory;
     config.pluginFile = options.pluginFile;
+    config.configDirectory = options.configDirectory;
     config.totalVariations = options.variations;
-    config.parallelWorkers = 1;
+    config.parallelWorkers = options.workers;
+    config.enableSIMD = options.enableSimd;
+    config.useMemoryPool = options.usePool;
     config.renderConfig.sampleRate = audioInfo.sampleRate;
     config.renderConfig.blockSize = 512;
     config.renderConfig.numChannels = audioInfo.numChannels;
     config.renderConfig.outputDirectory = options.outputDirectory;
+
+    // Apply duration limit if specified
+    if (options.durationSeconds > 0.0)
+    {
+        config.renderConfig.fullDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.transientDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.steadyStateDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.customDuration = static_cast<float>(options.durationSeconds);
+    }
 
     if (!config.isValid())
     {
@@ -364,13 +462,35 @@ int runRender(const CliOptions& options)
     config.inputFile = options.inputFile;
     config.outputDirectory = options.outputDirectory;
     config.pluginFile = options.pluginFile;
+    config.configDirectory = options.configDirectory;
     config.totalVariations = options.variations;
-    config.parallelWorkers = 1;
+    config.parallelWorkers = options.workers;
+    config.enableSIMD = options.enableSimd;
+    config.useMemoryPool = options.usePool;
     config.renderConfig.sampleRate = audioInfo.sampleRate;
     config.renderConfig.blockSize = 512;
     config.renderConfig.numChannels = audioInfo.numChannels;
     config.renderConfig.outputDirectory = options.outputDirectory;
     config.renderConfig.validateOutput = true;
+
+    // When --config-dir is provided, derive totalVariations from the number of
+    // JSON files so the renderer processes every config exactly once.
+    if (options.configDirectory.isDirectory())
+    {
+        const auto jsonCount = options.configDirectory
+            .getNumberOfChildFiles(juce::File::findFiles, "*.json");
+        if (jsonCount > 0)
+            config.totalVariations = jsonCount;
+    }
+
+    // Apply duration limit if specified
+    if (options.durationSeconds > 0.0)
+    {
+        config.renderConfig.fullDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.transientDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.steadyStateDuration = static_cast<float>(options.durationSeconds);
+        config.renderConfig.customDuration = static_cast<float>(options.durationSeconds);
+    }
 
     OfflineBatchRenderer renderer;
     if (!renderer.setConfig(config))
@@ -379,15 +499,47 @@ int runRender(const CliOptions& options)
         return 1;
     }
 
-    juce::CriticalSection completionLock;
-    bool renderCompleted = false;
-    bool renderSucceeded = false;
+    // Wire up ParameterSafetyConfig to prevent the "Parameter Trap":
+    // locks dangerous binary params (Mute, Solo, Bypass, Phase Invert) and
+    // constrains safe DSP params (Frequency, Gain, Q, Shape, Slope) to sane ranges.
+    {
+        // Query parameter count from the renderer's already-loaded plugin
+        // (avoids loading the plugin a second time in a separate host).
+        int numParams = 0;
+        if (const auto* plugin = renderer.getLoadedPlugin())
+            numParams = plugin->getParameters().size();
+
+        if (numParams == 0)
+        {
+            std::cerr << "Warning: Could not query plugin parameters, using default safety profile\n";
+            numParams = kFallbackParamCount;
+        }
+
+        const juce::String pluginName = options.pluginFile.getFileNameWithoutExtension();
+        auto safetyProfile = ParameterSafetyConfig::createAutoProfile(pluginName, numParams);
+        renderer.setSafetyConfig(safetyProfile);
+        renderer.setSafeRandomizationEnabled(true);
+
+        if (options.verbose)
+        {
+            auto counts = safetyProfile.getCategoryCounts();
+            std::cout << "Safety profile: " << pluginName << " (" << safetyProfile.getRuleCount() << " rules)\n";
+            std::cout << "  Plugin has " << numParams << " parameters\n";
+            for (const auto& [cat, count] : counts)
+                std::cout << "  " << parameterCategoryToString(cat) << ": " << count << "\n";
+        }
+    }
+
+    // NOTE: startRender() runs synchronously — renderLoop() executes on the
+    // calling thread and returns only after all variations are complete.
+    // The onRenderComplete callback fires BEFORE startRender() returns.
+    bool renderSuccess = false;
     juce::String renderMessage = "Rendering did not complete";
 
     renderer.onProgressUpdate = [](const OfflineBatchProgress& progress)
     {
         std::cout << "\rProgress: " << progress.completed << "/" << progress.total
-                  << " (" << std::fixed << std::setprecision(1) << progress.percentage << "%)"
+                  << " (" << std::fixed << std::setprecision(1) << progress.percentage << "%)   "
                   << std::flush;
     };
 
@@ -402,9 +554,7 @@ int runRender(const CliOptions& options)
 
     renderer.onRenderComplete = [&](bool success, const juce::String& message)
     {
-        const juce::ScopedLock lock(completionLock);
-        renderCompleted = true;
-        renderSucceeded = success;
+        renderSuccess = success;
         renderMessage = message;
     };
 
@@ -417,29 +567,19 @@ int runRender(const CliOptions& options)
         std::cout << "Channels: " << audioInfo.numChannels << "\n";
     }
 
-    if (!renderer.startRender())
+    if (!renderer.startRender(nullptr))
     {
         std::cerr << "Error: failed to start renderer\n";
         return 1;
     }
 
-    while (renderer.isRendering())
-        juce::Thread::sleep(50);
-
-    renderer.stopRender();
     std::cout << "\n";
-
-    {
-        const juce::ScopedLock lock(completionLock);
-        if (!renderCompleted)
-            renderMessage = "Renderer stopped without a completion callback";
-    }
 
     if (options.verbose)
         printProfilerSummary(renderer.getProfiler());
 
     const auto progress = renderer.getProgress();
-    const bool success = renderSucceeded && progress.failedRenders == 0;
+    const bool success = renderSuccess && progress.failedRenders == 0;
 
     if (!success)
     {
@@ -461,6 +601,12 @@ int main(int argc, char* argv[])
     if (options.help)
     {
         printUsage();
+        return 0;
+    }
+
+    if (options.version)
+    {
+        std::cout << "morephi-dataset " << kVersion << "\n";
         return 0;
     }
 

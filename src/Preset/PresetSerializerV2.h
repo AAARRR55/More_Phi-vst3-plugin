@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/PresetSerializerV2.h
+/* More-Phi — Preset/PresetSerializerV2.h
  * V2 preset serializer — reads/writes the V2 JSON format using nlohmann/json.
  * Kept separate from the V1 PresetSerializer to preserve backwards compatibility.
  * MESSAGE THREAD ONLY. */
@@ -11,7 +11,7 @@
 // Forward declaration — avoid pulling in heavy JUCE headers here.
 namespace juce { class XmlElement; }
 
-namespace morphsnap {
+namespace more_phi {
 
 class PresetSerializerV2
 {
@@ -57,4 +57,4 @@ private:
     static std::string toIso8601(int64_t unixSeconds);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/OversamplingWrapper.h
+ * More-Phi — Core/OversamplingWrapper.h
  *
  * Thin, audio-thread-safe oversampling adapter built on JUCE's
  * juce::dsp::Oversampling<float>. Wraps JUCE's FIR anti-aliasing
@@ -35,7 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Supported oversampling factors.
@@ -59,7 +59,7 @@ enum class OversamplingFactor : int
  *       Latency is fractional and factor-dependent — use with caution
  *       in latency-sensitive chains.
  *
- * For MorphSnap the default is FIR because hosted-plugin state morphing
+ * For MorePhi the default is FIR because hosted-plugin state morphing
  * must not introduce audible pre-ringing artifacts when switching presets.
  */
 enum class AAFilterType
@@ -309,4 +309,4 @@ private:
     std::array<float*, kMaxChannels> bypassChannelPtrs_{};
 };
 
-} // namespace morphsnap
+} // namespace more_phi

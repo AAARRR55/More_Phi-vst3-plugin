@@ -9,9 +9,9 @@ import numpy as np
 import librosa
 
 # SECURITY FIX: Token loaded from environment variable, not hardcoded.
-# Set MORPHSNAP_TOKEN env var or create a .env file.
-TOKEN = os.environ.get("MORPHSNAP_TOKEN", "").strip()
-PORT = int(os.environ.get("MORPHSNAP_PORT", "30001"))
+# Set MORE_PHI_TOKEN env var or create a .env file.
+TOKEN = os.environ.get("MORE_PHI_TOKEN", "").strip()
+PORT = int(os.environ.get("MORE_PHI_PORT", "30001"))
 
 # =====================================================================
 # FabFilter Pro-Q 4 Parameter Map — Safe Guardrails
@@ -89,6 +89,21 @@ SHAPE_VALUES = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
 # 6dB, 12dB, 18dB, 24dB, 30dB, 36dB, 48dB, 72dB, 96dB
 SLOPE_VALUES = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
 
+PARAM_COUNT = 737
+DEFAULT_PARAM_VALUE = 0.5
+
+
+def build_full_param_vector(params_array, param_count=PARAM_COUNT,
+                            default_value=DEFAULT_PARAM_VALUE):
+    """Convert sparse MCP parameter array into full parameter vector."""
+    full_params = [default_value] * param_count
+    for item in params_array:
+        idx = item.get("index")
+        val = item.get("value")
+        if isinstance(idx, int) and 0 <= idx < param_count:
+            full_params[idx] = float(val)
+    return full_params
+
 
 def build_safe_random_params(num_active_bands=4, rng=None):
     """
@@ -154,7 +169,7 @@ def build_safe_random_params(num_active_bands=4, rng=None):
     return params_array, human_readable
 
 
-class MorphSnapMCPClient:
+class MorePhiMCPClient:
     def __init__(self, port=None, token=None):
         self.port = port or PORT
         self.token = (token or TOKEN).strip()
@@ -163,25 +178,25 @@ class MorphSnapMCPClient:
 
         if not self.token:
             print("[!] ERROR: No bearer token configured!")
-            print("    Set MORPHSNAP_TOKEN env var or create a .env file.")
+            print("    Set MORE_PHI_TOKEN env var or create a .env file.")
             sys.exit(1)
 
     def connect(self):
-        """Connects to the MorphSnap MCP Server running in FL Studio"""
+        """Connects to the MorePhi MCP Server running in FL Studio"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.sock.connect(('127.0.0.1', self.port))
-            print(f"Connected to MorphSnap MCP server on port {self.port}.")
+            print(f"Connected to MorePhi MCP server on port {self.port}.")
 
             resp = self.send_request("initialize", {"bearer_token": self.token})
             if resp and "result" in resp:
-                print("Successfully authenticated with MorphSnap.")
+                print("Successfully authenticated with MorePhi.")
             else:
                 err = resp.get("error", {}).get("message", "Unknown") if resp else "No response"
                 print(f"Authentication FAILED: {err}")
                 sys.exit(1)
         except ConnectionRefusedError:
-            print("CONNECTION FAILED: Ensure FL Studio is open, MorphSnap is loaded, and 'MCP: ON' is visible.")
+            print("CONNECTION FAILED: Ensure FL Studio is open, MorePhi is loaded, and 'MCP: ON' is visible.")
             sys.exit(1)
 
     def send_request(self, method, params=None):
@@ -286,11 +301,11 @@ def generate_dataset(num_samples=50, num_bands=4, output_file="dataset_manifest.
     (Bypass, Solo, Mute, Phase Invert) to safe values.
 
     PREREQUISITES:
-    1. FL Studio running with MorphSnap loaded, hosting FabFilter Pro-Q 4
+    1. FL Studio running with MorePhi loaded, hosting FabFilter Pro-Q 4
     2. Pink noise (or a full drum break) playing on a loop through the plugin
        - Generate pink noise: python generate_pink_noise.py
     3. Windows recording device set to Stereo Mix / WASAPI loopback
-    4. MORPHSNAP_TOKEN env var set to your bearer token
+    4. MORE_PHI_TOKEN env var set to your bearer token
     """
     print("=" * 65)
     print("FabFilter Pro-Q 4 Dataset Generator — Safe Parameter Mode")
@@ -304,7 +319,7 @@ def generate_dataset(num_samples=50, num_bands=4, output_file="dataset_manifest.
     print("  PINNED: Bypass=OFF, Solo=OFF, Mute=OFF, Phase=OFF")
     print()
 
-    mcp = MorphSnapMCPClient()
+    mcp = MorePhiMCPClient()
     mcp.connect()
 
     rng = random.Random()
@@ -357,10 +372,14 @@ def generate_dataset(num_samples=50, num_bands=4, output_file="dataset_manifest.
         # Extract features
         features = extract_features(audio)
 
+        full_params = build_full_param_vector(params_array)
+
         dataset.append({
             "sample_id": i,
             "active_bands": active_bands,
-            "parameters": human_readable,
+            "parameters": full_params,
+            "parameters_named": human_readable,
+            "features_mfcc": features,
             "audio_features": features,
             "audio_quality": quality
         })
@@ -407,4 +426,3 @@ if __name__ == "__main__":
         num_bands=args.bands,
         output_file=args.output
     )
-

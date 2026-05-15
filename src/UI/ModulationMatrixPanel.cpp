@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/ModulationMatrixPanel.cpp
+ * More-Phi — UI/ModulationMatrixPanel.cpp
  *
  * Dark-theme modulation routing panel:
  *   Left  (60 %) — scrollable route list; each row shows enable/source/dest/depth.
@@ -16,10 +16,10 @@
 #include "Plugin/PluginProcessor.h"
 #include "Core/ModulationTypes.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 // ============================================================================
-// Colour constants (dark theme — matches MorphSnapLookAndFeel palette)
+// Colour constants (dark theme — matches MorePhiLookAndFeel palette)
 // ============================================================================
 
 namespace colours {
@@ -115,7 +115,7 @@ static int comboIndexFromSourceId(ModSourceId id)
 // RouteRow
 // ============================================================================
 
-RouteRow::RouteRow(int routeId, MorphSnapProcessor& proc)
+RouteRow::RouteRow(int routeId, MorePhiProcessor& proc)
     : routeId_(routeId), proc_(proc)
 {
     // --- Enable toggle ---
@@ -279,12 +279,12 @@ void RouteRow::onDepthChanged()
 // LFOPanel
 // ============================================================================
 
-LFOPanel::LFOPanel(int lfoIndex, MorphSnapProcessor& proc)
+LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
     : lfoIndex_(lfoIndex), proc_(proc)
 {
     // Label "LFO N"
     label_.setText("LFO " + juce::String(lfoIndex_ + 1), juce::dontSendNotification);
-    label_.setFont(juce::Font(juce::FontOptions(8.5f, juce::Font::bold)));
+    label_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
     label_.setColour(juce::Label::textColourId, colours::headerText);
     label_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(label_);
@@ -318,7 +318,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorphSnapProcessor& proc)
 
     // "Hz" unit label
     rateLabel_.setText("Hz", juce::dontSendNotification);
-    rateLabel_.setFont(juce::Font(juce::FontOptions(7.5f)));
+    rateLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 7.5f, juce::Font::plain)));
     rateLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     rateLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(rateLabel_);
@@ -361,12 +361,12 @@ void LFOPanel::onRateChanged()
 // ModulationMatrixPanel
 // ============================================================================
 
-ModulationMatrixPanel::ModulationMatrixPanel(MorphSnapProcessor& proc)
+ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
     : proc_(proc)
 {
     // ---- Section header: route list ----
     routeListHeader_.setText("Routes", juce::dontSendNotification);
-    routeListHeader_.setFont(juce::Font(juce::FontOptions(8.5f, juce::Font::bold)));
+    routeListHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
     routeListHeader_.setColour(juce::Label::textColourId, colours::headerText);
     routeListHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeListHeader_);
@@ -387,14 +387,14 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorphSnapProcessor& proc)
     addAndMakeVisible(clearAllBtn_);
 
     // ---- Route count label ----
-    routeCountLabel_.setFont(juce::Font(juce::FontOptions(8.0f)));
+    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.0f, juce::Font::plain)));
     routeCountLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     routeCountLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeCountLabel_);
 
     // ---- Section header: LFOs ----
     lfoHeader_.setText("LFOs", juce::dontSendNotification);
-    lfoHeader_.setFont(juce::Font(juce::FontOptions(8.5f, juce::Font::bold)));
+    lfoHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
     lfoHeader_.setColour(juce::Label::textColourId, colours::headerText);
     lfoHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(lfoHeader_);
@@ -620,4 +620,4 @@ void ModulationMatrixPanel::onClearAll()
     resized();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

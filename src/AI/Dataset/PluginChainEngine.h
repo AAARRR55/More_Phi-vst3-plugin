@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/PluginChainEngine.h
+ * More-Phi — AI/Dataset/PluginChainEngine.h
  * Sequential plugin chain engine for dataset generation.
  * Supports multiple plugin types: EQ, Dynamics, Mastering chains, etc.
  */
@@ -11,7 +11,7 @@
 #include <vector>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Types of plugin chains for different processing scenarios.
@@ -322,4 +322,4 @@ private:
     juce::Array<int> pluginSettleTimes_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

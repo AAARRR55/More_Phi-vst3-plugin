@@ -1,4 +1,4 @@
-# MorphSnap - Ableton Live Test Plan
+# More-Phi - Ableton Live Test Plan
 
 **DAW:** Ableton Live
 **Versions Tested:** 11.x, 12.x
@@ -10,7 +10,7 @@
 ## Prerequisites
 
 1. Ableton Live 11 Suite or Standard installed
-2. MorphSnap.vst3 installed in VST3 folder
+2. MorePhi.vst3 installed in VST3 folder
 3. At least one third-party VST3 plugin for hosting tests
 4. ASIO/Core Audio driver configured
 
@@ -40,7 +40,7 @@
 **Steps:**
 1. Open Ableton Live
 2. Open Browser > Plug-ins > VST3
-3. Locate MorphSnap
+3. Locate More-Phi
 4. Drag to audio or MIDI track
 
 **Expected Result:**
@@ -56,8 +56,8 @@
 
 **Priority:** P0 - Critical
 **Steps:**
-1. Add MorphSnap to track
-2. Click "Load Plugin" in MorphSnap UI
+1. Add More-Phi to track
+2. Click "Load Plugin" in More-Phi UI
 3. Select a VST3 instrument
 4. Play via MIDI
 
@@ -74,7 +74,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Add MorphSnap to track
+1. Add More-Phi to track
 2. Enable Automation Arm
 3. Move morphX during playback
 4. Stop and play back
@@ -112,7 +112,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Configure MorphSnap with snapshots
+1. Configure More-Phi with snapshots
 2. Save Live Set
 3. Close Ableton
 4. Reopen Live Set
@@ -130,7 +130,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap with hosted plugin
+1. Add More-Phi with hosted plugin
 2. Create some audio/MIDI content
 3. Freeze the track
 4. Unfreeze
@@ -149,7 +149,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap to project
+1. Add More-Phi to project
 2. Verify MCP server starts
 3. Connect external AI client
 4. Execute commands

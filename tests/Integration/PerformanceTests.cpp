@@ -6,13 +6,13 @@
 TEST_CASE("Performance optimizations improve rendering speed", "[Performance][Integration]")
 {
     // Create test configuration
-    morphsnap::OfflineBatchConfig config;
+    more_phi::OfflineBatchConfig config;
     config.totalVariations = 16;
     config.parallelWorkers = 4;
     config.enableSIMD = true;
     config.useMemoryPool = true;
 
-    morphsnap::OfflineBatchRenderer renderer;
+    more_phi::OfflineBatchRenderer renderer;
     renderer.setConfig(config);
 
     // Verify optimizations are enabled

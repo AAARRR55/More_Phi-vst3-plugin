@@ -1,13 +1,15 @@
 /*
- * MorphSnap — Core/DiscreteParameterHandler.cpp
+ * More-Phi — Core/DiscreteParameterHandler.cpp
  * Implementation of discrete parameter handling during morphing.
  */
 #include "DiscreteParameterHandler.h"
+#include "ParameterState.h"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <sstream>
 
-namespace morphsnap {
+namespace more_phi {
 
 DiscreteParameterHandler::DiscreteParameterHandler()
     : switchThreshold_(0.5f)
@@ -21,11 +23,25 @@ void DiscreteParameterHandler::initialize(const ParameterClassifier& classifier)
 {
     discreteMask_ = classifier.getDiscreteMap();
     parameterCount_.store(static_cast<uint32_t>(discreteMask_.size()));
-    
+
     const uint32_t count = parameterCount_.load();
     paramStates_.resize(count);
     paramStrategies_.resize(count, defaultStrategy_);
-    
+
+    // H-3 FIX: Read per-parameter step counts from classifier metadata.
+    // Default to 10 steps when classifier reports 0 (backwards compatible).
+    stepCount_.resize(count, 10);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        auto meta = classifier.getMetadata(static_cast<int>(i));
+        if (meta.stepCount > 0)
+            stepCount_[i] = static_cast<int>(meta.stepCount);
+    }
+
+    // Pre-allocate output scratch buffer to the maximum parameter count so that
+    // processDiscreteParameters() never calls resize() on the audio thread.
+    outputScratch_.resize(static_cast<size_t>(MAX_PARAMETERS), 0.0f);
+
     // Reset states
     for (auto& state : paramStates_)
     {
@@ -42,9 +58,12 @@ void DiscreteParameterHandler::processDiscreteParameters(
         static_cast<uint32_t>(interpolatedValues.size()),
         parameterCount_.load()
     );
-    
-    outputValues.resize(interpolatedValues.size());
-    
+
+    // Do NOT resize on the audio thread — callers must pre-size outputValues
+    // to at least interpolatedValues.size() before calling this function.
+    // outputScratch_ is pre-allocated in initialize() to MAX_PARAMETERS.
+    if (outputValues.size() < interpolatedValues.size()) { assert(false); return; }
+
     for (uint32_t i = 0; i < count; ++i)
     {
         if (discreteMask_[i])
@@ -57,6 +76,12 @@ void DiscreteParameterHandler::processDiscreteParameters(
             outputValues[i] = interpolatedValues[i];
         }
     }
+
+    // Pass through any remaining parameters beyond the discrete mask.
+    // This handles the case where parameterCount_ is 0 (no discrete params)
+    // or where the interpolated vector is larger than the discrete map.
+    for (uint32_t i = count; i < static_cast<uint32_t>(interpolatedValues.size()); ++i)
+        outputValues[i] = interpolatedValues[i];
 }
 
 float DiscreteParameterHandler::processDiscreteParameter(
@@ -199,14 +224,19 @@ bool DiscreteParameterHandler::shouldSwitch(int index, float interpolatedValue) 
 
 int DiscreteParameterHandler::valueToStep(int index, float value) const
 {
-    // For now, assume 10 steps max
-    // In a real implementation, this would use ParameterMetadata stepCount
-    return static_cast<int>(value * 9.999f);
+    // H-3 FIX: Use actual per-parameter step count instead of hardcoded 9.999f
+    const int steps = (index >= 0 && index < static_cast<int>(stepCount_.size()))
+                        ? stepCount_[index] : 10;
+    const float maxStep = static_cast<float>(steps - 1);
+    return std::clamp(static_cast<int>(value * maxStep), 0, steps - 1);
 }
 
 float DiscreteParameterHandler::stepToValue(int index, int step) const
 {
-    return static_cast<float>(step) / 9.999f;
+    const int steps = (index >= 0 && index < static_cast<int>(stepCount_.size()))
+                        ? stepCount_[index] : 10;
+    const float maxStep = static_cast<float>(steps - 1);
+    return (maxStep > 0.0f) ? static_cast<float>(step) / maxStep : 0.0f;
 }
 
 void DiscreteParameterHandler::setSwitchThreshold(float threshold)
@@ -508,4 +538,4 @@ bool MorphSafeAdvisor::areMorphCompatible(
     return comparison.compatibilityScore >= threshold;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

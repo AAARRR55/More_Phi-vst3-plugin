@@ -1,10 +1,10 @@
 /*
- * MorphSnap — AI/InstanceRegistry.cpp
+ * More-Phi — AI/InstanceRegistry.cpp
  * Thread-safe singleton managing active plugin instances.
  */
 #include "InstanceRegistry.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 InstanceIdentity InstanceRegistry::registerInstance()
 {
@@ -13,9 +13,8 @@ InstanceIdentity InstanceRegistry::registerInstance()
     int port = findAvailablePort();
     if (port <= 0)
     {
-        DBG("InstanceRegistry: no free MCP port found in preferred range; "
-            "falling back to base port " + juce::String(BASE_PORT));
-        port = BASE_PORT;
+        DBG("InstanceRegistry: no free MCP port found; registration failed");
+        return {};
     }
 
     auto identity = InstanceIdentity::generate(port);
@@ -72,18 +71,21 @@ int InstanceRegistry::getActiveCount() const
 int InstanceRegistry::findAvailablePort() const
 {
     // Must be called with mutex_ held
-    for (int port = BASE_PORT; port < BASE_PORT + MAX_INSTANCES; ++port)
+    const auto isRegisteredPortInUse = [this](int candidatePort)
     {
-        bool inUse = false;
         for (const auto& [id, identity] : instances_)
         {
-            if (identity.port == port)
-            {
-                inUse = true;
-                break;
-            }
+            juce::ignoreUnused(id);
+            if (identity.port == candidatePort)
+                return true;
         }
-        if (!inUse && isPortAvailable(port))
+
+        return false;
+    };
+
+    for (int port = BASE_PORT; port < BASE_PORT + MAX_INSTANCES; ++port)
+    {
+        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
             return port;
     }
 
@@ -91,14 +93,14 @@ int InstanceRegistry::findAvailablePort() const
     for (int port = BASE_PORT + MAX_INSTANCES;
          port < BASE_PORT + MAX_INSTANCES + 256; ++port)
     {
-        if (isPortAvailable(port))
+        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
             return port;
     }
 
     // Last resort: search IANA dynamic/private port range.
     for (int port = 49152; port <= 65535; ++port)
     {
-        if (isPortAvailable(port))
+        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
             return port;
     }
 
@@ -107,12 +109,23 @@ int InstanceRegistry::findAvailablePort() const
 
 bool InstanceRegistry::isPortAvailable(int port) const
 {
-    juce::StreamingSocket probe;
-    if (!probe.createListener(port, "127.0.0.1"))
-        return false;
+    {
+        juce::StreamingSocket loopbackProbe;
+        if (loopbackProbe.createListener(port, "127.0.0.1"))
+        {
+            loopbackProbe.close();
+            return true;
+        }
+    }
 
-    probe.close();
-    return true;
+    juce::StreamingSocket wildcardProbe;
+    if (wildcardProbe.createListener(port, {}))
+    {
+        wildcardProbe.close();
+        return true;
+    }
+
+    return false;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

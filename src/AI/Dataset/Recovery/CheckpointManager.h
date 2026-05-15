@@ -8,7 +8,7 @@
 #include <string>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Checkpoint — Serializable snapshot of generation state for crash recovery.
@@ -133,4 +133,4 @@ private:
     mutable std::mutex mutex_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

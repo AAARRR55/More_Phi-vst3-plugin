@@ -11,7 +11,7 @@
 #include <mutex>
 #include <string>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * LogLevel for structured logging.
@@ -171,4 +171,4 @@ private:
     size_t currentFileSize_ = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap - AI/InstanceIdentity.h
+ * More-Phi - AI/InstanceIdentity.h
  * Per-instance identity for multi-instance MCP architecture.
  */
 #pragma once
@@ -28,7 +28,7 @@
     #include <sys/random.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Generates cryptographically secure random bytes.
@@ -127,11 +127,7 @@ struct InstanceIdentity
 
     juce::String toJSON() const
     {
-        return "{\"instanceId\":\"" + instanceId + "\""
-             + ",\"morphCode\":\"" + morphCode + "\""
-             + ",\"port\":" + juce::String(port)
-             + ",\"bearerToken\":\"" + bearerToken + "\""
-             + ",\"createdAt\":" + juce::String(createdAt) + "}";
+        return toRedactedJSON();
     }
 
     juce::String toRedactedJSON() const
@@ -151,9 +147,11 @@ struct InstanceIdentity
         if (tokenLen > 0)
         {
             auto* rawPtr = bearerToken.getCharPointer().getAddress();
-            volatile char* vp = reinterpret_cast<volatile char*>(rawPtr);
-            for (int i = 0; i < tokenLen; ++i)
-                vp[i] = 0;
+#if JUCE_WINDOWS
+            SecureZeroMemory(rawPtr, static_cast<size_t>(tokenLen));
+#else
+            explicit_bzero(rawPtr, static_cast<size_t>(tokenLen));
+#endif
         }
         bearerToken = {};
         instanceId  = {};
@@ -163,4 +161,4 @@ struct InstanceIdentity
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

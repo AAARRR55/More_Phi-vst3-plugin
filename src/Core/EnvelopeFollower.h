@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/EnvelopeFollower.h
+ * More-Phi — Core/EnvelopeFollower.h
  * RMS-based envelope follower with separate attack/release coefficients.
  *
  * noexcept guarantee: process() is noexcept because:
@@ -13,7 +13,7 @@
 
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 class EnvelopeFollower
 {
@@ -83,4 +83,4 @@ private:
     void recomputeCoefficients() noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

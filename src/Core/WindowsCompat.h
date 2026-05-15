@@ -1,5 +1,5 @@
 /*
- * MorphSnap - Core/WindowsCompat.h
+ * More-Phi - Core/WindowsCompat.h
  * Windows compatibility macros and workarounds for JUCE conflicts.
  *
  * IMPORTANT: Include this BEFORE any JUCE headers to ensure Windows macros

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/SpectralControlPanel.h
+ * More-Phi — UI/SpectralControlPanel.h
  *
  * Horizontal strip panel exposing SpectralMorphEngine controls.
  * Placed in the "Engine" tab of the main tabbed interface.
@@ -15,14 +15,14 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class SpectralControlPanel : public juce::Component
 {
 public:
-    explicit SpectralControlPanel(MorphSnapProcessor& proc);
+    explicit SpectralControlPanel(MorePhiProcessor& proc);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -34,7 +34,7 @@ private:
                           juce::Rectangle<int> bounds) const;
 
     // ── Processor reference ──────────────────────────────────────────────────
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // ── Left section: SPECTRAL ───────────────────────────────────────────────
     juce::TextButton activeToggle_  { "Spectral" };
@@ -52,4 +52,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpectralControlPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

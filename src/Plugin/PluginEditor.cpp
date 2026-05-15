@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Advanced Parameter Morphing Engine
+ * More-Phi — Advanced Parameter Morphing Engine
  * PluginEditor.cpp — Main Editor Window (V2 Tabbed Layout)
  */
 #include "PluginEditor.h"
@@ -8,9 +8,9 @@
 #include "UI/ModulationMatrixPanel.h"
 #include "UI/V2PresetBrowserPanel.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
+MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     : AudioProcessorEditor(p),
       processor(p),
       morphPad(p),
@@ -50,7 +50,10 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     {
         paramPanelVisible_ = !paramPanelVisible_;
         paramPanel.setVisible(paramPanelVisible_);
-        paramToggleBtn_.setButtonText(paramPanelVisible_ ? "\xe2\x97\x82 Params" : "Params \xe2\x96\xb8");
+        paramToggleBtn_.setButtonText(
+        paramPanelVisible_
+            ? juce::String::charToString(0x25C2) + juce::String(" Params")
+            : juce::String("Params ") + juce::String::charToString(0x25B8));
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
@@ -75,19 +78,24 @@ MorphSnapEditor::MorphSnapEditor(MorphSnapProcessor& p)
     presetPage_ = std::make_unique<V2PresetBrowserPanel>(processor);
     addChildComponent(*presetPage_);
 
+    aiChatPage_ = std::make_unique<AIChatPanel>(processor);
+    addChildComponent(*aiChatPage_);
+
     // Default to Classic tab
     switchTab(V2TabBar::Classic);
 
-    startTimerHz(30);
+    // M-16 FIX: Reduced from 30Hz to 15Hz — sufficient for UI updates,
+    // reduces CPU overhead and message-thread contention.
+    startTimerHz(15);
 }
 
-MorphSnapEditor::~MorphSnapEditor()
+MorePhiEditor::~MorePhiEditor()
 {
     closePluginWindow();
     setLookAndFeel(nullptr);
 }
 
-void MorphSnapEditor::paint(juce::Graphics& g)
+void MorePhiEditor::paint(juce::Graphics& g)
 {
     g.fillAll(lnf.backgroundDark);
 
@@ -101,14 +109,14 @@ void MorphSnapEditor::paint(juce::Graphics& g)
 
     // Logo
     g.setColour(lnf.accentCoral);
-    g.setFont(juce::Font(juce::FontOptions(20.0f, juce::Font::bold)));
-    g.drawText("MorphSnap", titleArea.reduced(14, 0).removeFromLeft(160),
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 20.0f, juce::Font::bold)));
+    g.drawText("More-Phi", titleArea.reduced(14, 0).removeFromLeft(160),
                juce::Justification::centredLeft);
 
     // Version
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(juce::FontOptions(10.0f)));
-    g.drawText("v2.0", titleArea.reduced(14, 0).removeFromLeft(200),
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    g.drawText("v3.3.0", titleArea.reduced(14, 0).removeFromLeft(200),
                juce::Justification::centredLeft);
 
     // RMS meter
@@ -131,7 +139,7 @@ void MorphSnapEditor::paint(juce::Graphics& g)
     }
 
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(juce::FontOptions(9.0f)));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 9.0f, juce::Font::plain)));
     g.drawText("OUT", meterArea.translated(-28, 0).withWidth(24),
                juce::Justification::centredRight);
 
@@ -140,7 +148,7 @@ void MorphSnapEditor::paint(juce::Graphics& g)
     g.drawLine(0, 44, static_cast<float>(getWidth()), 44, 1.0f);
 }
 
-void MorphSnapEditor::resized()
+void MorePhiEditor::resized()
 {
     auto area = getLocalBounds();
 
@@ -152,11 +160,16 @@ void MorphSnapEditor::resized()
     if (paramPanelVisible_)
         paramPanel.setBounds(area.removeFromRight(paramWidth));
 
-    // Plugin browser row
-    auto browserRow = area.removeFromTop(38);
-    paramToggleBtn_.setBounds(browserRow.removeFromRight(80));
-    openPluginBtn_.setBounds(browserRow.removeFromRight(110));
-    pluginBrowser.setBounds(browserRow);
+    // Plugin browser row (FlexBox row)
+    {
+        auto browserRow = area.removeFromTop(38);
+        juce::FlexBox fb;
+        fb.flexDirection = juce::FlexBox::Direction::row;
+        fb.items.add(juce::FlexItem(pluginBrowser).withFlex(1));
+        fb.items.add(juce::FlexItem(openPluginBtn_).withWidth(110).withMargin(2));
+        fb.items.add(juce::FlexItem(paramToggleBtn_).withWidth(80).withMargin(2));
+        fb.performLayout(browserRow);
+    }
 
     // ── Bottom: AI status bar ──────────────────────────────────────────────────
     auto bottomBar = area.removeFromBottom(32);
@@ -170,28 +183,38 @@ void MorphSnapEditor::resized()
     constexpr int tabContentHeight = 210;
     auto tabContent = area.removeFromBottom(tabContentHeight);
 
-    // Tab bar (28px, above tab content)
+    // 3px gap between tab content and tab bar (prevents accent bleed)
+    area.removeFromBottom(3);
+
+    // Tab bar (28px, above gap)
     auto tabBarArea = area.removeFromBottom(28);
     tabBar_.setBounds(tabBarArea);
 
-    // ── Main area: Snap fader + MorphPad ───────────────────────────────────────
-    auto leftCol = area.removeFromLeft(52);
-    snapFader.setBounds(leftCol.reduced(6, 10));
+    // ── Main area: Snap fader + MorphPad (FlexBox row) ──────────────────────────
+    {
+        juce::FlexBox mainRow;
+        mainRow.flexDirection = juce::FlexBox::Direction::row;
+        mainRow.items.add(juce::FlexItem(snapFader)
+            .withWidth(52.0f)
+            .withMargin(juce::FlexItem::Margin(10, 0, 10, 6)));
+        mainRow.items.add(juce::FlexItem(morphPad)
+            .withFlex(1)
+            .withMargin(8));
+        mainRow.performLayout(area);
+        snapshotRing.setBounds(morphPad.getBounds());
+    }
 
-    auto padArea = area.reduced(8);
-    morphPad.setBounds(padArea);
-    snapshotRing.setBounds(padArea);
-
-    // ── Tab content layout ─────────────────────────────────────────────────────
-    // Classic tab: stack V1 controls in tabContent area
+    // ── Tab content layout (FlexBox) ───────────────────────────────────────────
     if (activeTab_ == V2TabBar::Classic)
     {
-        auto classicArea = tabContent;
-        controlStrip.setBounds(classicArea.removeFromTop(48));
-        modeBar.setBounds(classicArea.removeFromTop(32));
-        macroStrip.setBounds(classicArea.removeFromTop(60));
-        breedingPanel.setBounds(classicArea.removeFromTop(38));
-        // Remaining space is padding
+        juce::FlexBox classic;
+        classic.flexDirection = juce::FlexBox::Direction::column;
+        classic.items.add(juce::FlexItem(controlStrip).withHeight(60.0f));
+        classic.items.add(juce::FlexItem(modeBar).withHeight(32.0f));
+        classic.items.add(juce::FlexItem(macroStrip).withHeight(60.0f));
+        classic.items.add(juce::FlexItem(breedingPanel).withHeight(48.0f));
+        classic.items.add(juce::FlexItem().withFlex(1)); // padding
+        classic.performLayout(tabContent);
     }
 
     // Engine tab
@@ -205,9 +228,13 @@ void MorphSnapEditor::resized()
     // Presets tab
     if (presetPage_)
         presetPage_->setBounds(tabContent);
+
+    // AI chat tab
+    if (aiChatPage_)
+        aiChatPage_->setBounds(tabContent);
 }
 
-void MorphSnapEditor::switchTab(int tabIndex)
+void MorePhiEditor::switchTab(int tabIndex)
 {
     activeTab_ = tabIndex;
 
@@ -215,12 +242,14 @@ void MorphSnapEditor::switchTab(int tabIndex)
     setEngineTabVisible(tabIndex == V2TabBar::Engine);
     setModulationTabVisible(tabIndex == V2TabBar::Modulation);
     setPresetsTabVisible(tabIndex == V2TabBar::Presets);
+    setAITabVisible(tabIndex == V2TabBar::AI);
 
     resized();
-    repaint();
+    // Only repaint the content area below title bar and browser row, not the full editor
+    repaint(0, 44, getWidth(), getHeight() - 44);
 }
 
-void MorphSnapEditor::setClassicTabVisible(bool visible)
+void MorePhiEditor::setClassicTabVisible(bool visible)
 {
     controlStrip.setVisible(visible);
     modeBar.setVisible(visible);
@@ -228,46 +257,62 @@ void MorphSnapEditor::setClassicTabVisible(bool visible)
     breedingPanel.setVisible(visible);
 }
 
-void MorphSnapEditor::setEngineTabVisible(bool visible)
+void MorePhiEditor::setEngineTabVisible(bool visible)
 {
     if (enginePage_)
         enginePage_->setVisible(visible);
 }
 
-void MorphSnapEditor::setModulationTabVisible(bool visible)
+void MorePhiEditor::setModulationTabVisible(bool visible)
 {
     if (modulationPage_)
         modulationPage_->setVisible(visible);
 }
 
-void MorphSnapEditor::setPresetsTabVisible(bool visible)
+void MorePhiEditor::setPresetsTabVisible(bool visible)
 {
     if (presetPage_)
         presetPage_->setVisible(visible);
 }
 
-void MorphSnapEditor::timerCallback()
+void MorePhiEditor::setAITabVisible(bool visible)
 {
-    morphPad.repaint();
-    repaint(0, 0, getWidth(), 44);  // RMS meter
+    if (aiChatPage_)
+        aiChatPage_->setVisible(visible);
 }
 
-} // namespace morphsnap
-
-void morphsnap::MorphSnapEditor::openPluginWindow()
+void MorePhiEditor::timerCallback()
 {
+    // M-3 FIX: Only repaint title bar when RMS level visually changes
+    float currentRms = processor.getRmsLevel();
+    float dbLevel = juce::jlimit(0.0f, 1.0f,
+        (juce::Decibels::gainToDecibels(currentRms) + 60.0f) / 60.0f);
+    if (std::abs(dbLevel - lastDbLevel_) > 0.02f)
+    {
+        lastDbLevel_ = dbLevel;
+        repaint(0, 0, getWidth(), 44);
+    }
+}
+
+} // namespace more_phi
+
+void more_phi::MorePhiEditor::openPluginWindow()
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+
     if (hostedWindow_) return;  // Already open
 
     auto* plugin = processor.getHostManager().getPlugin();
     if (!plugin) return;
 
+    juce::Component::SafePointer<MorePhiEditor> safeThis(this);
     hostedWindow_ = std::make_unique<HostedPluginWindow>(
         plugin,
-        [this]() { closePluginWindow(); }  // on-close callback
+        [safeThis]() { if (safeThis) safeThis->closePluginWindow(); }  // on-close callback
     );
 }
 
-void morphsnap::MorphSnapEditor::closePluginWindow()
+void more_phi::MorePhiEditor::closePluginWindow()
 {
     hostedWindow_.reset();
 }

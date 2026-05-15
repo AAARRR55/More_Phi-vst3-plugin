@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/SpectralTypes.h
+ * More-Phi — Core/SpectralTypes.h
  * Shared type definitions for spectral and granular processing modes.
  *
  * These are pure configuration structs — no heap allocation, no JUCE types.
@@ -8,7 +8,7 @@
  */
 #pragma once
 
-namespace morphsnap {
+namespace more_phi {
 
 // ---------------------------------------------------------------------------
 // FFT size
@@ -158,4 +158,4 @@ struct HybridBlendWeights
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

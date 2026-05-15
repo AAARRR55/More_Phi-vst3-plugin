@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/TransientDetector.h
+ * More-Phi — Core/TransientDetector.h
  *
  * Header-only spectral flux transient detector used by SpectralMorphEngine.
  * Computes the per-hop increase in spectral energy and uses a soft threshold
@@ -26,7 +26,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Spectral-flux transient detector.
@@ -156,4 +156,4 @@ struct TransientDetector
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

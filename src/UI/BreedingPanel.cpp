@@ -1,15 +1,16 @@
 /*
- * MorphSnap - UI/BreedingPanel.cpp
+ * More-Phi - UI/BreedingPanel.cpp
  */
 #include "BreedingPanel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/SnapshotBank.h"
+#include "UI/Bindings/ParameterBinding.h"
 #include <array>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
-BreedingPanel::BreedingPanel(MorphSnapProcessor& processor)
+BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
     : proc_(processor)
 {
     breedButton_.onClick = [this]() { breedSnapshots(); };
@@ -149,9 +150,9 @@ void BreedingPanel::randomizeMorphPosition()
     proc_.setMorphSource(0);
 
     if (auto* px = proc_.getAPVTS().getParameter("morphX"))
-        px->setValueNotifyingHost(x);
+        ParameterBinding::setValueWithGesture(*px, x);
     if (auto* py = proc_.getAPVTS().getParameter("morphY"))
-        py->setValueNotifyingHost(y);
+        ParameterBinding::setValueWithGesture(*py, y);
 
     statusLabel_.setText("Randomized position: X " + juce::String(x, 2)
                              + " / Y " + juce::String(y, 2),
@@ -171,4 +172,4 @@ int BreedingPanel::findNextEmptySlot() const
     return 0;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

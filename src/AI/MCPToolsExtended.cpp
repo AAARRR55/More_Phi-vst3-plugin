@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/MCPToolsExtended.cpp
+ * More-Phi — AI/MCPToolsExtended.cpp
  * Implementation of extended MCP tools for AI integration.
  */
 #include "MCPToolsExtended.h"
@@ -16,7 +16,7 @@
 #include <future>
 #include <map>
 
-namespace morphsnap {
+namespace more_phi {
 
 const ExtendedToolInfo kExtendedTools[] = {
     {
@@ -240,7 +240,7 @@ const ExtendedToolInfo kExtendedTools[] = {
                 "pipeline": {"type": "string", "enum": ["legacy", "v2", "v3"], "default": "v3"},
                 "samples": {"type": "integer", "default": 1000},
                 "output_path": {"type": "string"},
-                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "dataset_name": {"type": "string", "default": "morephi_dataset"},
                 "source_audio_dir": {"type": "string"},
                 "sample_rate": {"type": "number", "default": 48000},
                 "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
@@ -278,7 +278,7 @@ const ExtendedToolInfo kExtendedTools[] = {
             "properties": {
                 "samples": {"type": "integer", "default": 1000, "description": "Total samples to generate"},
                 "output_path": {"type": "string", "description": "Output directory path"},
-                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "dataset_name": {"type": "string", "default": "morephi_dataset"},
                 "source_audio_dir": {"type": "string", "description": "Directory of source audio files"},
                 "sample_rate": {"type": "number", "default": 48000},
                 "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
@@ -307,7 +307,7 @@ const ExtendedToolInfo kExtendedTools[] = {
             "properties": {
                 "samples": {"type": "integer", "default": 1000},
                 "output_path": {"type": "string"},
-                "dataset_name": {"type": "string", "default": "morphsnap_dataset"},
+                "dataset_name": {"type": "string", "default": "morephi_dataset"},
                 "source_audio_dir": {"type": "string"},
                 "sample_rate": {"type": "number", "default": 48000},
                 "chain_type": {"type": "string", "enum": ["eq", "dynamics", "mastering", "mixing", "creative", "custom"], "default": "mastering"},
@@ -334,15 +334,15 @@ const int kExtendedToolCount = sizeof(kExtendedTools) / sizeof(kExtendedTools[0]
 
 juce::String MCPToolsExtended::analyzeParameters(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& processor,
     ParameterClassifier& classifier)
 {
     bool includeDescriptions = params.getProperty("include_descriptions", true);
     bool includeHidden = params.getProperty("include_hidden", false);
     int maxParams = params.getProperty("max_parameters", 50);
-    
+
     auto exposedIndices = classifier.getExposedParameterIndices();
-    
+
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
     result->setProperty("success", true);
     juce::Array<juce::var> paramArray;
@@ -389,7 +389,7 @@ juce::String MCPToolsExtended::analyzeParameters(
 
 juce::String MCPToolsExtended::exposeParameters(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& /*processor*/,
     ParameterClassifier& classifier)
 {
     juce::String action = params.getProperty("action", "expose").toString();
@@ -397,24 +397,24 @@ juce::String MCPToolsExtended::exposeParameters(
     if (action == "expose_all")
     {
         classifier.exposeAll();
-        return R"({"success": true, "message": "All parameters exposed"})";
+        return R"json({"success": true, "message": "All parameters exposed"})json";
     }
     else if (action == "hide_all")
     {
         classifier.hideAll();
-        return R"({"success": true, "message": "All parameters hidden"})";
+        return R"json({"success": true, "message": "All parameters hidden"})json";
     }
     else if (action == "reset_learn")
     {
         classifier.clearLearningData();
-        return R"({"success": true, "message": "Learning data cleared"})";
+        return R"json({"success": true, "message": "Learning data cleared"})json";
     }
     
     auto indices = parseParameterList(params["parameter_indices"]);
     
     if (indices.empty())
     {
-        return R"({"success": false, "error": "No parameter indices provided"})";
+        return R"json({"success": false, "error": "No parameter indices provided"})json";
     }
     
     int changed = 0;
@@ -481,40 +481,61 @@ juce::String MCPToolsExtended::getTokenEstimate(
 
 juce::String MCPToolsExtended::setParametersOptimized(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& processor,
     TokenOptimizer& optimizer)
 {
     // Parse parameters array
     auto paramsArray = params["parameters"];
     if (!paramsArray.isArray())
     {
-        return R"({"success": false, "error": "parameters must be an array"})";
+        return R"json({"success": false, "error": "parameters must be an array"})json";
     }
     
+    auto& bridge = processor.getParameterBridge();
+    const int maxParamCount = bridge.getParameterCount();
+    const int requested = paramsArray.size();
+    int rejected = 0;
     std::vector<std::pair<int, float>> updates;
     for (int i = 0; i < paramsArray.size(); ++i)
     {
         auto item = paramsArray[i];
-        int idx = item.getProperty("index", -1);
-        float val = item.getProperty("value", 0.0f);
-        if (idx >= 0)
+        const int idx = item.hasProperty("index")
+            ? static_cast<int>(item.getProperty("index", -1))
+            : static_cast<int>(item.getProperty("id", -1));
+        const auto stableId = item.getProperty("stableId",
+                              item.getProperty("stable_id", "")).toString();
+        const auto name = item.getProperty("name", "").toString();
+        const float val = item.getProperty("value", 0.0f);
+        const auto resolution = bridge.resolveParameter(stableId, idx, name);
+        if (resolution.success && resolution.index >= 0 && resolution.index < maxParamCount)
         {
-            updates.push_back({idx, val});
+            updates.push_back({resolution.index, val});
+        }
+        else
+        {
+            ++rejected;
         }
     }
     
     // Check budget
     if (optimizer.isBudgetExceeded())
     {
-        return R"({"success": false, "error": "token budget exceeded"})";
+        return R"json({"success": false, "error": "token budget exceeded"})json";
     }
     
-    // Apply updates
+    // Apply updates (defensive bounds check before enqueue)
     int applied = 0;
+    int queueFailures = 0;
     for (const auto& [idx, val] : updates)
     {
-        processor.enqueueParameterSet(idx, val);
-        applied++;
+        if (idx < 0 || idx >= maxParamCount)
+            continue;
+        if (processor.enqueueParameterSet(idx, val,
+                                          MorePhiProcessor::ParameterEditSource::MCP,
+                                          true))
+            applied++;
+        else
+            queueFailures++;
     }
     
     // Record usage estimate
@@ -527,9 +548,26 @@ juce::String MCPToolsExtended::setParametersOptimized(
     usage.timestamp = std::chrono::steady_clock::now();
     optimizer.recordUsage(usage);
     
+    const bool allQueued = requested > 0
+        && applied == requested
+        && rejected == 0
+        && queueFailures == 0;
+
     juce::DynamicObject::Ptr result = new juce::DynamicObject();
-    result->setProperty("success", true);
+    result->setProperty("success", allQueued);
+    result->setProperty("queued_count", applied);
     result->setProperty("applied_count", applied);
+    result->setProperty("requested_count", requested);
+    result->setProperty("rejected_count", rejected);
+    result->setProperty("queue_failures", queueFailures);
+    if (queueFailures > 0)
+        result->setProperty("error", "queue_full");
+    else if (requested == 0)
+        result->setProperty("error", "empty_parameters");
+    else if (applied == 0)
+        result->setProperty("error", "no_parameters_queued");
+    else if (rejected > 0)
+        result->setProperty("error", "partial_rejected");
     result->setProperty("estimated_tokens", static_cast<int>(estimate.totalTokens));
     result->setProperty("estimated_cost_usd", estimate.estimatedCostUsd);
     result->setProperty("budget_remaining_usd", optimizer.getBudgetRemainingUsd());
@@ -540,12 +578,15 @@ juce::String MCPToolsExtended::setParametersOptimized(
 
 juce::String MCPToolsExtended::getMorphCompatibility(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& processor,
     ParameterClassifier& classifier)
 {
     int snapA = params.getProperty("snapshot_a", 0);
     int snapB = params.getProperty("snapshot_b", 1);
-    
+
+    if (snapA < 0 || snapA >= SnapshotBank::NUM_SLOTS || snapB < 0 || snapB >= SnapshotBank::NUM_SLOTS)
+        return R"json({"success":false,"error":"invalid slot index"})json";
+
     // Get snapshot data
     std::vector<float> stateA;
     processor.getSnapshotBank().getSlotValuesCopy(snapA, stateA);
@@ -554,7 +595,7 @@ juce::String MCPToolsExtended::getMorphCompatibility(
     
     if (stateA.empty() || stateB.empty())
     {
-        return R"({"success": false, "error": "One or both snapshots are empty"})";
+        return R"json({"success": false, "error": "One or both snapshots are empty"})json";
     }
 
     const auto comparison = MorphSafeAdvisor::compareSnapshots(stateA, stateB, classifier);
@@ -591,21 +632,27 @@ juce::String MCPToolsExtended::formatCompatibilityReport(
 
 juce::String MCPToolsExtended::suggestIntermediateSnapshots(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& processor,
     ParameterClassifier& classifier)
 {
     int fromSnap = params.getProperty("from_snapshot", 0);
     int toSnap = params.getProperty("to_snapshot", 1);
     int steps = params.getProperty("steps", 2);
     
+    if (fromSnap < 0 || fromSnap >= SnapshotBank::NUM_SLOTS ||
+        toSnap < 0 || toSnap >= SnapshotBank::NUM_SLOTS)
+    {
+        return "{\"success\": false, \"error\": \"Snapshot index out of range (must be 0-11)\"}";
+    }
+
     std::vector<float> stateA;
     processor.getSnapshotBank().getSlotValuesCopy(fromSnap, stateA);
     std::vector<float> stateB;
     processor.getSnapshotBank().getSlotValuesCopy(toSnap, stateB);
-    
+
     if (stateA.empty() || stateB.empty())
     {
-        return R"({"success": false, "error": "One or both snapshots are empty"})";
+        return "{\"success\": false, \"error\": \"One or both snapshots are empty\"}";
     }
     
     auto intermediates = MorphSafeAdvisor::suggestIntermediateSnapshots(
@@ -642,7 +689,7 @@ juce::String MCPToolsExtended::suggestIntermediateSnapshots(
 
 juce::String MCPToolsExtended::getParameterCategories(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& /*processor*/,
     ParameterClassifier& classifier)
 {
     bool includeEmpty = params.getProperty("include_empty", false);
@@ -692,11 +739,11 @@ juce::String MCPToolsExtended::learnFromAdjustment(
     ParameterClassifier& classifier)
 {
     int idx = params.getProperty("parameter_index", -1);
-    float boost = params.getProperty("importance_boost", 0.1f);
+    (void)params.getProperty("importance_boost", 0.1f);  // boost param reserved for future weighted recording
     
     if (idx < 0)
     {
-        return R"({"success": false, "error": "Invalid parameter index"})";
+        return R"json({"success": false, "error": "Invalid parameter index"})json";
     }
     
     classifier.recordModification(idx);
@@ -713,7 +760,7 @@ juce::String MCPToolsExtended::learnFromAdjustment(
 }
 
 juce::String MCPToolsExtended::getLearnModeStatus(
-    const juce::var& params,
+    const juce::var& /*params*/,
     ParameterClassifier& classifier)
 {
     auto config = classifier.getLearnConfiguration();
@@ -753,20 +800,20 @@ juce::String MCPToolsExtended::setLearnModeConfig(
     
     classifier.setLearnConfiguration(config);
     
-    return R"({"success": true, "message": "Learn Mode configuration updated"})";
+    return R"json({"success": true, "message": "Learn Mode configuration updated"})json";
 }
 
 juce::String MCPToolsExtended::resetLearningData(
-    const juce::var& params,
+    const juce::var& /*params*/,
     ParameterClassifier& classifier)
 {
     classifier.clearLearningData();
-    return R"({"success": true, "message": "Learning data cleared"})";
+    return R"json({"success": true, "message": "Learning data cleared"})json";
 }
 
 juce::String MCPToolsExtended::getDiscreteParameters(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& /*processor*/,
     ParameterClassifier& classifier)
 {
     bool includeBinary = params.getProperty("include_binary", true);
@@ -817,15 +864,16 @@ juce::String MCPToolsExtended::getDiscreteParameters(
 
 juce::String MCPToolsExtended::suggestMorphSettings(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& processor,
     ParameterClassifier& classifier)
 {
     int snapA = params.getProperty("snapshot_a", -1);
     int snapB = params.getProperty("snapshot_b", -1);
     
-    if (snapA < 0 || snapB < 0)
+    if (snapA < 0 || snapA >= SnapshotBank::NUM_SLOTS ||
+        snapB < 0 || snapB >= SnapshotBank::NUM_SLOTS)
     {
-        return R"({"success": false, "error": "Must specify both snapshots"})";
+        return R"json({"success": false, "error": "Snapshot index out of range (must be 0-11)"})json";
     }
     
     std::vector<float> stateA;
@@ -931,7 +979,7 @@ juce::String MCPToolsExtended::setTokenBudget(
 
 juce::String MCPToolsExtended::explainParameter(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& /*processor*/,
     ParameterClassifier& classifier)
 {
     int idx = params.getProperty("parameter_index", -1);
@@ -939,7 +987,7 @@ juce::String MCPToolsExtended::explainParameter(
     
     if (idx < 0)
     {
-        return R"({"success": false, "error": "Invalid parameter index"})";
+        return R"json({"success": false, "error": "Invalid parameter index"})json";
     }
     
     const auto& meta = classifier.getMetadata(idx);
@@ -1001,7 +1049,7 @@ juce::String MCPToolsExtended::explainParameter(
 
 juce::String MCPToolsExtended::findRelatedParameters(
     const juce::var& params,
-    MorphSnapProcessor& processor,
+    MorePhiProcessor& /*processor*/,
     ParameterClassifier& classifier)
 {
     int idx = params.getProperty("parameter_index", -1);
@@ -1009,7 +1057,7 @@ juce::String MCPToolsExtended::findRelatedParameters(
     
     if (idx < 0)
     {
-        return R"({"success": false, "error": "Invalid parameter index"})";
+        return R"json({"success": false, "error": "Invalid parameter index"})json";
     }
     
     const auto& sourceMeta = classifier.getMetadata(idx);
@@ -1065,9 +1113,9 @@ std::vector<int> MCPToolsExtended::parseParameterList(const juce::var& params)
     return result;
 }
 
-} // namespace morphsnap
+} // namespace more_phi
 
-juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& params, morphsnap::MorphSnapProcessor& processor)
+juce::String more_phi::MCPToolsExtended::generateDataset(const juce::var& params, more_phi::MorePhiProcessor& processor)
 {
     const auto pipeline = params.getProperty("pipeline", "v3").toString().trim().toLowerCase();
 
@@ -1085,7 +1133,7 @@ juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& param
         return juce::String(result.dump());
     }
 
-    morphsnap::GenerationConfig config;
+    more_phi::GenerationConfig config;
     
     // Parse parameters from MCP call
     config.samplesPerState = static_cast<int>(params.getProperty("samples", 100));
@@ -1093,7 +1141,7 @@ juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& param
     
     juce::String outputPath = params.getProperty("output_path", "");
     if (outputPath.isEmpty())
-        config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MorphSnap_Datasets").getChildFile(processor.getName() + "_" + juce::Time::getCurrentTime().toString(true, true));
+        config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MorePhi_Datasets").getChildFile(processor.getName() + "_" + juce::Time::getCurrentTime().toString(true, true));
     else
         config.outputDirectory = juce::File(outputPath);
 
@@ -1105,7 +1153,7 @@ juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& param
     // concurrent MCP thread. The processor's getSanityConfigCopy() is properly protected.
     config.sanityConfig = processor.getSanityConfigCopy();
 
-    morphsnap::DatasetGenerator generator(processor.getHostManager());
+    more_phi::DatasetGenerator generator(processor.getHostManager());
     
     bool success = generator.generate(config, inputFile);
 
@@ -1123,25 +1171,25 @@ juce::String morphsnap::MCPToolsExtended::generateDataset(const juce::var& param
 
 // ── V2 Dataset Generation ─────────────────────────────────────────────────────
 
-static morphsnap::ChainType parseChainType(const juce::String& s)
+static more_phi::ChainType parseChainType(const juce::String& s)
 {
-    if (s == "eq")        return morphsnap::ChainType::EQOnly;
-    if (s == "dynamics")  return morphsnap::ChainType::DynamicsOnly;
-    if (s == "mixing")    return morphsnap::ChainType::Mixing;
-    if (s == "creative")  return morphsnap::ChainType::Creative;
-    if (s == "custom")    return morphsnap::ChainType::Custom;
-    return morphsnap::ChainType::Mastering;
+    if (s == "eq")        return more_phi::ChainType::EQOnly;
+    if (s == "dynamics")  return more_phi::ChainType::DynamicsOnly;
+    if (s == "mixing")    return more_phi::ChainType::Mixing;
+    if (s == "creative")  return more_phi::ChainType::Creative;
+    if (s == "custom")    return more_phi::ChainType::Custom;
+    return more_phi::ChainType::Mastering;
 }
 
-static morphsnap::OutputFormat parseOutputFormat(const juce::String& s)
+static more_phi::OutputFormat parseOutputFormat(const juce::String& s)
 {
-    if (s == "wav24")  return morphsnap::OutputFormat::WAV24;
-    if (s == "flac24") return morphsnap::OutputFormat::FLAC24;
-    return morphsnap::OutputFormat::WAV32Float;
+    if (s == "wav24")  return more_phi::OutputFormat::WAV24;
+    if (s == "flac24") return more_phi::OutputFormat::FLAC24;
+    return more_phi::OutputFormat::WAV32Float;
 }
 
-juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
-    const juce::var& params, morphsnap::MorphSnapProcessor& processor)
+juce::String more_phi::MCPToolsExtended::generateDatasetV2(
+    const juce::var& params, more_phi::MorePhiProcessor& processor)
 {
     // If a config file is provided, load from it
     juce::String configFilePath = params.getProperty("config_file", "");
@@ -1163,7 +1211,7 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
     {
         // Parse individual parameters
         config.totalSamples = static_cast<int>(params.getProperty("samples", 1000));
-        config.datasetName = params.getProperty("dataset_name", "morphsnap_dataset").toString();
+        config.datasetName = params.getProperty("dataset_name", "morephi_dataset").toString();
         config.sampleRate = static_cast<double>(params.getProperty("sample_rate", 48000.0));
         config.fullDuration = static_cast<float>(params.getProperty("full_duration", 30.0));
         config.transientDuration = static_cast<float>(params.getProperty("transient_duration", 2.0));
@@ -1191,7 +1239,7 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
     juce::String outputPath = params.getProperty("output_path", "");
     if (outputPath.isEmpty())
         config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-            .getChildFile("MorphSnap_Datasets")
+            .getChildFile("MorePhi_Datasets")
             .getChildFile(config.datasetName + "_v2_" + juce::Time::getCurrentTime().toString(true, true));
     else
         config.outputDirectory = juce::File(outputPath);
@@ -1227,7 +1275,15 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
         return juce::String(err.dump());
     }
 
-    // Wait for completion
+    // Wait for completion (10-second timeout to avoid blocking the MCP thread indefinitely)
+    if (future.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
+    {
+        nlohmann::json timeout;
+        timeout["success"] = false;
+        timeout["error"] = "generation_timeout";
+        timeout["message"] = "Dataset generation is still running. Check logs for progress.";
+        return juce::String(timeout.dump());
+    }
     auto genResult = future.get();
 
     // Build response
@@ -1266,8 +1322,8 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV2(
 
 // ── V3 Dataset Generation ─────────────────────────────────────────────────────
 
-juce::String morphsnap::MCPToolsExtended::generateDatasetV3(
-    const juce::var& params, morphsnap::MorphSnapProcessor& processor)
+juce::String more_phi::MCPToolsExtended::generateDatasetV3(
+    const juce::var& params, more_phi::MorePhiProcessor& processor)
 {
     V3GenerationConfig v3Config;
 
@@ -1289,7 +1345,7 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV3(
     {
         // Parse V2 base config fields
         v3Config.baseConfig.totalSamples = static_cast<int>(params.getProperty("samples", 1000));
-        v3Config.baseConfig.datasetName = params.getProperty("dataset_name", "morphsnap_dataset").toString();
+        v3Config.baseConfig.datasetName = params.getProperty("dataset_name", "morephi_dataset").toString();
         v3Config.baseConfig.sampleRate = static_cast<double>(params.getProperty("sample_rate", 48000.0));
         v3Config.baseConfig.chainType = parseChainType(params.getProperty("chain_type", "mastering").toString());
         v3Config.baseConfig.outputFormat = parseOutputFormat(params.getProperty("output_format", "wav32").toString());
@@ -1313,7 +1369,7 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV3(
     if (outputPath.isEmpty())
     {
         auto baseDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-            .getChildFile("MorphSnap_Datasets")
+            .getChildFile("MorePhi_Datasets")
             .getChildFile(v3Config.baseConfig.datasetName + "_v3_" + juce::Time::getCurrentTime().toString(true, true));
         v3Config.outputDirectory = baseDir;
         v3Config.baseConfig.outputDirectory = baseDir;
@@ -1357,7 +1413,15 @@ juce::String morphsnap::MCPToolsExtended::generateDatasetV3(
         return juce::String(err.dump());
     }
 
-    // Wait for completion
+    // Wait for completion (10-second timeout to avoid blocking the MCP thread indefinitely)
+    if (future.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
+    {
+        nlohmann::json timeout;
+        timeout["success"] = false;
+        timeout["error"] = "generation_timeout";
+        timeout["message"] = "Dataset generation is still running. Check logs for progress.";
+        return juce::String(timeout.dump());
+    }
     auto [success, message] = future.get();
 
     // Get final progress snapshot

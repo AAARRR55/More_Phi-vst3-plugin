@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/DatasetOrganizer.cpp
+ * More-Phi — AI/Dataset/DatasetOrganizer.cpp
  * Implementation of dataset organization, splitting, and verification.
  */
 #include "DatasetOrganizer.h"
@@ -10,7 +10,7 @@
 #include <random>
 #include <set>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -368,6 +368,9 @@ void DatasetOrganizer::performSplit(const SplitConfig& config)
         }
     }
 
+    // Reload manifest to pick up any updates made by moveSample() calls
+    // (moveSample updates audioPath and saves its own manifest copy)
+    manifest = loadGlobalManifest();
     manifest["updatedAt"] = juce::Time::getCurrentTime().toMilliseconds();
     saveGlobalManifest(manifest);
     updateManifests();
@@ -1076,6 +1079,7 @@ void DatasetOrganizer::logError(const juce::String& message)
 {
     // In production, this would log to a proper logging system
     DBG("DatasetOrganizer Error: " + message);
+    (void)message; // Suppress warning when DBG is a no-op
 }
 
-} // namespace morphsnap
+} // namespace more_phi

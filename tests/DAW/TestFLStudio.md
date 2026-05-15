@@ -1,4 +1,4 @@
-# MorphSnap - FL Studio Test Plan
+# More-Phi - FL Studio Test Plan
 
 **DAW:** FL Studio
 **Versions Tested:** 21.x, 24.x
@@ -10,7 +10,7 @@
 ## Prerequisites
 
 1. FL Studio 21 or later installed
-2. MorphSnap.vst3 installed in VST3 folder
+2. MorePhi.vst3 installed in VST3 folder
 3. At least one third-party VST3 plugin for hosting tests
 4. ASIO audio driver configured
 
@@ -20,11 +20,11 @@
 
 ### Stack Size Requirements
 - FL Studio uses a smaller stack by default
-- MorphSnap requires 4MB stack (configured via CMake: `/STACK:4194304`)
+- More-Phi requires 4MB stack (configured via CMake: `/STACK:4194304`)
 - **Known Issue:** Plugin-in-plugin hosting may crash with insufficient stack
 
 ### PDC (Plugin Delay Compensation)
-- MorphSnap reports 0 latency
+- More-Phi reports 0 latency
 - No PDC should be applied
 - Test with other latency-inducing plugins in chain
 
@@ -43,8 +43,8 @@
 1. Open FL Studio
 2. Open Plugin Manager (Options > Manage plugins)
 3. Scan for new plugins
-4. Verify MorphSnap appears in plugin list
-5. Add MorphSnap to a mixer insert
+4. Verify More-Phi appears in plugin list
+5. Add More-Phi to a mixer insert
 
 **Expected Result:**
 - Plugin appears in scan results
@@ -59,7 +59,7 @@
 
 **Priority:** P0 - Critical
 **Steps:**
-1. Add MorphSnap to mixer insert
+1. Add More-Phi to mixer insert
 2. Click "Load Plugin" button
 3. Select a VST3 synth (e.g., Serum, Vital)
 4. Wait for plugin to load
@@ -77,7 +77,7 @@
 
 **Priority:** P0 - Critical
 **Steps:**
-1. Add MorphSnap with hosted synth
+1. Add More-Phi with hosted synth
 2. Play MIDI notes via FL Studio piano roll
 3. Verify audio passes through to master
 
@@ -115,7 +115,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Add MorphSnap to project
+1. Add More-Phi to project
 2. Enable "Record automation" in FL Studio
 3. Move morphX/morphY during playback
 4. Stop recording
@@ -134,7 +134,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Create project with MorphSnap + hosted plugin
+1. Create project with More-Phi + hosted plugin
 2. Capture several snapshots
 3. Set morph position to specific location
 4. Save project (.flp)
@@ -155,7 +155,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap to project
+1. Add More-Phi to project
 2. Check AI Status Panel shows "MCP Running"
 3. Connect external MCP client (e.g., Claude)
 4. Send morph command via MCP
@@ -195,8 +195,8 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap to Insert 1
-2. Add MorphSnap to Insert 2
+1. Add More-Phi to Insert 1
+2. Add More-Phi to Insert 2
 3. Load different hosted plugins in each
 4. Process audio through both
 
@@ -213,7 +213,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap with hosted plugin
+1. Add More-Phi with hosted plugin
 2. Enable all 12 snapshot slots
 3. Continuously morph for 60 seconds
 4. Monitor CPU usage in FL Studio

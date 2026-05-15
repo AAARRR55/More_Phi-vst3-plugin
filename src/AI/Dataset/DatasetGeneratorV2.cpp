@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/DatasetGeneratorV2.cpp
+ * More-Phi — AI/Dataset/DatasetGeneratorV2.cpp
  * Implementation of the comprehensive synthetic audio dataset generator.
  */
 #include "DatasetGeneratorV2.h"
@@ -9,7 +9,7 @@
 #include <thread>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 //==============================================================================
 // DatasetGeneratorConfig Implementation
@@ -410,12 +410,12 @@ bool DatasetGeneratorV2::startGeneration()
                 progress.currentPhase = "Generating samples";
                 progress.currentSample = juce::String(i);
 
-                auto elapsed = juce::Time::getMillisecondCounter() - startTimeMs_;
-                progress.elapsedMs = elapsed;
+                auto elapsed = static_cast<juce::int64>(juce::Time::getMillisecondCounter()) - startTimeMs_;
+                progress.elapsedMs = static_cast<double>(elapsed);
                 if (progress.samplesCompleted > 0)
                 {
-                    progress.estimatedRemainingMs = (elapsed / progress.samplesCompleted) * (progress.totalSamples - progress.samplesCompleted);
-                    progress.samplesPerHour = static_cast<int>(progress.samplesCompleted * 3600000.0 / elapsed);
+                    progress.estimatedRemainingMs = (static_cast<double>(elapsed) / progress.samplesCompleted) * (progress.totalSamples - progress.samplesCompleted);
+                    progress.samplesPerHour = static_cast<int>(progress.samplesCompleted * 3600000.0 / static_cast<double>(elapsed));
                 }
 
                 onProgress(progress);
@@ -453,13 +453,13 @@ GenerationProgress DatasetGeneratorV2::getProgress() const
     progress.totalSamples = config_.totalSamples;
     progress.percentage = static_cast<float>(progress.samplesCompleted) / progress.totalSamples * 100.0f;
 
-    auto elapsed = juce::Time::getMillisecondCounter() - startTimeMs_;
-    progress.elapsedMs = elapsed;
+    auto elapsed = static_cast<juce::int64>(juce::Time::getMillisecondCounter()) - startTimeMs_;
+    progress.elapsedMs = static_cast<double>(elapsed);
 
     if (progress.samplesCompleted > 0)
     {
-        progress.estimatedRemainingMs = (elapsed / progress.samplesCompleted) * (progress.totalSamples - progress.samplesCompleted);
-        progress.samplesPerHour = static_cast<int>(progress.samplesCompleted * 3600000.0 / elapsed);
+        progress.estimatedRemainingMs = (static_cast<double>(elapsed) / progress.samplesCompleted) * (progress.totalSamples - progress.samplesCompleted);
+        progress.samplesPerHour = static_cast<int>(progress.samplesCompleted * 3600000.0 / static_cast<double>(elapsed));
     }
 
     return progress;
@@ -570,7 +570,7 @@ void DatasetGeneratorV2::processSample(int sampleIndex, const std::vector<float>
 }
 
 DatasetMetadata DatasetGeneratorV2::generateSample(
-    int sampleIndex,
+    int /*sampleIndex*/,
     const SourceAudio& source,
     const std::vector<float>& parameters)
 {
@@ -658,7 +658,7 @@ void DatasetGeneratorV2::finalizeGeneration()
         result.success = !shouldStop_.load();
         result.samplesGenerated = samplesCompleted_.load();
         result.stats = organizer_->computeStats();
-        result.totalTimeMs = juce::Time::getMillisecondCounter() - startTimeMs_;
+        result.totalTimeMs = static_cast<double>(static_cast<juce::int64>(juce::Time::getMillisecondCounter()) - startTimeMs_);
 
         if (result.totalTimeMs > 0)
         {
@@ -703,4 +703,4 @@ bool DatasetGeneratorV2::loadCheckpoint(const juce::File& checkpointFile)
     return true;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

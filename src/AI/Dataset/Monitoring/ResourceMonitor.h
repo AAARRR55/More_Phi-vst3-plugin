@@ -19,7 +19,7 @@
 #include <psapi.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * SystemLoadLevel — drives adaptive throttling in the pipeline.
@@ -219,4 +219,4 @@ private:
     uint64_t prevUser_   = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

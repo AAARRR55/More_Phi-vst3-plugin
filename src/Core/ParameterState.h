@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ParameterState.h
+ * More-Phi — Core/ParameterState.h
  * Normalized parameter vector storage for snapshots.
  * REAL-TIME SAFE: Uses fixed-size array to avoid allocations.
  */
@@ -10,7 +10,7 @@
 #include <cstring>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Maximum supported parameters per hosted plugin
 // Most plugins have < 500 parameters; this provides headroom
@@ -57,4 +57,4 @@ struct ParameterState
     int size() const { return parameterCount; }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/ParameterMapPanel.h
+ * More-Phi — UI/ParameterMapPanel.h
  * Scrollable panel showing ALL hosted plugin parameters with sliders.
  * Supports learn-mode to whitelist which params are included in morphing.
  */
@@ -9,15 +9,15 @@
 #include <vector>
 #include <set>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 // A single parameter row: checkbox + name + slider + value readout
 class ParameterRow : public juce::Component
 {
 public:
-    ParameterRow(int paramIndex, MorphSnapProcessor& proc);
+    ParameterRow(int paramIndex, MorePhiProcessor& proc);
     void resized() override;
     void refresh();
 
@@ -26,7 +26,7 @@ public:
 
 private:
     int index_;
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     juce::ToggleButton morphToggle_;
     juce::Label nameLabel_;
     juce::Slider slider_;
@@ -39,7 +39,7 @@ class ParameterMapPanel : public juce::Component,
                            private juce::Timer
 {
 public:
-    explicit ParameterMapPanel(MorphSnapProcessor& proc);
+    explicit ParameterMapPanel(MorePhiProcessor& proc);
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -52,7 +52,7 @@ public:
 private:
     void timerCallback() override;
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     juce::Viewport viewport_;
     juce::Component rowContainer_;
     std::vector<std::unique_ptr<ParameterRow>> rows_;
@@ -62,4 +62,4 @@ private:
     int lastParamCount_ = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -3,8 +3,13 @@
 #include <algorithm>
 #include <cmath>
 
+// Suppress unreachable code warnings for platform fallback paths
+#ifdef _MSC_VER
+#pragma warning(disable: 4702)
+#endif
+
 #if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
-#define MORPHSNAP_SIMD_X86 1
+#define MORE_PHI_SIMD_X86 1
 #include <immintrin.h>
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -12,10 +17,10 @@
 #include <cpuid.h>
 #endif
 #else
-#define MORPHSNAP_SIMD_X86 0
+#define MORE_PHI_SIMD_X86 0
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 bool SIMDAudio::supportsAVX()
 {
@@ -31,7 +36,7 @@ bool SIMDAudio::supportsSSE()
 
 bool SIMDAudio::detectAVXSupport()
 {
-#if MORPHSNAP_SIMD_X86
+#if MORE_PHI_SIMD_X86
    #ifdef _MSC_VER
     int cpuInfo[4] = {};
     __cpuid(cpuInfo, 1);
@@ -47,7 +52,7 @@ bool SIMDAudio::detectAVXSupport()
 
 bool SIMDAudio::detectSSESupport()
 {
-#if MORPHSNAP_SIMD_X86
+#if MORE_PHI_SIMD_X86
    #ifdef _MSC_VER
     int cpuInfo[4] = {};
     __cpuid(cpuInfo, 1);
@@ -145,7 +150,7 @@ float SIMDAudio::calculateRMS(const float* input, size_t numSamples)
     return calculateRMSFallback(input, numSamples);
 }
 
-#if MORPHSNAP_SIMD_X86
+#if MORE_PHI_SIMD_X86
 
 void SIMDAudio::multiplyScalarAVX(const float* input, float scalar, float* output, size_t numSamples)
 {
@@ -481,4 +486,4 @@ float SIMDAudio::calculateRMSFallback(const float* input, size_t numSamples)
     return std::sqrt(sum / static_cast<float>(numSamples));
 }
 
-} // namespace morphsnap
+} // namespace more_phi

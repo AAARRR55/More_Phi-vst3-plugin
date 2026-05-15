@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/TokenOptimizer.h
+ * More-Phi — AI/TokenOptimizer.h
  * Token cost estimation, budgeting, and optimization for MCP/AI integration.
  * Tracks usage and provides strategies for cost-effective AI interactions.
  */
@@ -12,7 +12,7 @@
 #include <chrono>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Token and cost tracking
 struct TokenUsage
@@ -240,7 +240,8 @@ private:
         const ParameterClassifier* classifier) const;
     
     void updateStats(const TokenUsage& usage);
-    void cleanupOldTimestamps() const;
+    void cleanupOldTimestamps();
+    void cleanupOldTimestampsLocked() const; // Caller must hold rateMutex_; only touches mutable members
 };
 
 // UI integration helper
@@ -260,4 +261,4 @@ public:
     static std::string getOptimizationExplanation(const TokenOptimizer::Estimate& est);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

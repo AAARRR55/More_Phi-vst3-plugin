@@ -1,10 +1,10 @@
 /*
- * MorphSnap — UI/SnapshotRing.cpp
+ * More-Phi — UI/SnapshotRing.cpp
  */
 #include "SnapshotRing.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 void SnapshotRing::paint(juce::Graphics& g)
 {
@@ -23,17 +23,21 @@ void SnapshotRing::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isRightButtonDown())
     {
         // Right-click: capture current state to this slot
-        bank.capture(slot, proc_.getParameterBridge());
+        proc_.captureSnapshotToSlot(slot, true);
     }
     else
     {
         // Left-click: recall this slot if occupied
         if (bank.isOccupied(slot))
-            proc_.recallSnapshotQueued(slot);
+        {
+            const auto mode = proc_.getRecallMode() == 1
+                ? MorePhiProcessor::SnapshotRecallMode::FullStateAndParams
+                : MorePhiProcessor::SnapshotRecallMode::FastParamsOnly;
+            proc_.recallSnapshot(slot, mode);
+        }
     }
 
     repaint();
-    if (auto* parent = getParentComponent()) parent->repaint();
 }
 
 int SnapshotRing::hitTestSlot(juce::Point<float> pos) const
@@ -56,4 +60,4 @@ int SnapshotRing::hitTestSlot(juce::Point<float> pos) const
     return -1;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/ParameterSafetyConfig.h
+ * More-Phi — AI/Dataset/ParameterSafetyConfig.h
  * Parameter safety configuration for safe DSP parameter randomization.
  *
  * The "Parameter Trap" Problem:
@@ -21,7 +21,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Parameter category for safety classification */
 enum class ParameterCategory
@@ -243,4 +243,4 @@ private:
     std::unordered_map<int, size_t> indexMap_; ///< Maps parameter index to rules_ position
 };
 
-} // namespace morphsnap
+} // namespace more_phi

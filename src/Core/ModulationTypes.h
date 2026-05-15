@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ModulationTypes.h
+ * More-Phi — Core/ModulationTypes.h
  * Shared type definitions for the V2 modulation system.
  *
  * These types are pure data — no JUCE or audio-thread allocations.
@@ -11,7 +11,7 @@
 #include <array>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ---------------------------------------------------------------------------
 // Modulation source identifiers
@@ -127,4 +127,4 @@ struct ModulationState
     int activeRouteCount = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,14 +1,21 @@
 /*
- * MorphSnap — Core/LockFreeQueue.h
- * Single-producer single-consumer lock-free ring buffer.
+ * More-Phi — Core/LockFreeQueue.h
+ * Multi-producer single-consumer lock-free ring buffer.
+ * Producers (UI/MCP threads) are serialized via SpinLock. Consumer (audio thread) is lock-free.
+ *
+ * MPMC SAFETY: push() has an internal mutex so that multiple producer
+ * threads (UI thread + MCP thread) can enqueue without corrupting the
+ * ring-buffer indices.  pop() remains lock-free because there is only
+ * ever one consumer (the audio thread).
  */
 #pragma once
 
 #include <atomic>
 #include <array>
 #include <cstddef>
+#include <juce_core/juce_core.h>
 
-namespace morphsnap {
+namespace more_phi {
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -22,10 +29,6 @@ class LockFreeQueue
     static_assert((Capacity & (Capacity - 1)) == 0,
                   "Capacity must be a power of 2");
 public:
-    // SINGLE-PRODUCER SINGLE-CONSUMER ONLY.
-    // Do NOT call push() from multiple threads simultaneously, or pop() from
-    // multiple threads simultaneously. The ABA problem does not apply here
-    // because only one thread ever writes head_ and one ever reads tail_.
     static constexpr size_t usableCapacity() noexcept
     {
         // Ring buffers that reserve one slot can store Capacity - 1 elements.
@@ -44,8 +47,11 @@ public:
         return usableCapacity() - sizeApprox();
     }
 
+    // MULTI-PRODUCER SAFETY: internal mutex serializes concurrent push() calls.
+    // pop() remains lock-free (single consumer = audio thread only).
     [[nodiscard]] bool push(const T& item)
     {
+        const juce::SpinLock::ScopedLockType guard(pushMutex_);
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = (head + 1) & mask_;
         if (next == tail_.load(std::memory_order_acquire))
@@ -76,10 +82,11 @@ private:
     std::array<T, Capacity> buffer_{};
     alignas(64) std::atomic<size_t> head_{0};
     alignas(64) std::atomic<size_t> tail_{0};
+    mutable juce::SpinLock pushMutex_;  // H-3 FIX: SpinLock avoids kernel transition (priority inversion)
 };
 
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
 
-} // namespace morphsnap
+} // namespace more_phi

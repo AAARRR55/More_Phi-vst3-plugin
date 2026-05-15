@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/StepSequencer.cpp
+ * More-Phi — Core/StepSequencer.cpp
  * Clock-driven step sequencer implementation.
  *
  * Clock model:
@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -167,4 +167,4 @@ float StepSequencer::process(float dt, float bpm) noexcept
     return std::clamp(smoothedValue_, -1.0f, 1.0f);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ThreadPool.h
+ * More-Phi — Core/ThreadPool.h
  * Thread pool infrastructure for parallel task execution.
  *
  * Features:
@@ -23,7 +23,7 @@
 #include <atomic>
 #include <type_traits>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * ThreadPool provides a pool of worker threads for parallel task execution.
@@ -121,4 +121,4 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     return result;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

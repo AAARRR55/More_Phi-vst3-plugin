@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/GranularMorphEngine.h
+ * More-Phi — Core/GranularMorphEngine.h
  *
  * Granular synthesis crossfade between two hosted-plugin audio streams.
  * Grains are extracted from both source A and source B circular buffers,
@@ -40,7 +40,7 @@
 #include <cmath>
 #include <atomic>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * GranularMorphEngine
@@ -197,8 +197,13 @@ private:
     // Pre-allocated mono mix buffer for grain output (maxBlockSize samples).
     std::vector<float> mixBuffer_;
 
+    // H-2 FIX: Pre-computed pitch LUT for 2^(n/12), n in [-12..+12].
+    // Avoids std::pow() on the audio thread.
+    static constexpr int kPitchLUTSize = 25;  // -12 to +12 inclusive
+    std::array<float, kPitchLUTSize> pitchLUT_{};
+
     // xorshift32 state — initialised to a non-zero seed.
     uint32_t rngState_ = 12345u;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,4 +1,4 @@
-# MorphSnap - Logic Pro Test Plan
+# More-Phi - Logic Pro Test Plan
 
 **DAW:** Logic Pro
 **Versions Tested:** Logic Pro X, Logic Pro 11
@@ -10,7 +10,7 @@
 ## Prerequisites
 
 1. Logic Pro X or later installed
-2. MorphSnap.component installed in:
+2. More-Phi.component installed in:
    - `/Library/Audio/Plug-Ins/Components/` (system)
    - `~/Library/Audio/Plug-Ins/Components/` (user)
 3. At least one third-party AU plugin for hosting tests
@@ -60,7 +60,7 @@
 **Steps:**
 1. Open Logic Pro
 2. Create new project
-3. Insert > Audio Unit > MorphSnap
+3. Insert > Audio Unit > More-Phi
 4. Verify plugin window opens
 
 **Expected Result:**
@@ -76,7 +76,7 @@
 
 **Priority:** P0 - Critical
 **Steps:**
-1. Add MorphSnap to channel
+1. Add More-Phi to channel
 2. Load an AU instrument
 3. Play via MIDI
 
@@ -93,7 +93,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Set automation mode to "Touch"
 3. Record-enable track
 4. Move morphX during playback
@@ -112,7 +112,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Open Smart Controls
 3. Verify parameters are mapped
 4. Adjust via Smart Control
@@ -131,7 +131,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Create project with MorphSnap
+1. Create project with More-Phi
 2. Capture snapshots
 3. Save project
 4. Close Logic
@@ -150,7 +150,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Check MCP status
 3. Connect AI client
 4. Execute commands
@@ -169,7 +169,7 @@
 **Priority:** P1 - High (if applicable)
 **Steps:**
 1. On Apple Silicon Mac, run Logic natively (not Rosetta)
-2. Load MorphSnap
+2. Load More-Phi
 3. Verify AU loads correctly
 4. Test all functionality
 

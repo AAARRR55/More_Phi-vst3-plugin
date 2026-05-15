@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Advanced Parameter Morphing Engine
+ * MorePhi — Advanced Parameter Morphing Engine
  * PluginProcessor.h — Main VST3 Audio Processor
  */
 #pragma once
@@ -21,13 +21,13 @@
 #include <vector>
 #include <mutex>
 
-namespace morphsnap {
+namespace morephi {
 
-class MorphSnapProcessor : public juce::AudioProcessor
+class MorePhiProcessor : public juce::AudioProcessor
 {
 public:
-    MorphSnapProcessor();
-    ~MorphSnapProcessor() override;
+    MorePhiProcessor();
+    ~MorePhiProcessor() override;
 
     // ── AudioProcessor interface ─────────────────────────────────────────────
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
@@ -38,7 +38,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "MorphSnap"; }
+    const juce::String getName() const override { return "MorePhi"; }
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -197,8 +197,8 @@ private:
     // Link Mode (UI → audio thread)
     std::atomic<bool> linkEnabled_{false};
 
-    JUCE_DECLARE_WEAK_REFERENCEABLE(MorphSnapProcessor)
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphSnapProcessor)
+    JUCE_DECLARE_WEAK_REFERENCEABLE(MorePhiProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiProcessor)
 };
 
-} // namespace morphsnap
+} // namespace morephi

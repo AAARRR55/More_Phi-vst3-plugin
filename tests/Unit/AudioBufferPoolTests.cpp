@@ -3,7 +3,7 @@
 
 TEST_CASE("AudioBufferPool provides reusable buffers", "[AudioBufferPool]")
 {
-    morphsnap::AudioBufferPool pool(2, 512, 44100.0);
+    more_phi::AudioBufferPool pool(2, 512, 44100.0);
 
     // Get two buffers
     auto buffer1 = pool.acquireBuffer();

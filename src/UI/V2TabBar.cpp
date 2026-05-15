@@ -1,23 +1,20 @@
 /*
- * MorphSnap — UI/V2TabBar.cpp
+ * More-Phi — UI/V2TabBar.cpp
  * V2 tab bar: surface-navy background, coral 3 px accent under the active tab,
  * dim text for inactive tabs, bold bright text for the selected tab.
  *
  * Threading: constructed and used on the JUCE message thread only.
  */
 #include "V2TabBar.h"
+#include "UI/Theme/MorePhiTheme.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-// ── Palette constants (mirrors MorphSnapLookAndFeel) ─────────────────────────
-namespace {
-    constexpr juce::uint32 kBackground  = 0xff16213e; // Surface navy
-    constexpr juce::uint32 kTopBorder   = 0xff1e3a5f; // 1 px top line
-    constexpr juce::uint32 kAccentCoral = 0xffec415d; // Active tab underline
-    constexpr juce::uint32 kTextActive  = 0xffe8eaed; // Active tab label
-    constexpr juce::uint32 kTextDim     = 0xff8b95a5; // Inactive tab label
-    constexpr int           kAccentH    = 3;           // Coral underline height (px)
-} // namespace
+using namespace Theme::Colours;
+using namespace Theme::Metrics;
+
+// Tab underline height
+static constexpr int kAccentH = 3;
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -37,9 +34,9 @@ V2TabBar::V2TabBar()
         tabs_[i].setColour(juce::TextButton::buttonOnColourId,
                            juce::Colours::transparentBlack);
         tabs_[i].setColour(juce::TextButton::textColourOffId,
-                           juce::Colour(kTextDim));
+                           textDim());
         tabs_[i].setColour(juce::TextButton::textColourOnId,
-                           juce::Colour(kTextActive));
+                           textBright());
 
         const int tabIndex = i; // capture by value
         tabs_[i].onClick = [this, tabIndex]()
@@ -58,20 +55,13 @@ V2TabBar::V2TabBar()
 
 void V2TabBar::resized()
 {
-    const int totalWidth = getWidth();
-    const int h          = getHeight();
-
-    // Distribute width as evenly as possible; give any remainder pixel to the
-    // rightmost tab so the combined set always reaches the component edge.
-    const int baseW      = totalWidth / NumTabs;
-    int       xOffset    = 0;
+    juce::FlexBox fb;
+    fb.flexDirection = juce::FlexBox::Direction::row;
 
     for (int i = 0; i < NumTabs; ++i)
-    {
-        const int w = (i == NumTabs - 1) ? (totalWidth - xOffset) : baseW;
-        tabs_[i].setBounds(xOffset, 0, w, h);
-        xOffset += w;
-    }
+        fb.items.add(juce::FlexItem(tabs_[i]).withFlex(1));
+
+    fb.performLayout(getLocalBounds());
 }
 
 // ── Painting ──────────────────────────────────────────────────────────────────
@@ -81,22 +71,23 @@ void V2TabBar::paint(juce::Graphics& g)
     const auto bounds = getLocalBounds();
 
     // 1. Background fill
-    g.setColour(juce::Colour(kBackground));
+    g.setColour(surface());
     g.fillRect(bounds);
 
     // 2. 1 px top border
-    g.setColour(juce::Colour(kTopBorder));
+    g.setColour(border());
     g.drawLine(0.0f, 0.0f,
                static_cast<float>(bounds.getWidth()), 0.0f,
                1.0f);
 
-    // 3. Coral accent under the selected tab
+    // 3. Coral accent under the selected tab (subtle rounded bar)
     const juce::Rectangle<int>& selBounds = tabs_[selected_].getBounds();
-    g.setColour(juce::Colour(kAccentCoral));
-    g.fillRect(selBounds.getX(),
-               bounds.getHeight() - kAccentH,
-               selBounds.getWidth(),
-               kAccentH);
+    g.setColour(accent());
+    g.fillRoundedRectangle(static_cast<float>(selBounds.getX() + 4),
+                           static_cast<float>(bounds.getHeight() - kAccentH),
+                           static_cast<float>(selBounds.getWidth() - 8),
+                           static_cast<float>(kAccentH),
+                           1.5f);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -121,9 +112,9 @@ void V2TabBar::setSelectedTab(int tab)
     for (int i = 0; i < NumTabs; ++i)
     {
         tabs_[i].setColour(juce::TextButton::textColourOffId,
-                           juce::Colour(i == selected_ ? kTextActive : kTextDim));
+                           juce::Colour(i == selected_ ? textBright() : textDim()));
         tabs_[i].setColour(juce::TextButton::textColourOnId,
-                           juce::Colour(kTextActive));
+                           textBright());
     }
 
     repaint();
@@ -145,9 +136,9 @@ void V2TabBar::selectTab(int index)
     {
         const bool active = (i == selected_);
         tabs_[i].setColour(juce::TextButton::textColourOffId,
-                           juce::Colour(active ? kTextActive : kTextDim));
+                           juce::Colour(active ? textBright() : textDim()));
         tabs_[i].setColour(juce::TextButton::textColourOnId,
-                           juce::Colour(kTextActive));
+                           textBright());
     }
 
     // Move the coral underline.
@@ -157,4 +148,4 @@ void V2TabBar::selectTab(int index)
         onTabChanged(selected_);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

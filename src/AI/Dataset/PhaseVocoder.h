@@ -1,5 +1,5 @@
 /*
- * MorphSnap -- AI/Dataset/PhaseVocoder.h
+ * More-Phi -- AI/Dataset/PhaseVocoder.h
  * Phase vocoder implementation for time-stretching and pitch-shifting.
  * Uses JUCE DSP FFT with overlap-add resynthesis.
  */
@@ -13,7 +13,7 @@
 #include <memory>
 #include <complex>
 
-namespace morphsnap {
+namespace more_phi {
 
 class PhaseVocoder
 {
@@ -309,4 +309,4 @@ private:
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

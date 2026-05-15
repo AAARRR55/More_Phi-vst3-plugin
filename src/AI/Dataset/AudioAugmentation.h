@@ -1,5 +1,5 @@
 /*
- * MorphSnap -- AI/Dataset/AudioAugmentation.h
+ * More-Phi -- AI/Dataset/AudioAugmentation.h
  * Audio and parameter augmentation for synthetic dataset generation.
  * Provides noise injection, dynamic processing, frequency/time masking,
  * gain changes, and parameter-space augmentation utilities.
@@ -16,7 +16,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ============================================================================
 // Enums and configuration structs
@@ -611,4 +611,4 @@ struct AugmentationChainPreset
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

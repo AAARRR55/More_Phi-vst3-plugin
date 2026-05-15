@@ -1,5 +1,5 @@
 /*
- * MorphSnap — tests/Unit/TestDSPQuality.cpp
+ * More-Phi — tests/Unit/TestDSPQuality.cpp
  *
  * Audio quality regression tests.
  * These tests verify measurable signal quality properties:
@@ -33,7 +33,7 @@
 #include <complex>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DSP Test Utilities

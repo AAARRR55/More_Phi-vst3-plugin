@@ -96,10 +96,24 @@ public:
                                 float  spectralTilt,
                                 float  correlationMS);
 
+    /**
+     * Build the same plan as executePlan() without mutating lastPlan_, invoking
+     * callbacks, or applying it to any hosted plugin.
+     */
+    MultiEffectPlan previewPlan(int    genreIndex,
+                                float  dynamicRange,
+                                float  spectralTilt,
+                                float  correlationMS);
+
     /** Get the last executed plan. Thread-safe (returns a copy). */
     [[nodiscard]] MultiEffectPlan getLastPlan() const noexcept { return lastPlan_; }
 
 private:
+    MultiEffectPlan buildPlan(int genreIndex,
+                              float dynamicRange,
+                              float spectralTilt,
+                              float correlationMS);
+
     // Step implementations
     MultiEffectPlan stepDynamicsAssessment(float dynamicRange);
     void stepSpectralAssessment(MultiEffectPlan& plan, int genreIndex, float spectralTilt);

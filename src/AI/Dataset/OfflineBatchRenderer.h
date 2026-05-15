@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/OfflineBatchRenderer.h
+ * More-Phi — AI/Dataset/OfflineBatchRenderer.h
  * Sequential offline renderer for hosted-plugin parameter variation batches.
  *
  * IMPORTANT: Uses ParameterSafetyConfig to avoid the "Parameter Trap":
@@ -13,6 +13,7 @@
 #include "AI/Dataset/ParameterSafetyConfig.h"
 #include "Core/AudioBufferPool.h"
 #include "Core/PerformanceProfiler.h"
+#include "Core/ThreadPool.h"
 #include "Host/IPluginHostManager.h"
 #include "Host/PluginHostManager.h"
 
@@ -25,18 +26,20 @@
 #include <thread>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 struct OfflineBatchConfig
 {
     juce::File inputFile;
     juce::File outputDirectory;
     juce::File pluginFile;
+    juce::File configDirectory;
 
     int totalVariations = 100;
     int parallelWorkers = 1;
     bool enableSIMD = true;
     bool useMemoryPool = true;
+    int maxInputFileSizeMB = 500;  // Prevent OOM on very large audio files
 
     RenderConfig renderConfig;
 
@@ -58,7 +61,8 @@ struct OfflineBatchConfig
 
     bool hasValidPlugin() const
     {
-        return pluginFile.existsAsFile() && pluginFile.hasFileExtension(".vst3");
+        return (pluginFile.existsAsFile() || pluginFile.isDirectory())
+            && pluginFile.hasFileExtension(".vst3");
     }
 };
 
@@ -101,6 +105,12 @@ public:
 
     PerformanceProfiler& getProfiler() { return profiler_; }
     const PerformanceProfiler& getProfiler() const { return profiler_; }
+
+    /** Get the loaded plugin instance (valid only after setConfig succeeds with a plugin). */
+    const juce::AudioPluginInstance* getLoadedPlugin() const
+    {
+        return pluginLoaded_ && pluginHost_ ? pluginHost_->getPlugin() : nullptr;
+    }
 
     /** Set a custom parameter safety configuration */
     void setSafetyConfig(const ParameterSafetyConfig& config) { safetyConfig_ = config; }
@@ -146,6 +156,10 @@ private:
     std::unique_ptr<PluginHostManager> pluginHost_;
     bool pluginLoaded_ = false;
 
+    // When --config-dir is used, stores the base filenames (no extension) of each
+    // loaded JSON config so that output WAVs are named to match their source configs.
+    mutable std::vector<juce::String> configFileBaseNames_;
+
     EnhancedRenderPipeline renderPipeline_;
     PerformanceProfiler profiler_;
     ParameterSafetyConfig safetyConfig_;
@@ -154,7 +168,8 @@ private:
     juce::int64 startTime_ = 0;
     mutable juce::CriticalSection progressLock_;
     std::thread renderThread_;
+    std::unique_ptr<ThreadPool> threadPool_;
     juce::AudioFormatManager formatManager_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

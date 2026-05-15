@@ -4,8 +4,9 @@
 #include <string>
 #include <unordered_map>
 #include <mutex>
+#include <juce_core/juce_core.h>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Statistics for profiling a specific operation.
@@ -32,11 +33,12 @@ public:
         Timer(PerformanceProfiler& profiler, const std::string& name);
         ~Timer();
 
-        // Non-copyable, movable
+        // Non-copyable, non-movable (destructor records timing — a moved-from
+        // Timer would record a spurious zero-duration measurement)
         Timer(const Timer&) = delete;
         Timer& operator=(const Timer&) = delete;
-        Timer(Timer&&) = default;
-        Timer& operator=(Timer&&) = default;
+        Timer(Timer&&) = delete;
+        Timer& operator=(Timer&&) = delete;
 
     private:
         PerformanceProfiler& profiler_;
@@ -89,15 +91,24 @@ private:
      */
     void updateStats(const std::string& name, double timeMs);
 
-    mutable std::mutex statsMutex_;
+    // SpinLock for recordTime() — never blocks audio thread (uses tryEnter).
+    // std::mutex retained for reader methods (message thread only, blocking OK).
+    mutable juce::SpinLock statsSpinLock_;
     std::unordered_map<std::string, ProfileStats> stats_;
 };
 
 /**
  * Convenience macro for creating RAII timers.
+ * Compiles to a no-op unless MORE_PHI_ENABLE_PROFILING is defined (opt-in).
+ * This avoids chrono syscalls on the audio thread in release builds.
  */
-#define MORPHSNAP_PROFILE_CONCAT_IMPL(a, b) a##b
-#define MORPHSNAP_PROFILE_CONCAT(a, b) MORPHSNAP_PROFILE_CONCAT_IMPL(a, b)
-#define MORPHSNAP_PROFILE(profiler, name) auto MORPHSNAP_PROFILE_CONCAT(morphsnapProfileTimer_, __LINE__) = profiler.createTimer(name)
+#define MORE_PHI_PROFILE_CONCAT_IMPL(a, b) a##b
+#define MORE_PHI_PROFILE_CONCAT(a, b) MORE_PHI_PROFILE_CONCAT_IMPL(a, b)
+#ifdef MORE_PHI_ENABLE_PROFILING
+  #define MORE_PHI_PROFILE(profiler, name) \
+      more_phi::PerformanceProfiler::Timer MORE_PHI_PROFILE_CONCAT(morephiProfileTimer_, __LINE__)(profiler, name)
+#else
+  #define MORE_PHI_PROFILE(profiler, name)  (void)0
+#endif
 
-} // namespace morphsnap
+} // namespace more_phi

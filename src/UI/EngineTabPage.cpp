@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/EngineTabPage.cpp
+ * More-Phi — UI/EngineTabPage.cpp
  * Layout container for the Engine tab.
  *
  * Layout (180px total height):
@@ -17,7 +17,7 @@
 #include "HybridBlendPanel.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ static constexpr int kGapBetweenSides  =  2;
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
 
-EngineTabPage::EngineTabPage(MorphSnapProcessor& proc)
+EngineTabPage::EngineTabPage(MorePhiProcessor& proc)
     : proc_(proc)
     , spectralPanel_(std::make_unique<SpectralControlPanel>(proc_))
     , granularPanel_(std::make_unique<GranularControlPanel>(proc_))
@@ -59,12 +59,13 @@ void EngineTabPage::resized()
     blendPanel_->setBounds(area.removeFromTop(kBlendPanelHeight));
     area.removeFromTop(kGapBelowBlend);
 
-    // Bottom row: Spectral (left) and Granular (right), split evenly.
-    const int halfWidth = (area.getWidth() - kGapBetweenSides) / 2;
-
-    spectralPanel_->setBounds(area.removeFromLeft(halfWidth));
-    area.removeFromLeft(kGapBetweenSides);
-    granularPanel_->setBounds(area);
+    // Bottom row: Spectral (left) and Granular (right) — FlexBox with equal flex
+    juce::FlexBox bottom;
+    bottom.flexDirection = juce::FlexBox::Direction::row;
+    bottom.items.add(juce::FlexItem(*spectralPanel_).withFlex(1));
+    bottom.items.add(juce::FlexItem().withWidth(static_cast<float>(kGapBetweenSides)));
+    bottom.items.add(juce::FlexItem(*granularPanel_).withFlex(1));
+    bottom.performLayout(area);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

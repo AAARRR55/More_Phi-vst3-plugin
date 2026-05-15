@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/ParameterSampler.cpp
+ * More-Phi — AI/Dataset/ParameterSampler.cpp
  * Implementation of advanced parameter sampling for synthetic audio dataset generation.
  */
 #include "ParameterSampler.h"
@@ -8,7 +8,7 @@
 #include <random>
 #include <sstream>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ============================================================================
 // Public Methods
@@ -537,4 +537,4 @@ void ParameterSampler::shuffleVector(std::vector<int>& vec)
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

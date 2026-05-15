@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ModulationMatrix.h
+ * More-Phi — Core/ModulationMatrix.h
  * Routes modulation source values to parameter destinations.
  *
  * The matrix is a flat array of up to MAX_ROUTES ModRoute entries.
@@ -47,7 +47,7 @@
 #include <vector>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
 class ModulationMatrix
 {
@@ -167,4 +167,4 @@ private:
     void publishAndMirror() noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

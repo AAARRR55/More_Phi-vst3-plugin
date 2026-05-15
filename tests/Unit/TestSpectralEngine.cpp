@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests: Spectral Morph Engine (V2)
+ * More-Phi — Unit Tests: Spectral Morph Engine (V2)
  *
  * Catch2 v3 test suite for V2 spectral processing subsystems.
  *
@@ -36,7 +36,7 @@
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
-using namespace morphsnap::test;
+using namespace more_phi::test;
 
 // =============================================================================
 //  DSP Helpers for spectral tests

@@ -1,5 +1,5 @@
-/* MorphSnap — Host/PluginScanner.cpp */
+/* More-Phi — Host/PluginScanner.cpp */
 #include "PluginScanner.h"
-namespace morphsnap {
+namespace more_phi {
 // Implementation inline in header
-} // namespace morphsnap
+} // namespace more_phi

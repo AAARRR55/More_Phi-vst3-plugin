@@ -1,4 +1,4 @@
-/* MorphSnap — UI/V2PresetBrowserPanel.h
+/* More-Phi — UI/V2PresetBrowserPanel.h
  * V2 preset browser panel for the "Presets" tab.
  * Provides search, filtering, list browsing, and CRUD operations
  * against the PresetLibrary JSON store.
@@ -12,9 +12,9 @@
 #include <vector>
 #include <string>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 // ── PresetListModel ───────────────────────────────────────────────────────────
 // ListBoxModel that renders PresetEntry rows with name, author, stars, and tags.
@@ -60,7 +60,7 @@ class V2PresetBrowserPanel final : public juce::Component,
 {
 public:
     /** Constructor. Takes a reference to the processor for save/load operations. */
-    explicit V2PresetBrowserPanel(MorphSnapProcessor& processor);
+    explicit V2PresetBrowserPanel(MorePhiProcessor& processor);
     ~V2PresetBrowserPanel() override;
 
     // juce::Component overrides
@@ -101,7 +101,7 @@ private:
 
     // ── Data ──────────────────────────────────────────────────────────────────
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     PresetLibrary       presetLibrary_;
 
     // Current search results (owned by the list model).
@@ -142,4 +142,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(V2PresetBrowserPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

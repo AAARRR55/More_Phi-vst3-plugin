@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/EnhancedRenderPipeline.h
+ * More-Phi — AI/Dataset/EnhancedRenderPipeline.h
  * Advanced audio rendering pipeline for synthetic dataset generation.
  * Supports multi-segment rendering, multiple output formats, and parallel processing.
  */
@@ -11,7 +11,7 @@
 #include <atomic>
 #include <mutex>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Segment types for multi-segment rendering */
 enum class RenderSegment
@@ -308,4 +308,4 @@ private:
     int renderCount_ = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

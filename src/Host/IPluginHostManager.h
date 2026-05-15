@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Host/IPluginHostManager.h
+ * More-Phi — Host/IPluginHostManager.h
  * Interface abstraction for plugin hosting - enables mocking and testing.
  */
 #pragma once
@@ -7,7 +7,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Interface for plugin host management.
@@ -62,6 +62,12 @@ public:
     // Discrete parameter classification (for Listen Mode)
     virtual bool isDiscrete(int index) const = 0;
     virtual std::vector<bool> getDiscreteMap() const = 0;
+
+    // Rich metadata for AI context enrichment (safe from non-audio threads)
+    virtual juce::String getParameterLabel(int index) const = 0;
+    virtual juce::String getParameterDisplayValue(int index) const = 0;
+    virtual float getParameterDefault(int index) const = 0;
+    virtual juce::StringArray getParameterValueStrings(int index) const = 0;
 };
 
 /**
@@ -86,4 +92,4 @@ public:
     virtual const juce::String& getAuthToken() const = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

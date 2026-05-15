@@ -14,6 +14,7 @@
 #include "MCPEQTool.h"
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"
+#include "PluginProfileDB.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <optional>
@@ -26,6 +27,80 @@ using json = nlohmann::json;
 static juce::String toJString(const json& j)
 {
     return juce::String(j.dump());
+}
+
+struct ToolDefinition
+{
+    const char* name;
+    const char* description;
+    const char* inputSchema;
+};
+
+static json parseSchema(const char* schemaText)
+{
+    if (schemaText == nullptr || schemaText[0] == '\0')
+        return json{{"type", "object"}, {"properties", json::object()}};
+
+    try
+    {
+        return json::parse(schemaText);
+    }
+    catch (...)
+    {
+        return json{{"type", "object"}, {"properties", json::object()}};
+    }
+}
+
+static const ToolDefinition kCoreTools[] = {
+    {"get_plugin_info", "Return More-Phi and hosted plugin identity information.", R"({"type":"object","properties":{}})"},
+    {"list_parameters", "List hosted plugin parameters with stable IDs and normalized values.", R"({"type":"object","properties":{}})"},
+    {"get_parameter", "Read a hosted plugin parameter by stableId, index, or exact name.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
+    {"set_parameter", "Queue a hosted plugin parameter change on the audio thread.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})"},
+    {"set_parameters_batch", "Queue multiple hosted plugin parameter changes on the audio thread.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}},"params":{"type":"array","items":{"type":"object"}}}})"},
+    {"capture_snapshot", "Capture the current hosted parameter state into a More-Phi snapshot slot.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"includeState":{"type":"boolean","default":true}},"required":["slot"]})"},
+    {"recall_snapshot", "Recall a More-Phi snapshot through the realtime-safe queue.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"mode":{"type":"string","enum":["fast","full"]}},"required":["slot"]})"},
+    {"set_morph_position", "Set More-Phi morph pad/fader state.", R"({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"fader":{"type":"number"},"source":{"type":"string","enum":["xy","xypad","fader"]}}})"},
+    {"get_morph_state", "Return More-Phi morph pad/fader state.", R"({"type":"object","properties":{}})"},
+    {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
+    {"apply_mastering_plan", "Generate and apply a mastering plan from compact analysis metrics.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"hosted_plugin.scan", "Inspect a VST3 plugin path and return the discoverable plugin description.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
+    {"hosted_plugin.load", "Load a hosted VST3 plugin from an explicit path.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
+    {"hosted_plugin.info", "Alias for get_plugin_info.", R"({"type":"object","properties":{}})"},
+    {"hosted_plugin.parameters", "Alias for list_parameters.", R"({"type":"object","properties":{}})"},
+    {"hosted_plugin.set_parameters", "Alias for set_parameters_batch.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}}}})"},
+    {"hosted_plugin.capture_state", "Capture hosted plugin parameter state, optionally into a snapshot slot.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"include_values":{"type":"boolean","default":false},"includeState":{"type":"boolean","default":true}}})"},
+    {"analysis.get_summary", "Return compact More-Phi-owned analysis and metering data.", R"({"type":"object","properties":{}})"},
+    {"analysis.capture_window", "Return the latest compact analysis snapshot for a requested window length.", R"({"type":"object","properties":{"window_seconds":{"type":"number","default":3.0}}})"},
+    {"analysis.compare_render", "Compare two compact analysis summaries or compare a provided summary to current meters.", R"({"type":"object","properties":{"before":{"type":"object"},"after":{"type":"object"}}})"},
+    {"mastering.plan_preview", "Generate a mastering plan without applying it.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.apply_plan", "Alias for apply_mastering_plan.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.render_batch", "Create dry-run mastering candidates from local analysis metrics.", R"({"type":"object","properties":{"candidate_count":{"type":"integer","default":3},"dry_run":{"type":"boolean","default":true},"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.select_candidate", "Select a candidate ID returned by mastering.render_batch.", R"({"type":"object","properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"]})"},
+    {"plugin_profile.audit_parameters", "Audit hosted plugin parameters into a versioned profile JSON object.", R"({"type":"object","properties":{}})"},
+    {"plugin_profile.get", "Load a saved profile by ID, or audit the current hosted plugin when omitted.", R"({"type":"object","properties":{"profile_id":{"type":"string"}}})"},
+    {"plugin_profile.save", "Audit and save the current hosted plugin profile under the user app-data directory.", R"({"type":"object","properties":{}})"}
+};
+
+static json planToJson(const MultiEffectPlan& plan)
+{
+    json result{
+        {"valid", plan.valid},
+        {"compression_need", plan.compressionNeed},
+        {"use_neural_comp", plan.useNeuralComp},
+        {"target_lufs", plan.targetLUFS},
+        {"ceiling_dbtp", plan.ceilingDBTP},
+        {"exciter_enabled", plan.exciterEnabled},
+        {"width_curve", { plan.widthCurve[0], plan.widthCurve[1], plan.widthCurve[2], plan.widthCurve[3] }},
+        {"eq_prescription", plan.eqPrescriptionJSON.toStdString()}
+    };
+    return result;
+}
+
+static float getNumberProperty(const juce::var& object, const char* name, float fallback)
+{
+    if (!object.isObject() || !object.hasProperty(name))
+        return fallback;
+    return static_cast<float>(object.getProperty(name, fallback));
 }
 
 // Extract a parameter index from a request that may use either "id" or "index" as key.
@@ -45,6 +120,28 @@ static std::optional<int> extractParamId(const juce::var& params, int maxParamCo
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
+juce::String MCPToolHandler::getToolList()
+{
+    json tools = json::array();
+
+    auto appendTool = [&tools](const char* name, const char* description, const char* schemaText)
+    {
+        tools.push_back({
+            {"name", name},
+            {"description", description != nullptr ? description : ""},
+            {"inputSchema", parseSchema(schemaText)}
+        });
+    };
+
+    for (const auto& tool : kCoreTools)
+        appendTool(tool.name, tool.description, tool.inputSchema);
+
+    for (int i = 0; i < kExtendedToolCount; ++i)
+        appendTool(kExtendedTools[i].name, kExtendedTools[i].description, kExtendedTools[i].schema);
+
+    return toJString(json{{"tools", tools}});
+}
+
 juce::String MCPToolHandler::handle(const juce::String& method,
                                      const juce::var& params,
                                      MorePhiProcessor& p,
@@ -59,6 +156,24 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "recall_snapshot")      return recallSnapshot(params, p);
     if (method == "set_morph_position")   return setMorphPosition(params, p);
     if (method == "get_morph_state")      return getMorphState(p);
+
+    // MCP workflow aliases from the hosted mastering integration plan
+    if (method == "hosted_plugin.scan")          return scanHostedPlugin(params, p);
+    if (method == "hosted_plugin.load")          return loadHostedPlugin(params, p);
+    if (method == "hosted_plugin.info")          return getPluginInfo(p);
+    if (method == "hosted_plugin.parameters")    return listParameters(params, p);
+    if (method == "hosted_plugin.set_parameters")return setParametersBatch(params, p);
+    if (method == "hosted_plugin.capture_state") return captureHostedState(params, p);
+    if (method == "analysis.get_summary")        return getAnalysisSummary(p);
+    if (method == "analysis.capture_window")     return captureAnalysisWindow(params, p);
+    if (method == "analysis.compare_render")     return compareAnalysis(params, p);
+    if (method == "mastering.plan_preview")      return previewMasteringPlan(params, p);
+    if (method == "mastering.apply_plan")        return applyMasteringPlan(params, p);
+    if (method == "mastering.render_batch")      return renderMasteringBatch(params, p);
+    if (method == "mastering.select_candidate")  return selectMasteringCandidate(params, p);
+    if (method == "plugin_profile.audit_parameters") return auditPluginProfile(p);
+    if (method == "plugin_profile.get")          return getPluginProfile(params, p);
+    if (method == "plugin_profile.save")         return savePluginProfile(params, p);
 
     // Extended AI Tools
     if (method == "analyze_parameters")             return MCPToolsExtended::analyzeParameters(params, p, p.getParameterClassifier());
@@ -428,6 +543,318 @@ juce::String MCPToolHandler::getMorphState(MorePhiProcessor& p)
         {"fader",  p.getFaderPos()},
         {"source", p.getMorphSource()}
     });
+}
+
+// ── Hosted mastering workflow tools ──────────────────────────────────────────
+
+juce::String MCPToolHandler::scanHostedPlugin(const juce::var& params, MorePhiProcessor& p)
+{
+    const auto path = params.getProperty("path",
+                      params.getProperty("plugin_path", "")).toString();
+    if (path.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_plugin_path"}});
+
+    juce::PluginDescription description;
+    juce::String error;
+    const juce::File pluginFile(path);
+    const bool found = PluginHostManager::discoverPlugin(
+        p.getHostManager().getFormatManager(), pluginFile, description, error);
+
+    if (!found)
+        return toJString(json{
+            {"success", false},
+            {"error", "plugin_discovery_failed"},
+            {"details", error.toStdString()}
+        });
+
+    return toJString(json{
+        {"success", true},
+        {"name", description.name.toStdString()},
+        {"manufacturer", description.manufacturerName.toStdString()},
+        {"format", description.pluginFormatName.toStdString()},
+        {"file_or_identifier", description.fileOrIdentifier.toStdString()},
+        {"unique_id", description.uniqueId}
+    });
+}
+
+juce::String MCPToolHandler::loadHostedPlugin(const juce::var& params, MorePhiProcessor& p)
+{
+    const auto path = params.getProperty("path",
+                      params.getProperty("plugin_path", "")).toString();
+    if (path.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_plugin_path"}});
+
+    juce::PluginDescription description;
+    juce::String error;
+    const juce::File pluginFile(path);
+    if (!PluginHostManager::discoverPlugin(p.getHostManager().getFormatManager(),
+                                           pluginFile, description, error))
+    {
+        return toJString(json{
+            {"success", false},
+            {"error", "plugin_discovery_failed"},
+            {"details", error.toStdString()}
+        });
+    }
+
+    const bool loaded = p.getHostManager().loadPlugin(description);
+    if (loaded)
+    {
+        p.refreshDiscreteMap();
+        p.getParameterClassifier().analyzeParameters(p.getParameterBridge());
+        p.getDiscreteHandler().initialize(p.getParameterClassifier());
+        p.reportLatencyToHost();
+    }
+
+    return toJString(json{
+        {"success", loaded},
+        {"name", description.name.toStdString()},
+        {"manufacturer", description.manufacturerName.toStdString()},
+        {"format", description.pluginFormatName.toStdString()},
+        {"error", loaded ? "" : "plugin_load_failed"}
+    });
+}
+
+juce::String MCPToolHandler::captureHostedState(const juce::var& params, MorePhiProcessor& p)
+{
+    const int slot = params.getProperty("slot", -1);
+    if (slot >= 0)
+    {
+        if (slot >= SnapshotBank::NUM_SLOTS)
+            return toJString(json{{"success", false}, {"error", "invalid_slot"}});
+
+        const bool includeState = params.getProperty("includeState",
+                                  params.getProperty("include_state", true));
+        const bool ok = p.captureSnapshotToSlot(slot, includeState);
+        return toJString(json{
+            {"success", ok},
+            {"slot", slot},
+            {"includeState", includeState},
+            {"stateChunk", ok && p.getSnapshotBank().hasStateChunk(slot)}
+        });
+    }
+
+    auto values = p.getParameterBridge().captureParameterState();
+    json result{
+        {"success", p.getHostManager().hasPlugin()},
+        {"parameter_count", static_cast<int>(values.size())}
+    };
+
+    if (params.getProperty("include_values", false))
+        result["values"] = values;
+
+    if (auto* plugin = p.getHostManager().getPlugin())
+        result["hosted_plugin"] = plugin->getName().toStdString();
+    else
+        result["error"] = "no_hosted_plugin";
+
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::getAnalysisSummary(MorePhiProcessor& p)
+{
+    auto& ame = p.getAutoMasteringEngine();
+    json result{
+        {"success", true},
+        {"schema_version", 1},
+        {"source", "more_phi_local_analysis"},
+        {"rms", p.getRmsLevel()},
+        {"queue_usage", p.getCommandQueueUsage()},
+        {"lufs_momentary", ame.getLUFSMomentary()},
+        {"lufs_short_term", ame.getLUFSShortTerm()},
+        {"lufs_integrated", ame.getLUFSIntegrated()},
+        {"lra", ame.getLRA()},
+        {"true_peak_dbtp", ame.getTruePeak_dBTP()},
+        {"dynamics_gr_db", json::array()}
+    };
+
+    for (int i = 0; i < 4; ++i)
+        result["dynamics_gr_db"].push_back(ame.getGainReductionDB(i));
+
+    if (auto* plugin = p.getHostManager().getPlugin())
+    {
+        result["hosted_plugin"] = {
+            {"name", plugin->getName().toStdString()},
+            {"parameter_count", static_cast<int>(plugin->getParameters().size())},
+            {"latency_samples", plugin->getLatencySamples()}
+        };
+    }
+    else
+    {
+        result["hosted_plugin"] = nullptr;
+    }
+
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p)
+{
+    const float windowSeconds = static_cast<float>(params.getProperty("window_seconds", 3.0f));
+    auto summary = json::parse(getAnalysisSummary(p).toStdString());
+    summary["window_seconds"] = std::max(0.0f, windowSeconds);
+    summary["mode"] = "current_meter_snapshot";
+    summary["warnings"] = json::array({
+        "Rolling audio-window capture is not enabled yet; returned current local meter state."
+    });
+    return toJString(summary);
+}
+
+juce::String MCPToolHandler::compareAnalysis(const juce::var& params, MorePhiProcessor& p)
+{
+    const auto before = params.getProperty("before", juce::var());
+    juce::var after = params.getProperty("after", juce::var());
+
+    if (!after.isObject())
+        after = juce::JSON::parse(getAnalysisSummary(p));
+
+    if (!before.isObject() || !after.isObject())
+        return toJString(json{{"success", false}, {"error", "missing_analysis_summary"}});
+
+    const float beforeLufs = getNumberProperty(before, "lufs_integrated", 0.0f);
+    const float afterLufs = getNumberProperty(after, "lufs_integrated", 0.0f);
+    const float beforePeak = getNumberProperty(before, "true_peak_dbtp", 0.0f);
+    const float afterPeak = getNumberProperty(after, "true_peak_dbtp", 0.0f);
+    const float beforeLra = getNumberProperty(before, "lra", 0.0f);
+    const float afterLra = getNumberProperty(after, "lra", 0.0f);
+
+    return toJString(json{
+        {"success", true},
+        {"delta", {
+            {"lufs_integrated", afterLufs - beforeLufs},
+            {"true_peak_dbtp", afterPeak - beforePeak},
+            {"lra", afterLra - beforeLra}
+        }},
+        {"warnings", afterPeak > -0.1f ? json::array({"true_peak_close_to_0_dbtp"}) : json::array()}
+    });
+}
+
+juce::String MCPToolHandler::previewMasteringPlan(const juce::var& params, MorePhiProcessor& p)
+{
+    const int   genreIndex    = static_cast<int>  (params.getProperty("genre_index",    0));
+    const float dynamicRange  = static_cast<float>(params.getProperty("dynamic_range",  6.0f));
+    const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
+    const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
+
+    const auto plan = p.getAutoMasteringEngine().getChainPlanner().previewPlan(
+        genreIndex, dynamicRange, spectralTilt, correlationMS);
+
+    json result = planToJson(plan);
+    result["success"] = plan.valid;
+    result["applied"] = false;
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MorePhiProcessor& p)
+{
+    const int candidateCount = juce::jlimit(1, 8, static_cast<int>(params.getProperty("candidate_count", 3)));
+    const bool dryRun = params.getProperty("dry_run", true);
+
+    if (!dryRun)
+    {
+        return toJString(json{
+            {"success", false},
+            {"error", "offline_render_requires_file_job"},
+            {"details", "Use dry_run=true for plan candidates; file-backed offline render job wiring is not enabled in this MCP tool yet."}
+        });
+    }
+
+    const int   genreIndex    = static_cast<int>  (params.getProperty("genre_index",    0));
+    const float dynamicRange  = static_cast<float>(params.getProperty("dynamic_range",  6.0f));
+    const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
+    const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
+
+    json candidates = json::array();
+    for (int i = 0; i < candidateCount; ++i)
+    {
+        const float offset = static_cast<float>(i) - static_cast<float>(candidateCount - 1) * 0.5f;
+        const auto plan = p.getAutoMasteringEngine().getChainPlanner().previewPlan(
+            genreIndex,
+            dynamicRange + offset,
+            spectralTilt + offset * 0.25f,
+            std::clamp(correlationMS + offset * 0.05f, -1.0f, 1.0f));
+        json candidate = planToJson(plan);
+        candidate["id"] = "dry_run_" + std::to_string(i + 1);
+        candidate["score"] = 1.0f / static_cast<float>(i + 1);
+        candidates.push_back(candidate);
+    }
+
+    return toJString(json{
+        {"success", true},
+        {"mode", "dry_run_plan_candidates"},
+        {"candidates", candidates}
+    });
+}
+
+juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, MorePhiProcessor& /*p*/)
+{
+    const auto candidateId = params.getProperty("candidate_id", "").toString();
+    if (candidateId.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_candidate_id"}});
+
+    return toJString(json{
+        {"success", true},
+        {"candidate_id", candidateId.toStdString()},
+        {"selected", true},
+        {"applied", false}
+    });
+}
+
+juce::String MCPToolHandler::auditPluginProfile(MorePhiProcessor& p)
+{
+    return PluginProfileDB::buildAuditJson(p.getHostManager(), p.getParameterBridge());
+}
+
+juce::String MCPToolHandler::getPluginProfile(const juce::var& params, MorePhiProcessor& p)
+{
+    const auto profileId = params.getProperty("profile_id", "").toString();
+    if (profileId.isEmpty())
+        return auditPluginProfile(p);
+
+    const auto file = PluginProfileDB::getProfileFile(profileId);
+    if (!file.existsAsFile())
+        return toJString(json{{"success", false}, {"error", "profile_not_found"}});
+
+    const auto text = file.loadFileAsString();
+    try
+    {
+        const auto parsed = json::parse(text.toStdString());
+        juce::ignoreUnused(parsed);
+        return text;
+    }
+    catch (...)
+    {
+        return toJString(json{{"success", false}, {"error", "profile_json_invalid"}});
+    }
+}
+
+juce::String MCPToolHandler::savePluginProfile(const juce::var& /*params*/, MorePhiProcessor& p)
+{
+    const auto audit = PluginProfileDB::buildAuditJson(p.getHostManager(), p.getParameterBridge());
+    json parsed;
+    try
+    {
+        parsed = json::parse(audit.toStdString());
+    }
+    catch (...)
+    {
+        return toJString(json{{"success", false}, {"error", "audit_json_invalid"}});
+    }
+
+    if (!parsed.value("success", false))
+        return audit;
+
+    const auto profileId = juce::String(parsed.value("profile_id", ""));
+    const auto dir = PluginProfileDB::getProfileDirectory();
+    if (!dir.createDirectory())
+        return toJString(json{{"success", false}, {"error", "profile_directory_create_failed"}});
+
+    const auto file = PluginProfileDB::getProfileFile(profileId);
+    if (!file.replaceWithText(audit, false, false, "\n"))
+        return toJString(json{{"success", false}, {"error", "profile_write_failed"}});
+
+    parsed["saved"] = true;
+    parsed["path"] = file.getFullPathName().toStdString();
+    return toJString(parsed);
 }
 
 // ── Multi-instance tools ──────────────────────────────────────────────────────

@@ -1,16 +1,16 @@
 /*
- * MorphSnap — PluginProcessor v3.3.0 Additions
+ * More-Phi — PluginProcessor v3.3.0 Additions
  * Implementation of new methods for Learn Mode and Discrete Parameter Handling
  */
 #include "PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 //=============================================================================
 // New v3.3.0 Integration Methods
 //=============================================================================
 
-void MorphSnapProcessor::refreshParameterClassification()
+void MorePhiProcessor::refreshParameterClassification()
 {
     // Analyze the currently loaded plugin
     parameterClassifier_.analyzeParameters(hostManager);
@@ -23,13 +23,13 @@ void MorphSnapProcessor::refreshParameterClassification()
     (void)stats; // May be used for initial budget estimation
 }
 
-void MorphSnapProcessor::recordParameterModification(int paramIndex)
+void MorePhiProcessor::recordParameterModification(int paramIndex)
 {
     // Track user modification for Learn Mode
     parameterClassifier_.recordModification(paramIndex);
 }
 
-bool MorphSnapProcessor::areSnapshotsCompatible(int slotA, int slotB) const
+bool MorePhiProcessor::areSnapshotsCompatible(int slotA, int slotB) const
 {
     auto stateA = snapshotBank.getSlotValuesCopy(slotA);
     auto stateB = snapshotBank.getSlotValuesCopy(slotB);
@@ -42,7 +42,7 @@ bool MorphSnapProcessor::areSnapshotsCompatible(int slotA, int slotB) const
     );
 }
 
-juce::String MorphSnapProcessor::getMorphCompatibilityReport(int slotA, int slotB) const
+juce::String MorePhiProcessor::getMorphCompatibilityReport(int slotA, int slotB) const
 {
     auto stateA = snapshotBank.getSlotValuesCopy(slotA);
     auto stateB = snapshotBank.getSlotValuesCopy(slotB);
@@ -103,4 +103,4 @@ juce::String MorphSnapProcessor::getMorphCompatibilityReport(int slotA, int slot
  * tokenOptimizer_.setTokenBudget(budget);
  */
 
-} // namespace morphsnap
+} // namespace more_phi

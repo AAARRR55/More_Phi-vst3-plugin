@@ -1,12 +1,17 @@
-# MorphSnap DAW Compatibility Test Matrix
+# More-Phi DAW Compatibility Test Matrix
 
 ## Overview
 
-This document defines the comprehensive testing strategy for MorphSnap VST3/AU plugin across all supported DAWs.
+This document defines the comprehensive testing strategy for More-Phi VST3/AU plugin across all supported DAWs.
 
 **Plugin Version:** 1.0.0
-**Last Updated:** 2026-02-19
+**Last Updated:** 2026-05-05
 **Test Lead:** Development Team
+
+**Current remediation note:** The 2026-05-05 audit remediation keeps DAW
+execution manual. Run automated build/CTest plus `vst3_validator` and
+`pluginval` first; if those tools or DAWs are not installed, mark the row
+blocked with the missing tool/host instead of treating it as passed.
 
 ---
 
@@ -134,7 +139,8 @@ This document defines the comprehensive testing strategy for MorphSnap VST3/AU p
 
 | Issue | DAW | Severity | Status | Notes |
 |-------|-----|----------|--------|-------|
-| None yet | - | - | - | - |
+| Validator coverage blocked when `vst3_validator` or `pluginval` is absent | All | P1 | Open | Install tools before release sign-off. |
+| Manual DAW execution remains pending after 2026-05-05 audit | All | P1 | Open | Use the current built VST3 artifact, not stale installed copies. |
 
 ---
 

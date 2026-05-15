@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/IModulationEngine.h
+ * More-Phi — Core/IModulationEngine.h
  * Abstract interface for the V2 modulation engine subsystem.
  *
  * Thread safety contract
@@ -27,7 +27,7 @@
 #include <memory>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Modulation engine interface.
@@ -271,4 +271,4 @@ public:
     virtual void fromXml(const juce::XmlElement& xml) = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

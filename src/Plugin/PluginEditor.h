@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Advanced Parameter Morphing Engine
+ * More-Phi — Advanced Parameter Morphing Engine
  * PluginEditor.h — Main Editor Window (V2 Tabbed Layout)
  */
 #pragma once
@@ -7,7 +7,7 @@
 #include <cstring>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "UI/MorphSnapLookAndFeel.h"
+#include "UI/MorePhiLookAndFeel.h"
 #include "UI/MorphPad.h"
 #include "UI/SnapFader.h"
 #include "UI/SnapshotRing.h"
@@ -20,22 +20,23 @@
 #include "UI/BottomControlStrip.h"
 #include "UI/HostedPluginWindow.h"
 #include "UI/V2TabBar.h"
+#include "UI/AIChatPanel.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 // Forward declarations for V2 tab pages
 class EngineTabPage;
 class ModulationMatrixPanel;
 class V2PresetBrowserPanel;
 
-class MorphSnapEditor : public juce::AudioProcessorEditor,
+class MorePhiEditor : public juce::AudioProcessorEditor,
                         private juce::Timer
 {
 public:
-    explicit MorphSnapEditor(MorphSnapProcessor&);
-    ~MorphSnapEditor() override;
+    explicit MorePhiEditor(MorePhiProcessor&);
+    ~MorePhiEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -44,8 +45,8 @@ private:
     void timerCallback() override;
     void switchTab(int tabIndex);
 
-    MorphSnapProcessor& processor;
-    MorphSnapLookAndFeel lnf;
+    MorePhiProcessor& processor;
+    MorePhiLookAndFeel lnf;
 
     // ── V1 UI components (Classic tab) ─────────────────────────────────────────
     MorphPad          morphPad;
@@ -60,7 +61,7 @@ private:
     BottomControlStrip controlStrip;
 
     // Parameter panel toggle
-    juce::TextButton paramToggleBtn_{"Params \xe2\x96\xb8"};
+    juce::TextButton paramToggleBtn_;
     bool paramPanelVisible_ = false;
 
     // Hosted plugin window (detached)
@@ -78,13 +79,19 @@ private:
     std::unique_ptr<ModulationMatrixPanel> modulationPage_;
     std::unique_ptr<V2PresetBrowserPanel>  presetPage_;
 
+    // AI chat tab page
+    std::unique_ptr<AIChatPanel>           aiChatPage_;
+
     // Classic tab child components (grouped for show/hide)
     void setClassicTabVisible(bool visible);
     void setEngineTabVisible(bool visible);
     void setModulationTabVisible(bool visible);
     void setPresetsTabVisible(bool visible);
+    void setAITabVisible(bool visible);
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphSnapEditor)
+    float lastDbLevel_ = -1.0f;  // RMS meter throttle state (per-instance)
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiEditor)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

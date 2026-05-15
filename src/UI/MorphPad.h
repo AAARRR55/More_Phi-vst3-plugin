@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/MorphPad.h
+ * More-Phi — UI/MorphPad.h
  * 2D XY Morph Pad with clock-layout snapshot dots.
  * Optimized for zero allocations during rendering.
  */
@@ -8,9 +8,9 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 enum class VisualizationMode
 {
@@ -23,7 +23,7 @@ class MorphPad : public juce::Component,
                  private juce::Timer
 {
 public:
-    explicit MorphPad(MorphSnapProcessor& p);
+    explicit MorphPad(MorePhiProcessor& p);
     ~MorphPad() override = default;
 
     void paint(juce::Graphics& g) override;
@@ -38,6 +38,9 @@ public:
     void setPathVisible(bool shouldShow);
     void setVisualizationMode(int modeIndex);
 
+    // Dirty flag for efficient repaint scheduling
+    void markDirty() { snapshotStateDirty_ = true; }
+
 private:
     void timerCallback() override;
     void updatePosition(juce::Point<float> pos);
@@ -48,7 +51,7 @@ private:
     // OPTIMIZATION: Fixed-size ring buffer for trail (no allocations)
     void appendTrailPoint(juce::Point<float> point);
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // Trail ring buffer (fixed size - no dynamic allocation)
     static constexpr int maxTrailPoints_ = 64;
@@ -61,6 +64,11 @@ private:
     bool showGrid_ = true;
     bool showPath_ = true;
     VisualizationMode visMode_ = VisualizationMode::Standard;
+
+    float lastRepaintX_ = -1.0f;
+    float lastRepaintY_ = -1.0f;
+    bool snapshotStateDirty_ = true;
+    bool needsRepaint_ = true;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

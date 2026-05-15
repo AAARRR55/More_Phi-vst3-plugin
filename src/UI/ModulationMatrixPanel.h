@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/ModulationMatrixPanel.h
+ * More-Phi — UI/ModulationMatrixPanel.h
  * Modulation tab panel: route list (left) + LFO controls (right).
  *
  * Layout: 180px tall, two sections side by side.
@@ -15,9 +15,9 @@
 #include <vector>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 // ---------------------------------------------------------------------------
 // RouteRow — one 24px-tall row inside the route list
@@ -26,7 +26,7 @@ class MorphSnapProcessor;
 class RouteRow final : public juce::Component
 {
 public:
-    RouteRow(int routeId, MorphSnapProcessor& proc);
+    RouteRow(int routeId, MorePhiProcessor& proc);
 
     void resized() override;
 
@@ -49,7 +49,7 @@ private:
     bool syncing_ = false;
 
     int routeId_;
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     juce::ToggleButton  enabledToggle_;
     juce::ComboBox      sourceCombo_;
@@ -66,7 +66,7 @@ private:
 class LFOPanel final : public juce::Component
 {
 public:
-    LFOPanel(int lfoIndex, MorphSnapProcessor& proc);
+    LFOPanel(int lfoIndex, MorePhiProcessor& proc);
 
     void resized() override;
     void paint(juce::Graphics& g) override;
@@ -76,7 +76,7 @@ private:
     void onRateChanged();
 
     int lfoIndex_;
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     juce::Label    label_;
     juce::ComboBox shapeCombo_;
@@ -94,7 +94,7 @@ class ModulationMatrixPanel final : public juce::Component,
                                     private juce::Timer
 {
 public:
-    explicit ModulationMatrixPanel(MorphSnapProcessor& proc);
+    explicit ModulationMatrixPanel(MorePhiProcessor& proc);
     ~ModulationMatrixPanel() override;
 
     void paint(juce::Graphics& g) override;
@@ -146,7 +146,7 @@ private:
     // Processor reference
     // ---------------------------------------------------------------------------
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // Last known route count — used to detect external route changes.
     int cachedRouteCount_ = -1;
@@ -154,4 +154,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ModulationMatrixPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

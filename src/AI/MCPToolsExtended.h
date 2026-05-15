@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/MCPToolsExtended.h
+ * More-Phi — AI/MCPToolsExtended.h
  * Extended MCP tools for Learn Mode, AI Teacher, Token Management, and
  * advanced features demonstrated in SnappySnap videos.
  */
@@ -11,14 +11,14 @@
 #include "Core/DiscreteParameterHandler.h"
 
 // Forward declarations
-namespace morphsnap {
-    class MorphSnapProcessor;
+namespace more_phi {
+    class MorePhiProcessor;
     class ParameterClassifier;
     class TokenOptimizer;
     struct InstanceIdentity;
 }
 
-namespace morphsnap {
+namespace more_phi {
 
 // Extended tool handler with new AI capabilities
 class MCPToolsExtended
@@ -28,14 +28,14 @@ public:
     // Provides AI-friendly analysis of plugin parameters with descriptions and relationships
     static juce::String analyzeParameters(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: expose_parameters
     // Configure which parameters are visible to AI (Learn Mode control)
     static juce::String exposeParameters(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: get_token_estimate
@@ -48,28 +48,28 @@ public:
     // Set parameters with automatic token optimization
     static juce::String setParametersOptimized(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         TokenOptimizer& optimizer);
     
     // Tool: get_morph_compatibility
     // Analyze how well two snapshots will morph together
     static juce::String getMorphCompatibility(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: suggest_intermediate_snapshots
     // Get suggestions for smooth morphing between distant snapshots
     static juce::String suggestIntermediateSnapshots(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: get_parameter_categories
     // Get parameters organized by category (Oscillator, Filter, etc.)
     static juce::String getParameterCategories(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: learn_from_adjustment
@@ -100,14 +100,14 @@ public:
     // Get list of discrete/non-interpolatable parameters
     static juce::String getDiscreteParameters(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: suggest_morph_settings
     // Get recommended physics mode and settings for a morph
     static juce::String suggestMorphSettings(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: get_usage_stats
@@ -126,34 +126,34 @@ public:
     // Get human-readable explanation of a parameter's function
     static juce::String explainParameter(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
     
     // Tool: find_related_parameters
     // Find parameters that typically work together
     static juce::String findRelatedParameters(
         const juce::var& params,
-        MorphSnapProcessor& processor,
+        MorePhiProcessor& processor,
         ParameterClassifier& classifier);
 
     // Tool: generate_dataset
     // Renders multiple audio clips with random parameter settings to create a machine learning dataset
-    static juce::String generateDataset(const juce::var& params, MorphSnapProcessor& processor);
+    static juce::String generateDataset(const juce::var& params, MorePhiProcessor& processor);
 
     // Tool: generate_dataset_v2
     // Full ML pipeline: Latin Hypercube Sampling, plugin chains, feature extraction, validation, train/val/test splitting
-    static juce::String generateDatasetV2(const juce::var& params, MorphSnapProcessor& processor);
+    static juce::String generateDatasetV2(const juce::var& params, MorePhiProcessor& processor);
 
     // Tool: generate_dataset_v3
     // Async pipeline with worker pool, adaptive throttling, crash recovery, and watchdog
-    static juce::String generateDatasetV3(const juce::var& params, MorphSnapProcessor& processor);
+    static juce::String generateDatasetV3(const juce::var& params, MorePhiProcessor& processor);
 
 private:
     // Helper: Build parameter JSON with metadata
     static juce::var buildParameterInfo(
         int index,
         const ParameterClassifier& classifier,
-        MorphSnapProcessor& processor);
+        MorePhiProcessor& processor);
     
     // Helper: Parse parameter list from request
     static std::vector<int> parseParameterList(const juce::var& params);
@@ -176,4 +176,4 @@ struct ExtendedToolInfo
 extern const ExtendedToolInfo kExtendedTools[];
 extern const int kExtendedToolCount;
 
-} // namespace morphsnap
+} // namespace more_phi

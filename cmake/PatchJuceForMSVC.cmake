@@ -3,8 +3,8 @@
 # juce_PushNotifications.h defines enum values whose names are Windows macros
 # (none, small, large, min, max, normal, high from winnt.h / windef.h).
 # This causes MSVC parse errors in the juce_gui_extra module.
-# MorphSnap doesn't use PushNotifications, but the class is always parsed.
-# This script applies JUCE compatibility patches used by MorphSnap on Windows.
+# MorePhi doesn't use PushNotifications, but the class is always parsed.
+# This script applies JUCE compatibility patches used by MorePhi on Windows.
 # Must be called AFTER FetchContent_MakeAvailable(juce).
 # ---------------------------------------------------------------------------
 
@@ -14,15 +14,15 @@ if(WIN32 AND MINGW)
     )
 
     if(EXISTS "${_JUCE_CORE_H}")
-        file(READ "${_JUCE_CORE_H}" _MORPHSNAP_JUCE_CORE_CONTENT)
+        file(READ "${_JUCE_CORE_H}" _MORE_PHI_JUCE_CORE_CONTENT)
 
-        if(NOT _MORPHSNAP_JUCE_CORE_CONTENT MATCHES "#include <cstring>")
-            message(STATUS "MorphSnap: Patching juce_core.h for MinGW cstring compatibility")
-            string(REPLACE "#pragma once" "#pragma once\n#include <cstring>" _MORPHSNAP_JUCE_CORE_CONTENT "${_MORPHSNAP_JUCE_CORE_CONTENT}")
-            file(WRITE "${_JUCE_CORE_H}" "${_MORPHSNAP_JUCE_CORE_CONTENT}")
-            message(STATUS "MorphSnap: juce_core.h patched successfully")
+        if(NOT _MORE_PHI_JUCE_CORE_CONTENT MATCHES "#include <cstring>")
+            message(STATUS "MorePhi: Patching juce_core.h for MinGW cstring compatibility")
+            string(REPLACE "#pragma once" "#pragma once\n#include <cstring>" _MORE_PHI_JUCE_CORE_CONTENT "${_MORE_PHI_JUCE_CORE_CONTENT}")
+            file(WRITE "${_JUCE_CORE_H}" "${_MORE_PHI_JUCE_CORE_CONTENT}")
+            message(STATUS "MorePhi: juce_core.h patched successfully")
         else()
-            message(STATUS "MorphSnap: juce_core.h already patched, skipping")
+            message(STATUS "MorePhi: juce_core.h already patched, skipping")
         endif()
     endif()
 endif()
@@ -40,7 +40,7 @@ if(WIN32 AND MSVC)
 
         # Only patch if not already patched (idempotent check)
         if(NOT _CONTENT MATCHES "noBadge")
-            message(STATUS "MorphSnap: Patching juce_PushNotifications.h for MSVC Windows macro conflicts")
+            message(STATUS "MorePhi: Patching juce_PushNotifications.h for MSVC Windows macro conflicts")
 
             # BadgeIconType enum: none -> noBadge, small -> smallBadge, large -> largeBadge
             string(REGEX REPLACE "(enum BadgeIconType[ \t\r\n]*\\{[ \t\r\n]*)none"
@@ -67,9 +67,9 @@ if(WIN32 AND MSVC)
             string(REPLACE "Importance importance = normal" "Importance importance = importanceNormal" _CONTENT "${_CONTENT}")
 
             file(WRITE "${_JUCE_PUSH_NOTIF_H}" "${_CONTENT}")
-            message(STATUS "MorphSnap: juce_PushNotifications.h patched successfully")
+            message(STATUS "MorePhi: juce_PushNotifications.h patched successfully")
         else()
-            message(STATUS "MorphSnap: juce_PushNotifications.h already patched, skipping")
+            message(STATUS "MorePhi: juce_PushNotifications.h already patched, skipping")
         endif()
     endif()
 endif()

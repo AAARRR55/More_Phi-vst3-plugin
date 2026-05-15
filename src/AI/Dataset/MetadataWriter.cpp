@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/MetadataWriter.cpp
+ * More-Phi — AI/Dataset/MetadataWriter.cpp
  * Implementation of comprehensive metadata management for dataset generation.
  */
 #include "MetadataWriter.h"
@@ -8,7 +8,11 @@
 #include <iomanip>
 #include <juce_cryptography/juce_cryptography.h>
 
-namespace morphsnap {
+#ifdef _MSC_VER
+#pragma warning(disable: 4101)
+#endif
+
+namespace more_phi {
 
 // ── DatasetMetadata Implementation ──────────────────────────────────────────────
 
@@ -635,88 +639,7 @@ float MetadataWriter::calculateProcessingIntensity(const std::vector<ParameterVa
 
 // ── Private Helper Methods ─────────────────────────────────────────────────────
 
-void MetadataWriter::initializeSchema()
-{
-    // Built incrementally to avoid MSVC C1060 (out of heap space)
-    // from deeply nested nlohmann::json brace-initialization.
-
-    nlohmann::json paramSchema;
-    paramSchema["type"] = "object";
-    paramSchema["properties"]["name"]            = {{"type", "string"}};
-    paramSchema["properties"]["index"]           = {{"type", "integer"}};
-    paramSchema["properties"]["normalizedValue"] = {{"type", "number"}, {"minimum", 0}, {"maximum", 1}};
-    paramSchema["properties"]["rawValue"]        = {{"type", "number"}};
-    paramSchema["properties"]["textValue"]       = {{"type", "string"}};
-    paramSchema["properties"]["category"]        = {{"type", "string"}};
-
-    nlohmann::json pluginItemSchema;
-    pluginItemSchema["type"] = "object";
-    pluginItemSchema["required"] = {"pluginId", "pluginName"};
-    pluginItemSchema["properties"]["pluginId"]   = {{"type", "string"}};
-    pluginItemSchema["properties"]["pluginName"] = {{"type", "string"}};
-    pluginItemSchema["properties"]["vendor"]     = {{"type", "string"}};
-    pluginItemSchema["properties"]["version"]    = {{"type", "string"}};
-    pluginItemSchema["properties"]["format"]     = {{"type", "string"}, {"enum", {"VST3", "AU"}}};
-    pluginItemSchema["properties"]["parameters"] = {{"type", "array"}, {"items", paramSchema}};
-
-    nlohmann::json sourceSchema;
-    sourceSchema["type"] = "object";
-    sourceSchema["required"] = {"filePath", "sampleRate", "numChannels"};
-    sourceSchema["properties"]["filePath"]       = {{"type", "string"}};
-    sourceSchema["properties"]["genre"]          = {{"type", "string"}};
-    sourceSchema["properties"]["contentType"]    = {{"type", "string"}};
-    sourceSchema["properties"]["originalLufs"]   = {{"type", "number"}};
-    sourceSchema["properties"]["dynamicRangeDb"] = {{"type", "number"}};
-    sourceSchema["properties"]["sampleRate"]     = {{"type", "number"}, {"exclusiveMinimum", 0}};
-    sourceSchema["properties"]["numChannels"]    = {{"type", "integer"}, {"minimum", 1}};
-    sourceSchema["properties"]["numSamples"]     = {{"type", "integer"}, {"minimum", 0}};
-    sourceSchema["properties"]["fileHash"]       = {{"type", "string"}};
-
-    nlohmann::json chainSchema;
-    chainSchema["type"] = "object";
-    chainSchema["required"] = {"plugins", "sampleRate", "blockSize"};
-    chainSchema["properties"]["chainType"]  = {{"type", "string"}};
-    chainSchema["properties"]["plugins"]    = {{"type", "array"}, {"items", pluginItemSchema}};
-    chainSchema["properties"]["sampleRate"] = {{"type", "number"}, {"exclusiveMinimum", 0}};
-    chainSchema["properties"]["blockSize"]  = {{"type", "integer"}, {"minimum", 1}};
-
-    nlohmann::json outputSchema;
-    outputSchema["type"] = "object";
-    outputSchema["properties"]["lufs"]               = {{"type", "number"}};
-    outputSchema["properties"]["truePeakDb"]         = {{"type", "number"}};
-    outputSchema["properties"]["dynamicRangeDb"]     = {{"type", "number"}};
-    outputSchema["properties"]["spectralCentroidHz"] = {{"type", "number"}, {"minimum", 0}};
-    outputSchema["properties"]["numSamples"]         = {{"type", "integer"}, {"minimum", 0}};
-    outputSchema["properties"]["durationSeconds"]    = {{"type", "number"}, {"minimum", 0}};
-
-    nlohmann::json targetsSchema;
-    targetsSchema["type"] = "object";
-    targetsSchema["properties"]["parameterRegression"]  = {{"type", "array"}, {"items", {{"type", "number"}}}};
-    targetsSchema["properties"]["styleClassification"]  = {{"type", "string"}};
-    targetsSchema["properties"]["processingIntensity"]  = {{"type", "number"}, {"minimum", 0}, {"maximum", 1}};
-    targetsSchema["properties"]["featureVector"]        = {{"type", "array"}, {"items", {{"type", "number"}}}};
-
-    nlohmann::json props;
-    props["sampleId"]          = {{"type", "string"}, {"description", "Unique identifier for the sample"}, {"pattern", "^sample_[0-9]+_[0-9]+$"}};
-    props["timestamp"]         = {{"type", "integer"}, {"description", "Unix timestamp in milliseconds"}, {"minimum", 0}};
-    props["source"]            = sourceSchema;
-    props["chain"]             = chainSchema;
-    props["output"]            = outputSchema;
-    props["spectralFeatures"]  = {{"type", "object"}};
-    props["temporalFeatures"]  = {{"type", "object"}};
-    props["perceptualFeatures"]= {{"type", "object"}};
-    props["targets"]           = targetsSchema;
-    props["split"]             = {{"type", "string"}, {"enum", {"train", "val", "test", ""}}};
-    props["tags"]              = {{"type", "array"}, {"items", {{"type", "string"}}}};
-
-    schema_["$schema"]     = "https://json-schema.org/draft/2020-12/schema";
-    schema_["$id"]         = "https://morphsnap.ai/schemas/dataset-metadata.json";
-    schema_["title"]       = "MorphSnap Dataset Metadata";
-    schema_["description"] = "Schema for synthetic audio dataset metadata";
-    schema_["type"]        = "object";
-    schema_["required"]    = {"sampleId", "timestamp", "source", "chain", "output"};
-    schema_["properties"]  = props;
-}
+// initializeSchema() implementation moved to MetadataSchema.cpp to reduce compiler memory load.
 
 nlohmann::json MetadataWriter::sourceProvenanceToJson(const SourceProvenance& source) const
 {
@@ -983,4 +906,4 @@ nlohmann::json MetadataWriter::flattenFeatures(const DatasetMetadata& metadata) 
     return flat;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

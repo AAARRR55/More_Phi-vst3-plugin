@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/HybridBlendPanel.cpp
+ * More-Phi — UI/HybridBlendPanel.cpp
  *
  * Implements the hybrid blend weight control strip.
  *
@@ -8,42 +8,37 @@
  *   the three raw values are summed and each is divided by the total to
  *   produce normalized weights that always sum to 1.0. If all three are
  *   zero the Direct weight is forced to 1.0 as a safe fallback.
+ *
+ * All controls route through APVTS for DAW automation support.
+ * syncStateFromAPVTS() bridges APVTS → engine setters on the audio thread.
  */
 #include "HybridBlendPanel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/OversamplingWrapper.h"
+#include "UI/Theme/MorePhiTheme.h"
+#include "UI/Bindings/ParameterBinding.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-// ── Color constants ───────────────────────────────────────────────────────────
-namespace {
-    constexpr juce::uint32 kBgColour       = 0xff16213e;
-    constexpr juce::uint32 kSurfaceColour  = 0xff1a2742;
-    constexpr juce::uint32 kAccentColour   = 0xffec415d;
-    constexpr juce::uint32 kTextColour     = 0xffe8eaed;
-    constexpr juce::uint32 kTextDimColour  = 0xff4a5568;
-    constexpr juce::uint32 kBorderColour   = 0xff1e3a5f;
-    constexpr juce::uint32 kGreenColour    = 0xff4ade80;
+using namespace Theme::Colours;
 
     // Pixel widths for the three main sections
     constexpr int kLeftSectionW   = 140;
     constexpr int kRightSectionW  = 80;
     // Center section fills the remainder
-} // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-HybridBlendPanel::HybridBlendPanel(MorphSnapProcessor& proc)
+HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     : proc_(proc)
 {
+    auto& apvts = proc_.getAPVTS();
+
     // ── Audio Domain toggle ───────────────────────────────────────────────────
     setupToggleButton(audioDomainToggle_, "Audio Domain");
     audioDomainToggle_.setToggleState(proc_.getAudioDomainEnabled(),
                                        juce::dontSendNotification);
-    audioDomainToggle_.onClick = [this]()
-    {
-        proc_.setAudioDomainEnabled(audioDomainToggle_.getToggleState());
-    };
+    ParameterBinding::bindToggleButton(audioDomainToggle_, apvts, "audioDomainEnabled");
 
     // ── Oversampling combo ────────────────────────────────────────────────────
     oversamplingCombo_.addItem("x1", 1);
@@ -51,32 +46,18 @@ HybridBlendPanel::HybridBlendPanel(MorphSnapProcessor& proc)
     oversamplingCombo_.addItem("x4", 3);
     oversamplingCombo_.addItem("x8", 4);
     oversamplingCombo_.setSelectedId(1, juce::dontSendNotification); // default x1
-    oversamplingCombo_.onChange = [this]()
-    {
-        auto& os = proc_.getOversampling();
-        switch (oversamplingCombo_.getSelectedId())
-        {
-            case 1: os.setFactor(OversamplingFactor::x1); break;
-            case 2: os.setFactor(OversamplingFactor::x2); break;
-            case 3: os.setFactor(OversamplingFactor::x4); break;
-            case 4: os.setFactor(OversamplingFactor::x8); break;
-            default: break;
-        }
-        // Note: setFactor() takes effect on the next prepare() call.
-        // The host's prepareToPlay() will re-invoke it when sample rate changes,
-        // or manually trigger via proc_.prepareToPlay() if accessible.
-    };
+    ParameterBinding::bindComboBox(oversamplingCombo_, apvts, "oversampling");
     oversamplingCombo_.setColour(juce::ComboBox::backgroundColourId,
-                                  juce::Colour(kSurfaceColour));
+                                  surfaceLit());
     oversamplingCombo_.setColour(juce::ComboBox::textColourId,
-                                  juce::Colour(kTextColour));
+                                  textBright());
     oversamplingCombo_.setColour(juce::ComboBox::outlineColourId,
-                                  juce::Colour(kBorderColour));
+                                  border());
 
     oversamplingLabel_.setText("Oversampling", juce::dontSendNotification);
-    oversamplingLabel_.setFont(juce::Font(juce::FontOptions(8.5f)));
+    oversamplingLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
     oversamplingLabel_.setColour(juce::Label::textColourId,
-                                  juce::Colour(kTextDimColour));
+                                  textDim());
     oversamplingLabel_.setJustificationType(juce::Justification::centredLeft);
 
     // ── Vertical blend sliders ────────────────────────────────────────────────
@@ -87,13 +68,17 @@ HybridBlendPanel::HybridBlendPanel(MorphSnapProcessor& proc)
     paramSlider_.onValueChange    = [this]() { onBlendWeightChanged(); };
     spectralSlider_.onValueChange = [this]() { onBlendWeightChanged(); };
     granularSlider_.onValueChange = [this]() { onBlendWeightChanged(); };
+    paramSlider_.onDragStart = spectralSlider_.onDragStart = granularSlider_.onDragStart =
+        [this]() { beginBlendGesture(); };
+    paramSlider_.onDragEnd = spectralSlider_.onDragEnd = granularSlider_.onDragEnd =
+        [this]() { endBlendGesture(); };
 
     // Slider axis labels
     const auto setupSliderLabel = [this](juce::Label& lbl, const juce::String& text)
     {
         lbl.setText(text, juce::dontSendNotification);
-        lbl.setFont(juce::Font(juce::FontOptions(8.5f)));
-        lbl.setColour(juce::Label::textColourId, juce::Colour(kTextDimColour));
+        lbl.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+        lbl.setColour(juce::Label::textColourId, textDim());
         lbl.setJustificationType(juce::Justification::centred);
     };
 
@@ -102,34 +87,31 @@ HybridBlendPanel::HybridBlendPanel(MorphSnapProcessor& proc)
     setupSliderLabel(granularLabel_, "Granular");
 
     // Blend summary label
-    blendSummaryLabel_.setFont(juce::Font(juce::FontOptions(9.0f)));
+    blendSummaryLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 9.0f, juce::Font::plain)));
     blendSummaryLabel_.setColour(juce::Label::textColourId,
-                                  juce::Colour(kGreenColour));
+                                  green());
     blendSummaryLabel_.setJustificationType(juce::Justification::centred);
     updateBlendLabel(); // initialise text
 
-    // ── Alpha knob ────────────────────────────────────────────────────────────
+    // ── Alpha knob (shares morphAlpha APVTS param with SpectralControlPanel) ──
     alphaKnob_.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     alphaKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
     alphaKnob_.setRange(0.0, 1.0, 0.001);
     alphaKnob_.setValue(static_cast<double>(proc_.getMorphAlpha()),
                          juce::dontSendNotification);
     alphaKnob_.setColour(juce::Slider::rotarySliderFillColourId,
-                          juce::Colour(kAccentColour));
+                          accent());
     alphaKnob_.setColour(juce::Slider::rotarySliderOutlineColourId,
-                          juce::Colour(kSurfaceColour));
+                          surfaceLit());
     alphaKnob_.setColour(juce::Slider::textBoxTextColourId,
-                          juce::Colour(kTextColour));
+                          textBright());
     alphaKnob_.setColour(juce::Slider::textBoxOutlineColourId,
                           juce::Colours::transparentBlack);
-    alphaKnob_.onValueChange = [this]()
-    {
-        proc_.setMorphAlpha(static_cast<float>(alphaKnob_.getValue()));
-    };
+    ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(juce::Font(juce::FontOptions(8.5f)));
-    alphaLabel_.setColour(juce::Label::textColourId, juce::Colour(kTextDimColour));
+    alphaLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    alphaLabel_.setColour(juce::Label::textColourId, textDim());
     alphaLabel_.setJustificationType(juce::Justification::centred);
 
     // ── Register children ─────────────────────────────────────────────────────
@@ -152,17 +134,17 @@ HybridBlendPanel::HybridBlendPanel(MorphSnapProcessor& proc)
 void HybridBlendPanel::paint(juce::Graphics& g)
 {
     // Panel background
-    g.setColour(juce::Colour(kBgColour).withAlpha(0.85f));
+    g.setColour(surface().withAlpha(0.85f));
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
 
     // Border
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.25f), 4.0f, 0.5f);
 
     const float h = static_cast<float>(getHeight());
 
     // Section dividers
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawLine(static_cast<float>(kLeftSectionW),
                6.0f, static_cast<float>(kLeftSectionW), h - 6.0f, 0.5f);
     g.drawLine(static_cast<float>(getWidth() - kRightSectionW),
@@ -188,18 +170,20 @@ void HybridBlendPanel::resized()
     const int topOffset = 18;
     const int innerH    = totalH - topOffset - pad;
 
-    // ── Left section: BLEND MODE ──────────────────────────────────────────────
+    // ── Left section: BLEND MODE — vertical FlexBox ──────────────────────────
     {
         auto leftArea = juce::Rectangle<int>(pad, topOffset,
                                               kLeftSectionW - pad * 2, innerH);
-        const int btnH = 28;
-        audioDomainToggle_.setBounds(leftArea.removeFromTop(btnH));
-        leftArea.removeFromTop(6);
-        oversamplingLabel_.setBounds(leftArea.removeFromTop(14));
-        oversamplingCombo_.setBounds(leftArea.removeFromTop(26));
+        juce::FlexBox leftCol;
+        leftCol.flexDirection = juce::FlexBox::Direction::column;
+        leftCol.items.add(juce::FlexItem(audioDomainToggle_).withHeight(28.0f));
+        leftCol.items.add(juce::FlexItem().withHeight(6.0f));
+        leftCol.items.add(juce::FlexItem(oversamplingLabel_).withHeight(14.0f));
+        leftCol.items.add(juce::FlexItem(oversamplingCombo_).withHeight(26.0f));
+        leftCol.performLayout(leftArea);
     }
 
-    // ── Center section: BLEND WEIGHTS ────────────────────────────────────────
+    // ── Center section: BLEND WEIGHTS — FlexBox slider row ────────────────────
     {
         const int centerX = kLeftSectionW + pad;
         const int centerW = totalW - kLeftSectionW - kRightSectionW - pad * 2;
@@ -210,22 +194,20 @@ void HybridBlendPanel::resized()
                                       topOffset + innerH - summaryH,
                                       centerW, summaryH);
 
-        // Three vertical sliders fill remaining center height
+        // Three vertical sliders — FlexBox row with equal columns
         const int sliderH  = 120;
         const int labelH   = 14;
         const int sliderW  = 40;
         const int totalSliderH = sliderH + labelH + 4;
         const int sliderY  = topOffset + (innerH - summaryH - 4 - totalSliderH) / 2;
 
-        const int spacing = centerW / 3;
-        const int sliderNames[3] = { 0, 1, 2 };
         juce::Slider* sliders[3] = { &paramSlider_, &spectralSlider_, &granularSlider_ };
         juce::Label*  labels[3]  = { &paramLabel_,  &spectralLabel_,  &granularLabel_  };
 
+        const float colW = static_cast<float>(centerW) / 3.0f;
         for (int i = 0; i < 3; ++i)
         {
-            (void)sliderNames[i];
-            const int cx = centerX + spacing * i + spacing / 2;
+            const int cx = centerX + static_cast<int>(colW * i + colW / 2.0f);
             sliders[i]->setBounds(cx - sliderW / 2, sliderY, sliderW, sliderH);
             labels[i]->setBounds(cx - sliderW / 2, sliderY + sliderH + 2,
                                   sliderW, labelH);
@@ -256,9 +238,9 @@ void HybridBlendPanel::setupToggleButton(juce::TextButton& btn,
                                           const juce::String& /*label*/)
 {
     btn.setClickingTogglesState(true);
-    btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(kSurfaceColour));
-    btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(kAccentColour));
-    btn.setColour(juce::TextButton::textColourOffId,  juce::Colour(kTextColour));
+    btn.setColour(juce::TextButton::buttonColourId,   surfaceLit());
+    btn.setColour(juce::TextButton::buttonOnColourId, accent());
+    btn.setColour(juce::TextButton::textColourOffId,  textBright());
     btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
 }
 
@@ -268,8 +250,32 @@ void HybridBlendPanel::setupVerticalSlider(juce::Slider& slider, double defaultV
     slider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
     slider.setRange(0.0, 1.0, 0.001);
     slider.setValue(defaultVal, juce::dontSendNotification);
-    slider.setColour(juce::Slider::thumbColourId,   juce::Colour(kAccentColour));
-    slider.setColour(juce::Slider::trackColourId,   juce::Colour(kBorderColour));
+    slider.setColour(juce::Slider::thumbColourId,   accent());
+    slider.setColour(juce::Slider::trackColourId,   border());
+}
+
+void HybridBlendPanel::beginBlendGesture()
+{
+    if (blendGestureActive_)
+        return;
+
+    auto& apvts = proc_.getAPVTS();
+    if (auto* p = apvts.getParameter("blendParamWeight")) p->beginChangeGesture();
+    if (auto* p = apvts.getParameter("blendSpectralWeight")) p->beginChangeGesture();
+    if (auto* p = apvts.getParameter("blendGranularWeight")) p->beginChangeGesture();
+    blendGestureActive_ = true;
+}
+
+void HybridBlendPanel::endBlendGesture()
+{
+    if (!blendGestureActive_)
+        return;
+
+    auto& apvts = proc_.getAPVTS();
+    if (auto* p = apvts.getParameter("blendParamWeight")) p->endChangeGesture();
+    if (auto* p = apvts.getParameter("blendSpectralWeight")) p->endChangeGesture();
+    if (auto* p = apvts.getParameter("blendGranularWeight")) p->endChangeGesture();
+    blendGestureActive_ = false;
 }
 
 void HybridBlendPanel::onBlendWeightChanged()
@@ -295,9 +301,29 @@ void HybridBlendPanel::onBlendWeightChanged()
         normGranular = rawGranular / total;
     }
 
-    proc_.setHybridParamWeight(normParam);
-    proc_.setHybridSpectralWeight(normSpectral);
-    proc_.setHybridGranularWeight(normGranular);
+    // Route normalized weights through APVTS for DAW automation support.
+    auto& apvts = proc_.getAPVTS();
+    if (auto* p = apvts.getParameter("blendParamWeight"))
+    {
+        if (blendGestureActive_)
+            p->setValueNotifyingHost(normParam);
+        else
+            ParameterBinding::setValueWithGesture(*p, normParam);
+    }
+    if (auto* p = apvts.getParameter("blendSpectralWeight"))
+    {
+        if (blendGestureActive_)
+            p->setValueNotifyingHost(normSpectral);
+        else
+            ParameterBinding::setValueWithGesture(*p, normSpectral);
+    }
+    if (auto* p = apvts.getParameter("blendGranularWeight"))
+    {
+        if (blendGestureActive_)
+            p->setValueNotifyingHost(normGranular);
+        else
+            ParameterBinding::setValueWithGesture(*p, normGranular);
+    }
 
     updateBlendLabel();
 }
@@ -340,9 +366,9 @@ void HybridBlendPanel::drawSectionLabel(juce::Graphics& g,
                                          const juce::String& text,
                                          juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions(8.5f)));
-    g.setColour(juce::Colour(kTextDimColour));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

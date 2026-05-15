@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/SnapshotRing.h
+ * More-Phi — UI/SnapshotRing.h
  * Interactive overlay for clicking snapshot dots to capture/recall.
  */
 #pragma once
@@ -7,14 +7,14 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Core/InterpolationEngine.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class SnapshotRing : public juce::Component
 {
 public:
-    explicit SnapshotRing(MorphSnapProcessor& p) : proc_(p) {}
+    explicit SnapshotRing(MorePhiProcessor& p) : proc_(p) {}
 
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
@@ -30,7 +30,7 @@ public:
 
 private:
     int hitTestSlot(juce::Point<float> pos) const;
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -7,7 +7,7 @@
 #include <mutex>
 #include <string>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * ProgressTracker — Thread-safe, real-time progress and ETA tracking.
@@ -112,4 +112,4 @@ private:
     std::chrono::steady_clock::time_point startTime_ = std::chrono::steady_clock::now();
 };
 
-} // namespace morphsnap
+} // namespace more_phi

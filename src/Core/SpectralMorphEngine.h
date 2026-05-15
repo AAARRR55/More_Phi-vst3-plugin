@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/SpectralMorphEngine.h
+ * More-Phi — Core/SpectralMorphEngine.h
  *
  * STFT-based audio-domain spectral morph engine.
  *
@@ -48,7 +48,7 @@
 
 #include "TransientDetector.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * SpectralMorphEngine
@@ -174,6 +174,7 @@ private:
     // ── Parameters ────────────────────────────────────────────────────────
 
     int    fftSize_        = 2048;
+    std::atomic<int> pendingFFTSize_ { 2048 };
     int    hopSize_        = 512;
     int    numBins_        = 0;       // fftSize / 2 + 1, set in prepare()
     double sampleRate_     = 48000.0;
@@ -210,4 +211,4 @@ private:
                           int numBins, float alpha) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

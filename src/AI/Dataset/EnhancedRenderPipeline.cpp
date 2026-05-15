@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/EnhancedRenderPipeline.cpp
+ * More-Phi — AI/Dataset/EnhancedRenderPipeline.cpp
  * Implementation of the enhanced rendering pipeline for synthetic dataset generation.
  */
 #include "EnhancedRenderPipeline.h"
@@ -11,7 +11,7 @@
 #include <vector>
 #include <numeric>
 
-namespace morphsnap {
+namespace more_phi {
 
 EnhancedRenderPipeline::EnhancedRenderPipeline()
 {
@@ -487,7 +487,7 @@ bool EnhancedRenderPipeline::isFormatSupported(OutputFormat format) const
     }
 }
 
-double EnhancedRenderPipeline::estimateBatchRenderTime(int numSamples, const RenderConfig& config) const
+double EnhancedRenderPipeline::estimateBatchRenderTime(int numSamples, const RenderConfig& /*config*/) const
 {
     // Use average render time if available, otherwise estimate based on target throughput
     double avgRenderTime = averageRenderTimeMs_;
@@ -628,4 +628,4 @@ void EnhancedRenderPipeline::updateProgress(BatchProgress& progress,
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

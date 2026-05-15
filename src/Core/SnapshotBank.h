@@ -1,5 +1,5 @@
 /*
- * MorphSnap - Core/SnapshotBank.h
+ * More-Phi - Core/SnapshotBank.h
  * 12-slot snapshot storage with capture/recall.
  * Thread-safe for concurrent UI/audio access using seqlock pattern.
  *
@@ -33,7 +33,7 @@ namespace juce {
 #include <xmmintrin.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 class ParameterBridge;  // forward
 
@@ -47,7 +47,8 @@ class SnapshotBank
 public:
     static constexpr int NUM_SLOTS = 12;
     // Maximum retries for audio thread read operations
-    static constexpr int MAX_READ_RETRIES = 8;
+    // Increased to 128 for better tolerance under MCP write contention
+    static constexpr int MAX_READ_RETRIES = 128;
 
     // Heap-allocate the large slots array so it never lives on the stack
     SnapshotBank()
@@ -58,6 +59,7 @@ public:
     void prepare(int maxParamCount);
     void capture(int slot, const ParameterBridge& bridge);
     void captureValues(int slot, const std::vector<float>& values);
+    void captureValuesWithNames(int slot, const float* values, int count, const juce::StringArray& names);
     void recall(int slot, ParameterBridge& bridge) const;
 
     // Params-only recall: skips state chunk even in Full mode.
@@ -69,9 +71,11 @@ public:
     void captureStateChunk(int slot, const juce::MemoryBlock& chunk);
     void recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
     void recallStateChunk(int slot, juce::AudioProcessor* plugin) const;
+    bool copyStateChunk(int slot, juce::MemoryBlock& outChunk) const;
+    bool hasStateChunk(int slot) const;
 
-    void setRecallMode(RecallMode m)  { recallMode_ = m; }
-    RecallMode getRecallMode() const  { return recallMode_; }
+    void setRecallMode(RecallMode m)  { recallMode_.store(m, std::memory_order_release); }
+    RecallMode getRecallMode() const  { return recallMode_.load(std::memory_order_acquire); }
 
     bool isOccupied(int slot) const noexcept;
     bool hasAnyOccupied() const noexcept;
@@ -80,6 +84,19 @@ public:
 
     void clearSlot(int slot);
     void clearAll();
+
+    // ── Parameter name remapping (VST3-H1) ─────────────────────────────────
+    /** Look up a parameter index by name within a captured snapshot slot.
+     *  Returns -1 if the slot is unoccupied, has no names, or the name was not found.
+     *  Used during recall to remap parameter indices when a hosted plugin's
+     *  parameter order has changed between versions. */
+    int findParameterIndex(int slot, const juce::String& paramName) const
+    {
+        if (slot < 0 || slot >= NUM_SLOTS) return -1;
+        const auto& names = paramNames_[slot];
+        int idx = names.indexOf(paramName);
+        return (idx >= 0) ? idx : -1;
+    }
 
     // ── State persistence ───────────────────────────────────────────────────
     /** Serialize all occupied snapshot slots to an XML element for DAW state save. */
@@ -97,10 +114,15 @@ public:
 
                 bool occupied = (*slots_)[i].occupied;
                 int count = (*slots_)[i].parameterCount;
+
+                // C-4 FIX: Read state chunk under its own mutex, NOT under seqlock.
+                // MemoryBlock copy can heap-allocate, violating seqlock contract.
                 juce::MemoryBlock chunkCopy;
-                
-                if (occupied) {
-                     chunkCopy = stateChunks_[i]; // copy the state chunk while under lock-free read
+                {
+                    const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+                    if (occupied) {
+                        chunkCopy = stateChunks_[i];
+                    }
                 }
 
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
@@ -116,8 +138,18 @@ public:
                     if (count > 0) {
                         // Encode float values as base64 for compact, lossless storage
                         juce::MemoryBlock block((*slots_)[i].values.data(),
-                                               static_cast<size_t>(count) * sizeof(float));
+                                                static_cast<size_t>(count) * sizeof(float));
                         slotXml->setAttribute("values", block.toBase64Encoding());
+
+                        // Store parameter names for forward compatibility (VST3-H1)
+                        // Allows parameter remapping when hosted plugin order changes
+                        {
+                            auto namesXml = slotXml->createNewChildElement("PARAM_NAMES");
+                            const auto& names = paramNames_[i];
+                            const int nameCount = juce::jmin(names.size(), count);
+                            for (int p = 0; p < nameCount; ++p)
+                                namesXml->setAttribute("p" + juce::String(p), names[p]);
+                        }
                     }
                     
                     if (chunkCopy.getSize() > 0) {
@@ -132,13 +164,16 @@ public:
         return xml;
     }
 
-    /** Restore snapshot slots from a previously saved XML element. */
+    /** Restore snapshot slots from a previously saved XML element.
+     *  C-4 FIX: Parse into temporary storage first, then swap on success.
+     *  If any element is malformed, the original snapshot data is preserved.
+     */
     void fromXml(const juce::XmlElement& xml)
     {
-        WriteScope write(*this);
-
-        for (auto& s : *slots_) s.clear();
-        for (auto& chunk : stateChunks_) chunk.setSize(0, false);
+        // Phase 1: Parse into temporary storage (no side effects on live data)
+        auto tmpSlots = std::make_unique<std::array<ParameterState, NUM_SLOTS>>();
+        std::array<juce::MemoryBlock, NUM_SLOTS> tmpChunks;
+        std::array<juce::StringArray, NUM_SLOTS> tmpNames;
 
         for (auto* child : xml.getChildIterator())
         {
@@ -161,23 +196,54 @@ public:
                     int expectedBytes = safeCount * static_cast<int>(sizeof(float));
                     if (static_cast<int>(block.getSize()) >= expectedBytes)
                     {
-                        (*slots_)[slot].capture(static_cast<const float*>(block.getData()), safeCount);
-                        (*slots_)[slot].setName(name.toRawUTF8());
+                        (*tmpSlots)[slot].capture(static_cast<const float*>(block.getData()), safeCount);
+                        (*tmpSlots)[slot].setName(name.toRawUTF8());
                     }
                 }
             }
             else {
-                // if it's occupied but parameter count is 0, we still need to set name and occupied flag
-                (*slots_)[slot].setName(name.toRawUTF8());
-                (*slots_)[slot].occupied = true;
+                (*tmpSlots)[slot].setName(name.toRawUTF8());
+                (*tmpSlots)[slot].occupied = true;
             }
-            
+
+            // Restore parameter names (VST3-H1)
+            if (auto* namesEl = child->getChildByName("PARAM_NAMES"))
+            {
+                for (int p = 0; p < count; ++p)
+                {
+                    juce::String paramName = namesEl->getStringAttribute("p" + juce::String(p), "");
+                    if (paramName.isNotEmpty())
+                        tmpNames[slot].add(paramName);
+                    else
+                        tmpNames[slot].add("");  // Preserve index alignment
+                }
+            }
+
             if (stateBase64.isNotEmpty()) {
-                 juce::MemoryBlock chunkBlock;
-                 if (chunkBlock.fromBase64Encoding(stateBase64)) {
-                     stateChunks_[slot] = std::move(chunkBlock);
-                 }
+                juce::MemoryBlock chunkBlock;
+                if (chunkBlock.fromBase64Encoding(stateBase64))
+                    tmpChunks[slot] = std::move(chunkBlock);
             }
+        }
+
+        // Phase 2: Swap parsed data into live slots under seqlock write
+        {
+            WriteScope write(*this);
+
+            for (int i = 0; i < NUM_SLOTS; ++i)
+            {
+                if ((*tmpSlots)[i].occupied || (*tmpSlots)[i].name[0] != '\0')
+                    (*slots_)[i] = std::move((*tmpSlots)[i]);
+                else
+                    (*slots_)[i].clear();
+            }
+
+            for (int i = 0; i < NUM_SLOTS; ++i)
+                paramNames_[i] = std::move(tmpNames[i]);
+
+            const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+            for (int i = 0; i < NUM_SLOTS; ++i)
+                stateChunks_[i] = std::move(tmpChunks[i]);
         }
     }
 
@@ -199,12 +265,19 @@ public:
                 // Spin pause hint for better performance on x86
                 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
                 _mm_pause();
+                #elif defined(__arm__) || defined(__aarch64__)
+                __asm__ __volatile__("yield" ::: "memory");
                 #endif
                 continue;
             }
 
             // Copy data - this is the critical read section
             fn(*slots_);
+
+            // Prevent the compiler from moving non-atomic slot reads below the
+            // second sequence check. The seqlock only works if validation
+            // happens after the copy in the generated code.
+            std::atomic_signal_fence(std::memory_order_seq_cst);
 
             // Load sequence again - acquire to ensure we see consistent state
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
@@ -241,34 +314,51 @@ private:
     // must serialize writes to keep sequence transitions valid.
     mutable juce::SpinLock writeLock_;
 
-    // Heap-allocated to keep SnapshotBank (and its owner MorphSnapProcessor)
+    // C-4 FIX: Separate mutex for stateChunks_ — MemoryBlock copy assignment
+    // can heap-allocate, which violates the seqlock's side-effect-free read contract.
+    mutable juce::SpinLock chunksLock_;
+
+    // Heap-allocated to keep SnapshotBank (and its owner MorePhiProcessor)
     // off the stack. Each ParameterState holds 2048 floats; 12 slots = ~384 KB.
     std::unique_ptr<std::array<ParameterState, NUM_SLOTS>> slots_;
-    int preparedParamCount_ = 0;
-    RecallMode recallMode_ = RecallMode::Fast;
+    std::atomic<int> preparedParamCount_{0};
+    std::atomic<RecallMode> recallMode_{RecallMode::Fast};
 
     // State chunks for Full recall mode (one per slot)
     std::array<juce::MemoryBlock, NUM_SLOTS> stateChunks_;
+
+    // Parameter names per slot — populated during capture(), used for forward
+    // compatibility when hosted plugin parameter order changes between versions.
+    // Not read on audio thread, so juce::StringArray (heap-allocating) is safe.
+    std::array<juce::StringArray, NUM_SLOTS> paramNames_;
+
+    // Pre-allocated scratch buffer for recall/recallFast — avoids per-call stack
+    // allocation of 8 KB (std::array<float, 2048>) on the audio thread.
+    mutable std::array<float, MAX_PARAMETERS> recallScratch_{};
+
+    // Pre-allocated scratch buffer for capture/captureValues — avoids per-call stack
+    // allocation of 8 KB (std::array<float, 2048>) on the calling thread.
+    mutable std::array<float, MAX_PARAMETERS> captureScratch_{};
 
     // Begin write section - increments seqlock to odd
     void beginWrite()
     {
         writeLock_.enter();
-        // Increment to odd value (signals write in progress)
-        seqlock_.fetch_add(1, std::memory_order_release);
+        // acq_rel ensures all previous writes are visible and sequence update is ordered
+        seqlock_.fetch_add(1, std::memory_order_acq_rel);
     }
 
     // End write section - increments seqlock to even
     void endWrite()
     {
-        // Increment to even value (signals write complete)
-        // Release ensures all writes to slots_ are visible before seqlock update
+        // Ensure all data writes complete before seqlock goes even
+        std::atomic_thread_fence(std::memory_order_release);
         seqlock_.fetch_add(1, std::memory_order_release);
         writeLock_.exit();
     }
 
-    // Helper to copy a single slot with seqlock protection
-    // Used by recall() and getSlotValuesCopy()
+    // Helper to copy a single slot with seqlock protection.
+    // Used by recall()/recallFast() on the audio path.
     bool copySlotValues(int slot, float* outValues, int& outCount) const
     {
         for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
@@ -278,6 +368,8 @@ private:
             {
                 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
                 _mm_pause();
+                #elif defined(__arm__) || defined(__aarch64__)
+                __asm__ __volatile__("yield" ::: "memory");
                 #endif
                 continue;
             }
@@ -304,6 +396,8 @@ private:
                         outValues);
             outCount = count;
 
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
             if (seq1 == seq2)
                 return true;
@@ -312,34 +406,32 @@ private:
     }
     
     // Helper to copy a state chunk safely
-    bool copyStateChunk(int slot, juce::MemoryBlock& outChunk) const
+    bool copyStateChunkInternal(int slot, juce::MemoryBlock& outChunk) const
     {
+        // ATS-M5: Read occupied under seqlock for correctness (occupied is
+        // protected by the seqlock, not chunksLock_).
+        bool occupied = false;
+        bool readOccupied = false;
         for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
         {
             uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
-            if ((seq1 & 1) != 0)
-            {
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                _mm_pause();
-                #endif
-                continue;
-            }
-
-            if (!(*slots_)[slot].occupied)
-            {
-                uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
-                if (seq1 == seq2) return false;
-                continue;
-            }
-            
-            // This is making a deep copy
-            outChunk = stateChunks_[slot];
-
+            if ((seq1 & 1) != 0) continue;
+            occupied = (*slots_)[slot].occupied;
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
-            if (seq1 == seq2) return true;
+            if (seq1 == seq2)
+            {
+                readOccupied = true;
+                break;
+            }
         }
-        return false;
+        if (!readOccupied || !occupied) return false;
+
+        // C-4 FIX: Use chunksLock_ for state chunk reads — MemoryBlock
+        // copy-assignment can heap-allocate, violating seqlock contract.
+        const juce::SpinLock::ScopedLockType lock(chunksLock_);
+        outChunk = stateChunks_[slot];
+        return outChunk.getSize() > 0;
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,10 +1,10 @@
-/* MorphSnap — UI/SnapFader.cpp */
+/* More-Phi — UI/SnapFader.cpp */
 #include "SnapFader.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-SnapFader::SnapFader(MorphSnapProcessor& p) : proc_(p) {}
+SnapFader::SnapFader(MorePhiProcessor& p) : proc_(p) {}
 
 void SnapFader::paint(juce::Graphics& g)
 {
@@ -69,8 +69,21 @@ void SnapFader::paint(juce::Graphics& g)
     g.fillRoundedRectangle(trackX - 6, thumbY - 1.5f, 12, 3, 1.5f);
 }
 
-void SnapFader::mouseDown(const juce::MouseEvent& e) { updateValue(e.position.y); }
+void SnapFader::mouseDown(const juce::MouseEvent& e)
+{
+    dragging_ = true;
+    if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
+        p->beginChangeGesture();
+    updateValue(e.position.y);
+}
 void SnapFader::mouseDrag(const juce::MouseEvent& e) { updateValue(e.position.y); }
+void SnapFader::mouseUp(const juce::MouseEvent&)
+{
+    if (dragging_)
+        if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
+            p->endChangeGesture();
+    dragging_ = false;
+}
 
 void SnapFader::updateValue(float yPos)
 {
@@ -79,9 +92,12 @@ void SnapFader::updateValue(float yPos)
     float normalised = 1.0f - juce::jlimit(0.0f, 1.0f,
         (yPos - trackTop) / (trackBot - trackTop));
 
-    proc_.setFaderPos(normalised);
+    // Route through APVTS so DAW automation captures the change.
+    if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
+        p->setValueNotifyingHost(normalised);
+
     proc_.setMorphSource(1);  // Switch to fader mode
     repaint();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

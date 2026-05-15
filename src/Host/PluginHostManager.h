@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Host/PluginHostManager.h
+ * More-Phi — Host/PluginHostManager.h
  * Manages loading and running a hosted VST3/AU plugin instance.
  * Implements IPluginHostManager for testability.
  *
@@ -12,8 +12,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "IPluginHostManager.h"
 #include <atomic>
+#include <array>
 
-namespace morphsnap {
+namespace more_phi {
 
 class PluginHostManager : public IPluginHostManager
 {
@@ -26,11 +27,34 @@ public:
     void releaseResources() override;
     bool loadPlugin(const juce::PluginDescription& desc) override;
     void unloadPlugin() override;
-    bool hasPlugin() const override { return hostedPlugin != nullptr; }
+    bool hasPlugin() const override { return hostedPluginPtr_.load(std::memory_order_acquire) != nullptr; }
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
     
-    juce::AudioPluginInstance* getPlugin() override { return hostedPlugin.get(); }
-    const juce::AudioPluginInstance* getPlugin() const override { return hostedPlugin.get(); }
+    juce::AudioPluginInstance* getPlugin() override { return hostedPluginPtr_.load(std::memory_order_acquire); }
+    const juce::AudioPluginInstance* getPlugin() const override { return hostedPluginPtr_.load(std::memory_order_acquire); }
+
+    /**
+     * Acquire a stable plugin pointer for short-lived processing work.
+     * Must be paired with releasePluginFromUse(). Returns nullptr when no plugin is loaded.
+     */
+    juce::AudioPluginInstance* acquirePluginForUse() noexcept;
+
+    /**
+     * Release a previously acquired plugin usage lease.
+     */
+    void releasePluginFromUse() noexcept;
+
+    /**
+     * Request exclusive non-audio access to the hosted plugin for opaque state
+     * capture/restore. While requested, acquirePluginForUse() returns nullptr
+     * so the audio thread skips hosted processing instead of blocking.
+     */
+    juce::AudioPluginInstance* beginExclusivePluginUse(int timeoutMs = 200) noexcept;
+    void endExclusivePluginUse() noexcept;
+    bool isExclusivePluginUseRequested() const noexcept
+    {
+        return exclusivePluginUseRequested_.load(std::memory_order_acquire);
+    }
     
     const juce::PluginDescription* getLastDescription() const override;
 
@@ -44,16 +68,53 @@ public:
     /** Get the last loaded plugin description — available even after unload for recovery. */
     const juce::PluginDescription& getLastDescriptionRef() const { return lastDescription; }
 
+    /**
+     * Robust plugin discovery with multi-stage fallback.
+     * Handles complex VST3 bundles (e.g. FabFilter Pro-Q 4) that fail basic discovery.
+     *
+     * Stage 1: Direct file query via findAllTypesForFile() (fast path).
+     * Stage 2: PluginDirectoryScanner on the plugin's parent directory.
+     *
+     * Acquires MessageManagerLock when a MessageManager is available,
+     * which is required by many VST3 plugins during scanning.
+     *
+     * @param formatManager  Registered plugin format manager
+     * @param pluginFile     Path to the .vst3 file or bundle
+     * @param outDescription Populated on success
+     * @param errorDetails   Diagnostic details on failure
+     * @param verbose        Print per-stage progress to stderr
+     * @return true if a full PluginDescription was obtained
+     */
+    static bool discoverPlugin(juce::AudioPluginFormatManager& formatManager,
+                               const juce::File& pluginFile,
+                               juce::PluginDescription& outDescription,
+                               juce::String& errorDetails,
+                               bool verbose = false);
+
+    /** Check if a plugin swap is currently in progress. */
+    bool isPluginSwapping() const noexcept { return isSwapping_.load(std::memory_order_acquire); }
+
 private:
     // Suspend (bypass audio) a misbehaving plugin after this many consecutive
     // exceptions. Raised from 5 to tolerate short DAW reconfiguration bursts.
     static constexpr int MAX_PLUGIN_EXCEPTIONS = 20;
 
+    // Maximum channel count for the pre-allocated wide buffer. Prevents overrun
+    // when a hosted plugin reports an unusually high channel count.
+    static constexpr int kMaxHostChannels = 16;
+
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
     std::unique_ptr<juce::AudioPluginInstance> hostedPlugin;
+    std::atomic<juce::AudioPluginInstance*> hostedPluginPtr_{nullptr};
     juce::PluginDescription lastDescription;
     mutable juce::SpinLock  descLock_;    // guards lastDescription
+
+    // Number of active short-lived plugin users (audio thread processing and
+    // parameter-bridge operations). unloadPlugin() waits for this to reach 0
+    // after publishing hostedPluginPtr_=nullptr.
+    std::atomic<uint32_t> activePluginUsers_{0};
+    std::atomic<bool> exclusivePluginUseRequested_{false};
 
     // Counts consecutive processBlock exceptions; reset on successful load.
     // When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is suspended (NOT unloaded).
@@ -63,10 +124,30 @@ private:
     // Recovery is attempted automatically when processBlock succeeds.
     std::atomic<bool> suspended_{false};
 
+    // C-1 FIX: Guards against concurrent load/unload calls. Set during
+    // loadPlugin() and unloadPlugin(), checked by callers to prevent
+    // UI-initiated swaps from racing with state restoration.
+    std::atomic<bool> isSwapping_{false};
+
+    // m-5 FIX: Grace period after recovery — requires this many consecutive
+    // successful processBlock calls before fully re-enabling the plugin.
+    // Prevents immediate re-suspend from burst exceptions.
+    std::atomic<int> recoveryGracePeriod_{0};
+
+    // RT-safe exception tracking — audio thread increments, message thread reads
+    std::atomic<int> lastExceptionCode_{0};  // 0=none, 1=std::exception, 2=unknown
+    static constexpr int MAX_EXCEPTION_LOG_ENTRIES = 4;
+    std::atomic<int> exceptionLogCursor_{0};
+    std::array<std::atomic<const char*>, MAX_EXCEPTION_LOG_ENTRIES> exceptionLog_{};
+
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;
     int currentNumChannels = 2;
     bool hasPreparedConfiguration_ = false;
+
+    // Pre-allocated wide buffer to avoid audio-thread heap allocation when the
+    // hosted plugin requires more channels than the incoming buffer provides.
+    juce::AudioBuffer<float> wideBuffer_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

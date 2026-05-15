@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ModulationEngine.h
+ * More-Phi — Core/ModulationEngine.h
  * V2 Modulation Engine: owns all sources (LFOs, envelope followers, macro
  * knobs, step sequencers) and routes their output through the ModulationMatrix
  * to modify the morph parameter vector in real-time.
@@ -38,7 +38,7 @@
 #include <memory>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 class ModulationEngine : public IModulationEngine
 {
@@ -68,7 +68,7 @@ public:
     /**
      * Overload that also accepts maxParamCount. The IModulationEngine interface
      * only mandates (sampleRate, blockSize); this overload is for direct use
-     * from MorphSnapProcessor::prepareToPlay() where paramCount is known.
+     * from MorePhiProcessor::prepareToPlay() where paramCount is known.
      */
     void prepare(double sampleRate, int blockSize, int maxParamCount);
 
@@ -211,4 +211,4 @@ private:
     void updateSourceValues(float dt) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

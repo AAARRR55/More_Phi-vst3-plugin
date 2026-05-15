@@ -1,15 +1,17 @@
-/* MorphSnap — Preset/PresetSerializer.cpp
+/* More-Phi — Preset/PresetSerializer.cpp
  * JSON serialization for meta preset storage.
  * Format: { "version": 1, "name": "...", "apvts": {...}, "snapshots": [...] }
  */
 #include "PresetSerializer.h"
 #include "Core/ParameterState.h"
 #include "Host/ParameterBridge.h"
+#include "Host/PluginHostManager.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 juce::var PresetSerializer::serialize(const SnapshotBank& bank,
-                                      juce::AudioProcessorValueTreeState& apvts)
+                                      juce::AudioProcessorValueTreeState& apvts,
+                                      PluginHostManager* hostManager)
 {
     auto* root = new juce::DynamicObject();
     root->setProperty("version", 1);
@@ -46,17 +48,62 @@ juce::var PresetSerializer::serialize(const SnapshotBank& bank,
 
     root->setProperty("snapshots", snapshots);
 
+    // Optional hosted plugin info/state for preset parity with DAW export state.
+    if (hostManager != nullptr)
+    {
+        if (const auto* desc = hostManager->getLastDescription())
+        {
+            if (auto descXml = desc->createXml())
+                root->setProperty("hostedPlugin", descXml->toString());
+        }
+
+        if (auto* plugin = hostManager->acquirePluginForUse())
+        {
+            juce::MemoryBlock pluginState;
+            try
+            {
+                plugin->getStateInformation(pluginState);
+            }
+            catch (const std::exception& e)
+            {
+                juce::Logger::writeToLog("PresetSerializer::serialize — getStateInformation failed: "
+                    + juce::String(e.what()));
+                pluginState.reset();
+            }
+            catch (...)
+            {
+                juce::Logger::writeToLog("PresetSerializer::serialize — getStateInformation failed: unknown exception");
+                pluginState.reset();
+            }
+
+            hostManager->releasePluginFromUse();
+
+            if (pluginState.getSize() > 0)
+                root->setProperty("hostedPluginState", pluginState.toBase64Encoding());
+        }
+    }
+
     return juce::var(root);
 }
 
 bool PresetSerializer::deserialize(const juce::var& json,
                                     SnapshotBank& bank,
-                                    juce::AudioProcessorValueTreeState& apvts)
+                                    juce::AudioProcessorValueTreeState& apvts,
+                                    PluginHostManager* hostManager)
 {
     if (!json.isObject()) return false;
 
     auto version = json.getProperty("version", 0);
-    if (static_cast<int>(version) != 1) return false;
+    const int ver = static_cast<int>(version);
+    if (ver < 1)
+        return false;
+    if (ver > 1)
+    {
+        juce::Logger::writeToLog("PresetSerializer::deserialize — preset version "
+            + juce::String(ver) + " is newer than expected (1); attempting migration");
+        // Future: call migrateFromV1() or version-specific migration here
+        // For now, proceed with best-effort deserialization
+    }
 
     // Restore APVTS from XML string
     auto apvtsXml = json.getProperty("apvts", {});
@@ -94,7 +141,50 @@ bool PresetSerializer::deserialize(const juce::var& json,
         }
     }
 
+    if (hostManager != nullptr)
+    {
+        bool pluginReady = hostManager->hasPlugin();
+
+        const auto hostedPluginVar = json.getProperty("hostedPlugin", juce::var{});
+        if (hostedPluginVar.isString())
+        {
+            if (auto descXml = juce::parseXML(hostedPluginVar.toString()))
+            {
+                juce::PluginDescription desc;
+                if (desc.loadFromXml(*descXml))
+                    pluginReady = hostManager->loadPlugin(desc);
+            }
+        }
+
+        juce::MemoryBlock hostedState;
+        const auto hostedStateVar = json.getProperty("hostedPluginState", juce::var{});
+        if (hostedStateVar.isString())
+            hostedState.fromBase64Encoding(hostedStateVar.toString());
+
+        if (pluginReady && hostedState.getSize() > 0)
+        {
+            if (auto* plugin = hostManager->acquirePluginForUse())
+            {
+                try
+                {
+                    plugin->setStateInformation(hostedState.getData(),
+                                                static_cast<int>(hostedState.getSize()));
+                }
+                catch (const std::exception& e)
+                {
+                    juce::Logger::writeToLog("PresetSerializer::deserialize — setStateInformation failed: "
+                        + juce::String(e.what()));
+                }
+                catch (...)
+                {
+                    juce::Logger::writeToLog("PresetSerializer::deserialize — setStateInformation failed: unknown exception");
+                }
+                hostManager->releasePluginFromUse();
+            }
+        }
+    }
+
     return true;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

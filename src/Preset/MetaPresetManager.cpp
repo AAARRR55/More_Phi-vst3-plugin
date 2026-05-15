@@ -1,7 +1,7 @@
-/* MorphSnap — Preset/MetaPresetManager.cpp */
+/* More-Phi — Preset/MetaPresetManager.cpp */
 #include "MetaPresetManager.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 juce::File MetaPresetManager::getPresetFile(int bank, int preset) const
 {
@@ -70,4 +70,4 @@ juce::String MetaPresetManager::getPresetName(int bank, int preset) const
     return "Bank " + juce::String(bank) + " / Preset " + juce::String(preset);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

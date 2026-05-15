@@ -1,12 +1,12 @@
 /*
- * MorphSnap — UI/PluginBrowserPanel.cpp
+ * More-Phi — UI/PluginBrowserPanel.cpp
  */
 #include "PluginBrowserPanel.h"
 #include "Plugin/PluginProcessor.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-PluginBrowserPanel::PluginBrowserPanel(MorphSnapProcessor& proc)
+PluginBrowserPanel::PluginBrowserPanel(MorePhiProcessor& proc)
     : proc_(proc), host_(proc.getHostManager())
 {
     addAndMakeVisible(loadBtn_);
@@ -161,6 +161,7 @@ void PluginBrowserPanel::loadSelectedPlugin(const juce::PluginDescription& desc)
         pluginNameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe0e0e0));
         showBtn_.setEnabled(true);
         captureBtn_.setEnabled(true);
+        proc_.reportLatencyToHost();
 
         // Clear old snapshots since parameter layout changed
         proc_.getSnapshotBank().clearAll();
@@ -200,15 +201,15 @@ void PluginBrowserPanel::captureToNextSlot()
     {
         if (!bank.isOccupied(i))
         {
-            bank.capture(i, proc_.getParameterBridge());
+            proc_.captureSnapshotToSlot(i, true);
             pluginNameLabel_.setText("Captured → Slot " + juce::String(i + 1),
                                      juce::dontSendNotification);
             return;
         }
     }
     // All slots full — overwrite slot 0
-    bank.capture(0, proc_.getParameterBridge());
+    proc_.captureSnapshotToSlot(0, true);
     pluginNameLabel_.setText("Captured → Slot 1 (overwrite)", juce::dontSendNotification);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

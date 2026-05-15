@@ -1,5 +1,5 @@
-/* MorphSnap — Preset/PresetSerializer.h
- * Serializes/deserializes full MorphSnap state (snapshots, morph config, sanity)
+/* More-Phi — Preset/PresetSerializer.h
+ * Serializes/deserializes full MorePhi state (snapshots, morph config, sanity)
  * into JSON for meta preset storage. */
 #pragma once
 #include <juce_core/juce_core.h>
@@ -7,19 +7,23 @@
 #include "Core/SnapshotBank.h"
 #include "Core/GeneticEngine.h"
 
-namespace morphsnap {
+namespace more_phi {
+
+class PluginHostManager;
 
 class PresetSerializer
 {
 public:
     // Serialize full state: 12 snapshot slots + morph/physics config + sanity
     static juce::var serialize(const SnapshotBank& bank,
-                               juce::AudioProcessorValueTreeState& apvts);
+                               juce::AudioProcessorValueTreeState& apvts,
+                               PluginHostManager* hostManager = nullptr);
 
     // Deserialize into existing bank and APVTS
     static bool deserialize(const juce::var& json,
                             SnapshotBank& bank,
-                            juce::AudioProcessorValueTreeState& apvts);
+                            juce::AudioProcessorValueTreeState& apvts,
+                            PluginHostManager* hostManager = nullptr);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

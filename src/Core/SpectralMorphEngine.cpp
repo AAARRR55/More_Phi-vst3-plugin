@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/SpectralMorphEngine.cpp
+ * More-Phi — Core/SpectralMorphEngine.cpp
  *
  * Full STFT-based phase-vocoder spectral morph implementation.
  *
@@ -44,13 +44,13 @@
 #include <cstring>
 #include <cassert>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 static constexpr float kSMTwoPi = 6.28318530717958647692f;
 static constexpr float kSMPi    = 3.14159265358979323846f;
-static constexpr float kSMEps   = 1e-18f;
+static constexpr float kSMEps   = 1e-6f;
 
 // ─── Construction / destruction ───────────────────────────────────────────────
 
@@ -63,13 +63,19 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate;
 
-    // Validate fftSize_ (set before prepare via setFFTSize)
+    // Validate pending FFT size (set before prepare via setFFTSize)
+    fftSize_ = pendingFFTSize_.load(std::memory_order_relaxed);
+
+    // Clamp to supported values if state was corrupted
     const int validSizes[] = { 512, 1024, 2048, 4096 };
     bool valid = false;
     for (int s : validSizes)
         if (fftSize_ == s) { valid = true; break; }
     if (!valid)
+    {
         fftSize_ = 2048;
+        pendingFFTSize_.store(fftSize_, std::memory_order_relaxed);
+    }
 
     hopSize_        = fftSize_ / 4;
     numBins_        = fftSize_ / 2 + 1;
@@ -134,7 +140,7 @@ void SpectralMorphEngine::setFFTSize(int size)
 {
     const int validSizes[] = { 512, 1024, 2048, 4096 };
     for (int s : validSizes)
-        if (size == s) { fftSize_ = size; return; }
+        if (size == s) { pendingFFTSize_.store(size, std::memory_order_relaxed); return; }
     // Silently ignore invalid values
 }
 
@@ -514,4 +520,4 @@ void SpectralMorphEngine::interpolatePhase(const float* phaseA, const float* pha
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

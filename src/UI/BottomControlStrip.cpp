@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/BottomControlStrip.cpp
+ * More-Phi — UI/BottomControlStrip.cpp
  * Bottom control strip: SanityMode, RecallMode, Sidechain controls.
  * Glassmorphic panel with coral accent highlights.
  *
@@ -8,11 +8,12 @@
  */
 #include "BottomControlStrip.h"
 #include "Plugin/PluginProcessor.h"
-#include "MorphSnapLookAndFeel.h"
+#include "MorePhiLookAndFeel.h"
+#include "UI/Bindings/ParameterBinding.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-BottomControlStrip::BottomControlStrip(MorphSnapProcessor& p)
+BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     : processor(p)
 {
     // ── SanityMode toggle ──────────────────────────────────────────────────
@@ -31,12 +32,12 @@ BottomControlStrip::BottomControlStrip(MorphSnapProcessor& p)
     recallFullBtn_.setClickingTogglesState(false);
     recallFastBtn_.onClick = [this]() {
         if (auto* param = processor.getAPVTS().getParameter("recallMode"))
-            param->setValueNotifyingHost(0.0f);  // Fast = index 0
+            ParameterBinding::setValueWithGesture(*param, 0.0f);  // Fast = index 0
         updateRecallButtons();
     };
     recallFullBtn_.onClick = [this]() {
         if (auto* param = processor.getAPVTS().getParameter("recallMode"))
-            param->setValueNotifyingHost(1.0f);  // Full = index 1
+            ParameterBinding::setValueWithGesture(*param, 1.0f);  // Full = index 1
         updateRecallButtons();
     };
     addAndMakeVisible(recallFastBtn_);
@@ -65,7 +66,7 @@ BottomControlStrip::BottomControlStrip(MorphSnapProcessor& p)
             processor.getAPVTS(), "sidechainThreshold", thresholdKnob_);
     }
 
-    thresholdLabel_.setFont(juce::Font(juce::FontOptions(9.0f)));
+    thresholdLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 9.0f, juce::Font::plain)));
     thresholdLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
     thresholdLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(thresholdLabel_);
@@ -103,6 +104,49 @@ BottomControlStrip::BottomControlStrip(MorphSnapProcessor& p)
         linkAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             processor.getAPVTS(), "linkMode", linkToggle_);
     }
+
+    // ── Output Gain knob ───────────────────────────────────────────────────
+    outputGainKnob_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    outputGainKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 48, 14);
+    outputGainKnob_.setTextValueSuffix(" dB");
+    outputGainKnob_.setColour(juce::Slider::rotarySliderFillColourId,
+                               juce::Colour(0xffec415d));
+    outputGainKnob_.setColour(juce::Slider::rotarySliderOutlineColourId,
+                               juce::Colour(0xff1a2742));
+    outputGainKnob_.setColour(juce::Slider::textBoxTextColourId,
+                               juce::Colour(0xffe8eaed));
+    outputGainKnob_.setColour(juce::Slider::textBoxOutlineColourId,
+                               juce::Colours::transparentBlack);
+    addAndMakeVisible(outputGainKnob_);
+
+    if (auto* param = processor.getAPVTS().getParameter("outputGain"))
+    {
+        gainAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor.getAPVTS(), "outputGain", outputGainKnob_);
+    }
+
+    outputGainLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 9.0f, juce::Font::plain)));
+    outputGainLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
+    outputGainLabel_.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(outputGainLabel_);
+
+    // ── Bypass button ──────────────────────────────────────────────────────
+    bypassBtn_.setClickingTogglesState(true);
+    bypassBtn_.setColour(juce::TextButton::buttonColourId,
+                          juce::Colour(0xff16213e));
+    bypassBtn_.setColour(juce::TextButton::buttonOnColourId,
+                          juce::Colour(0xffec415d));
+    bypassBtn_.setColour(juce::TextButton::textColourOffId,
+                          juce::Colour(0xffe8eaed));
+    bypassBtn_.setColour(juce::TextButton::textColourOnId,
+                          juce::Colours::white);
+    addAndMakeVisible(bypassBtn_);
+
+    if (auto* param = processor.getAPVTS().getParameter("bypass"))
+    {
+        bypassAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            processor.getAPVTS(), "bypass", bypassBtn_);
+    }
 }
 
 void BottomControlStrip::paint(juce::Graphics& g)
@@ -119,49 +163,83 @@ void BottomControlStrip::paint(juce::Graphics& g)
 
     // Section dividers
     g.setColour(juce::Colour(0xff1e3a5f));
-    int divX1 = getWidth() / 3;
-    int divX2 = 2 * getWidth() / 3;
-    g.drawLine(static_cast<float>(divX1), 6.0f,
-               static_cast<float>(divX1), static_cast<float>(getHeight() - 6), 1.0f);
-    g.drawLine(static_cast<float>(divX2), 6.0f,
-               static_cast<float>(divX2), static_cast<float>(getHeight() - 6), 1.0f);
+    int q = getWidth() / 4;
+    int divX1 = q;
+    int divX2 = 2 * q;
+    int divX3 = 3 * q;
+    g.drawLine(static_cast<float>(divX1), 4.0f,
+               static_cast<float>(divX1), static_cast<float>(getHeight() - 4), 1.0f);
+    g.drawLine(static_cast<float>(divX2), 4.0f,
+               static_cast<float>(divX2), static_cast<float>(getHeight() - 4), 1.0f);
+    g.drawLine(static_cast<float>(divX3), 4.0f,
+               static_cast<float>(divX3), static_cast<float>(getHeight() - 4), 1.0f);
 
-    // Section labels
-    g.setColour(juce::Colour(0xff4a5568));
-    g.setFont(juce::Font(juce::FontOptions(8.5f)));
-    g.drawText("SAFETY", 10, 2, divX1 - 20, 12, juce::Justification::centredLeft);
-    g.drawText("RECALL", divX1 + 10, 2, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
-    g.drawText("SIDECHAIN", divX2 + 10, 2, getWidth() - divX2 - 20, 12, juce::Justification::centredLeft);
+    // Section labels (smaller, less prominent)
+    g.setColour(juce::Colour(0x604a5568));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 7.5f, juce::Font::plain)));
+    g.drawText("SAFETY", 10, 3, divX1 - 20, 10, juce::Justification::centredLeft);
+    g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 10, juce::Justification::centredLeft);
+    g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 10, juce::Justification::centredLeft);
+    g.drawText("SC", divX3 + 10, 3, getWidth() - divX3 - 20, 10, juce::Justification::centredLeft);
 }
 
 void BottomControlStrip::resized()
 {
-    auto area = getLocalBounds().reduced(8, 14);
-    int sectionWidth = area.getWidth() / 3;
+    auto area = getLocalBounds().reduced(6, 12);
 
-    // Section 1: Safety (Sanity + Listen Mode)
-    auto safetyArea = area.removeFromLeft(sectionWidth);
-    safetyArea = safetyArea.reduced(4, 0);
-    int thirdH = safetyArea.getHeight() / 3;
-    sanityToggle_.setBounds(safetyArea.removeFromTop(thirdH));
-    listenToggle_.setBounds(safetyArea.removeFromTop(thirdH));
-    linkToggle_.setBounds(safetyArea);
+    // Outer: 4 equal-width columns via FlexBox
+    juce::FlexBox outer;
+    outer.flexDirection = juce::FlexBox::Direction::row;
+    int sectionWidth = area.getWidth() / 4;
+
+    // Section 1: Safety (Sanity + Listen + Link)
+    auto safetyArea = juce::Rectangle<int>(area.getX(), area.getY(), sectionWidth, area.getHeight()).reduced(2, 0);
+    {
+        juce::FlexBox col;
+        col.flexDirection = juce::FlexBox::Direction::column;
+        col.items.add(juce::FlexItem(sanityToggle_).withFlex(1));
+        col.items.add(juce::FlexItem(listenToggle_).withFlex(1));
+        col.items.add(juce::FlexItem(linkToggle_).withFlex(1));
+        col.performLayout(safetyArea);
+    }
 
     // Section 2: Recall (Mode buttons + Sustain toggle)
-    auto recallArea = area.removeFromLeft(sectionWidth);
-    recallArea = recallArea.reduced(4, 0);
-    auto recallTop = recallArea.removeFromTop(recallArea.getHeight() / 2);
-    int halfW = recallTop.getWidth() / 2;
-    recallFastBtn_.setBounds(recallTop.removeFromLeft(halfW).reduced(2, 2));
-    recallFullBtn_.setBounds(recallTop.reduced(2, 2));
-    recallToggle_.setBounds(recallArea);
+    auto recallArea = juce::Rectangle<int>(area.getX() + sectionWidth, area.getY(),
+                                            sectionWidth, area.getHeight()).reduced(2, 0);
+    {
+        auto recallTop = recallArea.removeFromTop(recallArea.getHeight() / 2);
+        juce::FlexBox btnPair;
+        btnPair.flexDirection = juce::FlexBox::Direction::row;
+        btnPair.items.add(juce::FlexItem(recallFastBtn_).withFlex(1).withMargin(1));
+        btnPair.items.add(juce::FlexItem(recallFullBtn_).withFlex(1).withMargin(1));
+        btnPair.performLayout(recallTop);
+        recallToggle_.setBounds(recallArea);
+    }
 
-    // Section 3: Sidechain
-    auto scArea = area;
-    scArea = scArea.reduced(4, 0);
-    sidechainToggle_.setBounds(scArea.removeFromLeft(40));
-    thresholdLabel_.setBounds(scArea.removeFromBottom(12));
-    thresholdKnob_.setBounds(scArea);
+    // Section 3: Output (Gain knob + Bypass button)
+    auto outputArea = juce::Rectangle<int>(area.getX() + sectionWidth * 2, area.getY(),
+                                            sectionWidth, area.getHeight()).reduced(2, 0);
+    {
+        juce::FlexBox col;
+        col.flexDirection = juce::FlexBox::Direction::column;
+        col.items.add(juce::FlexItem(outputGainKnob_).withFlex(1));
+        col.items.add(juce::FlexItem(outputGainLabel_).withHeight(10.0f));
+        col.items.add(juce::FlexItem(bypassBtn_).withHeight(16.0f).withMargin({ 0, 2, 0, 2 }));
+        col.performLayout(outputArea);
+    }
+
+    // Section 4: Sidechain
+    auto scArea = juce::Rectangle<int>(area.getX() + sectionWidth * 3, area.getY(),
+                                        sectionWidth, area.getHeight()).reduced(2, 0);
+    {
+        juce::FlexBox scRow;
+        scRow.flexDirection = juce::FlexBox::Direction::row;
+        scRow.items.add(juce::FlexItem(sidechainToggle_).withWidth(32.0f));
+        scRow.items.add(juce::FlexItem(thresholdKnob_).withFlex(1));
+        scRow.performLayout(scArea);
+        thresholdLabel_.setBounds(scArea.getX(), scArea.getBottom() - 10,
+                                   scArea.getWidth(), 10);
+    }
 }
 
 void BottomControlStrip::updateRecallButtons()
@@ -182,4 +260,4 @@ void BottomControlStrip::updateRecallButtons()
                               !isFast ? juce::Colours::white : juce::Colour(0xff8b95a5));
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — tests/Unit/TestDatasetModules.cpp
+ * More-Phi — tests/Unit/TestDatasetModules.cpp
  *
  * Unit tests for the dataset generation subsystem modules:
  *   - ParameterSampler (LHS, constraints, augmentation)
@@ -29,7 +29,7 @@
 #include <numeric>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // =============================================================================
 //  ParameterSampler Tests
@@ -559,7 +559,7 @@ TEST_CASE("DatasetOrganizer: initializeStructure creates expected directories", 
 {
     // Use a temporary directory
     auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                       .getChildFile("morphsnap_test_organizer_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+                       .getChildFile("morephi_test_organizer_" + juce::String(juce::Random::getSystemRandom().nextInt()));
     tempDir.deleteRecursively();
 
     {
@@ -581,7 +581,7 @@ TEST_CASE("DatasetOrganizer: initializeStructure creates expected directories", 
 TEST_CASE("DatasetOrganizer: generateSampleId produces unique IDs", "[dataset][organizer]")
 {
     auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                       .getChildFile("morphsnap_test_ids");
+                       .getChildFile("morephi_test_ids");
     tempDir.deleteRecursively();
 
     DatasetOrganizer org(tempDir);
@@ -603,7 +603,7 @@ TEST_CASE("DatasetOrganizer: generateSampleId produces unique IDs", "[dataset][o
 TEST_CASE("DatasetOrganizer: split ratios produce proportional results", "[dataset][organizer]")
 {
     auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                       .getChildFile("morphsnap_test_split_" + juce::String(juce::Random::getSystemRandom().nextInt()));
+                       .getChildFile("morephi_test_split_" + juce::String(juce::Random::getSystemRandom().nextInt()));
     tempDir.deleteRecursively();
 
     DatasetOrganizer org(tempDir);
@@ -654,13 +654,13 @@ TEST_CASE("DatasetOrganizer: split ratios produce proportional results", "[datas
 
 TEST_CASE("PhaseVocoder: can be constructed", "[dataset][phasevocoder]")
 {
-    morphsnap::PhaseVocoder vocoder;
+    more_phi::PhaseVocoder vocoder;
     REQUIRE(true); // Just verify it compiles
 }
 
 TEST_CASE("PhaseVocoder: prepare initializes FFT", "[dataset][phasevocoder]")
 {
-    morphsnap::PhaseVocoder vocoder;
+    more_phi::PhaseVocoder vocoder;
     vocoder.prepare(48000.0, 2048);
     // Should not crash, FFT should be initialized
     REQUIRE(true);
@@ -668,7 +668,7 @@ TEST_CASE("PhaseVocoder: prepare initializes FFT", "[dataset][phasevocoder]")
 
 TEST_CASE("PhaseVocoder: prepare handles different FFT sizes", "[dataset][phasevocoder]")
 {
-    morphsnap::PhaseVocoder vocoder;
+    more_phi::PhaseVocoder vocoder;
     vocoder.prepare(48000.0, 1024);
     vocoder.prepare(48000.0, 4096);
     REQUIRE(true);
@@ -676,7 +676,7 @@ TEST_CASE("PhaseVocoder: prepare handles different FFT sizes", "[dataset][phasev
 
 TEST_CASE("PhaseVocoder: time stretch changes duration", "[dataset][phasevocoder]")
 {
-    morphsnap::PhaseVocoder vocoder;
+    more_phi::PhaseVocoder vocoder;
     vocoder.prepare(48000.0, 2048);
 
     // Create 1 second of audio (440 Hz sine wave)
@@ -700,7 +700,7 @@ TEST_CASE("PhaseVocoder: time stretch changes duration", "[dataset][phasevocoder
 
 TEST_CASE("PhaseVocoder: time stretch preserves approximate energy", "[dataset][phasevocoder]")
 {
-    morphsnap::PhaseVocoder vocoder;
+    more_phi::PhaseVocoder vocoder;
     vocoder.prepare(48000.0, 2048);
 
     juce::AudioBuffer<float> buffer(1, 48000);
@@ -879,7 +879,7 @@ TEST_CASE("AudioAugmenter: time mask zeroes target samples", "[dataset][augmenta
 
 TEST_CASE("DatasetNormalizer: classification-aware normalization", "[dataset][normalization][class-aware]")
 {
-    morphsnap::ClassAwareNormalizer classNorm;
+    more_phi::ClassAwareNormalizer classNorm;
     
     std::vector<std::vector<float>> samples = {
         {1.0f}, {2.0f}, {3.0f}, // class A
@@ -903,7 +903,7 @@ TEST_CASE("ParameterAugmenter: parameter-space interpolation", "[dataset][augmen
     std::vector<float> a = {0.0f, 0.0f, 0.0f};
     std::vector<float> b = {1.0f, 0.5f, 0.2f};
     
-    auto mid = morphsnap::ParameterAugmenter::interpolate(a, b, 0.5f);
+    auto mid = more_phi::ParameterAugmenter::interpolate(a, b, 0.5f);
     REQUIRE(mid.size() == 3);
     REQUIRE(mid[0] == Catch::Approx(0.5f));
     REQUIRE(mid[1] == Catch::Approx(0.25f));
@@ -912,7 +912,7 @@ TEST_CASE("ParameterAugmenter: parameter-space interpolation", "[dataset][augmen
 
 TEST_CASE("ValidationEngine: cross-reference validation", "[dataset][validation][crossref]")
 {
-    morphsnap::ValidationEngine engine;
+    more_phi::ValidationEngine engine;
     
     std::vector<std::vector<float>> dsA = {{0.5f}, {0.6f}, {0.7f}};
     std::vector<std::vector<float>> dsB = {{0.51f}, {0.61f}, {0.71f}};
@@ -930,16 +930,16 @@ TEST_CASE("ValidationEngine: cross-reference validation", "[dataset][validation]
 
 TEST_CASE("ParameterSampler: strategy dispatch works", "[dataset][sampler][strategies]")
 {
-    morphsnap::ParameterSampler sampler;
-    morphsnap::SamplingConfig config;
+    more_phi::ParameterSampler sampler;
+    more_phi::SamplingConfig config;
     config.sampleCount = 10;
-    config.strategy = morphsnap::SamplingStrategy::Random;
+    config.strategy = more_phi::SamplingStrategy::Random;
     
     auto samples = sampler.generate(config, 3);
     REQUIRE(samples.size() == 10);
     REQUIRE(samples[0].size() == 3);
     
-    config.strategy = morphsnap::SamplingStrategy::LinearSweep;
+    config.strategy = more_phi::SamplingStrategy::LinearSweep;
     samples = sampler.generate(config, 2);
     REQUIRE(samples.size() == 10);
     // Linear sweep should be deterministic
@@ -949,11 +949,11 @@ TEST_CASE("ParameterSampler: strategy dispatch works", "[dataset][sampler][strat
 
 TEST_CASE("MetadataWriter: binary export produces readable file", "[dataset][metadata][binary]")
 {
-    morphsnap::MetadataWriter writer;
+    more_phi::MetadataWriter writer;
     juce::File tempFile = juce::File::getCurrentWorkingDirectory().getChildFile("temp_test.msbf");
 
-    std::vector<morphsnap::DatasetMetadata> list;
-    morphsnap::DatasetMetadata m;
+    std::vector<more_phi::DatasetMetadata> list;
+    more_phi::DatasetMetadata m;
     m.sampleId = "test_binary_001";
     m.targets.featureVector = {0.1f, 0.2f, 0.3f};
     m.targets.parameterRegression = {0.5f, 0.6f};
@@ -973,8 +973,8 @@ TEST_CASE("MetadataWriter: binary export produces readable file", "[dataset][met
 
 TEST_CASE("AudioAugmenter: time stretch augmentation applies", "[dataset][augmentation]")
 {
-    morphsnap::AudioAugmenter augmenter;
-    augmenter.addAugmentation({morphsnap::AugmentationType::TimeStretch, 1.0f, 0.5f, true});
+    more_phi::AudioAugmenter augmenter;
+    augmenter.addAugmentation({more_phi::AugmentationType::TimeStretch, 1.0f, 0.5f, true});
 
     juce::AudioBuffer<float> buffer(1, 48000);
     for (int i = 0; i < 48000; ++i)
@@ -1000,8 +1000,8 @@ TEST_CASE("AudioAugmenter: time stretch augmentation applies", "[dataset][augmen
 
 TEST_CASE("AudioAugmenter: pitch shift augmentation applies", "[dataset][augmentation]")
 {
-    morphsnap::AudioAugmenter augmenter;
-    augmenter.addAugmentation({morphsnap::AugmentationType::PitchShift, 1.0f, 0.5f, true});
+    more_phi::AudioAugmenter augmenter;
+    augmenter.addAugmentation({more_phi::AugmentationType::PitchShift, 1.0f, 0.5f, true});
 
     juce::AudioBuffer<float> buffer(1, 48000);
     for (int i = 0; i < 48000; ++i)
@@ -1023,8 +1023,8 @@ TEST_CASE("AudioAugmenter: pitch shift augmentation applies", "[dataset][augment
 
 TEST_CASE("AudioAugmenter: time stretch with high intensity shortens buffer", "[dataset][augmentation]")
 {
-    morphsnap::AudioAugmenter augmenter;
-    augmenter.addAugmentation({morphsnap::AugmentationType::TimeStretch, 1.0f, 1.0f, true}); // intensity 1.0 = 1.2x faster
+    more_phi::AudioAugmenter augmenter;
+    augmenter.addAugmentation({more_phi::AugmentationType::TimeStretch, 1.0f, 1.0f, true}); // intensity 1.0 = 1.2x faster
 
     juce::AudioBuffer<float> buffer(1, 48000);
     for (int i = 0; i < 48000; ++i)

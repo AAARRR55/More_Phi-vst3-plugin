@@ -1,5 +1,5 @@
-/* MorphSnap — UI/HostedPluginWindow.cpp */
+/* More-Phi — UI/HostedPluginWindow.cpp */
 #include "HostedPluginWindow.h"
-namespace morphsnap {
+namespace more_phi {
 // All implementation inline in header
-} // namespace morphsnap
+} // namespace more_phi

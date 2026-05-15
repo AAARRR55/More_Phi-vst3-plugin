@@ -1,11 +1,11 @@
 /*
- * MorphSnap — AI/LinkBroadcaster.h
+ * More-Phi — AI/LinkBroadcaster.h
  *
  * Cross-instance morph position synchronization using shared memory.
  * One instance acts as leader (writes), others as followers (read).
  *
  * DESIGN:
- * - Uses a named shared memory block ("MorphSnap_LinkState")
+ * - Uses a named shared memory block ("MorePhi_LinkState")
  * - Layout: [uint32 seqlock] [float x] [float y] [uint32 leaderHash]
  * - Leader writes position every processBlock
  * - Followers read with seqlock retry (lock-free, real-time safe)
@@ -33,16 +33,19 @@
     #include <unistd.h>
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Shared memory layout for link state. */
 struct alignas(64) LinkStateBlock
 {
     std::atomic<uint32_t> seqlock{0};
-    float morphX    = 0.5f;
-    float morphY    = 0.5f;
-    uint32_t leaderHash = 0;   // Hash of leader's instanceId
-    uint32_t groupId    = 0;   // Link group ID (0 = default group)
+    std::atomic<float> morphX{0.5f};
+    std::atomic<float> morphY{0.5f};
+    std::atomic<uint32_t> leaderHash{0};   // Hash of leader's instanceId
+    uint32_t groupId      = 0;   // Link group ID (0 = default group)
+    std::atomic<uint64_t> lastActivity{0}; // Milliseconds since epoch
+    // Keep struct at exactly one cache line (64 bytes).
+    uint8_t padding[32] = {};
 };
 
 static_assert(sizeof(LinkStateBlock) <= 64, "LinkStateBlock must fit in one cache line");
@@ -90,8 +93,8 @@ private:
     int shmFd_ = -1;
 #endif
 
-    static constexpr const char* SHM_NAME_PREFIX = "MorphSnap_Link_";
+    static constexpr const char* SHM_NAME_PREFIX = "MorePhi_Link_";
     juce::String getShmName() const;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

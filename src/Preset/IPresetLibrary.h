@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Preset/IPresetLibrary.h
+ * More-Phi — Preset/IPresetLibrary.h
  * Abstract interface for the V2 preset library.
  *
  * Thread safety contract
@@ -37,7 +37,7 @@
 #include <string>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ---------------------------------------------------------------------------
 // PresetEntry — full preset record
@@ -114,7 +114,7 @@ struct PresetSearchQuery
 // ---------------------------------------------------------------------------
 
 /**
- * Preset library interface for the V2 MorphSnap preset system.
+ * Preset library interface for the V2 MorePhi preset system.
  *
  * Implementations may back this interface with a local SQLite database,
  * a flat JSON file store, or a remote API. The interface is intentionally
@@ -272,4 +272,4 @@ public:
     virtual bool isCloudEnabled() const = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

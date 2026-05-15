@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/GranularMorphEngine.cpp
+ * More-Phi — Core/GranularMorphEngine.cpp
  *
  * Full implementation of the granular morph engine.
  *
@@ -49,7 +49,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lifecycle
@@ -72,6 +72,10 @@ void GranularMorphEngine::prepare(double sampleRate, int maxBlockSize)
 
     // Pre-allocate the mono mix buffer — exactly maxBlockSize floats.
     mixBuffer_.assign(static_cast<size_t>(maxBlockSize), 0.0f);
+
+    // H-2 FIX: Pre-compute pitch ratio LUT: 2^(n/12) for n in [-12..+12]
+    for (int i = 0; i < kPitchLUTSize; ++i)
+        pitchLUT_[static_cast<size_t>(i)] = std::pow(2.0f, static_cast<float>(i - 12) / 12.0f);
 
     // Compute maximum grain length in samples from the maximum grain size (200 ms).
     const int maxGrainSamples = static_cast<int>(
@@ -198,17 +202,19 @@ void GranularMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
 
     renderGrains(mixBuffer_.data(), usedSamples);
 
-    // --- 4. Copy mono mix into all output channels of bufA ------------------
+    // --- 4. Add mono mix into all output channels of bufA ------------------
+    // H-11 FIX: Use additive mixing (+=) instead of overwrite (=) so that
+    // the granular engine can layer on top of spectral engine output.
 
     auto* ch0Out = bufA.getWritePointer(0);
     for (int i = 0; i < usedSamples; ++i)
-        ch0Out[i] = mixBuffer_[static_cast<size_t>(i)];
+        ch0Out[i] += mixBuffer_[static_cast<size_t>(i)];
 
     for (int ch = 1; ch < numChannelsA; ++ch)
     {
         auto* chOut = bufA.getWritePointer(ch);
         for (int i = 0; i < usedSamples; ++i)
-            chOut[i] = mixBuffer_[static_cast<size_t>(i)];
+            chOut[i] += mixBuffer_[static_cast<size_t>(i)];
     }
 }
 
@@ -241,6 +247,9 @@ void GranularMorphEngine::feedSourceBuffer(int sourceIndex,
 
     if (numChannels <= 0 || numSamples <= 0)
         return;
+
+    // Clamp to circular buffer capacity to prevent write pointer from lapping
+    numSamples = std::min(numSamples, kCircularBufferSize);
 
     const float normalise = 1.0f / static_cast<float>(numChannels);
 
@@ -297,6 +306,11 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
             startOffset = static_cast<int>(r1 * static_cast<float>(maxOffset));
         }
 
+        // Guard: skip grain if combined length + offset would exceed circular buffer
+        // capacity.  Without this, the read pointer aliases into unwritten memory.
+        if (grainLengthSamples + startOffset >= kCircularBufferSize)
+            continue;   // Grain too long for buffer depth — skip rather than alias
+
         // Convert offset to an absolute read position in the circular buffer.
         // We go backwards from writePos so recent audio is at offset=0.
         const auto& sb = sourceBuffers_[static_cast<size_t>(srcIdx)];
@@ -304,15 +318,20 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
                                + kCircularBufferSize * 2) & (kCircularBufferSize - 1);
 
         // Pitch randomisation: random semitone deviation in [-pitch, +pitch].
+        // H-2 FIX: Use pre-computed LUT instead of std::pow() on audio thread.
         float pitchRatio = 1.0f;
         if (pitchRandom_ > 0.0f)
         {
             const float r2     = nextRandom(); // [0, 1)
             const float offset = (r2 * 2.0f - 1.0f) * pitchRandom_; // [-max, +max] semitones
-            pitchRatio = std::pow(2.0f, offset / 12.0f);
+            const float lutIndex = offset + 12.0f;
+            const int lo = std::clamp(static_cast<int>(lutIndex), 0, kPitchLUTSize - 2);
+            const float frac = lutIndex - static_cast<float>(lo);
+            pitchRatio = pitchLUT_[static_cast<size_t>(lo)] * (1.0f - frac)
+                       + pitchLUT_[static_cast<size_t>(lo + 1)] * frac;
         }
 
-        pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples, pitchRatio);
+        (void)pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples, pitchRatio);
     }
 }
 
@@ -366,4 +385,4 @@ void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
     });
 }
 
-} // namespace morphsnap
+} // namespace more_phi

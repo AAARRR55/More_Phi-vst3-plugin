@@ -1,10 +1,10 @@
-/* MorphSnap — Preset/CloudSyncClient.cpp
+/* More-Phi — Preset/CloudSyncClient.cpp
  * Stub implementation for cloud sync.
  * All operations complete immediately without any network activity.
  * Replace method bodies with real HTTP calls in a future release. */
 #include "CloudSyncClient.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
 
@@ -113,4 +113,4 @@ std::vector<PresetEntry> CloudSyncClient::browseCloud(
     return {};
 }
 
-} // namespace morphsnap
+} // namespace more_phi

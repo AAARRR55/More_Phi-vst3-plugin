@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/HybridBlend.h
+ * More-Phi — Core/HybridBlend.h
  *
  * Equal-power mixing of parameter-domain, spectral, and granular morph
  * outputs into a single output buffer.
@@ -40,7 +40,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * HybridBlend
@@ -127,8 +127,13 @@ public:
                           std::min(spectralOut.getNumSamples(),
                                    granularOut.getNumSamples())));
 
-            for (int i = 0; i < n; ++i)
-                dst[i] = pSrc[i] * pGain + sSrc[i] * sGain + gSrc[i] * gGain;
+            // PERF-5: Use FloatVectorOperations for SIMD-accelerated blending.
+            // Three-way blend: clear, then accumulate each scaled contribution.
+            // addWithMultiply handles the multiply-add in SIMD batches internally.
+            juce::FloatVectorOperations::clear(dst, n);
+            juce::FloatVectorOperations::addWithMultiply(dst, pSrc, pGain, n);
+            juce::FloatVectorOperations::addWithMultiply(dst, sSrc, sGain, n);
+            juce::FloatVectorOperations::addWithMultiply(dst, gSrc, gGain, n);
 
             // Zero any trailing samples if output is longer than sources.
             for (int i = n; i < numSamples; ++i)
@@ -182,8 +187,10 @@ public:
             const int n = std::min(numSamples,
                           std::min(bufA.getNumSamples(), bufB.getNumSamples()));
 
-            for (int i = 0; i < n; ++i)
-                dst[i] = aSrc[i] * gainA + bSrc[i] * gainB;
+            // PERF-5: Use FloatVectorOperations for SIMD-accelerated two-way blend.
+            juce::FloatVectorOperations::clear(dst, n);
+            juce::FloatVectorOperations::addWithMultiply(dst, aSrc, gainA, n);
+            juce::FloatVectorOperations::addWithMultiply(dst, bSrc, gainB, n);
 
             for (int i = n; i < numSamples; ++i)
                 dst[i] = 0.0f;
@@ -230,4 +237,4 @@ public:
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/PresetSerializerV2.cpp
+/* More-Phi — Preset/PresetSerializerV2.cpp
  * JSON serialization/deserialization for V2 presets using nlohmann/json.
  * MESSAGE THREAD ONLY. */
 #include "PresetSerializerV2.h"
@@ -10,7 +10,7 @@
 #include <chrono>
 #include <stdexcept>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -318,10 +318,69 @@ bool PresetSerializerV2::migrateFromV1(const juce::XmlElement& v1Xml,
     // Build a minimal V2 JSON from the V1 XML, preserving what we can.
     nlohmann::json j = toJson(p);   // Gives us the default skeleton.
 
-    // Try to pull apvts string (for future reference, stored in description).
+    // Preserve the APVTS state string in the output JSON under "apvts" so it
+    // can be restored verbatim when the preset is loaded.
     juce::String apvtsStr = v1Xml.getStringAttribute("apvts", "");
     if (apvtsStr.isNotEmpty())
-        p.description = "Migrated from V1 preset. APVTS state preserved in JSON.";
+    {
+        j["apvts"] = apvtsStr.toStdString();
+        p.description = "Migrated from V1 preset.";
+    }
+
+    // Parse the V1 SNAPSHOT_BANK XML child element and convert snapshot values
+    // into the V2 JSON format.
+    //
+    // V1 format:
+    //   <SNAPSHOT_BANK>
+    //     <SNAPSHOT index="0" occupied="1" paramCount="N">
+    //       <VALUE v="0.5"/>
+    //       ...
+    //     </SNAPSHOT>
+    //   </SNAPSHOT_BANK>
+    auto* snapshotBankEl = v1Xml.getChildByName("SNAPSHOT_BANK");
+    if (snapshotBankEl != nullptr)
+    {
+        nlohmann::json occupiedArr = nlohmann::json::array();
+        nlohmann::json snapData    = nlohmann::json::object();
+
+        for (auto* snapEl = snapshotBankEl->getFirstChildElement();
+             snapEl != nullptr;
+             snapEl = snapEl->getNextElement())
+        {
+            if (!snapEl->hasTagName("SNAPSHOT")) continue;
+
+            int idx = snapEl->getIntAttribute("index", -1);
+            if (idx < 0 || idx >= 12) continue;  // NUM_SLOTS == 12
+
+            bool occupied    = snapEl->getBoolAttribute("occupied", false);
+            int  paramCount  = snapEl->getIntAttribute("paramCount", 0);
+
+            nlohmann::json slotObj;
+            slotObj["index"]      = idx;
+            slotObj["occupied"]   = occupied;
+            slotObj["paramCount"] = paramCount;
+
+            if (occupied && paramCount > 0)
+            {
+                nlohmann::json vals = nlohmann::json::array();
+                for (auto* valEl = snapEl->getFirstChildElement();
+                     valEl != nullptr;
+                     valEl = valEl->getNextElement())
+                {
+                    if (valEl->hasTagName("VALUE"))
+                        vals.push_back(valEl->getDoubleAttribute("v", 0.0));
+                }
+                slotObj["values"] = vals;
+                occupiedArr.push_back(idx);
+            }
+
+            snapData[std::to_string(idx)] = slotObj;
+        }
+
+        j["snapshots"]["count"]    = 12;
+        j["snapshots"]["occupied"] = occupiedArr;
+        j["snapshots"]["data"]     = snapData;
+    }
 
     // Re-build final JSON with updated description.
     j["description"] = p.description;
@@ -331,4 +390,4 @@ bool PresetSerializerV2::migrateFromV1(const juce::XmlElement& v1Xml,
     return true;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — MCP Integration Tests (Catch2)
+ * More-Phi — MCP Integration Tests (Catch2)
  */
 
 // On Windows, WIN32_LEAN_AND_MEAN must be defined before ANY includes
@@ -40,7 +40,7 @@
 
 using Catch::Approx;
 using json = nlohmann::json;
-using namespace morphsnap;
+using namespace more_phi;
 
 namespace {
 
@@ -137,6 +137,38 @@ private:
     SOCKET_TYPE socket_;
 };
 
+bool localTcpProviderAvailable()
+{
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        return false;
+#endif
+
+    const SOCKET_TYPE probe = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (probe == INVALID_SOCKET_VALUE)
+    {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return false;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(0);
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+
+    const bool ok = ::bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0
+        && ::listen(probe, 1) == 0;
+
+    CLOSE_SOCKET(probe);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+    return ok;
+}
+
 bool waitForServer(int port, int maxWaitMs = 3000)
 {
     const int attempts = maxWaitMs / 50;
@@ -147,6 +179,23 @@ bool waitForServer(int port, int maxWaitMs = 3000)
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+    return false;
+}
+
+bool waitForDeferredMCPServer(MorePhiProcessor& processor, int maxWaitMs = 3000)
+{
+    const int attempts = maxWaitMs / 50;
+    for (int i = 0; i < attempts; ++i)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+
+        const int port = processor.getMCPServer().getPort();
+        if (port > 0 && processor.getMCPServer().isHealthy() && waitForServer(port, 50))
+            return true;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+
     return false;
 }
 
@@ -187,11 +236,14 @@ void initializeSession(SocketClient& client, const juce::String& token)
 
 TEST_CASE("MCP initialize rejects missing bearer token", "[integration][mcp]")
 {
-    MorphSnapProcessor processor;
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
 
+    REQUIRE(waitForDeferredMCPServer(processor));
     const int port = processor.getMCPServer().getPort();
-    REQUIRE(waitForServer(port));
 
     SocketClient client;
     REQUIRE(client.connectTo(port));
@@ -209,12 +261,15 @@ TEST_CASE("MCP initialize rejects missing bearer token", "[integration][mcp]")
 
 TEST_CASE("MCP initialize succeeds with instance auth token", "[integration][mcp]")
 {
-    MorphSnapProcessor processor;
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
 
+    REQUIRE(waitForDeferredMCPServer(processor));
     const int port = processor.getMCPServer().getPort();
     const auto token = processor.getMCPServer().getAuthToken();
-    REQUIRE(waitForServer(port));
 
     SocketClient client;
     REQUIRE(client.connectTo(port));
@@ -223,16 +278,64 @@ TEST_CASE("MCP initialize succeeds with instance auth token", "[integration][mcp
     processor.releaseResources();
 }
 
+TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[integration][mcp]")
+{
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    REQUIRE(waitForDeferredMCPServer(processor));
+    const int port = processor.getMCPServer().getPort();
+    const auto token = processor.getMCPServer().getAuthToken();
+
+    SocketClient client;
+    REQUIRE(client.connectTo(port));
+    initializeSession(client, token);
+
+    const auto listResponse = sendRpc(client, rpcRequest("tools/list", json::object(), 2));
+    REQUIRE(listResponse.contains("result"));
+    REQUIRE(listResponse["result"].contains("tools"));
+    REQUIRE(listResponse["result"]["tools"].is_array());
+
+    bool foundSummary = false;
+    for (const auto& tool : listResponse["result"]["tools"])
+    {
+        if (tool["name"].get<std::string>() == "analysis.get_summary")
+            foundSummary = true;
+    }
+    REQUIRE(foundSummary);
+
+    const auto callResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "hosted_plugin.info"},
+            {"arguments", json::object()}
+        },
+        3));
+
+    REQUIRE(callResponse.contains("result"));
+    REQUIRE(callResponse["result"].contains("structuredContent"));
+    REQUIRE(callResponse["result"]["structuredContent"]["name"].get<std::string>() == "More-Phi");
+    REQUIRE_FALSE(callResponse["result"]["isError"].get<bool>());
+
+    processor.releaseResources();
+}
+
 TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors", "[integration][mcp]")
 {
-    MorphSnapProcessor processor;
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
     processor.setMorphX(0.5f);
     processor.setMorphY(0.5f);
 
+    REQUIRE(waitForDeferredMCPServer(processor));
     const int port = processor.getMCPServer().getPort();
     const auto token = processor.getMCPServer().getAuthToken();
-    REQUIRE(waitForServer(port));
 
     SocketClient client;
     REQUIRE(client.connectTo(port));
@@ -254,18 +357,27 @@ TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors"
     REQUIRE(processor.getMorphX() == Approx(0.25f).margin(0.01f));
     REQUIRE(processor.getMorphY() == Approx(0.75f).margin(0.01f));
 
+    juce::AudioBuffer<float> buffer(2, 256);
+    juce::MidiBuffer midi;
+    processor.processBlock(buffer, midi);
+    REQUIRE(processor.getMorphX() == Approx(0.25f).margin(0.01f));
+    REQUIRE(processor.getMorphY() == Approx(0.75f).margin(0.01f));
+
     processor.releaseResources();
 }
 
 TEST_CASE("MCP rate limit is enforced through token optimizer bookkeeping", "[integration][mcp]")
 {
-    MorphSnapProcessor processor;
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
     processor.getTokenOptimizer().setRateLimit(1);
 
+    REQUIRE(waitForDeferredMCPServer(processor));
     const int port = processor.getMCPServer().getPort();
     const auto token = processor.getMCPServer().getAuthToken();
-    REQUIRE(waitForServer(port));
 
     SocketClient client;
     REQUIRE(client.connectTo(port));

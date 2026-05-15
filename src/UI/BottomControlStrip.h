@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/BottomControlStrip.h
+ * More-Phi — UI/BottomControlStrip.h
  * Bottom control strip from Stitch-enhanced UI design.
  * Contains: SanityMode, Listen Mode, RecallMode, Recall Toggle, Link Mode, Sidechain controls.
  */
@@ -8,20 +8,20 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class BottomControlStrip : public juce::Component
 {
 public:
-    explicit BottomControlStrip(MorphSnapProcessor& p);
+    explicit BottomControlStrip(MorePhiProcessor& p);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
-    MorphSnapProcessor& processor;
+    MorePhiProcessor& processor;
 
     // SanityMode toggle
     juce::ToggleButton sanityToggle_{"Sanity Mode"};
@@ -54,7 +54,14 @@ private:
     juce::ToggleButton linkToggle_{"Link"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttach_;
 
+    // Output gain + bypass
+    juce::Slider       outputGainKnob_;
+    juce::Label        outputGainLabel_{"", "Gain"};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttach_;
+    juce::TextButton   bypassBtn_{"Bypass"};
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttach_;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BottomControlStrip)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

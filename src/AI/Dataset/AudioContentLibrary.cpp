@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/AudioContentLibrary.cpp
+ * More-Phi — AI/Dataset/AudioContentLibrary.cpp
  * Implementation of source audio library management for dataset generation.
  */
 #include "AudioContentLibrary.h"
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -655,7 +655,8 @@ float AudioContentLibrary::computeRhythmicDensity(const juce::AudioBuffer<float>
         return 0.0f;
 
     float avgFlux = totalFlux / frameCount;
-    float duration = static_cast<float>(numSamples) / static_cast<float>(sampleRate);
+    // duration reserved for future per-second normalisation; currently unused
+    (void)(static_cast<float>(numSamples) / static_cast<float>(sampleRate));
 
     // Events per second, normalized to 0-1 (assuming max ~20 events/sec)
     float eventsPerSecond = avgFlux * 10.0f; // Scaling factor
@@ -757,7 +758,7 @@ float AudioContentLibrary::computeSpectralFlatness(const float* magnitudes, int 
     return arithmeticMean > 0.0f ? geometricMean / arithmeticMean : 0.0f;
 }
 
-float AudioContentLibrary::computeLoudnessLUFS(const juce::AudioBuffer<float>& buffer, double sampleRate)
+float AudioContentLibrary::computeLoudnessLUFS(const juce::AudioBuffer<float>& buffer, double /*sampleRate*/)
 {
     // Simplified LUFS calculation using K-weighting
     const float* left = buffer.getReadPointer(0);
@@ -824,7 +825,7 @@ float AudioContentLibrary::computeZeroCrossingRate(const juce::AudioBuffer<float
 juce::AudioBuffer<float> AudioContentLibrary::applyTimeStretch(
     const juce::AudioBuffer<float>& source,
     float ratio,
-    double sampleRate)
+    double /*sampleRate*/)
 {
     if (ratio <= 0.0f || std::abs(ratio - 1.0f) < 0.001f)
         return source;
@@ -869,7 +870,7 @@ juce::AudioBuffer<float> AudioContentLibrary::applyTimeStretch(
 juce::AudioBuffer<float> AudioContentLibrary::applyPitchShift(
     const juce::AudioBuffer<float>& source,
     int semitones,
-    double sampleRate)
+    double /*sampleRate*/)
 {
     if (semitones == 0)
         return source;
@@ -978,4 +979,4 @@ void AudioContentLibrary::applyGainAndNormalize(
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

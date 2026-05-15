@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/DiscreteParameterHandler.h
+ * More-Phi — Core/DiscreteParameterHandler.h
  * Handles discrete parameters during morphing to prevent clicks/pops.
  * Implements threshold-based switching and hysteresis to avoid rapid toggling.
  */
@@ -9,7 +9,7 @@
 #include <vector>
 #include <atomic>
 
-namespace morphsnap {
+namespace more_phi {
 
 // State tracking for discrete parameters during morph
 struct DiscreteParamState
@@ -104,7 +104,16 @@ private:
     uint32_t cooldownFrames_ = 100;  // ~2ms at 48kHz/512 buffer
     
     std::atomic<uint32_t> parameterCount_{0};
-    
+
+    // H-3 FIX: Per-parameter step count for accurate quantization.
+    // Default 10 steps (backwards compatible with old hardcoded behavior).
+    std::vector<int> stepCount_;
+
+    // Pre-allocated scratch buffer for processDiscreteParameters() so that the
+    // audio-path call never performs a heap allocation (resize is done once in
+    // initialize()).
+    std::vector<float> outputScratch_;
+
     // Internal processing
     float processDiscreteParameter(int index, float interpolatedValue, float morphAmount);
     BlendStrategy getStrategyForParameter(int index) const;
@@ -145,4 +154,4 @@ public:
         float threshold = 0.7f);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/FormantMorphEngine.h
+ * More-Phi — Core/FormantMorphEngine.h
  *
  * Cepstral-liftering formant preservation engine.
  *
@@ -39,7 +39,7 @@
 #include <vector>
 #include <atomic>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * FormantMorphEngine
@@ -238,4 +238,4 @@ private:
                     float* scratch) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

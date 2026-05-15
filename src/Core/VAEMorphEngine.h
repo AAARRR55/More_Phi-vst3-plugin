@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/VAEMorphEngine.h
+ * More-Phi — Core/VAEMorphEngine.h
  *
  * Variational Autoencoder morph engine.
  *
@@ -31,7 +31,7 @@
 #include <vector>
 #include <cstddef>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * VAEMorphEngine
@@ -187,4 +187,4 @@ private:
     //                  std::vector<const char*> decoderOutputNames_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

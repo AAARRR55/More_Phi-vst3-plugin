@@ -1,12 +1,12 @@
 /*
- * MorphSnap — AI/Dataset/ParameterSafetyConfig.cpp
+ * More-Phi — AI/Dataset/ParameterSafetyConfig.cpp
  * Implementation of parameter safety configuration for safe DSP randomization.
  */
 #include "ParameterSafetyConfig.h"
 #include <algorithm>
 #include <fstream>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ============================================================================
 // Rule Management
@@ -217,108 +217,205 @@ ParameterSafetyConfig ParameterSafetyConfig::createFabFilterProQProfile(int numP
 {
     ParameterSafetyConfig config;
 
-    // FabFilter Pro-Q 3/4 has ~700 parameters organized in bands
-    // Band parameters follow a pattern: BandN_ParamName
+    // FabFilter Pro-Q 4 actual parameter layout (verified via --list-params):
+    //   24 bands × 24 params per band = 576 band params (indices 0–575)
+    //   Global params start at index 576
     //
-    // SAFE DSP PARAMETERS (to randomize):
-    //   - BandN_Frequency (logarithmic: 10Hz - 30kHz)
-    //   - BandN_Gain (linear: -30dB to +30dB, normalized)
-    //   - BandN_Q (logarithmic: 0.025 to 40.0)
-    //   - BandN_Slope (discrete: 6/12/24/48 dB/oct)
-    //   - Band Type (discrete: Bell/Cut/Shelf/etc.)
-    //
-    // DANGEROUS BINARY PARAMETERS (to lock at 0):
-    //   - BandN_Enable (1 = bypass this band!)
-    //   - BandN_Solo (1 = only hear this band)
-    //   - BandN_Mute (1 = silence this band)
-    //   - Phase Invert
-    //   - Global Bypass
-    //   - Channel Mode (L/R/M/S)
+    // Per-band layout (offset from band base):
+    //   +0  Band N Used              — gate: 1=band active, 0=inactive
+    //   +1  Band N Enabled           — 1=processing, 0=bypassed
+    //   +2  Band N Frequency         — SAFE: log 10Hz–30kHz
+    //   +3  Band N Gain              — SAFE: -30dB to +30dB
+    //   +4  Band N Q                 — SAFE: 0.025 to 40.0
+    //   +5  Band N Shape             — SAFE discrete: Bell/LowShelf/HighShelf/etc.
+    //   +6  Band N Slope             — SAFE discrete: 6/12/24/48 dB/oct
+    //   +7  Band N Stereo Placement  — DANGEROUS: L/R/M/S routing
+    //   +8  Band N Speakers          — DANGEROUS: routing
+    //   +9  Band N Dynamic Range     — dynamics sub-feature
+    //   +10 Band N Dynamics Enabled  — dynamics toggle
+    //   +11 Band N Dynamics Auto     — dynamics auto
+    //   +12 Band N Threshold         — dynamics
+    //   +13 Band N Attack            — dynamics
+    //   +14 Band N Release           — dynamics
+    //   +15 Band N External Side Chain — routing
+    //   +16 Band N Side Chain Filtering — routing
+    //   +17 Band N Side Chain Low Frequency  — side chain
+    //   +18 Band N Side Chain High Frequency — side chain
+    //   +19 Band N Side Chain Audition       — audition toggle
+    //   +20 Band N Spectral Enabled  — spectral toggle
+    //   +21 Band N Spectral Density  — spectral
+    //   +22 Band N Solo              — DANGEROUS: mutes everything else
+    //   +23 Band N Spectral Tilt     — spectral
 
-    // Global dangerous parameters
-    config.addRule({0, "Bypass", ParameterCategory::DangerousBinary, 0, 1, 0, true, {}, 0.0f});
-    config.addRule({1, "Phase Invert", ParameterCategory::DangerousBinary, 0, 1, 0, true, {}, 0.0f});
-    config.addRule({2, "Stereo Placement", ParameterCategory::DangerousBinary, 0, 1, 0.5f, true, {}, 0.5f});
-
-    // Band parameters (Pro-Q typically has 24 bands, each with ~25 parameters)
-    // Parameters per band: Enable, Freq, Gain, Q, Type, Slope, Solo, Mute, Stereo, etc.
-    const int paramsPerBand = 25;
+    const int paramsPerBand = 24;
     const int numBands = 24;
+    // bandParamCount (numBands * paramsPerBand = 576) documented for reference
+    (void)(numBands * paramsPerBand);
 
     for (int band = 0; band < numBands; ++band)
     {
-        int baseIndex = 10 + band * paramsPerBand; // Offset by global params
+        const int b = band * paramsPerBand;
+        const auto prefix = "Band " + juce::String(band + 1) + " ";
 
-        // Band Enable - MUST stay at 1 (on) or we get silent bands
-        config.addRule({baseIndex + 0,
-                       "Band" + juce::String(band) + "_Enable",
+        // +0 Used — lock ON so band is active
+        config.addRule({b + 0, prefix + "Used",
                        ParameterCategory::DangerousBinary,
-                       0, 1, 1.0f, true, {}, 1.0f}); // Lock to ON
+                       0, 1, 1.0f, true, {}, 1.0f});
 
-        // Frequency - SAFE to randomize (logarithmic mapping)
-        config.addRule({baseIndex + 1,
-                       "Band" + juce::String(band) + "_Frequency",
+        // +1 Enabled — lock ON so band processes audio
+        config.addRule({b + 1, prefix + "Enabled",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 1.0f, true, {}, 1.0f});
+
+        // +2 Frequency — SAFE continuous
+        config.addRule({b + 2, prefix + "Frequency",
                        ParameterCategory::SafeContinuous,
-                       0.1f, 0.9f, 0.5f, true}); // Avoid extremes
+                       0.1f, 0.9f, 0.5f, true});
 
-        // Gain - SAFE to randomize
-        config.addRule({baseIndex + 2,
-                       "Band" + juce::String(band) + "_Gain",
+        // +3 Gain — SAFE continuous (constrained to avoid extreme boosts)
+        config.addRule({b + 3, prefix + "Gain",
                        ParameterCategory::SafeContinuous,
-                       0.2f, 0.8f, 0.5f, true}); // Avoid extreme boosts/cuts
+                       0.2f, 0.8f, 0.5f, true});
 
-        // Q - SAFE to randomize (filter resonance)
-        config.addRule({baseIndex + 3,
-                       "Band" + juce::String(band) + "_Q",
+        // +4 Q — SAFE continuous
+        config.addRule({b + 4, prefix + "Q",
                        ParameterCategory::SafeContinuous,
                        0.1f, 0.9f, 0.3f, true});
 
-        // Filter Type - SAFE discrete
-        config.addRule({baseIndex + 4,
-                       "Band" + juce::String(band) + "_Type",
+        // +5 Shape — SAFE discrete (Bell, Low Shelf, High Shelf, Notch, etc.)
+        config.addRule({b + 5, prefix + "Shape",
                        ParameterCategory::SafeDiscrete,
                        0, 1, 0, true,
-                       {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f}}); // Bell, Cut, Shelf, etc.
+                       {0.0f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f}});
 
-        // Slope - SAFE discrete
-        config.addRule({baseIndex + 5,
-                       "Band" + juce::String(band) + "_Slope",
+        // +6 Slope — SAFE discrete (6/12/24/48 dB/oct)
+        config.addRule({b + 6, prefix + "Slope",
                        ParameterCategory::SafeDiscrete,
                        0, 1, 0.25f, true,
-                       {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}}); // 6/12/24/48 dB/oct
+                       {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}});
 
-        // Solo - DANGEROUS (mutes all other bands!)
-        config.addRule({baseIndex + 6,
-                       "Band" + juce::String(band) + "_Solo",
+        // +7 Stereo Placement — lock to center (don't alter stereo routing)
+        config.addRule({b + 7, prefix + "Stereo Placement",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
+
+        // +8 Speakers — lock (routing)
+        config.addRule({b + 8, prefix + "Speakers",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.0f, false, {}, 0.0f});
+
+        // +9 Dynamic Range — lock (dynamics sub-feature off by default)
+        config.addRule({b + 9, prefix + "Dynamic Range",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.0f, false, {}, 0.0f});
+
+        // +10 Dynamics Enabled — lock OFF
+        config.addRule({b + 10, prefix + "Dynamics Enabled",
                        ParameterCategory::DangerousBinary,
-                       0, 1, 0, true, {}, 0.0f}); // Lock to OFF
+                       0, 1, 0.0f, true, {}, 0.0f});
 
-        // Mute - DANGEROUS
-        config.addRule({baseIndex + 7,
-                       "Band" + juce::String(band) + "_Mute",
+        // +11 Dynamics Auto — lock OFF
+        config.addRule({b + 11, prefix + "Dynamics Auto",
                        ParameterCategory::DangerousBinary,
-                       0, 1, 0, true, {}, 0.0f}); // Lock to OFF
+                       0, 1, 0.0f, true, {}, 0.0f});
 
-        // Stereo placement - could be safe but risky
-        config.addRule({baseIndex + 8,
-                       "Band" + juce::String(band) + "_Stereo",
-                       ParameterCategory::SafeContinuous,
-                       0.0f, 1.0f, 0.5f, true});
+        // +12 Threshold — lock (dynamics)
+        config.addRule({b + 12, prefix + "Threshold",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
 
-        // Remaining band parameters - treat as unknown/safe by default
-        for (int p = 9; p < paramsPerBand && baseIndex + p < numParameters; ++p)
-        {
-            config.addRule({baseIndex + p,
-                           "Band" + juce::String(band) + "_Param" + juce::String(p),
-                           ParameterCategory::SafeContinuous,
-                           0.1f, 0.9f, 0.5f, true});
-        }
+        // +13 Attack — lock (dynamics)
+        config.addRule({b + 13, prefix + "Attack",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
+
+        // +14 Release — lock (dynamics)
+        config.addRule({b + 14, prefix + "Release",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
+
+        // +15 External Side Chain — lock OFF
+        config.addRule({b + 15, prefix + "External Side Chain",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 0.0f, true, {}, 0.0f});
+
+        // +16 Side Chain Filtering — lock OFF
+        config.addRule({b + 16, prefix + "Side Chain Filtering",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 0.0f, true, {}, 0.0f});
+
+        // +17 Side Chain Low Frequency — lock
+        config.addRule({b + 17, prefix + "SC Low Freq",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.0f, false, {}, 0.0f});
+
+        // +18 Side Chain High Frequency — lock
+        config.addRule({b + 18, prefix + "SC High Freq",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 1.0f, false, {}, 1.0f});
+
+        // +19 Side Chain Audition — lock OFF
+        config.addRule({b + 19, prefix + "Side Chain Audition",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 0.0f, true, {}, 0.0f});
+
+        // +20 Spectral Enabled — lock OFF
+        config.addRule({b + 20, prefix + "Spectral Enabled",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 0.0f, true, {}, 0.0f});
+
+        // +21 Spectral Density — lock
+        config.addRule({b + 21, prefix + "Spectral Density",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
+
+        // +22 Solo — DANGEROUS: lock OFF
+        config.addRule({b + 22, prefix + "Solo",
+                       ParameterCategory::DangerousBinary,
+                       0, 1, 0.0f, true, {}, 0.0f});
+
+        // +23 Spectral Tilt — lock
+        config.addRule({b + 23, prefix + "Spectral Tilt",
+                       ParameterCategory::DangerousSystem,
+                       0, 1, 0.5f, false, {}, 0.5f});
     }
 
-    // Spectrum/Analyzer settings (not audio, but don't affect sound)
-    for (int i = numBands * paramsPerBand + 10; i < numParameters; ++i)
+    // Global params (indices 576+)
+    // 576 Processing Mode — lock
+    config.addRule({576, "Processing Mode", ParameterCategory::DangerousSystem,
+                   0, 1, 0.0f, false, {}, 0.0f});
+    // 577 Processing Resolution — lock
+    config.addRule({577, "Processing Resolution", ParameterCategory::DangerousSystem,
+                   0, 1, 0.0f, false, {}, 0.0f});
+    // 578 Character — lock
+    config.addRule({578, "Character", ParameterCategory::DangerousSystem,
+                   0, 1, 0.0f, false, {}, 0.0f});
+    // 579 Gain Scale — lock
+    config.addRule({579, "Gain Scale", ParameterCategory::DangerousSystem,
+                   0, 1, 0.5f, false, {}, 0.5f});
+    // 580 Output Level — lock
+    config.addRule({580, "Output Level", ParameterCategory::DangerousBinary,
+                   0, 1, 0.5f, true, {}, 0.5f});
+    // 581 Output Pan — lock
+    config.addRule({581, "Output Pan", ParameterCategory::DangerousBinary,
+                   0, 1, 0.5f, true, {}, 0.5f});
+    // 582 Output Pan Mode — lock
+    config.addRule({582, "Output Pan Mode", ParameterCategory::DangerousSystem,
+                   0, 1, 0.0f, false, {}, 0.0f});
+    // 583 Bypass — lock OFF
+    config.addRule({583, "Bypass", ParameterCategory::DangerousBinary,
+                   0, 1, 0.0f, true, {}, 0.0f});
+    // 584 Output Invert Phase — lock OFF
+    config.addRule({584, "Output Invert Phase", ParameterCategory::DangerousBinary,
+                   0, 1, 0.0f, true, {}, 0.0f});
+    // 585 Auto Gain — lock OFF
+    config.addRule({585, "Auto Gain", ParameterCategory::DangerousBinary,
+                   0, 1, 0.0f, true, {}, 0.0f});
+
+    // Remaining global params (analyzer, MIDI CC, internal) — all DangerousSystem
+    for (int i = 586; i < numParameters; ++i)
     {
-        config.addRule({i, "UI_Param" + juce::String(i),
+        config.addRule({i, "Global_Param" + juce::String(i),
                        ParameterCategory::DangerousSystem,
                        0, 1, 0.5f, false, {}, 0.5f});
     }
@@ -666,4 +763,4 @@ bool ParameterSafetyConfig::parameterNameMatches(const juce::String& name, const
            pattern.containsIgnoreCase(name);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

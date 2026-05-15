@@ -1,5 +1,5 @@
 /*
- * MorphSnap - tests/Unit/TestAIStatusPanel.cpp
+ * More-Phi - tests/Unit/TestAIStatusPanel.cpp
  * Unit tests for AIStatusPanel component
  */
 #include <catch2/catch_test_macros.hpp>
@@ -8,7 +8,7 @@
 #include "Plugin/PluginProcessor.h"
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // ── Test Fixtures ─────────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ using namespace morphsnap;
 class TestableAIStatusPanel : public AIStatusPanel
 {
 public:
-    explicit TestableAIStatusPanel(MorphSnapProcessor& proc)
+    explicit TestableAIStatusPanel(MorePhiProcessor& proc)
         : AIStatusPanel(proc) {}
 
     // Expose protected/private methods for testing
@@ -28,7 +28,7 @@ public:
 
 TEST_CASE("AIStatusPanel connection state", "[UI][AIStatusPanel]")
 {
-    // Note: Full testing requires a MorphSnapProcessor instance
+    // Note: Full testing requires a MorePhiProcessor instance
     // These tests verify the API contract
 
     SECTION("Connection color reflects state")

@@ -1,9 +1,9 @@
-/* MorphSnap — UI/MorphSnapLookAndFeel.cpp */
-#include "MorphSnapLookAndFeel.h"
+/* More-Phi — UI/MorePhiLookAndFeel.cpp */
+#include "MorePhiLookAndFeel.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-MorphSnapLookAndFeel::MorphSnapLookAndFeel()
+MorePhiLookAndFeel::MorePhiLookAndFeel()
 {
     // Global defaults
     setColour(juce::ResizableWindow::backgroundColourId, backgroundDark);
@@ -24,13 +24,13 @@ MorphSnapLookAndFeel::MorphSnapLookAndFeel()
     setColour(juce::Slider::textBoxTextColourId, textSecondary);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
-    // Default font
+    // Default font with fallbacks
     setDefaultSansSerifTypefaceName("Segoe UI");
 }
 
 // ── Buttons ──────────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
+void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
                                                   const juce::Colour&,
                                                   bool isOver, bool isDown)
 {
@@ -60,10 +60,12 @@ void MorphSnapLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button&
     }
 }
 
-void MorphSnapLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
+void MorePhiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
                                             bool /*isOver*/, bool /*isDown*/)
 {
-    g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::plain)));
+    auto font = juce::Font(juce::FontOptions("Segoe UI", 12.0f, juce::Font::plain));
+    font.setFallbackEnabled(true);
+    g.setFont(font);
     g.setColour(button.getToggleState() ? juce::Colours::white : textPrimary);
     g.drawText(button.getButtonText(), button.getLocalBounds(),
                juce::Justification::centred);
@@ -71,7 +73,7 @@ void MorphSnapLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& b
 
 // ── Rotary Knobs ─────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
+void MorePhiLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
                                               float sliderPos, float startAngle, float endAngle,
                                               juce::Slider&)
 {
@@ -112,7 +114,7 @@ void MorphSnapLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
 
 // ── Linear Slider ────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h,
+void MorePhiLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h,
                                               float sliderPos, float /*minSliderPos*/,
                                               float /*maxSliderPos*/,
                                               juce::Slider::SliderStyle style,
@@ -161,7 +163,7 @@ void MorphSnapLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int
 
 // ── ComboBox ─────────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool isDown,
+void MorePhiLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool isDown,
                                           int, int, int, int, juce::ComboBox&)
 {
     auto bounds = juce::Rectangle<float>(0, 0, static_cast<float>(w), static_cast<float>(h));
@@ -180,7 +182,7 @@ void MorphSnapLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool is
 
 // ── Popup Menu ───────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int w, int h)
+void MorePhiLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int w, int h)
 {
     g.setColour(surfaceLight);
     g.fillRoundedRectangle(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), cornerRadius);
@@ -190,7 +192,7 @@ void MorphSnapLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int w, int
 
 // ── Labels ───────────────────────────────────────────────────────────────────
 
-void MorphSnapLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
+void MorePhiLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
 {
     g.setColour(label.findColour(juce::Label::textColourId));
     g.setFont(label.getFont());
@@ -201,4 +203,4 @@ void MorphSnapLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
                       1.0f);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ISpectralMorphEngine.h
+ * More-Phi — Core/ISpectralMorphEngine.h
  * Abstract interface for STFT-based spectral morphing between audio buffers.
  *
  * Thread safety contract
@@ -34,7 +34,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * STFT-based spectral morphing engine interface.
@@ -169,4 +169,4 @@ public:
     virtual SpectralConfig getConfig() const noexcept = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

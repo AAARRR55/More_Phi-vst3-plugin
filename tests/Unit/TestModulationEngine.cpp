@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests: Modulation Engine (V2)
+ * More-Phi — Unit Tests: Modulation Engine (V2)
  *
  * Catch2 v3 test suite for the V2 modulation subsystem.
  *
@@ -32,8 +32,8 @@
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
-using namespace morphsnap;
-using namespace morphsnap::test;
+using namespace more_phi;
+using namespace more_phi::test;
 
 // =============================================================================
 //  LFO Waveform Generation

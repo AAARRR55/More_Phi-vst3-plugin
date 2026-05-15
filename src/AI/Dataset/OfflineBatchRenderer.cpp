@@ -1,9 +1,10 @@
 /*
- * MorphSnap — AI/Dataset/OfflineBatchRenderer.cpp
+ * More-Phi — AI/Dataset/OfflineBatchRenderer.cpp
  * Sequential hosted-plugin renderer with reusable buffers for offline batches.
  */
 
 #include "AI/Dataset/OfflineBatchRenderer.h"
+#include "Core/SIMDAudio.h"
 
 #include <nlohmann/json.hpp>
 
@@ -14,7 +15,7 @@
 #include <numeric>
 #include <random>
 
-namespace morphsnap {
+namespace more_phi {
 
 namespace {
 
@@ -27,33 +28,6 @@ struct MutationTarget
     juce::Array<int> activationIndices;
     juce::String lowerName;
 };
-
-bool populatePluginDescription(juce::AudioPluginFormatManager& formatManager,
-                               const juce::File& pluginFile,
-                               juce::PluginDescription& outDescription)
-{
-    const auto pluginPath = pluginFile.getFullPathName();
-
-    for (auto* format : formatManager.getFormats())
-    {
-        if (!format->fileMightContainThisPluginType(pluginPath))
-            continue;
-
-        juce::OwnedArray<juce::PluginDescription> descriptions;
-        format->findAllTypesForFile(descriptions, pluginPath);
-
-        if (!descriptions.isEmpty())
-        {
-            outDescription = *descriptions.getFirst();
-            return true;
-        }
-    }
-
-    outDescription.fileOrIdentifier = pluginPath;
-    outDescription.pluginFormatName = pluginFile.hasFileExtension(".vst3") ? "VST3" : juce::String();
-    outDescription.name = pluginFile.getFileNameWithoutExtension();
-    return false;
-}
 
 void logProfilingSummary(const PerformanceProfiler& profiler)
 {
@@ -263,21 +237,56 @@ float generateDiscreteValue(std::mt19937& generator, float baseValue, int numSte
     return static_cast<float>(nextStep) / static_cast<float>(maxStep);
 }
 
-std::vector<MutationTarget> collectMutationTargets(const juce::AudioPluginInstance* plugin)
+struct ParamCache
+{
+    juce::String lowerName;
+    float value = 0.0f;
+    int numSteps = 0;
+    bool isBoolean = false;
+    bool isDiscrete = false;
+    bool isNull = true;
+};
+
+std::vector<MutationTarget> collectMutationTargets(const juce::AudioPluginInstance* plugin,
+                                                    std::vector<float>* outBaseValues = nullptr)
 {
     std::vector<MutationTarget> targets;
     if (plugin == nullptr)
         return targets;
 
     const auto& parameters = plugin->getParameters();
-    juce::Array<juce::String> lowerNames;
-    lowerNames.ensureStorageAllocated(parameters.size());
+    const int numParams = parameters.size();
 
-    for (int index = 0; index < parameters.size(); ++index)
+    // Pre-cache ALL parameter metadata in one pass to minimize yabridge IPC issues
+    std::vector<ParamCache> cache(static_cast<size_t>(numParams));
+    for (int index = 0; index < numParams; ++index)
     {
         auto* parameter = parameters[index];
-        lowerNames.add(parameter != nullptr ? parameter->getName(256).toLowerCase().trim()
-                                            : juce::String());
+        if (parameter == nullptr)
+            continue;
+
+        auto& c = cache[static_cast<size_t>(index)];
+        c.isNull = false;
+        c.lowerName = parameter->getName(256).toLowerCase().trim();
+        c.value = parameter->getValue();
+        c.numSteps = parameter->getNumSteps();
+        c.isBoolean = parameter->isBoolean();
+        c.isDiscrete = !c.isBoolean
+            && (parameter->isDiscrete()
+                || (c.numSteps > 1 && c.numSteps < std::numeric_limits<int>::max()));
+    }
+
+    juce::Array<juce::String> lowerNames;
+    lowerNames.ensureStorageAllocated(numParams);
+    for (const auto& c : cache)
+        lowerNames.add(c.lowerName);
+
+    // Optionally export cached base values
+    if (outBaseValues != nullptr)
+    {
+        outBaseValues->resize(static_cast<size_t>(numParams), 0.0f);
+        for (int i = 0; i < numParams; ++i)
+            (*outBaseValues)[static_cast<size_t>(i)] = cache[static_cast<size_t>(i)].value;
     }
 
     const juce::String pluginName = plugin->getName().toLowerCase();
@@ -287,24 +296,36 @@ std::vector<MutationTarget> collectMutationTargets(const juce::AudioPluginInstan
 
     const auto appendTargets = [&](auto&& predicate)
     {
-        for (int index = 0; index < parameters.size(); ++index)
+        for (int index = 0; index < numParams; ++index)
         {
-            auto* parameter = parameters[index];
-            const auto lowerName = lowerNames[index];
-
-            if (shouldExcludeFromMutation(lowerName, parameter) || !predicate(lowerName))
+            const auto& c = cache[static_cast<size_t>(index)];
+            if (c.isNull)
                 continue;
 
-            const int numSteps = parameter->getNumSteps();
-            const bool isDiscrete = !parameter->isBoolean()
-                && (parameter->isDiscrete()
-                    || (numSteps > 1 && numSteps < std::numeric_limits<int>::max()));
+            const auto& lowerName = c.lowerName;
+
+            // Inline exclusion check using cached data (avoids IPC)
+            if (c.isBoolean || isTrapBinaryParameter(lowerName) || isStructuralToggle(lowerName))
+                continue;
+            if (containsAny(lowerName, {
+                "dry/wet", "dry", "wet", "mix",
+                "stereo placement", "speakers",
+                "side chain", "external",
+                "output", "input", "master",
+                "power", "mono", "latency",
+                "oversampling", "quality", "lookahead",
+                "analyzer", "meter", "routing"
+            }) || isGlobalGainLike(lowerName))
+                continue;
+
+            if (!predicate(lowerName))
+                continue;
 
             MutationTarget target;
             target.index = index;
-            target.baseValue = parameter->getValue();
-            target.numSteps = numSteps;
-            target.isDiscrete = isDiscrete;
+            target.baseValue = c.value;
+            target.numSteps = c.numSteps;
+            target.isDiscrete = c.isDiscrete;
             target.activationIndices = findActivationIndices(lowerNames, extractGroupPrefix(lowerName));
             target.lowerName = lowerName;
             targets.push_back(std::move(target));
@@ -365,16 +386,33 @@ bool OfflineBatchRenderer::setConfig(const OfflineBatchConfig& config)
     {
         pluginHost_ = std::make_unique<PluginHostManager>();
 
+        // Discover and load the plugin inside a single MessageManagerLock scope
+        // so the same wineserver/IPC state is used for both operations.
+        // NOTE: Do NOT kill wineserver between scan and load — the same yabridge
+        // Wine process must stay alive for both operations, otherwise the load
+        // segfaults during processBlock due to stale IPC state.
         juce::PluginDescription description;
-        populatePluginDescription(pluginHost_->getFormatManager(), config_.pluginFile, description);
 
-        auto prepareAndLoad = [&]()
+        auto discoverPrepareAndLoad = [&]()
         {
+            juce::String discoveryError;
+            if (!PluginHostManager::discoverPlugin(
+                    pluginHost_->getFormatManager(), config_.pluginFile,
+                    description, discoveryError))
+            {
+                std::cerr << "[OfflineBatchRenderer] Plugin discovery warning: "
+                          << discoveryError << std::endl;
+                // Continue with fallback description — loadPlugin may still succeed
+            }
+
             pluginHost_->prepare(config_.renderConfig.sampleRate,
                                  config_.renderConfig.blockSize,
                                  config_.renderConfig.numChannels);
 
             pluginLoaded_ = pluginHost_->loadPlugin(description);
+            if (!pluginLoaded_)
+                std::cerr << "[OfflineBatchRenderer] loadPlugin failed for: "
+                          << description.fileOrIdentifier << std::endl;
             return pluginLoaded_;
         };
 
@@ -382,12 +420,15 @@ bool OfflineBatchRenderer::setConfig(const OfflineBatchConfig& config)
         {
             juce::MessageManagerLock mmLock(juce::Thread::getCurrentThread());
             if (!mmLock.lockWasGained())
+            {
+                std::cerr << "[OfflineBatchRenderer] Failed to acquire MessageManagerLock\n";
                 return false;
+            }
 
-            if (!prepareAndLoad())
+            if (!discoverPrepareAndLoad())
                 return false;
         }
-        else if (!prepareAndLoad())
+        else if (!discoverPrepareAndLoad())
         {
             return false;
         }
@@ -419,7 +460,10 @@ bool OfflineBatchRenderer::startRender(IPluginHostManager* hostManager)
     isRendering_.store(true);
     startTime_ = juce::Time::getCurrentTime().toMilliseconds();
 
-    renderThread_ = std::thread([this, hostManager]() { renderLoop(hostManager); });
+    // Run synchronously on the calling thread for yabridge compatibility.
+    // yabridge/Wine plugins may require processBlock on the same thread
+    // that called prepareToPlay.
+    renderLoop(hostManager);
     return true;
 }
 
@@ -468,7 +512,7 @@ void OfflineBatchRenderer::renderLoop(IPluginHostManager* hostManager)
 
     juce::AudioBuffer<float> sourceAudio;
     {
-        MORPHSNAP_PROFILE(profiler_, "load_source_audio");
+        MORE_PHI_PROFILE(profiler_, "load_source_audio");
         sourceAudio = loadSourceAudio();
     }
 
@@ -494,12 +538,14 @@ void OfflineBatchRenderer::renderLoop(IPluginHostManager* hostManager)
     const int spareCount = juce::jmax(10, config_.totalVariations / 5);
     std::vector<std::vector<float>> parameterVariations;
     {
-        MORPHSNAP_PROFILE(profiler_, "generate_parameter_variations");
-        // Temporarily request extra variations, then split into main + spares
-        const auto origTotal = config_.totalVariations;
-        config_.totalVariations = origTotal + spareCount;
+        MORE_PHI_PROFILE(profiler_, "generate_parameter_variations");
+        // Use a local copy to request extra variations for spares instead of
+        // temporarily mutating config_ (which is fragile if render ever goes async).
+        const auto totalWithSpares = config_.totalVariations + spareCount;
+        const auto savedTotal = config_.totalVariations;
+        config_.totalVariations = totalWithSpares;
         parameterVariations = generateParameterVariations(activeHost != nullptr ? activeHost->getPlugin() : nullptr);
-        config_.totalVariations = origTotal;
+        config_.totalVariations = savedTotal;
     }
 
     // Split: first N are primary, rest are spares for near-silent retries
@@ -513,9 +559,9 @@ void OfflineBatchRenderer::renderLoop(IPluginHostManager* hostManager)
     }
     int nextSpare = 0;
 
-    if (activeHost != nullptr)
+    if (activeHost != nullptr && activeHost != pluginHost_.get())
     {
-        MORPHSNAP_PROFILE(profiler_, "prepare_plugin");
+        MORE_PHI_PROFILE(profiler_, "prepare_plugin");
         activeHost->prepare(config_.renderConfig.sampleRate,
                             config_.renderConfig.blockSize,
                             sourceAudio.getNumChannels());
@@ -524,103 +570,251 @@ void OfflineBatchRenderer::renderLoop(IPluginHostManager* hostManager)
     const int processChannels = juce::jmax(sourceAudio.getNumChannels(), config_.renderConfig.numChannels);
     const int blockSize = juce::jmax(1, config_.renderConfig.blockSize);
 
-    AudioBufferPool::AudioBufferPtr workBufferOwner;
-    AudioBufferPool::AudioBufferPtr settleBufferOwner;
-    std::unique_ptr<AudioBufferPool> scratchPool;
+    const int numWorkers = config_.parallelWorkers;
+    if (numWorkers > 1)
+        threadPool_ = std::make_unique<ThreadPool>(static_cast<size_t>(numWorkers));
 
-    if (config_.useMemoryPool)
+    // Parallel path: Use ThreadPool to render variations concurrently.
+    // Each worker thread needs its own PluginHostManager and render buffers
+    // to avoid thread-safety issues with plugin state and IPC.
+    if (threadPool_ != nullptr)
     {
-        scratchPool = std::make_unique<AudioBufferPool>(processChannels, blockSize, config_.renderConfig.sampleRate);
-        scratchPool->preallocate(2);
-        workBufferOwner = scratchPool->acquireBuffer();
-        settleBufferOwner = scratchPool->acquireBuffer();
+        updateProgress(0, 0, 0, "Initializing parallel worker pool");
+
+        // Per-worker thread local state for plugin hosting and scratch buffers
+        struct WorkerState
+        {
+            std::unique_ptr<PluginHostManager> host;
+            AudioBufferPool::AudioBufferPtr workBuf;
+            AudioBufferPool::AudioBufferPtr settleBuf;
+            juce::AudioBuffer<float> wetBuf;
+            bool failed = false;
+        };
+
+        // Initialize worker states before starting the render loop
+        std::vector<std::unique_ptr<WorkerState>> workerStates;
+        workerStates.reserve(static_cast<size_t>(numWorkers));
+        for (int i = 0; i < numWorkers; ++i)
+            workerStates.push_back(std::make_unique<WorkerState>());
+
+        std::vector<std::future<void>> initFutures;
+        for (int i = 0; i < numWorkers; ++i)
+        {
+            initFutures.push_back(threadPool_->enqueue([&, i]() {
+                auto& state = *workerStates[static_cast<size_t>(i)];
+                state.host = std::make_unique<PluginHostManager>();
+                
+                juce::PluginDescription desc;
+                juce::String error;
+                if (activeHost != nullptr && activeHost->getLastDescription() != nullptr)
+                    desc = *activeHost->getLastDescription();
+                else if (config_.hasValidPlugin())
+                    PluginHostManager::discoverPlugin(state.host->getFormatManager(), config_.pluginFile, desc, error);
+
+                state.host->prepare(config_.renderConfig.sampleRate, config_.renderConfig.blockSize, sourceAudio.getNumChannels());
+                if (!desc.fileOrIdentifier.isEmpty())
+                    state.host->loadPlugin(desc);
+                
+                if (config_.useMemoryPool)
+                {
+                    auto pool = std::make_unique<AudioBufferPool>(processChannels, blockSize, config_.renderConfig.sampleRate);
+                    pool->preallocate(2);
+                    state.workBuf = pool->acquireBuffer();
+                    state.settleBuf = pool->acquireBuffer();
+                }
+                else
+                {
+                    state.workBuf = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
+                    state.settleBuf = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
+                }
+                
+                state.wetBuf.setSize(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
+                state.failed = !state.workBuf || !state.settleBuf;
+            }));
+        }
+
+        for (auto& f : initFutures) f.get();
+
+        updateProgress(0, 0, 0, "Rendering variations (Parallel)");
+
+        std::vector<std::future<void>> renderFutures;
+        for (int index = 0; index < config_.totalVariations; ++index)
+        {
+            renderFutures.push_back(threadPool_->enqueue([&, index]() {
+                if (shouldStop_.load()) return;
+
+                // Simple round-robin worker assignment
+                const size_t workerIdx = static_cast<size_t>(index % numWorkers);
+                auto& state = *workerStates[workerIdx];
+                if (state.failed) return;
+
+                RenderTask task;
+                task.variationIndex = index;
+                task.parameters = index < static_cast<int>(parameterVariations.size())
+                    ? parameterVariations[static_cast<size_t>(index)]
+                    : std::vector<float>{};
+                task.outputFile = generateOutputFile(index);
+
+                auto result = renderSingleVariation(task, state.host.get(), sourceAudio, state.wetBuf, *state.workBuf, *state.settleBuf);
+
+                {
+                    const juce::ScopedLock lock(progressLock_);
+                    ++progress_.completed;
+                    if (result.success) ++progress_.successfulRenders;
+                    else ++progress_.failedRenders;
+                    
+                    if (onVariationComplete) onVariationComplete(index, result);
+                }
+
+                if (onProgressUpdate)
+                {
+                    auto p = getProgress();
+                    updateProgress(p.completed, p.successfulRenders, p.failedRenders, 
+                                   "Rendered variation " + juce::String(p.completed) + " of " + juce::String(p.total));
+                    onProgressUpdate(p);
+                }
+            }));
+        }
+
+        for (auto& f : renderFutures) f.get();
+        threadPool_->shutdown();
     }
     else
     {
-        workBufferOwner = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
-        settleBufferOwner = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
-    }
+        // Fallback to sequential rendering (preserves existing logic)
+        AudioBufferPool::AudioBufferPtr workBufferOwner;
+        AudioBufferPool::AudioBufferPtr settleBufferOwner;
+        std::unique_ptr<AudioBufferPool> scratchPool;
 
-    if (!workBufferOwner || !settleBufferOwner)
-    {
-        finish(false, "Failed to allocate render buffers");
-        return;
-    }
-
-    auto& workBuf = *workBufferOwner;
-    auto& settleBuf = *settleBufferOwner;
-    juce::AudioBuffer<float> wetBuffer(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
-
-    // Copy dry source audio to output directory for ML pipeline pairing
-    {
-        auto dryOutputFile = config_.outputDirectory.getChildFile(
-            "dry_source" + config_.renderConfig.getFileExtension());
-        if (!dryOutputFile.existsAsFile())
-            renderPipeline_.writeAudioFile(dryOutputFile, sourceAudio,
-                                           config_.renderConfig.sampleRate,
-                                           config_.renderConfig.format);
-    }
-
-    updateProgress(0, 0, 0, "Rendering variations");
-
-    for (int index = 0; index < config_.totalVariations; ++index)
-    {
-        if (shouldStop_.load())
+        if (config_.useMemoryPool)
         {
-            finish(false, "Cancelled");
+            scratchPool = std::make_unique<AudioBufferPool>(processChannels, blockSize, config_.renderConfig.sampleRate);
+            scratchPool->preallocate(2);
+            workBufferOwner = scratchPool->acquireBuffer();
+            settleBufferOwner = scratchPool->acquireBuffer();
+        }
+        else
+        {
+            workBufferOwner = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
+            settleBufferOwner = std::make_unique<juce::AudioBuffer<float>>(processChannels, blockSize);
+        }
+
+        if (!workBufferOwner || !settleBufferOwner)
+        {
+            finish(false, "Failed to allocate render buffers");
             return;
         }
 
-        RenderTask task;
-        task.variationIndex = index;
-        task.parameters = index < static_cast<int>(parameterVariations.size())
-            ? parameterVariations[static_cast<size_t>(index)]
-            : std::vector<float>{};
-        task.outputFile = generateOutputFile(index);
+        auto& workBuf = *workBufferOwner;
+        auto& settleBuf = *settleBufferOwner;
+        juce::AudioBuffer<float> wetBuffer(sourceAudio.getNumChannels(), sourceAudio.getNumSamples());
 
-        MORPHSNAP_PROFILE(profiler_, "render_variation_total");
-        auto result = renderSingleVariation(task, activeHost, sourceAudio, wetBuffer, workBuf, settleBuf);
-
-        // Retry near-silent renders with spare parameter sets
-        constexpr float nearSilentThresholdDb = -40.0f;
-        constexpr int maxRetries = 3;
-        int retryCount = 0;
-        while (result.success && result.rmsDb < nearSilentThresholdDb
-               && retryCount < maxRetries && nextSpare < static_cast<int>(spareVariations.size()))
+        // Copy dry source audio to output directory for ML pipeline pairing
         {
-            task.parameters = spareVariations[static_cast<size_t>(nextSpare++)];
-            result = renderSingleVariation(task, activeHost, sourceAudio, wetBuffer, workBuf, settleBuf);
-            ++retryCount;
+            auto dryOutputFile = config_.outputDirectory.getChildFile(
+                "dry_source" + config_.renderConfig.getFileExtension());
+            if (!dryOutputFile.existsAsFile())
+                renderPipeline_.writeAudioFile(dryOutputFile, sourceAudio,
+                                               config_.renderConfig.sampleRate,
+                                               config_.renderConfig.format);
         }
 
-        int completed = 0;
-        int successful = 0;
-        int failed = 0;
+        updateProgress(0, 0, 0, "Rendering variations");
+
+        // Helper: reload the plugin when the Wine host process crashes (broken pipe).
+        auto reloadPlugin = [&]() -> IPluginHostManager*
         {
-            const juce::ScopedLock lock(progressLock_);
-            ++progress_.completed;
-            if (result.success)
-                ++progress_.successfulRenders;
-            else
-                ++progress_.failedRenders;
+            pluginHost_.reset();
+            pluginLoaded_ = false;
 
-            progress_.currentStatus = "Rendered variation " + juce::String(progress_.completed)
-                                    + " of " + juce::String(progress_.total);
-            progress_.updatePercentage();
-            completed = progress_.completed;
-            successful = progress_.successfulRenders;
-            failed = progress_.failedRenders;
+            {
+                juce::ChildProcess wineserver;
+                wineserver.start("wineserver -k");
+                wineserver.waitForProcessToFinish(3000);  // 3 second timeout
+            }
+
+            juce::Thread::sleep(2000);
+
+            pluginHost_ = std::make_unique<PluginHostManager>();
+            juce::PluginDescription description;
+            juce::String discoveryError;
+            PluginHostManager::discoverPlugin(pluginHost_->getFormatManager(), config_.pluginFile, description, discoveryError);
+
+            pluginHost_->prepare(config_.renderConfig.sampleRate,
+                                 config_.renderConfig.blockSize,
+                                 config_.renderConfig.numChannels);
+
+            pluginLoaded_ = pluginHost_->loadPlugin(description);
+            if (pluginLoaded_ && pluginHost_->hasPlugin())
+                return pluginHost_.get();
+            return nullptr;
+        };
+
+        for (int index = 0; index < config_.totalVariations; ++index)
+        {
+            if (shouldStop_.load())
+            {
+                finish(false, "Cancelled");
+                return;
+            }
+
+            RenderTask task;
+            task.variationIndex = index;
+            task.parameters = index < static_cast<int>(parameterVariations.size())
+                ? parameterVariations[static_cast<size_t>(index)]
+                : std::vector<float>{};
+            task.outputFile = generateOutputFile(index);
+
+            MORE_PHI_PROFILE(profiler_, "render_variation_total");
+            auto result = renderSingleVariation(task, activeHost, sourceAudio, wetBuffer, workBuf, settleBuf);
+
+            // Detect Wine host crash (broken pipe / connection reset) and auto-reload
+            if (!result.success
+                && (result.errorMessage.contains("Broken pipe")
+                    || result.errorMessage.contains("Connection reset")))
+            {
+                auto* reloaded = reloadPlugin();
+                if (reloaded != nullptr)
+                {
+                    activeHost = reloaded;
+                    result = renderSingleVariation(task, activeHost, sourceAudio, wetBuffer, workBuf, settleBuf);
+                }
+            }
+
+            // Retry near-silent renders with spare parameter sets
+            constexpr float nearSilentThresholdDb = -40.0f;
+            constexpr int maxRetries = 3;
+            int retryCount = 0;
+            while (result.success && result.rmsDb < nearSilentThresholdDb
+                   && retryCount < maxRetries && nextSpare < static_cast<int>(spareVariations.size()))
+            {
+                task.parameters = spareVariations[static_cast<size_t>(nextSpare++)];
+                result = renderSingleVariation(task, activeHost, sourceAudio, wetBuffer, workBuf, settleBuf);
+                ++retryCount;
+            }
+
+            {
+                const juce::ScopedLock lock(progressLock_);
+                ++progress_.completed;
+                if (result.success)
+                    ++progress_.successfulRenders;
+                else
+                    ++progress_.failedRenders;
+            }
+
+            const int completed = progress_.completed;
+            const int successful = progress_.successfulRenders;
+            const int failed = progress_.failedRenders;
+            updateProgress(completed, successful, failed,
+                           "Rendered variation " + juce::String(completed)
+                         + " of " + juce::String(config_.totalVariations));
+
+            if (onVariationComplete)
+                onVariationComplete(index, result);
+
+            if (onProgressUpdate)
+                onProgressUpdate(getProgress());
         }
-
-        updateProgress(completed, successful, failed,
-                       "Rendered variation " + juce::String(completed)
-                     + " of " + juce::String(config_.totalVariations));
-
-        if (onVariationComplete)
-            onVariationComplete(index, result);
-
-        if (onProgressUpdate)
-            onProgressUpdate(getProgress());
     }
 
     const auto finalProgress = getProgress();
@@ -655,7 +849,7 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
         {
             if (auto* plugin = hostManager->getPlugin())
             {
-                MORPHSNAP_PROFILE(profiler_, "apply_parameters");
+                MORE_PHI_PROFILE(profiler_, "apply_parameters");
                 auto& parameters = plugin->getParameters();
                 const auto parameterCount = std::min(task.parameters.size(),
                                                      static_cast<size_t>(parameters.size()));
@@ -667,14 +861,15 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
                 }
             }
 
-            MORPHSNAP_PROFILE(profiler_, "process_audio_blocks");
+            MORE_PHI_PROFILE(profiler_, "process_audio_blocks");
             juce::MidiBuffer midiBuffer;
 
-            settleBuf.clear();
-            juce::AudioBuffer<float> settleView(settleBuf.getArrayOfWritePointers(),
-                                                settleBuf.getNumChannels(),
-                                                config_.renderConfig.blockSize);
-            hostManager->processBlock(settleView, midiBuffer);
+            // Settle block: run one silent block through the plugin to flush internal state.
+            // Reuse the pooled settleBuf instead of allocating a new buffer per variation (H3).
+            {
+                settleBuf.clear();
+                hostManager->processBlock(settleBuf, midiBuffer);
+            }
 
             const int totalSamples = sourceAudio.getNumSamples();
             const int blockSize = juce::jmax(1, config_.renderConfig.blockSize);
@@ -716,14 +911,36 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
             double diffEnergy = 0.0;
             double dryEnergy = 0.0;
             const int numSamples = sourceAudio.getNumSamples();
-            const auto* dryPtr = sourceAudio.getReadPointer(0);
-            const auto* wetPtr = wetBuffer.getReadPointer(0);
-            for (int s = 0; s < numSamples; ++s)
+
+            for (int ch = 0; ch < sourceAudio.getNumChannels(); ++ch)
             {
-                const double diff = static_cast<double>(wetPtr[s]) - static_cast<double>(dryPtr[s]);
-                diffEnergy += diff * diff;
-                dryEnergy += static_cast<double>(dryPtr[s]) * static_cast<double>(dryPtr[s]);
+                const auto* dryPtr = sourceAudio.getReadPointer(ch);
+                const auto* wetPtr = wetBuffer.getReadPointer(ch);
+
+                if (config_.enableSIMD)
+                {
+                    // Use RMS^2 * samples to get energy via SIMD
+                    const float dryRMS = SIMDAudio::calculateRMS(dryPtr, static_cast<size_t>(numSamples));
+                    dryEnergy += static_cast<double>(dryRMS) * static_cast<double>(dryRMS) * numSamples;
+
+                    // For the difference, we still need a loop unless we use a temp buffer
+                    for (int s = 0; s < numSamples; ++s)
+                    {
+                        const double diff = static_cast<double>(wetPtr[s]) - static_cast<double>(dryPtr[s]);
+                        diffEnergy += diff * diff;
+                    }
+                }
+                else
+                {
+                    for (int s = 0; s < numSamples; ++s)
+                    {
+                        const double diff = static_cast<double>(wetPtr[s]) - static_cast<double>(dryPtr[s]);
+                        diffEnergy += diff * diff;
+                        dryEnergy += static_cast<double>(dryPtr[s]) * static_cast<double>(dryPtr[s]);
+                    }
+                }
             }
+
             const double diffRatio = dryEnergy > 0.0 ? diffEnergy / dryEnergy : 0.0;
 
             // If the wet/dry difference is negligible, the plugin is likely bypassed
@@ -737,17 +954,23 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
         const bool isPassthrough = result.errorMessage.contains("PASSTHROUGH");
 
         // Peak-normalize if clipping: scale wet buffer so peak = -0.3 dBFS.
-        // Applied after passthrough detection (which needs raw output) but before
-        // writing, so files are clipping-free for ML training.
         float normalizationGainDb = 0.0f;
         if (pluginProcessed && !isPassthrough)
         {
             float peak = 0.0f;
-            for (int ch = 0; ch < wetBuffer.getNumChannels(); ++ch)
+            if (config_.enableSIMD)
             {
-                const auto* data = wetBuffer.getReadPointer(ch);
-                for (int s = 0; s < wetBuffer.getNumSamples(); ++s)
-                    peak = juce::jmax(peak, std::abs(data[s]));
+                for (int ch = 0; ch < wetBuffer.getNumChannels(); ++ch)
+                    peak = std::max(peak, SIMDAudio::findPeak(wetBuffer.getReadPointer(ch), static_cast<size_t>(wetBuffer.getNumSamples())));
+            }
+            else
+            {
+                for (int ch = 0; ch < wetBuffer.getNumChannels(); ++ch)
+                {
+                    const auto* data = wetBuffer.getReadPointer(ch);
+                    for (int s = 0; s < wetBuffer.getNumSamples(); ++s)
+                        peak = juce::jmax(peak, std::abs(data[s]));
+                }
             }
 
             constexpr float targetPeak = 0.966f; // -0.3 dBFS
@@ -760,7 +983,7 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
         }
 
         {
-            MORPHSNAP_PROFILE(profiler_, "write_audio_file");
+            MORE_PHI_PROFILE(profiler_, "write_audio_file");
             const auto valid = renderPipeline_.validateAudio(wetBuffer,
                                                              config_.renderConfig,
                                                              result.peakDb,
@@ -812,10 +1035,12 @@ RenderResult OfflineBatchRenderer::renderSingleVariation(const RenderTask& task,
     catch (const std::exception& e)
     {
         result.errorMessage = juce::String("Exception during render: ") + e.what();
+        result.success = false;
     }
     catch (...)
     {
         result.errorMessage = "Unknown exception during render";
+        result.success = false;
     }
 
     result.renderTimeMs = juce::Time::getMillisecondCounterHiRes() - startMs;
@@ -834,6 +1059,56 @@ std::vector<std::vector<float>> OfflineBatchRenderer::generateParameterVariation
 
     // If safe randomization is enabled and we have a safety config, use it
     const bool useSafetyConfig = safeRandomizationEnabled_ && safetyConfig_.getRuleCount() > 0;
+
+
+    if (config_.configDirectory.exists() && config_.configDirectory.isDirectory())
+    {
+        auto jsonFiles = config_.configDirectory.findChildFiles(juce::File::findFiles, false, "*.json");
+        jsonFiles.sort(); // Sort alphabetically to maintain deterministic ordering
+
+        configFileBaseNames_.clear();
+        
+        for (const auto& file : jsonFiles)
+        {
+            try
+            {
+                nlohmann::json j = nlohmann::json::parse(file.loadFileAsString().toStdString());
+                std::vector<float> params;
+                if (j.contains("parameters") && j["parameters"].is_array())
+                {
+                    // Find max index to size the vector
+                    int maxIdx = -1;
+                    for (const auto& p : j["parameters"]) {
+                        int idx = p["index"].get<int>();
+                        if (idx > maxIdx) maxIdx = idx;
+                    }
+                    if (maxIdx >= 0) {
+                        params.resize(maxIdx + 1, 0.0f);
+                        for (const auto& p : j["parameters"]) {
+                            int idx = p["index"].get<int>();
+                            float val = p["value"].get<float>();
+                            params[idx] = val;
+                        }
+                    }
+                }
+                variations.push_back(std::move(params));
+                configFileBaseNames_.push_back(file.getFileNameWithoutExtension());
+            }
+            catch (...)
+            {
+                // ignore invalid files
+            }
+        }
+        
+        // If we found valid variations, return them. Otherwise fallback to random generation.
+        if (!variations.empty())
+        {
+            // Truncate to totalVariations if needed
+            if (variations.size() > static_cast<size_t>(config_.totalVariations))
+                variations.resize(config_.totalVariations);
+            return variations;
+        }
+    }
 
     if (plugin == nullptr)
     {
@@ -866,15 +1141,12 @@ std::vector<std::vector<float>> OfflineBatchRenderer::generateParameterVariation
     // Otherwise, trust collectMutationTargets which already has safety logic
     ParameterSafetyConfig effectiveConfig = safetyConfig_;
 
-    // Get base parameter values from plugin
-    std::vector<float> baseValues(static_cast<size_t>(numParameters), 0.0f);
-    for (int index = 0; index < numParameters; ++index)
-    {
-        if (auto* parameter = pluginParameters[index])
-            baseValues[static_cast<size_t>(index)] = parameter->getValue();
-    }
+    // Collect mutation targets AND base values in one pass through yabridge IPC
+    std::vector<float> baseValues;
+    auto mutationTargets = collectMutationTargets(plugin, &baseValues);
+    if (baseValues.size() != static_cast<size_t>(numParameters))
+        baseValues.resize(static_cast<size_t>(numParameters), 0.0f);
 
-    const auto mutationTargets = collectMutationTargets(plugin);
     if (mutationTargets.empty())
     {
         // No mutation targets - use base values with safety sanitization
@@ -1025,6 +1297,15 @@ std::vector<std::vector<float>> OfflineBatchRenderer::generateParameterVariation
 
 juce::File OfflineBatchRenderer::generateOutputFile(int variationIndex) const
 {
+    // When using --config-dir, name outputs after the source config files
+    if (variationIndex >= 0
+        && static_cast<size_t>(variationIndex) < configFileBaseNames_.size())
+    {
+        return config_.outputDirectory.getChildFile(
+            configFileBaseNames_[static_cast<size_t>(variationIndex)]
+            + config_.renderConfig.getFileExtension());
+    }
+
     const auto filename = juce::String::formatted("variation_%04d", variationIndex)
                         + config_.renderConfig.getFileExtension();
     return config_.outputDirectory.getChildFile(filename);
@@ -1061,13 +1342,88 @@ juce::AudioBuffer<float> OfflineBatchRenderer::loadSourceAudio()
     if (!reader)
         return buffer;
 
+    // H2: Reject files exceeding maxInputFileSizeMB to prevent OOM.
+    // A 2-hour 96kHz stereo file is ~2.6 GB in memory.
+    const juce::int64 fileSizeBytes = config_.inputFile.getSize();
+    const juce::int64 maxBytes = static_cast<juce::int64>(config_.maxInputFileSizeMB) * 1024 * 1024;
+    if (maxBytes > 0 && fileSizeBytes > maxBytes)
+    {
+        std::cerr << "Error: input file size (" << (fileSizeBytes / (1024 * 1024))
+                  << " MB) exceeds limit of " << config_.maxInputFileSizeMB << " MB\n";
+        return buffer;
+    }
+
+    // H3: Respect renderConfig.fullDuration to limit render length.
+    // Calculate max samples to read based on configured duration.
+    const juce::int64 maxSamplesToRead = static_cast<juce::int64>(
+        config_.renderConfig.fullDuration * reader->sampleRate
+    );
+
+    // H4: Skip silent intros - detect and seek past silent regions.
+    // Many source files (especially MUSDB18-HQ stems) have silent intros
+    // which would result in silent output when rendering from the beginning.
+    // Use threshold of 0.005 (-46dB) to properly detect meaningful audio.
+    // Lower thresholds catch noise/artifacts which aren't useful for training.
+    constexpr float kSilenceThresholdLinear = 0.005f;  // -46dB approximately
+    constexpr int kScanBlockSize = 4096;  // Scan in larger blocks for efficiency
+    constexpr int kMaxSilentSamplesToScan = 60 * 48000;  // Scan up to 60 seconds for non-silent audio
+
+    juce::int64 startSample = 0;
+
+    // Scan for first non-silent sample
+    {
+        juce::AudioBuffer<float> scanBuffer(static_cast<int>(reader->numChannels), kScanBlockSize);
+        const juce::int64 scanLimit = std::min(reader->lengthInSamples, static_cast<juce::int64>(kMaxSilentSamplesToScan));
+
+        while (startSample < scanLimit)
+        {
+            const int samplesToScan = static_cast<int>(std::min(
+                static_cast<juce::int64>(kScanBlockSize),
+                scanLimit - startSample));
+
+            scanBuffer.clear();
+            if (!reader->read(&scanBuffer, 0, samplesToScan, startSample, true, reader->numChannels > 1))
+                break;
+
+            // Check if this block has non-silent audio
+            bool hasAudio = false;
+            for (int channel = 0; channel < static_cast<int>(reader->numChannels) && !hasAudio; ++channel)
+            {
+                const float* channelData = scanBuffer.getReadPointer(channel);
+                for (int i = 0; i < samplesToScan; ++i)
+                {
+                    if (std::abs(channelData[i]) > kSilenceThresholdLinear)
+                    {
+                        hasAudio = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasAudio)
+                break;  // Found non-silent audio, start from here
+
+            startSample += samplesToScan;
+        }
+    }
+
+    // Calculate available samples from the detected start position
+    const juce::int64 availableSamples = reader->lengthInSamples - startSample;
+    const juce::int64 samplesToRead = std::min(availableSamples, maxSamplesToRead);
+
+    if (samplesToRead <= 0)
+    {
+        std::cerr << "Warning: No audio available after silent intro detection\n";
+        return buffer;
+    }
+
     buffer.setSize(static_cast<int>(reader->numChannels),
-                   static_cast<int>(reader->lengthInSamples));
+                   static_cast<int>(samplesToRead));
 
     if (!reader->read(&buffer,
                       0,
-                      static_cast<int>(reader->lengthInSamples),
-                      0,
+                      static_cast<int>(samplesToRead),
+                      startSample,
                       true,
                       reader->numChannels > 1))
     {
@@ -1077,4 +1433,4 @@ juce::AudioBuffer<float> OfflineBatchRenderer::loadSourceAudio()
     return buffer;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

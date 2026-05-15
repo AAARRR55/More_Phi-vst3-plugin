@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/PresetLibrary.h
+/* More-Phi — Preset/PresetLibrary.h
  * Full-featured V2 preset management: JSON storage, in-memory index,
  * full-text search, tagging, ratings, import/export.
  * MESSAGE THREAD ONLY — not audio-thread safe. */
@@ -10,7 +10,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 class PresetLibrary
 {
@@ -138,4 +138,4 @@ private:
     static std::string toLower(const std::string& s);
 };
 
-} // namespace morphsnap
+} // namespace more_phi

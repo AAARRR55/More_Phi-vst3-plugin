@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/MorphSnapLookAndFeel.h
+ * More-Phi — UI/MorePhiLookAndFeel.h
  * Premium dark theme derived from Stitch design system.
  * Palette: Deep navy, coral accents, purple highlights, glassmorphic surfaces.
  */
@@ -7,12 +7,12 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapLookAndFeel : public juce::LookAndFeel_V4
+class MorePhiLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    MorphSnapLookAndFeel();
+    MorePhiLookAndFeel();
 
     // ── Color Palette (Stitch-derived) ───────────────────────────────────────
     static constexpr float cornerRadius = 8.0f;
@@ -55,4 +55,4 @@ public:
     void drawLabel(juce::Graphics&, juce::Label&) override;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

@@ -20,6 +20,9 @@ public:
                                MorePhiProcessor& processor,
                                const InstanceIdentity& identity);
 
+    /** Return an MCP-compatible tools/list result object. */
+    static juce::String getToolList();
+
 private:
     static juce::String getPluginInfo(MorePhiProcessor& p);
     static juce::String listParameters(const juce::var& params, MorePhiProcessor& p);
@@ -39,6 +42,21 @@ private:
     /** Tool: apply_mastering_plan — runs ChainPlanExecutor with provided analysis inputs.
      *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
     static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
+
+    // MCP v1 workflow tools
+    static juce::String scanHostedPlugin(const juce::var& params, MorePhiProcessor& p);
+    static juce::String loadHostedPlugin(const juce::var& params, MorePhiProcessor& p);
+    static juce::String captureHostedState(const juce::var& params, MorePhiProcessor& p);
+    static juce::String getAnalysisSummary(MorePhiProcessor& p);
+    static juce::String captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p);
+    static juce::String compareAnalysis(const juce::var& params, MorePhiProcessor& p);
+    static juce::String previewMasteringPlan(const juce::var& params, MorePhiProcessor& p);
+    static juce::String renderMasteringBatch(const juce::var& params, MorePhiProcessor& p);
+    static juce::String getMasteringRenderStatus(const juce::var& params);
+    static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p);
+    static juce::String auditPluginProfile(MorePhiProcessor& p);
+    static juce::String getPluginProfile(const juce::var& params, MorePhiProcessor& p);
+    static juce::String savePluginProfile(const juce::var& params, MorePhiProcessor& p);
 
     // Multi-instance tools
     static juce::String getInstanceInfo(const InstanceIdentity& id);

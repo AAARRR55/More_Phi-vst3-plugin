@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/StepSequencer.h
+ * More-Phi — Core/StepSequencer.h
  * Clock-driven step sequencer producing a modulation signal in [-1, 1].
  *
  * noexcept guarantee: process() is noexcept because:
@@ -19,7 +19,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 class StepSequencer
 {
@@ -118,4 +118,4 @@ private:
     void advanceStep() noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

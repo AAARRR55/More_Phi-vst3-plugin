@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/HybridBlendPanel.h
+ * More-Phi — UI/HybridBlendPanel.h
  *
  * Horizontal strip panel for hybrid blend weight control.
  * Placed in the "Engine" tab of the main tabbed interface.
@@ -13,20 +13,20 @@
  * The three blend weight sliders visually indicate they sum to 1.0.
  * When any slider changes, a "D:X% S:X% G:X%" label updates in real time.
  *
- * All calls go directly to MorphSnapProcessor atomics; no APVTS binding.
+ * All calls go directly to MorePhiProcessor atomics; no APVTS binding.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class HybridBlendPanel : public juce::Component
 {
 public:
-    explicit HybridBlendPanel(MorphSnapProcessor& proc);
+    explicit HybridBlendPanel(MorePhiProcessor& proc);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -35,13 +35,15 @@ private:
     // ── Helpers ──────────────────────────────────────────────────────────────
     void setupToggleButton(juce::TextButton& btn, const juce::String& label);
     void setupVerticalSlider(juce::Slider& slider, double defaultVal);
+    void beginBlendGesture();
+    void endBlendGesture();
     void onBlendWeightChanged();
     void updateBlendLabel();
     void drawSectionLabel(juce::Graphics& g, const juce::String& text,
                           juce::Rectangle<int> bounds) const;
 
     // ── Processor reference ──────────────────────────────────────────────────
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
 
     // ── Left section: BLEND MODE ──────────────────────────────────────────────
     juce::TextButton audioDomainToggle_ { "Audio Domain" };
@@ -52,6 +54,7 @@ private:
     juce::Slider paramSlider_;      // Direct weight
     juce::Slider spectralSlider_;   // Spectral weight
     juce::Slider granularSlider_;   // Granular weight
+    bool blendGestureActive_ = false;
 
     juce::Label  paramLabel_;
     juce::Label  spectralLabel_;
@@ -66,4 +69,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HybridBlendPanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

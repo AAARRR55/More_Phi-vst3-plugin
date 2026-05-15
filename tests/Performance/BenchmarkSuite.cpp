@@ -1,9 +1,9 @@
 /*
- * MorphSnap — Performance Benchmark Suite
+ * More-Phi — Performance Benchmark Suite
  * Measures CPU usage, memory allocations, and throughput.
  *
- * Build with: cmake -DCMAKE_BUILD_TYPE=Release -DMORPHSNAP_BUILD_BENCHMARKS=ON
- * Run with: ./MorphSnap_Benchmarks
+ * Build with: cmake -DCMAKE_BUILD_TYPE=Release -DMORE_PHI_BUILD_BENCHMARKS=ON
+ * Run with: ./MorePhi_Benchmarks
  */
 #include <iostream>
 #include <chrono>
@@ -19,7 +19,7 @@
 #include "Core/SnapshotBank.h"
 #include "Core/PhysicsEngine.h"
 
-namespace morphsnap {
+namespace more_phi {
 namespace benchmark {
 
 // ── Timing Utilities ──────────────────────────────────────────────────────────
@@ -310,7 +310,7 @@ int runBenchmarks()
 {
     std::cout << "\n";
     std::cout << "╔══════════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║                        MORPHSNAP PERFORMANCE BENCHMARKS                      ║\n";
+    std::cout << "║                        MORE-PHI PERFORMANCE BENCHMARKS                      ║\n";
     std::cout << "╚══════════════════════════════════════════════════════════════════════════════╝\n\n";
 
     // Print SIMD support
@@ -370,9 +370,9 @@ int runBenchmarks()
 }
 
 } // namespace benchmark
-} // namespace morphsnap
+} // namespace more_phi
 
 int main()
 {
-    return morphsnap::benchmark::runBenchmarks();
+    return more_phi::benchmark::runBenchmarks();
 }

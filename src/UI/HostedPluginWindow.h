@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/HostedPluginWindow.h
+ * More-Phi — UI/HostedPluginWindow.h
  * DocumentWindow wrapper for displaying a hosted plugin's native editor.
  */
 #pragma once
@@ -7,7 +7,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
-namespace morphsnap {
+namespace more_phi {
 
 class HostedPluginWindow : public juce::DocumentWindow
 {
@@ -53,4 +53,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HostedPluginWindow)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

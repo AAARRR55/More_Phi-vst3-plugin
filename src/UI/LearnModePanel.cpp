@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/LearnModePanel.cpp
+ * More-Phi — UI/LearnModePanel.cpp
  * Implementation of LearnModePanel matching the header definition.
  */
 #include "LearnModePanel.h"
@@ -7,9 +7,9 @@
 #include <iomanip>
 #include <sstream>
 
-namespace morphsnap {
+namespace more_phi {
 
-LearnModePanel::LearnModePanel(MorphSnapProcessor& processor)
+LearnModePanel::LearnModePanel(MorePhiProcessor& processor)
     : processor_(processor)
 {
     // Add components
@@ -197,4 +197,4 @@ void LearnModePanel::onAnalyzeClicked()
     refresh();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

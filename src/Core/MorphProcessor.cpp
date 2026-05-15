@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/MorphProcessor.cpp
+ * More-Phi — Core/MorphProcessor.cpp
  * SIMD-optimized smoothing for real-time performance.
  */
 #include "MorphProcessor.h"
@@ -9,13 +9,13 @@
 // SIMD headers
 #if defined(__AVX2__)
     #include <immintrin.h>
-    #define MORPHSNAP_USE_AVX 1
+    #define MORE_PHI_USE_AVX 1
 #elif defined(__SSE2__) || (defined(_MSC_VER) && defined(_M_X64))
     #include <emmintrin.h>
-    #define MORPHSNAP_USE_SSE 1
+    #define MORE_PHI_USE_SSE 1
 #endif
 
-namespace morphsnap {
+namespace more_phi {
 
 MorphProcessor::MorphProcessor(SnapshotBank& bank)
     : bank_(bank)
@@ -27,7 +27,14 @@ void MorphProcessor::prepare(int maxParamCount)
     smoothedValues_.resize(static_cast<size_t>(maxParamCount), 0.0f);
     trail_.fill({0.5f, 0.5f});
     trailHead_ = 0;
+
+    // C-3 FIX: Reset all physics state so stale values from a previous
+    // sample rate / block size don't cause large initial displacement.
+    elasticState_ = ElasticState{};
+    processedX_ = 0.5f;
+    processedY_ = 0.5f;
     driftTime_ = 0.0f;
+
     prepared_ = true;
 }
 
@@ -89,7 +96,7 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
 
         case MorphMode::Elastic:
             PhysicsEngine::updateElastic(elasticState_, targetX, targetY,
-                                          elasticPreset_, dt);
+                                          static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)), dt);
             processedX_ = std::clamp(elasticState_.x, -1.0f, 1.0f);
             processedY_ = std::clamp(elasticState_.y, -1.0f, 1.0f);
             break;
@@ -97,8 +104,11 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
         case MorphMode::Drift:
             driftTime_ += dt;
             PhysicsEngine::updateDrift(processedX_, processedY_,
-                                        driftTime_, driftSpeed_, driftDistance_,
-                                        driftChaos_, driftMode_,
+                                        driftTime_,
+                                        driftSpeed_.load(std::memory_order_relaxed),
+                                        driftDistance_.load(std::memory_order_relaxed),
+                                        driftChaos_.load(std::memory_order_relaxed),
+                                        static_cast<DriftMode>(driftMode_.load(std::memory_order_relaxed)),
                                         targetX, targetY, 0.5f);
             processedX_ = std::clamp(processedX_, -1.0f, 1.0f);
             processedY_ = std::clamp(processedY_, -1.0f, 1.0f);
@@ -111,10 +121,10 @@ void MorphProcessor::applySmoothing(std::vector<float>& output)
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());
 
-    const float rate = smoothRate_;
+    const float rate = smoothRate_.load(std::memory_order_relaxed);
     const float oneMinusRate = 1.0f - rate;
 
-#if defined(MORPHSNAP_USE_AVX)
+#if defined(MORE_PHI_USE_AVX)
     // AVX2 SIMD path - 8 floats at once
     __m256 rateVec = _mm256_set1_ps(rate);
     __m256 oneMinusRateVec = _mm256_set1_ps(oneMinusRate);
@@ -142,7 +152,7 @@ void MorphProcessor::applySmoothing(std::vector<float>& output)
         output[i] = smoothedValues_[i];
     }
 
-#elif defined(MORPHSNAP_USE_SSE)
+#elif defined(MORE_PHI_USE_SSE)
     // SSE2 SIMD path - 4 floats at once
     __m128 rateVec = _mm_set1_ps(rate);
     __m128 oneMinusRateVec = _mm_set1_ps(oneMinusRate);
@@ -181,9 +191,11 @@ void MorphProcessor::applySmoothing(std::vector<float>& output)
 
 void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
 {
-    if (!listenMode_) return;
+    if (!listenMode_.load(std::memory_order_relaxed)) return;
 
-    auto discreteMap = discreteMapSnapshot_.load(std::memory_order_acquire);
+    // ATS-H2: Double-buffer read — truly lock-free, no ref-count contention
+    auto idx = discreteActiveIndex_.load(std::memory_order_acquire);
+    auto* discreteMap = discreteBuffers_[idx].get();
     if (!discreteMap || discreteMap->empty()) return;
 
     const size_t count = std::min(output.size(), discreteMap->size());
@@ -194,4 +206,4 @@ void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

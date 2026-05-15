@@ -1,5 +1,5 @@
 /*
- * MorphSnap — UI/PluginBrowserPanel.h
+ * More-Phi — UI/PluginBrowserPanel.h
  * Top bar: Load plugin, show plugin editor, snapshot capture/recall buttons.
  */
 #pragma once
@@ -10,9 +10,9 @@
 #include "HostedPluginWindow.h"
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class PluginBrowserPanel : public juce::Component,
                            private juce::Button::Listener,
@@ -20,7 +20,7 @@ class PluginBrowserPanel : public juce::Component,
                            private juce::Timer
 {
 public:
-    explicit PluginBrowserPanel(MorphSnapProcessor& proc);
+    explicit PluginBrowserPanel(MorePhiProcessor& proc);
     ~PluginBrowserPanel() override;
 
     void resized() override;
@@ -37,7 +37,7 @@ private:
     void closePluginEditor();
     void captureToNextSlot();
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     PluginHostManager& host_;
 
     juce::TextButton loadBtn_{"Load Plugin..."};
@@ -50,4 +50,4 @@ private:
     juce::String lastKnownPluginName_;  // tracks last label state to avoid redundant updates
 };
 
-} // namespace morphsnap
+} // namespace more_phi

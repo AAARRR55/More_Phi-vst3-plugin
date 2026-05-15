@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests: V2 Integration Pipeline
+ * More-Phi — Unit Tests: V2 Integration Pipeline
  *
  * Catch2 v3 test suite for V2 audio domain pipeline integration.
  *
@@ -41,8 +41,8 @@
 
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
-using namespace morphsnap;
-using namespace morphsnap::test;
+using namespace more_phi;
+using namespace more_phi::test;
 
 // =============================================================================
 //  Helpers

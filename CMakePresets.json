@@ -15,11 +15,11 @@
       "cacheVariables": {
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "MORPHSNAP_BUILD_TESTS": "ON",
-        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF",
-        "MORPHSNAP_SAFE_BUILD_MODE": "ON",
-        "MORPHSNAP_MSVC_MP": "2",
-        "MORPHSNAP_ENABLE_LTO": "OFF"
+        "MORE_PHI_BUILD_TESTS": "ON",
+        "MORE_PHI_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORE_PHI_SAFE_BUILD_MODE": "ON",
+        "MORE_PHI_MSVC_MP": "2",
+        "MORE_PHI_ENABLE_LTO": "OFF"
       }
     },
     {
@@ -36,10 +36,14 @@
         "value": "x64",
         "strategy": "set"
       },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "set"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
-        "MORPHSNAP_ENABLE_SANITIZERS": "OFF"
+        "MORE_PHI_ENABLE_SANITIZERS": "OFF"
       }
     },
     {
@@ -56,6 +60,10 @@
         "value": "x64",
         "strategy": "set"
       },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "set"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDebug"
@@ -66,10 +74,54 @@
       "displayName": "Windows x64 MSVC Safe Local Build",
       "inherits": "windows-msvc-release",
       "cacheVariables": {
-        "MORPHSNAP_BUILD_TESTS": "OFF",
-        "MORPHSNAP_SAFE_BUILD_MODE": "ON",
-        "MORPHSNAP_MSVC_MP": "2",
-        "MORPHSNAP_ENABLE_LTO": "OFF"
+        "MORE_PHI_BUILD_TESTS": "OFF",
+        "MORE_PHI_SAFE_BUILD_MODE": "ON",
+        "MORE_PHI_MSVC_MP": "2",
+        "MORE_PHI_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "windows-ninja-vs2026-safe",
+      "displayName": "Windows x64 MSVC 2026 Ninja Safe Local Build",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-ninja-vs2026-safe",
+      "installDir": "${sourceDir}/install/windows-ninja-vs2026-safe",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "MORE_PHI_BUILD_TESTS": "OFF",
+        "MORE_PHI_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORE_PHI_SAFE_BUILD_MODE": "ON",
+        "MORE_PHI_MSVC_MP": "2",
+        "MORE_PHI_ENABLE_LTO": "OFF",
+        "MORE_PHI_ENABLE_SANITIZERS": "OFF"
+      }
+    },
+    {
+      "name": "windows-nmake-release",
+      "displayName": "Windows x64 MSVC Release (Developer Prompt / NMake)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "NMake Makefiles",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "MORE_PHI_BUILD_TESTS": "ON",
+        "MORE_PHI_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORE_PHI_SAFE_BUILD_MODE": "ON",
+        "MORE_PHI_MSVC_MP": "1",
+        "MORE_PHI_ENABLE_LTO": "OFF",
+        "MORE_PHI_ENABLE_SANITIZERS": "OFF"
       }
     },
     {
@@ -77,10 +129,10 @@
       "displayName": "Windows x64 MSVC Stress Build",
       "inherits": "windows-msvc-release",
       "cacheVariables": {
-        "MORPHSNAP_BUILD_TESTS": "ON",
-        "MORPHSNAP_SAFE_BUILD_MODE": "OFF",
-        "MORPHSNAP_MSVC_MP": "2",
-        "MORPHSNAP_ENABLE_LTO": "OFF"
+        "MORE_PHI_BUILD_TESTS": "ON",
+        "MORE_PHI_SAFE_BUILD_MODE": "OFF",
+        "MORE_PHI_MSVC_MP": "2",
+        "MORE_PHI_ENABLE_LTO": "OFF"
       }
     },
     {
@@ -97,7 +149,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang-cl",
         "CMAKE_C_COMPILER": "clang-cl",
-        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+        "MORE_PHI_ENABLE_SANITIZERS": "ON"
       }
     },
     {
@@ -128,7 +180,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
-        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+        "MORE_PHI_ENABLE_SANITIZERS": "ON"
       }
     },
     {
@@ -144,7 +196,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_OSX_ARCHITECTURES": "x86_64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0",
-        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+        "MORE_PHI_ENABLE_SANITIZERS": "ON"
       }
     },
     {
@@ -175,7 +227,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_C_COMPILER": "clang",
-        "MORPHSNAP_ENABLE_SANITIZERS": "ON"
+        "MORE_PHI_ENABLE_SANITIZERS": "ON"
       }
     },
     {
@@ -183,10 +235,10 @@
       "displayName": "CI: Windows (no GUI, tests only)",
       "inherits": "windows-msvc-release",
       "cacheVariables": {
-        "MORPHSNAP_BUILD_TESTS": "ON",
-        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF",
-        "MORPHSNAP_SAFE_BUILD_MODE": "OFF",
-        "MORPHSNAP_ENABLE_LTO": "ON"
+        "MORE_PHI_BUILD_TESTS": "ON",
+        "MORE_PHI_COPY_PLUGIN_AFTER_BUILD": "OFF",
+        "MORE_PHI_SAFE_BUILD_MODE": "OFF",
+        "MORE_PHI_ENABLE_LTO": "ON"
       }
     },
     {
@@ -194,8 +246,8 @@
       "displayName": "CI: macOS Universal (tests only)",
       "inherits": "macos-universal-release",
       "cacheVariables": {
-        "MORPHSNAP_BUILD_TESTS": "ON",
-        "MORPHSNAP_COPY_PLUGIN_AFTER_BUILD": "OFF"
+        "MORE_PHI_BUILD_TESTS": "ON",
+        "MORE_PHI_COPY_PLUGIN_AFTER_BUILD": "OFF"
       }
     }
   ],
@@ -213,10 +265,25 @@
       "jobs": 1
     },
     {
+      "name": "windows-vs2026-safe",
+      "configurePreset": "windows-ninja-vs2026-safe",
+      "jobs": 2
+    },
+    {
+      "name": "windows-vs2026-single",
+      "configurePreset": "windows-ninja-vs2026-safe",
+      "jobs": 1
+    },
+    {
       "name": "windows-stress-test",
       "configurePreset": "windows-msvc-stress",
       "configuration": "Release",
       "jobs": 4
+    },
+    {
+      "name": "windows-nmake-single",
+      "configurePreset": "windows-nmake-release",
+      "jobs": 1
     },
     {
       "name": "windows-release",
@@ -267,6 +334,18 @@
       "execution": {
         "jobs": 4,
         "timeout": 120
+      }
+    },
+    {
+      "name": "windows-nmake-tests",
+      "configurePreset": "windows-nmake-release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "jobs": 1,
+        "timeout": 180
       }
     },
     {

@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/ModulationMatrix.cpp
+ * More-Phi — Core/ModulationMatrix.cpp
  * Route-based modulation matrix: source values → parameter delta accumulation.
  *
  * apply() inner loop:
@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ void ModulationMatrix::fromXml(const juce::XmlElement& xml)
 
     RouteBuffer& buf = buffers_[writeIndex_];
 
-    forEachXmlChildElementWithTagName(xml, routeEl, "Route")
+    for (auto* routeEl : xml.getChildWithTagNameIterator("Route"))
     {
         const int id   = routeEl->getIntAttribute("id", -1);
         const int src  = routeEl->getIntAttribute("source", 0);
@@ -225,4 +225,4 @@ void ModulationMatrix::fromXml(const juce::XmlElement& xml)
     publishAndMirror();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

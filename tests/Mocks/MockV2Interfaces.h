@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Tests/Mocks/MockV2Interfaces.h
+ * More-Phi — Tests/Mocks/MockV2Interfaces.h
  * Mock and stub implementations for V2 subsystem testing.
  *
  * These mocks are self-contained and do not depend on any V2 source files
@@ -23,7 +23,7 @@
 #include <string>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 namespace test {
 
 // ---------------------------------------------------------------------------
@@ -541,4 +541,4 @@ struct PresetSearchQuery
 };
 
 } // namespace test
-} // namespace morphsnap
+} // namespace more_phi

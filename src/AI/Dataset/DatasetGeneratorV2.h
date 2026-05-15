@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/DatasetGeneratorV2.h
+ * More-Phi — AI/Dataset/DatasetGeneratorV2.h
  * Comprehensive synthetic audio dataset generator with ground-truth DSP parameters.
  * Integrates all dataset modules for end-to-end generation pipeline.
  */
@@ -23,7 +23,7 @@
 #include <mutex>
 #include <thread>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Configuration for the complete dataset generation pipeline.
@@ -32,7 +32,7 @@ struct DatasetGeneratorConfig
 {
     // Output settings
     juce::File outputDirectory;
-    juce::String datasetName = "morphsnap_dataset";
+    juce::String datasetName = "morephi_dataset";
 
     // Generation settings
     int totalSamples = 1000;
@@ -247,4 +247,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DatasetGeneratorV2)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

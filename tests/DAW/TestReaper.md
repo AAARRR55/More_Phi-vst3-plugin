@@ -1,4 +1,4 @@
-# MorphSnap - Reaper Test Plan
+# More-Phi - Reaper Test Plan
 
 **DAW:** Reaper
 **Versions Tested:** 6.x, 7.x
@@ -10,7 +10,7 @@
 ## Prerequisites
 
 1. Reaper 6.0 or later installed
-2. MorphSnap.vst3 installed in VST3 path
+2. MorePhi.vst3 installed in VST3 path
 3. At least one third-party plugin for hosting tests
 4. Audio device configured (ASIO/JACK/Core Audio)
 
@@ -41,7 +41,7 @@
 1. Open Reaper
 2. Options > Preferences > VST
 3. Clear cache and re-scan
-4. Verify MorphSnap found
+4. Verify More-Phi found
 
 **Expected Result:**
 - Plugin appears in scan results
@@ -58,11 +58,11 @@
 **Steps:**
 1. Create new track
 2. Click FX button
-3. Add MorphSnap
+3. Add More-Phi
 4. Verify UI opens
 
 **Expected Result:**
-- FX window shows MorphSnap
+- FX window shows More-Phi
 - UI renders correctly
 - No crashes
 
@@ -74,7 +74,7 @@
 
 **Priority:** P0 - Critical
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Load hosted plugin
 3. Create MIDI item
 4. Play notes
@@ -92,7 +92,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Show track envelopes
 3. Select morphX
 4. Draw automation
@@ -111,7 +111,7 @@
 
 **Priority:** P1 - High
 **Steps:**
-1. Create project with MorphSnap
+1. Create project with More-Phi
 2. Configure snapshots
 3. Save project (.rpp)
 4. Close Reaper
@@ -131,7 +131,7 @@
 **Priority:** P2 - Medium (Linux only)
 **Steps:**
 1. On Linux system with Reaper
-2. Install MorphSnap via Wine or natively
+2. Install More-Phi via Wine or natively
 3. Load plugin
 4. Test basic functionality
 
@@ -148,8 +148,8 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap to track 1
-2. Add MorphSnap to track 2
+1. Add More-Phi to track 1
+2. Add More-Phi to track 2
 3. Load different hosted plugins
 4. Process simultaneously
 
@@ -166,7 +166,7 @@
 
 **Priority:** P2 - Medium
 **Steps:**
-1. Add MorphSnap
+1. Add More-Phi
 2. Verify MCP starts
 3. Connect client
 4. Test commands

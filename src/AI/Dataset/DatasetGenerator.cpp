@@ -4,7 +4,7 @@
 #include <fstream>
 #include <iomanip>
 
-namespace morphsnap {
+namespace more_phi {
 
 DatasetGenerator::DatasetGenerator(IPluginHostManager& hostManager)
     : hostManager_(hostManager)
@@ -99,9 +99,9 @@ bool DatasetGenerator::generate(const GenerationConfig& config, const juce::File
     return true;
 }
 
-bool DatasetGenerator::renderSingleState(int index, 
-                                        const GenerationConfig& config, 
-                                        const std::vector<float>& parameters,
+bool DatasetGenerator::renderSingleState(int /*index*/,
+                                        const GenerationConfig& config,
+                                        const std::vector<float>& /*parameters*/,
                                         const juce::File& inputFile,
                                         juce::AudioFormatWriter* writer,
                                         juce::AudioBuffer<float>& outBuffer)
@@ -208,4 +208,4 @@ std::vector<float> DatasetGenerator::generateRandomParameters(int count, const G
     return params;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

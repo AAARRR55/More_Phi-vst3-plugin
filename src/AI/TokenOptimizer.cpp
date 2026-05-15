@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/TokenOptimizer.cpp
+ * More-Phi — AI/TokenOptimizer.cpp
  * Token optimization and cost management implementation.
  */
 #include "TokenOptimizer.h"
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 TokenOptimizer::TokenOptimizer()
 {
@@ -413,14 +413,14 @@ void TokenOptimizer::setRateLimit(uint32_t maxRequestsPerMinute)
 bool TokenOptimizer::canMakeRequest() const
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
-    cleanupOldTimestamps();
+    cleanupOldTimestampsLocked();
     return requestTimestamps_.size() < rateLimit_.load();
 }
 
 bool TokenOptimizer::tryConsumeRequestSlot()
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
-    cleanupOldTimestamps();
+    cleanupOldTimestampsLocked();
     if (requestTimestamps_.size() >= rateLimit_.load())
         return false;
     requestTimestamps_.push_back(std::chrono::steady_clock::now());
@@ -430,14 +430,14 @@ bool TokenOptimizer::tryConsumeRequestSlot()
 void TokenOptimizer::recordRequestTimestamp()
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
-    cleanupOldTimestamps();
+    cleanupOldTimestampsLocked();
     requestTimestamps_.push_back(std::chrono::steady_clock::now());
 }
 
 float TokenOptimizer::getTimeUntilNextRequest() const
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
-    cleanupOldTimestamps();
+    cleanupOldTimestampsLocked();
     
     if (requestTimestamps_.size() < rateLimit_.load())
     {
@@ -457,7 +457,7 @@ std::string TokenOptimizer::generateUsageReport() const
     const TokenBudget budget = getTokenBudget();
     
     std::ostringstream report;
-    report << "=== MorphSnap AI Usage Report ===\n\n";
+    report << "=== MorePhi AI Usage Report ===\n\n";
     
     report << "Session Duration: ";
     auto now = std::chrono::steady_clock::now();
@@ -622,15 +622,22 @@ void TokenOptimizer::updateStats(const TokenUsage& usage)
     sessionStats_.totalCostUsd += usage.estimatedCostUsd;
 }
 
-void TokenOptimizer::cleanupOldTimestamps() const
+void TokenOptimizer::cleanupOldTimestampsLocked() const
 {
+    // Caller must hold rateMutex_; only touches mutable members
     auto now = std::chrono::steady_clock::now();
     auto cutoff = now - std::chrono::minutes(1);
-    
+
     while (!requestTimestamps_.empty() && requestTimestamps_.front() < cutoff)
     {
         requestTimestamps_.pop_front();
     }
+}
+
+void TokenOptimizer::cleanupOldTimestamps()
+{
+    std::lock_guard<std::mutex> lock(rateMutex_);
+    cleanupOldTimestampsLocked();
 }
 
 
@@ -709,4 +716,4 @@ std::string TokenOptimizerUI::getOptimizationExplanation(const TokenOptimizer::E
     return explanation.str();
 }
 
-} // namespace morphsnap
+} // namespace more_phi

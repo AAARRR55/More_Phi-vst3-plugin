@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/FormantMorphEngine.cpp
+ * More-Phi — Core/FormantMorphEngine.cpp
  *
  * Cepstral-liftering formant preservation engine implementation.
  *
@@ -42,7 +42,7 @@
 #include <algorithm>
 #include <cassert>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -322,10 +322,13 @@ void FormantMorphEngine::extractFormantEnvelope(const float* real, const float* 
     fft_->performRealOnlyForwardTransform(scratch, true);
 
     // ── Step 5: exp() → linear spectral envelope ─────────────────────────────
+    // M-20 FIX: Flush denormals after exp() — log-space values near zero produce
+    // subnormal outputs that cause FPU performance penalties on some architectures.
     for (int k = 0; k < numBins_; ++k)
     {
         // Real part of forward FFT gives us the log envelope (imaginary ≈ 0)
-        envelope[k] = std::exp(scratch[static_cast<size_t>(k * 2)]);
+        float val = std::exp(scratch[static_cast<size_t>(k * 2)]);
+        envelope[k] = (std::abs(val) < 1e-10f) ? 0.0f : val;
     }
 }
 
@@ -405,4 +408,4 @@ void FormantMorphEngine::inverseFFT(const float* real, const float* imag,
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

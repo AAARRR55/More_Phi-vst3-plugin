@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/MorphProcessor.h
+ * More-Phi — Core/MorphProcessor.h
  * Orchestrates morph computation: physics → interpolation → smoothing.
  * All methods are audio-thread safe (no allocations after prepare()).
  *
@@ -16,7 +16,7 @@
 #include <atomic>
 #include <memory>
 
-namespace morphsnap {
+namespace more_phi {
 
 enum class MorphMode   { Direct = 0, Elastic = 1, Drift = 2 };
 enum class MorphSource { XYPad = 0, Fader = 1 };
@@ -37,26 +37,30 @@ public:
                  MorphSource source, MorphMode mode,
                  float dt, std::vector<float>& output) noexcept;
 
-    // Physics tuning
-    void setElasticPreset(ElasticPreset p) { elasticPreset_ = p; }
-    void setDriftSpeed(float s)    { driftSpeed_ = s; }
-    void setDriftDistance(float d)  { driftDistance_ = d; }
-    void setDriftChaos(float c)    { driftChaos_ = c; }
-    void setDriftMode(DriftMode m) { driftMode_ = m; }
-    void setSmoothingRate(float r) { smoothRate_ = r; }  // 0=instant, 0.999=very slow
+    // Physics tuning (ATS-M7+M8: all atomics for cross-thread safety)
+    void setElasticPreset(ElasticPreset p) { elasticPreset_.store(static_cast<int>(p), std::memory_order_relaxed); }
+    void setDriftSpeed(float s)    { driftSpeed_.store(s, std::memory_order_relaxed); }
+    void setDriftDistance(float d)  { driftDistance_.store(d, std::memory_order_relaxed); }
+    void setDriftChaos(float c)    { driftChaos_.store(c, std::memory_order_relaxed); }
+    void setDriftMode(DriftMode m) { driftMode_.store(static_cast<int>(m), std::memory_order_relaxed); }
+    void setSmoothingRate(float r) { smoothRate_.store(r, std::memory_order_relaxed); }
 
     // Listen Mode: when enabled, discrete parameters are excluded from morph output
-    void setListenMode(bool enabled) { listenMode_ = enabled; }
-    bool getListenMode() const { return listenMode_; }
+    void setListenMode(bool enabled) { listenMode_.store(enabled, std::memory_order_relaxed); }
+    bool getListenMode() const { return listenMode_.load(std::memory_order_relaxed); }
 
+    // ATS-H2: Double-buffer pattern — truly lock-free (no shared_ptr ref-count contention)
     void setDiscreteMap(const std::vector<bool>& map)
     {
-        auto snapshot = std::make_shared<DiscreteMask>();
-        snapshot->reserve(map.size());
-        for (bool value : map)
-            snapshot->push_back(value ? 1u : 0u);
-        discreteMapSnapshot_.store(std::static_pointer_cast<const DiscreteMask>(snapshot),
-                                   std::memory_order_release);
+        int current = discreteActiveIndex_.load(std::memory_order_acquire);
+        int next = 1 - current;
+        if (!discreteBuffers_[next])
+            discreteBuffers_[next] = std::make_unique<DiscreteMask>();
+        auto& buf = *discreteBuffers_[next];
+        buf.resize(map.size());
+        for (size_t i = 0; i < map.size(); ++i)
+            buf[i] = map[i] ? 1u : 0u;
+        discreteActiveIndex_.store(next, std::memory_order_release);
     }
     void setDiscreteMap(std::vector<bool>&& map)
     {
@@ -82,13 +86,13 @@ private:
 
     SnapshotBank& bank_;
 
-    // Physics state
+    // Physics state (ATS-M7+M8: enum/float params now atomic for thread safety)
     ElasticState elasticState_;
-    ElasticPreset elasticPreset_ = ElasticPreset::Medium;
-    DriftMode driftMode_ = DriftMode::Free;
-    float driftSpeed_    = 0.3f;
-    float driftDistance_  = 0.4f;
-    float driftChaos_    = 0.5f;
+    std::atomic<int> elasticPreset_{static_cast<int>(ElasticPreset::Medium)};
+    std::atomic<int> driftMode_{static_cast<int>(DriftMode::Free)};
+    std::atomic<float> driftSpeed_{0.3f};
+    std::atomic<float> driftDistance_{0.4f};
+    std::atomic<float> driftChaos_{0.5f};
     float driftTime_     = 0.0f;
 
     // Processed position (after physics)
@@ -96,7 +100,7 @@ private:
     float processedY_ = 0.5f;
 
     // Smoothing
-    float smoothRate_ = 0.95f;
+    std::atomic<float> smoothRate_{0.95f};
     std::vector<float> smoothedValues_;
 
     // Trail
@@ -108,10 +112,12 @@ private:
     bool prepared_ = false;
 
     // Listen Mode
-    bool listenMode_ = false;
+    std::atomic<bool> listenMode_{false};
+    // ATS-H2: Double-buffer for truly lock-free discrete map reads on audio thread
     using DiscreteMask = std::vector<uint8_t>;
-    std::atomic<std::shared_ptr<const DiscreteMask>> discreteMapSnapshot_{};
+    std::array<std::unique_ptr<DiscreteMask>, 2> discreteBuffers_{};
+    std::atomic<int> discreteActiveIndex_{0};
     void applyListenFilter(std::vector<float>& output) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

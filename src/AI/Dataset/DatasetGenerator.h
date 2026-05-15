@@ -1,7 +1,7 @@
 /*
- * MorphSnap — AI/Dataset/DatasetGenerator.h
+ * More-Phi — AI/Dataset/DatasetGenerator.h
  * Generates datasets by rendering audio with various plugin parameter states.
- * Connects MorphSnap's hosting capabilities with a batch rendering engine.
+ * Connects MorePhi's hosting capabilities with a batch rendering engine.
  */
 #pragma once
 
@@ -15,7 +15,7 @@
 #include <vector>
 #include <functional>
 
-namespace morphsnap {
+namespace more_phi {
 
 struct GenerationConfig
 {
@@ -59,4 +59,4 @@ private:
     juce::AudioFormatManager formatManager_;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

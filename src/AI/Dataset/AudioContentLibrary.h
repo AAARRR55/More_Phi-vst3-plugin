@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/AudioContentLibrary.h
+ * More-Phi — AI/Dataset/AudioContentLibrary.h
  * Source audio library management for synthetic audio dataset generation.
  * Handles diverse audio content taxonomy, characteristic extraction,
  * and augmentation pipelines.
@@ -14,7 +14,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Forward declaration for use in SourceAudio::toJson()
 class AudioContentLibrary;
@@ -383,4 +383,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioContentLibrary)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

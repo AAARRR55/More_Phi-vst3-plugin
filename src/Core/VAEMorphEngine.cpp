@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/VAEMorphEngine.cpp
+ * More-Phi — Core/VAEMorphEngine.cpp
  *
  * Variational Autoencoder morph engine — message thread only.
  *
@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
 
@@ -66,6 +66,11 @@ bool VAEMorphEngine::loadModel(const juce::File& onnxFile)
     //           .GetTensorTypeAndShapeInfo().GetShape().back());
     //
     // For MVP, stub out with a fixed latent dimension of 16.
+    //
+    // NOTE: This returns true to indicate the file was accepted, but callers
+    // MUST check getBackendMode() == BackendMode::ONNX before relying on
+    // actual neural-network inference.  When BackendMode is Stub, the engine
+    // performs only deterministic linear interpolation in latent space.
     latentDims_  = 16;
     modelLoaded_ = true;
     backendMode_ = BackendMode::Stub;
@@ -127,6 +132,8 @@ std::vector<float> VAEMorphEngine::encode(const std::vector<float>& parameterSna
     //   return std::vector<float>(latentData, latentData + latentDims_);
 
     // MVP stub: return a zero latent vector of the correct dimensionality.
+    // M-5 FIX: Alert developers that encode is called without ONNX runtime.
+    jassertfalse;  // encode() called without ONNX runtime — using zero-latent stub
     return std::vector<float>(static_cast<size_t>(latentDims_), 0.0f);
 }
 
@@ -139,6 +146,8 @@ std::vector<float> VAEMorphEngine::decode(const std::vector<float>& latentVector
     //   Pass latentVector as input tensor, receive parameter snapshot output.
 
     // MVP stub: return an empty vector (caller falls back to parameter-space morph).
+    // M-5 FIX: Alert developers that decode is called without ONNX runtime.
+    jassertfalse;  // decode() called without ONNX runtime — returning empty
     return {};
 }
 
@@ -216,23 +225,16 @@ std::vector<float> VAEMorphEngine::padPositionToLatent(float x, float y) const
 
     // MVP stub: return the latent vector of the nearest stored map point
     // using Euclidean distance in 2D pad space.
-    size_t nearestIdx  = 0;
-    float  nearestDist = std::numeric_limits<float>::max();
+    auto nearestIt = std::min_element(latentMap_.begin(), latentMap_.end(),
+        [x, y](const LatentMapping& a, const LatentMapping& b) {
+            const float dxA = a.padX - x;
+            const float dyA = a.padY - y;
+            const float dxB = b.padX - x;
+            const float dyB = b.padY - y;
+            return (dxA * dxA + dyA * dyA) < (dxB * dxB + dyB * dyB);
+        });
 
-    for (size_t i = 0; i < latentMap_.size(); ++i)
-    {
-        const float dx = latentMap_[i].padX - x;
-        const float dy = latentMap_[i].padY - y;
-        const float dist = dx * dx + dy * dy;  // squared distance (no sqrt needed)
-
-        if (dist < nearestDist)
-        {
-            nearestDist = dist;
-            nearestIdx  = i;
-        }
-    }
-
-    return latentMap_[nearestIdx].latent;
+    return nearestIt->latent;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

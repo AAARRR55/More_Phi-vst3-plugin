@@ -7,7 +7,7 @@
 #include <queue>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Priority levels for pipeline tasks.
@@ -160,4 +160,4 @@ private:
     std::atomic<bool> shutdown_{false};
 };
 
-} // namespace morphsnap
+} // namespace more_phi

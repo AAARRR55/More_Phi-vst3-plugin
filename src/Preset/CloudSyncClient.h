@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/CloudSyncClient.h
+/* More-Phi — Preset/CloudSyncClient.h
  * Cloud sync client — stub implementation for V2.
  * Real HTTP implementation will be added in a future release.
  * This establishes the API contract so the rest of the system can be built.
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 class CloudSyncClient
 {
@@ -33,7 +33,7 @@ public:
 
     // ── Configuration ────────────────────────────────────────────────────────
 
-    /** Set the base URL of the sync endpoint, e.g. "https://api.morphsnap.io/v2". */
+    /** Set the base URL of the sync endpoint, e.g. "https://api.morephi.io/v2". */
     void setEndpoint(const std::string& url);
 
     /** Set the API key used to authenticate requests. */
@@ -78,4 +78,4 @@ private:
     SyncStatus  status_ = SyncStatus::NotConfigured;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

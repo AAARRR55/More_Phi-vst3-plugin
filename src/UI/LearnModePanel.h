@@ -1,20 +1,20 @@
 /*
- * MorphSnap — UI/LearnModePanel.h
+ * More-Phi — UI/LearnModePanel.h
  * Status panel for Learn Mode, token usage, and parameter exposure.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class LearnModePanel : public juce::Component,
                        private juce::Timer
 {
 public:
-    explicit LearnModePanel(MorphSnapProcessor& processor);
+    explicit LearnModePanel(MorePhiProcessor& processor);
     ~LearnModePanel() override;
 
     void paint(juce::Graphics& g) override;
@@ -29,7 +29,7 @@ private:
     void updateLearnModeDisplay();
     void updateCompatibilityDisplay();
 
-    MorphSnapProcessor& processor_;
+    MorePhiProcessor& processor_;
 
     // Token usage labels
     juce::Label tokenUsageLabel_{"Token Usage", "Token Usage"};
@@ -57,4 +57,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LearnModePanel)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

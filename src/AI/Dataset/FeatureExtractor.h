@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/FeatureExtractor.h
+ * More-Phi — AI/Dataset/FeatureExtractor.h
  * Audio feature extraction for synthetic dataset generation.
  * Provides spectral, temporal, and perceptual feature extraction
  * using JUCE DSP primitives for FFT and filtering.
@@ -13,7 +13,7 @@
 #include <vector>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Spectral features extracted from frequency domain analysis */
 struct SpectralFeatures
@@ -74,13 +74,23 @@ struct ExtractionConfig
     bool computeFrameLevel = true;      ///< Compute per-frame features
     bool computeMFCC = true;
     bool computeChroma = true;
-    int mfccCoefficients = 13;
+    int mfccCoefficients = 13;  ///< NOTE: Currently ignored - computeMFCC() returns fixed std::array<float, 13>
     float lufsIntegrationTime = 0.4f;   ///< Seconds for LUFS gating
+};
+
+/** Configuration for spectrogram generation */
+struct SpectrogramConfig
+{
+    bool generateLinear = true;        ///< Generate linear frequency spectrograms
+    bool generateMel = true;           ///< Generate mel-scale spectrograms
+    int melBands = 80;                 ///< Number of mel frequency bands
+    bool enableOutput = true;          ///< Enable .npy file output
 };
 
 /**
  * Audio feature extractor supporting spectral, temporal, and perceptual analysis.
- * Thread-safe for read operations. FFT-based features use JUCE's DSP module.
+ * Not thread-safe: extract() mutates internal buffers (fftBuffer_, magnitudeBuffer_, etc.).
+ * Use separate instances for concurrent processing. FFT-based features use JUCE's DSP module.
  */
 class FeatureExtractor
 {
@@ -165,14 +175,15 @@ public:
 
     /**
      * Export features as flat vector (NumPy-compatible).
-     * Order: spectral (19), temporal (6), perceptual (6) = 31 floats
+     * Order: spectral (30: 13 MFCC + 5 scalars + 12 chroma), temporal (6), perceptual (6) = 42 floats
      */
     std::vector<float> toVector(const AudioFeatures& features) const;
 
     /**
      * Get total number of scalar features (for vector dimension).
+     * Note: SpectralFeatures contains 30 floats (mfcc[13] + 5 scalars + chroma[12])
      */
-    static constexpr int getFeatureDimension() { return 31; }
+    static constexpr int getFeatureDimension() { return 42; }
 
 private:
     // FFT processing
@@ -216,4 +227,4 @@ private:
     double currentLufsSampleRate_ = 0.0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

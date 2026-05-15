@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/EnvelopeFollower.cpp
+ * More-Phi — Core/EnvelopeFollower.cpp
  * One-pole RMS envelope follower implementation.
  *
  * Algorithm:
@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -100,4 +100,4 @@ float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
     return envelope_;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

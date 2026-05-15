@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/DatasetConfig.h
+ * More-Phi — AI/Dataset/DatasetConfig.h
  * Configuration schema and CLI interface for dataset generation.
  */
 #pragma once
@@ -8,8 +8,10 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 #include <map>
+#include <iostream>
+#include <iomanip>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * JSON schema for dataset configuration validation.
@@ -20,7 +22,7 @@ inline nlohmann::json getSchema()
 {
     return {
         {"$schema", "http://json-schema.org/draft-07/schema#"},
-        {"title", "MorphSnap Dataset Generator Configuration"},
+        {"title", "MorePhi Dataset Generator Configuration"},
         {"type", "object"},
         {"required", {"outputDirectory", "totalSamples"}},
         {"properties", {
@@ -30,7 +32,7 @@ inline nlohmann::json getSchema()
             }},
             {"datasetName", {
                 {"type", "string"},
-                {"default", "morphsnap_dataset"},
+                {"default", "morephi_dataset"},
                 {"description", "Name of the dataset (used for directory name)"}
             }},
             {"totalSamples", {
@@ -187,26 +189,31 @@ public:
             {
                 if (i + 1 < argc)
                     options.configFile = juce::File(argv[++i]);
+            else std::cerr << "Error: --config requires a file path\n";
             }
             else if (arg == "-o" || arg == "--output")
             {
                 if (i + 1 < argc)
                     options.outputDirectory = juce::File(argv[++i]);
+            else std::cerr << "Error: --output requires a directory path\n";
             }
             else if (arg == "-s" || arg == "--source")
             {
                 if (i + 1 < argc)
                     options.sourceDirectory = juce::File(argv[++i]);
+            else std::cerr << "Error: --source requires a directory path\n";
             }
             else if (arg == "-n" || arg == "--samples")
             {
                 if (i + 1 < argc)
                     options.totalSamples = juce::String(argv[++i]).getIntValue();
+            else std::cerr << "Error: --samples requires a number\n";
             }
             else if (arg == "--seed")
             {
                 if (i + 1 < argc)
                     options.seed = juce::String(argv[++i]).getIntValue();
+            else std::cerr << "Error: --seed requires a number\n";
             }
             else if (arg == "--dry-run")
             {
@@ -220,11 +227,13 @@ public:
             {
                 if (i + 1 < argc)
                     options.chainType = argv[++i];
+            else std::cerr << "Error: --chain requires a type\n";
             }
             else if (arg == "-t" || arg == "--threads")
             {
                 if (i + 1 < argc)
                     options.numThreads = juce::String(argv[++i]).getIntValue();
+            else std::cerr << "Error: --threads requires a number\n";
             }
         }
 
@@ -233,8 +242,8 @@ public:
 
     static void printUsage()
     {
-        std::cout << "MorphSnap Dataset Generator v1.0\n\n";
-        std::cout << "Usage: morphsnap-dataset [options]\n\n";
+        std::cout << "MorePhi Dataset Generator v1.0\n\n";
+        std::cout << "Usage: morephi-dataset [options]\n\n";
         std::cout << "Options:\n";
         std::cout << "  -h, --help           Show this help message\n";
         std::cout << "  -c, --config FILE    Configuration file (JSON/YAML)\n";
@@ -247,9 +256,9 @@ public:
         std::cout << "  --chain TYPE         Chain type (EQOnly, DynamicsOnly, Mastering, Mixing, Creative)\n";
         std::cout << "  -t, --threads N      Number of parallel threads\n";
         std::cout << "\nExamples:\n";
-        std::cout << "  morphsnap-dataset -c config.json\n";
-        std::cout << "  morphsnap-dataset -o ./dataset -n 1000 --chain Mastering\n";
-        std::cout << "  morphsnap-dataset -c config.json --dry-run\n";
+        std::cout << "  morephi-dataset -c config.json\n";
+        std::cout << "  morephi-dataset -o ./dataset -n 1000 --chain Mastering\n";
+        std::cout << "  morephi-dataset -c config.json --dry-run\n";
     }
 
     static void printProgress(const GenerationProgress& progress)
@@ -311,7 +320,7 @@ public:
     {
         return {
             {"outputDirectory", "./dataset"},
-            {"datasetName", "morphsnap_dataset"},
+            {"datasetName", "morephi_dataset"},
             {"totalSamples", 1000},
             {"randomSeed", 42},
             {"sampleRate", 48000},
@@ -396,4 +405,4 @@ public:
     }
 };
 
-} // namespace morphsnap
+} // namespace more_phi

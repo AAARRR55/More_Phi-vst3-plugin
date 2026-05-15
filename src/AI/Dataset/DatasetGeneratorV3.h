@@ -20,7 +20,7 @@
 #include <thread>
 #include <vector>
 
-namespace morphsnap {
+namespace more_phi {
 
 // Forward declarations — existing modules are referenced through DatasetGeneratorV2
 struct DatasetGeneratorConfig;
@@ -166,4 +166,4 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DatasetGeneratorV3)
 };
 
-} // namespace morphsnap
+} // namespace more_phi

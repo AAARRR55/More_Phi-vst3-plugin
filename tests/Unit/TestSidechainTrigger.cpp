@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Unit Tests — Sidechain Trigger
+ * More-Phi — Unit Tests — Sidechain Trigger
  * Tests for MIDIRouter::processSidechain edge detection and round-robin.
  */
 
@@ -12,7 +12,7 @@
 #include <cmath>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // Helper: create an AudioBuffer with constant amplitude
 static juce::AudioBuffer<float> makeConstantBuffer(int numSamples, float amplitude)
@@ -23,6 +23,32 @@ static juce::AudioBuffer<float> makeConstantBuffer(int numSamples, float amplitu
     return buf;
 }
 
+// ── Callback helpers (plain C function pointers + void* context) ────────────
+
+struct TriggerCapture {
+    int value = -1;
+};
+
+struct TriggerCollector {
+    std::vector<int> slots;
+};
+
+struct TriggerCounter {
+    int count = 0;
+};
+
+static void captureSlot(int slot, void* ctx) {
+    static_cast<TriggerCapture*>(ctx)->value = slot;
+}
+
+static void collectSlot(int slot, void* ctx) {
+    static_cast<TriggerCollector*>(ctx)->slots.push_back(slot);
+}
+
+static void countTrigger(int /*slot*/, void* ctx) {
+    ++static_cast<TriggerCounter*>(ctx)->count;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  MIDIRouter — Sidechain Trigger
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,37 +56,37 @@ static juce::AudioBuffer<float> makeConstantBuffer(int numSamples, float amplitu
 TEST_CASE("Sidechain: silent buffer does not trigger", "[midi][sidechain]")
 {
     MIDIRouter router;
-    int triggered = -1;
-    router.setSnapshotCallback([&](int slot) { triggered = slot; });
+    TriggerCapture cap;
+    router.setSnapshotCallback(&captureSlot, &cap);
     router.setSidechainEnabled(true);
     router.setSidechainThreshold(0.1f);
 
     auto buf = makeConstantBuffer(512, 0.0f);
     router.processSidechain(buf);
 
-    REQUIRE(triggered == -1);
+    REQUIRE(cap.value == -1);
 }
 
 TEST_CASE("Sidechain: loud buffer fires trigger exactly once", "[midi][sidechain]")
 {
     MIDIRouter router;
-    std::vector<int> triggers;
-    router.setSnapshotCallback([&](int slot) { triggers.push_back(slot); });
+    TriggerCollector col;
+    router.setSnapshotCallback(&collectSlot, &col);
     router.setSidechainEnabled(true);
     router.setSidechainThreshold(0.1f);
 
     auto buf = makeConstantBuffer(512, 0.5f);
     router.processSidechain(buf);
 
-    REQUIRE(triggers.size() == 1);
-    REQUIRE(triggers[0] == 0);  // First trigger → slot 0
+    REQUIRE(col.slots.size() == 1);
+    REQUIRE(col.slots[0] == 0);  // First trigger → slot 0
 }
 
 TEST_CASE("Sidechain: sustained loud does not re-trigger", "[midi][sidechain]")
 {
     MIDIRouter router;
-    int triggerCount = 0;
-    router.setSnapshotCallback([&](int) { ++triggerCount; });
+    TriggerCounter counter;
+    router.setSnapshotCallback(&countTrigger, &counter);
     router.setSidechainEnabled(true);
     router.setSidechainThreshold(0.1f);
 
@@ -71,14 +97,14 @@ TEST_CASE("Sidechain: sustained loud does not re-trigger", "[midi][sidechain]")
     router.processSidechain(buf);
     router.processSidechain(buf);
 
-    REQUIRE(triggerCount == 1);
+    REQUIRE(counter.count == 1);
 }
 
 TEST_CASE("Sidechain: loud-silent-loud triggers on second rising edge", "[midi][sidechain]")
 {
     MIDIRouter router;
-    std::vector<int> triggers;
-    router.setSnapshotCallback([&](int slot) { triggers.push_back(slot); });
+    TriggerCollector col;
+    router.setSnapshotCallback(&collectSlot, &col);
     router.setSidechainEnabled(true);
     router.setSidechainThreshold(0.1f);
 
@@ -89,16 +115,16 @@ TEST_CASE("Sidechain: loud-silent-loud triggers on second rising edge", "[midi][
     router.processSidechain(quiet);  // Below threshold → reset gate
     router.processSidechain(loud);   // Rising edge → trigger slot 1
 
-    REQUIRE(triggers.size() == 2);
-    REQUIRE(triggers[0] == 0);
-    REQUIRE(triggers[1] == 1);
+    REQUIRE(col.slots.size() == 2);
+    REQUIRE(col.slots[0] == 0);
+    REQUIRE(col.slots[1] == 1);
 }
 
 TEST_CASE("Sidechain: round-robin cycles through 12 slots", "[midi][sidechain]")
 {
     MIDIRouter router;
-    std::vector<int> triggers;
-    router.setSnapshotCallback([&](int slot) { triggers.push_back(slot); });
+    TriggerCollector col;
+    router.setSnapshotCallback(&collectSlot, &col);
     router.setSidechainEnabled(true);
     router.setSidechainThreshold(0.1f);
 
@@ -112,24 +138,24 @@ TEST_CASE("Sidechain: round-robin cycles through 12 slots", "[midi][sidechain]")
         router.processSidechain(quiet);
     }
 
-    REQUIRE(triggers.size() == 13);
+    REQUIRE(col.slots.size() == 13);
     for (int i = 0; i < 12; ++i)
-        REQUIRE(triggers[i] == i);
-    REQUIRE(triggers[12] == 0);  // Wrapped around
+        REQUIRE(col.slots[i] == i);
+    REQUIRE(col.slots[12] == 0);  // Wrapped around
 }
 
 TEST_CASE("Sidechain: disabled does not fire triggers", "[midi][sidechain]")
 {
     MIDIRouter router;
-    int triggered = -1;
-    router.setSnapshotCallback([&](int slot) { triggered = slot; });
+    TriggerCapture cap;
+    router.setSnapshotCallback(&captureSlot, &cap);
     router.setSidechainEnabled(false);  // Disabled
     router.setSidechainThreshold(0.1f);
 
     auto buf = makeConstantBuffer(512, 0.5f);
     router.processSidechain(buf);
 
-    REQUIRE(triggered == -1);
+    REQUIRE(cap.value == -1);
 }
 
 TEST_CASE("Sidechain: threshold accessor round-trips", "[midi][sidechain]")

@@ -15,6 +15,30 @@ MultiEffectPlan ChainPlanExecutor::executePlan(int   genreIndex,
                                                float spectralTilt,
                                                float correlationMS)
 {
+    MultiEffectPlan plan = buildPlan(genreIndex, dynamicRange, spectralTilt, correlationMS);
+    lastPlan_  = plan;
+
+    if (callback_) callback_(plan);
+
+    // Apply to Ozone 11 if a hosted instance is registered
+    if (ozoneApplicator_) ozoneApplicator_->apply(plan);
+
+    return plan;
+}
+
+MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,
+                                               float dynamicRange,
+                                               float spectralTilt,
+                                               float correlationMS)
+{
+    return buildPlan(genreIndex, dynamicRange, spectralTilt, correlationMS);
+}
+
+MultiEffectPlan ChainPlanExecutor::buildPlan(int   genreIndex,
+                                             float dynamicRange,
+                                             float spectralTilt,
+                                             float correlationMS)
+{
     MultiEffectPlan plan;
 
     // Step 1: Dynamics
@@ -33,13 +57,6 @@ MultiEffectPlan ChainPlanExecutor::executePlan(int   genreIndex,
     stepStageControl(plan);
 
     plan.valid = true;
-    lastPlan_  = plan;
-
-    if (callback_) callback_(plan);
-
-    // Apply to Ozone 11 if a hosted instance is registered
-    if (ozoneApplicator_) ozoneApplicator_->apply(plan);
-
     return plan;
 }
 

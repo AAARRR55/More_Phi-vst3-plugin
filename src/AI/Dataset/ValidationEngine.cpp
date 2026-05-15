@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/ValidationEngine.cpp
+ * More-Phi — AI/Dataset/ValidationEngine.cpp
  * Implementation of statistical validation for synthetic audio datasets.
  */
 
@@ -14,7 +14,7 @@
 #include <limits>
 #include <fstream>
 
-namespace morphsnap {
+namespace more_phi {
 
 // =============================================================================
 // Constructor
@@ -454,18 +454,18 @@ TransferEvaluationResult ValidationEngine::evaluateTransferLearning(
 
     if (syntheticDataDir.isDirectory())
     {
-        juce::DirectoryIterator synthIter(syntheticDataDir, false, "*.wav;*.json", juce::File::findFiles);
-        while (synthIter.next())
+        for (const auto& entry : juce::RangedDirectoryIterator(syntheticDataDir, false, "*.wav;*.json", juce::File::findFiles))
         {
+            (void)entry;
             ++syntheticCount;
         }
     }
 
     if (realDataDir.isDirectory())
     {
-        juce::DirectoryIterator realIter(realDataDir, false, "*.wav;*.json", juce::File::findFiles);
-        while (realIter.next())
+        for (const auto& entry : juce::RangedDirectoryIterator(realDataDir, false, "*.wav;*.json", juce::File::findFiles))
         {
+            (void)entry;
             ++realCount;
         }
     }
@@ -1106,7 +1106,9 @@ int ValidationEngine::countOccupiedBins(
     const std::vector<std::vector<float>>& samples,
     int dim1, int dim2, float resolution)
 {
-    const int binsPerDim = static_cast<int>(1.0f / resolution);
+    // binsPerDim documented for callers but not needed here — occupied count
+    // is derived from the set size, not a fixed grid total.
+    (void)(static_cast<int>(1.0f / resolution));
     std::set<std::pair<int, int>> occupiedBins;
 
     for (const auto& sample : samples)
@@ -1406,4 +1408,4 @@ nlohmann::json ValidationEngine::transferToJson(const TransferEvaluationResult& 
     return json;
 }
 
-} // namespace morphsnap
+} // namespace more_phi

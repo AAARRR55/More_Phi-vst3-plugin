@@ -1,10 +1,11 @@
-/* MorphSnap — UI/ModeBar.cpp */
+/* More-Phi — UI/ModeBar.cpp */
 #include "ModeBar.h"
 #include "Plugin/PluginProcessor.h"
+#include "UI/Bindings/ParameterBinding.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-ModeBar::ModeBar(MorphSnapProcessor& p) : proc_(p)
+ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
 {
     const juce::StringArray labels = {"Direct", "Elastic", "Drift"};
     for (int i = 0; i < 3; ++i)
@@ -21,8 +22,32 @@ ModeBar::ModeBar(MorphSnapProcessor& p) : proc_(p)
     smoothSlider_.setValue(0.95);
     smoothSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     smoothSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 18);
+    smoothSlider_.onDragStart = [this]() {
+        if (!smoothingGestureActive_)
+        {
+            if (auto* p = proc_.getAPVTS().getParameter("smoothing"))
+                p->beginChangeGesture();
+            smoothingGestureActive_ = true;
+        }
+    };
+    smoothSlider_.onDragEnd = [this]() {
+        if (smoothingGestureActive_)
+        {
+            if (auto* p = proc_.getAPVTS().getParameter("smoothing"))
+                p->endChangeGesture();
+            smoothingGestureActive_ = false;
+        }
+    };
     smoothSlider_.onValueChange = [this]() {
-        proc_.setSmoothingRate(static_cast<float>(smoothSlider_.getValue()));
+        // Route through APVTS for DAW automation support.
+        if (auto* p = proc_.getAPVTS().getParameter("smoothing"))
+        {
+            const auto value = static_cast<float>(smoothSlider_.getValue());
+            if (smoothingGestureActive_)
+                p->setValueNotifyingHost(value);
+            else
+                ParameterBinding::setValueWithGesture(*p, value);
+        }
     };
     addAndMakeVisible(smoothSlider_);
 
@@ -34,16 +59,21 @@ ModeBar::ModeBar(MorphSnapProcessor& p) : proc_(p)
 
 void ModeBar::resized()
 {
-    auto b = getLocalBounds().reduced(4, 2);
+    juce::FlexBox fb;
+    fb.flexDirection = juce::FlexBox::Direction::row;
+    fb.alignItems = juce::FlexBox::AlignItems::center;
+
     for (auto& btn : modeButtons_)
     {
-        btn.setBounds(b.removeFromLeft(70));
-        b.removeFromLeft(4);
+        fb.items.add(juce::FlexItem(btn).withWidth(70.0f).withMargin(2));
     }
-    b.removeFromLeft(16);
-    smoothLabel_.setBounds(b.removeFromLeft(50));
-    b.removeFromLeft(4);
-    smoothSlider_.setBounds(b.removeFromLeft(juce::jmin(b.getWidth(), 160)));
+
+    fb.items.add(juce::FlexItem().withWidth(16)); // spacer
+    fb.items.add(juce::FlexItem(smoothLabel_).withWidth(50.0f).withMargin(2));
+    fb.items.add(juce::FlexItem(smoothSlider_).withWidth(160.0f).withMargin(2));
+    fb.items.add(juce::FlexItem().withFlex(1)); // absorb remaining space
+
+    fb.performLayout(getLocalBounds().reduced(4, 2));
 }
 
 void ModeBar::paint(juce::Graphics& g)
@@ -64,10 +94,12 @@ void ModeBar::updateSelection()
         if (modeButtons_[i].getToggleState())
         {
             currentMode_ = i;
-            proc_.setPhysicsMode(i);
+            // Route through APVTS for DAW automation support.
+            if (auto* p = proc_.getAPVTS().getParameter("physicsMode"))
+                ParameterBinding::setValueWithGesture(*p, static_cast<float>(i) / 2.0f);
             break;
         }
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

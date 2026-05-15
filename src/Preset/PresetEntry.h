@@ -1,4 +1,4 @@
-/* MorphSnap — Preset/PresetEntry.h
+/* More-Phi — Preset/PresetEntry.h
  * Data structures for a single V2 preset entry and search queries.
  * Pure data — no JUCE dependencies, no audio thread constraints. */
 #pragma once
@@ -7,7 +7,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Information about the plugin whose parameters are captured in this preset. */
 struct HostedPluginInfo
@@ -65,4 +65,4 @@ struct PresetSearchQuery
     int offset     = 0;   // Pagination offset into the full result set.
 };
 
-} // namespace morphsnap
+} // namespace more_phi

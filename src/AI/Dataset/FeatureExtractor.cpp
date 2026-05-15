@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/FeatureExtractor.cpp
+ * More-Phi — AI/Dataset/FeatureExtractor.cpp
  * Implementation of audio feature extraction for synthetic dataset generation.
  */
 #include "FeatureExtractor.h"
@@ -7,7 +7,7 @@
 #include <numeric>
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 namespace
 {
@@ -151,7 +151,7 @@ SpectralFeatures FeatureExtractor::extractSpectral(const juce::AudioBuffer<float
         for (size_t i = 0; i < magnitudeBuffer_.size(); ++i)
         {
             const float freq = static_cast<float>(i) * binWidth;
-            spreadSum += magnitudeBuffer_[i] * std::pow(freq - centroid, 2);
+            spreadSum += magnitudeBuffer_[i] * std::pow(static_cast<double>(freq) - static_cast<double>(centroid), 2.0);
         }
         const float spread = centroidDenom > 0.0f ? std::sqrt(spreadSum / centroidDenom) : 0.0f;
         spreadAccum.push_back(spread);
@@ -616,7 +616,7 @@ PerceptualFeatures FeatureExtractor::extractPerceptual(const juce::AudioBuffer<f
 
                 // Critical bandwidth (Bark scale approximation)
                 const float fMin = std::min(f1, f2);
-                const float criticalBandwidth = 25.0f + 75.0f * std::pow(1.0f + 1.4f * std::pow(fMin / 1000.0f, 2), 0.69f);
+                const float criticalBandwidth = 25.0f + 75.0f * std::pow(1.0f + 1.4f * std::pow(fMin / 1000.0f, 2.0f), 0.69f);
 
                 const float freqDiff = std::abs(f2 - f1);
                 const float s = freqDiff / criticalBandwidth;
@@ -713,7 +713,7 @@ PerceptualFeatures FeatureExtractor::extractPerceptual(const juce::AudioBuffer<f
 
 // ── MFCC Computation ───────────────────────────────────────────────────────────
 
-std::array<float, 13> FeatureExtractor::computeMFCC(const float* magnitudes, int size, double sampleRate)
+std::array<float, 13> FeatureExtractor::computeMFCC(const float* magnitudes, int size, double /*sampleRate*/)
 {
     std::array<float, 13> mfcc{};
     mfcc.fill(0.0f);
@@ -1066,4 +1066,4 @@ void FeatureExtractor::applyHannWindow(float* samples, int size)
     }
 }
 
-} // namespace morphsnap
+} // namespace more_phi

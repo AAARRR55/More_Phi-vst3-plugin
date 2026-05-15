@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/IGranularMorphEngine.h
+ * More-Phi — Core/IGranularMorphEngine.h
  * Abstract interface for granular synthesis morphing between audio streams.
  *
  * Thread safety contract
@@ -35,7 +35,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
 /**
  * Granular synthesis morphing engine interface.
@@ -165,4 +165,4 @@ public:
     virtual GranularConfig getConfig() const noexcept = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

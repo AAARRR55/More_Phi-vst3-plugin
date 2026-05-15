@@ -1,39 +1,31 @@
 /*
- * MorphSnap — UI/SpectralControlPanel.cpp
+ * More-Phi — UI/SpectralControlPanel.cpp
  *
  * Implements the spectral engine control strip.
- * Direct engine calls — no APVTS, no parameter automation.
+ * All controls route through APVTS for DAW automation support.
+ * syncStateFromAPVTS() bridges APVTS → engine setters on the audio thread.
  */
 #include "SpectralControlPanel.h"
 #include "Plugin/PluginProcessor.h"
+#include "UI/Theme/MorePhiTheme.h"
+#include "UI/Bindings/ParameterBinding.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-// ── Color constants (panel-local, consistent with dark theme) ─────────────────
-namespace {
-    constexpr juce::uint32 kBgColour       = 0xff16213e;
-    constexpr juce::uint32 kSurfaceColour  = 0xff1a2742;
-    constexpr juce::uint32 kAccentColour   = 0xffec415d;
-    constexpr juce::uint32 kTextColour     = 0xffe8eaed;
-    constexpr juce::uint32 kTextDimColour  = 0xff4a5568;
-    constexpr juce::uint32 kBorderColour   = 0xff1e3a5f;
-    constexpr juce::uint32 kGreenColour    = 0xff4ade80;
-} // namespace
+using namespace Theme::Colours;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-SpectralControlPanel::SpectralControlPanel(MorphSnapProcessor& proc)
+SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     : proc_(proc)
 {
+    auto& apvts = proc_.getAPVTS();
     auto& engine = proc_.getSpectralEngine();
 
     // ── Active toggle ─────────────────────────────────────────────────────────
     setupToggleButton(activeToggle_, "Spectral");
-    activeToggle_.onClick = [this, &engine]()
-    {
-        engine.setActive(activeToggle_.getToggleState());
-    };
     activeToggle_.setToggleState(engine.isActive(), juce::dontSendNotification);
+    ParameterBinding::bindToggleButton(activeToggle_, apvts, "spectralActive");
 
     // ── FFT size combo ────────────────────────────────────────────────────────
     fftSizeCombo_.addItem("512",  1);
@@ -41,23 +33,17 @@ SpectralControlPanel::SpectralControlPanel(MorphSnapProcessor& proc)
     fftSizeCombo_.addItem("2048", 3);
     fftSizeCombo_.addItem("4096", 4);
     fftSizeCombo_.setSelectedId(3, juce::dontSendNotification); // default 2048
-    fftSizeCombo_.onChange = [this, &engine]()
-    {
-        const int sizes[] = { 512, 1024, 2048, 4096 };
-        const int idx = fftSizeCombo_.getSelectedId() - 1;
-        if (idx >= 0 && idx < 4)
-            engine.setFFTSize(sizes[idx]);
-    };
+    ParameterBinding::bindComboBox(fftSizeCombo_, apvts, "spectralFFTSize");
     fftSizeCombo_.setColour(juce::ComboBox::backgroundColourId,
-                             juce::Colour(kSurfaceColour));
+                             surfaceLit());
     fftSizeCombo_.setColour(juce::ComboBox::textColourId,
-                             juce::Colour(kTextColour));
+                             textBright());
     fftSizeCombo_.setColour(juce::ComboBox::outlineColourId,
-                             juce::Colour(kBorderColour));
+                             border());
 
     fftSizeLabel_.setText("FFT Size", juce::dontSendNotification);
-    fftSizeLabel_.setFont(juce::Font(juce::FontOptions(8.5f)));
-    fftSizeLabel_.setColour(juce::Label::textColourId, juce::Colour(kTextDimColour));
+    fftSizeLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    fftSizeLabel_.setColour(juce::Label::textColourId, textDim());
     fftSizeLabel_.setJustificationType(juce::Justification::centredLeft);
 
     // ── Alpha knob ────────────────────────────────────────────────────────────
@@ -67,38 +53,29 @@ SpectralControlPanel::SpectralControlPanel(MorphSnapProcessor& proc)
     alphaKnob_.setValue(static_cast<double>(proc_.getMorphAlpha()),
                          juce::dontSendNotification);
     alphaKnob_.setColour(juce::Slider::rotarySliderFillColourId,
-                          juce::Colour(kAccentColour));
+                          accent());
     alphaKnob_.setColour(juce::Slider::rotarySliderOutlineColourId,
-                          juce::Colour(kSurfaceColour));
+                          surfaceLit());
     alphaKnob_.setColour(juce::Slider::textBoxTextColourId,
-                          juce::Colour(kTextColour));
+                          textBright());
     alphaKnob_.setColour(juce::Slider::textBoxOutlineColourId,
                           juce::Colours::transparentBlack);
-    alphaKnob_.onValueChange = [this]()
-    {
-        proc_.setMorphAlpha(static_cast<float>(alphaKnob_.getValue()));
-    };
+    ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(juce::Font(juce::FontOptions(8.5f)));
-    alphaLabel_.setColour(juce::Label::textColourId, juce::Colour(kTextDimColour));
+    alphaLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    alphaLabel_.setColour(juce::Label::textColourId, textDim());
     alphaLabel_.setJustificationType(juce::Justification::centred);
 
     // ── Transient toggle ──────────────────────────────────────────────────────
     setupToggleButton(transientToggle_, "Transient");
     transientToggle_.setToggleState(true, juce::dontSendNotification); // default on
-    transientToggle_.onClick = [this, &engine]()
-    {
-        engine.setTransientPreserve(transientToggle_.getToggleState());
-    };
+    ParameterBinding::bindToggleButton(transientToggle_, apvts, "spectralTransient");
 
     // ── Formant toggle ────────────────────────────────────────────────────────
     setupToggleButton(formantToggle_, "Formant");
     formantToggle_.setToggleState(false, juce::dontSendNotification); // default off
-    formantToggle_.onClick = [this, &engine]()
-    {
-        engine.setFormantPreserve(formantToggle_.getToggleState());
-    };
+    ParameterBinding::bindToggleButton(formantToggle_, apvts, "spectralFormant");
 
     addAndMakeVisible(activeToggle_);
     addAndMakeVisible(fftSizeCombo_);
@@ -114,11 +91,11 @@ SpectralControlPanel::SpectralControlPanel(MorphSnapProcessor& proc)
 void SpectralControlPanel::paint(juce::Graphics& g)
 {
     // Panel background
-    g.setColour(juce::Colour(kBgColour).withAlpha(0.85f));
+    g.setColour(surface().withAlpha(0.85f));
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
 
     // Border
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.25f), 4.0f, 0.5f);
 
     const float w  = static_cast<float>(getWidth());
@@ -126,7 +103,7 @@ void SpectralControlPanel::paint(juce::Graphics& g)
     const float sectionW = w / 3.0f;
 
     // Vertical dividers between sections
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawLine(sectionW,     6.0f, sectionW,     h - 6.0f, 0.5f);
     g.drawLine(sectionW * 2, 6.0f, sectionW * 2, h - 6.0f, 0.5f);
 
@@ -151,11 +128,13 @@ void SpectralControlPanel::resized()
         auto leftArea = juce::Rectangle<int>(pad, topOffset,
                                               sectionW - pad * 2,
                                               h - topOffset - pad);
-        const int btnH = 28;
-        activeToggle_.setBounds(leftArea.removeFromTop(btnH));
-        leftArea.removeFromTop(6);
-        fftSizeLabel_.setBounds(leftArea.removeFromTop(14));
-        fftSizeCombo_.setBounds(leftArea.removeFromTop(26));
+        juce::FlexBox leftCol;
+        leftCol.flexDirection = juce::FlexBox::Direction::column;
+        leftCol.items.add(juce::FlexItem(activeToggle_).withHeight(28.0f));
+        leftCol.items.add(juce::FlexItem().withHeight(6.0f));
+        leftCol.items.add(juce::FlexItem(fftSizeLabel_).withHeight(14.0f));
+        leftCol.items.add(juce::FlexItem(fftSizeCombo_).withHeight(26.0f));
+        leftCol.performLayout(leftArea);
     }
 
     // ── Center section: Alpha knob ────────────────────────────────────────────
@@ -179,10 +158,12 @@ void SpectralControlPanel::resized()
         auto rightArea = juce::Rectangle<int>(sectionW * 2 + pad, topOffset,
                                                sectionW - pad * 2,
                                                h - topOffset - pad);
-        const int btnH = 28;
-        transientToggle_.setBounds(rightArea.removeFromTop(btnH));
-        rightArea.removeFromTop(6);
-        formantToggle_.setBounds(rightArea.removeFromTop(btnH));
+        juce::FlexBox rightCol;
+        rightCol.flexDirection = juce::FlexBox::Direction::column;
+        rightCol.items.add(juce::FlexItem(transientToggle_).withHeight(28.0f));
+        rightCol.items.add(juce::FlexItem().withHeight(6.0f));
+        rightCol.items.add(juce::FlexItem(formantToggle_).withHeight(28.0f));
+        rightCol.performLayout(rightArea);
     }
 }
 
@@ -192,9 +173,9 @@ void SpectralControlPanel::setupToggleButton(juce::TextButton& btn,
                                                const juce::String& /*label*/)
 {
     btn.setClickingTogglesState(true);
-    btn.setColour(juce::TextButton::buttonColourId,    juce::Colour(kSurfaceColour));
-    btn.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(kAccentColour));
-    btn.setColour(juce::TextButton::textColourOffId,   juce::Colour(kTextColour));
+    btn.setColour(juce::TextButton::buttonColourId,    surfaceLit());
+    btn.setColour(juce::TextButton::buttonOnColourId,  accent());
+    btn.setColour(juce::TextButton::textColourOffId,   textBright());
     btn.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
 }
 
@@ -202,9 +183,9 @@ void SpectralControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions(8.5f)));
-    g.setColour(juce::Colour(kTextDimColour));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

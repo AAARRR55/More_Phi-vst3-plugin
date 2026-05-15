@@ -1,9 +1,9 @@
-/* MorphSnap — Preset/MetaPresetManager.h */
+/* More-Phi — Preset/MetaPresetManager.h */
 #pragma once
 #include <juce_core/juce_core.h>
 #include "PresetSerializer.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 class MetaPresetManager
 {
@@ -35,4 +35,4 @@ private:
     juce::File getPresetFile(int bank, int preset) const;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

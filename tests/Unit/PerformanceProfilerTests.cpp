@@ -4,7 +4,7 @@
 
 TEST_CASE("PerformanceProfiler measures execution time", "[PerformanceProfiler]")
 {
-    morphsnap::PerformanceProfiler profiler;
+    more_phi::PerformanceProfiler profiler;
 
     {
         auto timer = profiler.createTimer("test_operation");

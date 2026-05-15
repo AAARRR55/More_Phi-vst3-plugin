@@ -1,11 +1,17 @@
 /*
- * MorphSnap — AI/Dataset/PluginChainEngine.cpp
+ * More-Phi — AI/Dataset/PluginChainEngine.cpp
  * Implementation of sequential plugin chain engine for dataset generation.
  */
 #include "PluginChainEngine.h"
 #include <juce_dsp/juce_dsp.h>
 
-namespace morphsnap {
+// Suppress deprecation warnings for legacy JUCE parameter APIs
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#endif
+
+namespace more_phi {
 
 // ── PluginSlot JSON Serialization ─────────────────────────────────────────────
 
@@ -686,4 +692,8 @@ ChainConfig PluginChainEngine::createDynamicsChain()
     return ChainConfig::createDynamicsChain();
 }
 
-} // namespace morphsnap
+} // namespace more_phi
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

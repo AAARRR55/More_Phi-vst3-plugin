@@ -1,22 +1,18 @@
 /*
- * MorphSnap — UI/GranularControlPanel.cpp
+ * More-Phi — UI/GranularControlPanel.cpp
  *
  * Implements the granular engine control strip.
- * Direct engine calls — no APVTS, no parameter automation.
+ * All controls route through APVTS for DAW automation support.
+ * syncStateFromAPVTS() bridges APVTS → engine setters on the audio thread.
  */
 #include "GranularControlPanel.h"
 #include "Plugin/PluginProcessor.h"
+#include "UI/Theme/MorePhiTheme.h"
+#include "UI/Bindings/ParameterBinding.h"
 
-namespace morphsnap {
+namespace more_phi {
 
-// ── Color constants ───────────────────────────────────────────────────────────
-namespace {
-    constexpr juce::uint32 kBgColour       = 0xff16213e;
-    constexpr juce::uint32 kSurfaceColour  = 0xff1a2742;
-    constexpr juce::uint32 kAccentColour   = 0xffec415d;
-    constexpr juce::uint32 kTextColour     = 0xffe8eaed;
-    constexpr juce::uint32 kTextDimColour  = 0xff4a5568;
-    constexpr juce::uint32 kBorderColour   = 0xff1e3a5f;
+using namespace Theme::Colours;
 
     // Knob metadata
     struct KnobDef
@@ -26,72 +22,50 @@ namespace {
         double      max;
         double      defaultVal;
         const char* suffix;
+        const char* apvtsId;  // APVTS parameter ID
     };
 
     constexpr std::array<KnobDef, 4> kKnobDefs
     {{
-        { "Size",    20.0,  200.0, 50.0,  " ms" },
-        { "Density",  5.0,  100.0, 20.0,  " g/s" },
-        { "Pitch",    0.0,    2.0,  0.0,  " st" },
-        { "Scatter",  0.0,    1.0,  0.0,  "" }
+        { "Size",    20.0,  200.0, 50.0,  " ms",  "grainSize"    },
+        { "Density",  5.0,  100.0, 20.0,  " g/s", "grainDensity" },
+        { "Pitch",    0.0,    2.0,  0.0,  " st",  "grainPitch"   },
+        { "Scatter",  0.0,    1.0,  0.0,  "",     "grainScatter" }
     }};
-} // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-GranularControlPanel::GranularControlPanel(MorphSnapProcessor& proc)
+GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
     : proc_(proc)
 {
+    auto& apvts = proc_.getAPVTS();
     auto& engine = proc_.getGranularEngine();
 
     // ── Active toggle ─────────────────────────────────────────────────────────
     setupToggleButton(activeToggle_);
     activeToggle_.setToggleState(engine.isActive(), juce::dontSendNotification);
-    activeToggle_.onClick = [this, &engine]()
-    {
-        engine.setActive(activeToggle_.getToggleState());
-    };
+    ParameterBinding::bindToggleButton(activeToggle_, apvts, "granularActive");
     addAndMakeVisible(activeToggle_);
 
-    // ── Knob 0: Grain Size ────────────────────────────────────────────────────
-    setupKnob(knobs_[0], kKnobDefs[0].min, kKnobDefs[0].max,
-               kKnobDefs[0].defaultVal, kKnobDefs[0].suffix);
-    knobs_[0].onValueChange = [this, &engine]()
-    {
-        engine.setGrainSize(static_cast<float>(knobs_[0].getValue()));
+    // ── Knobs: route through APVTS ─────────────────────────────────────────────
+    static constexpr const char* knobParamIds[] = {
+        "grainSize", "grainDensity", "grainPitch", "grainScatter"
     };
 
-    // ── Knob 1: Density ───────────────────────────────────────────────────────
-    setupKnob(knobs_[1], kKnobDefs[1].min, kKnobDefs[1].max,
-               kKnobDefs[1].defaultVal, kKnobDefs[1].suffix);
-    knobs_[1].onValueChange = [this, &engine]()
+    for (int i = 0; i < 4; ++i)
     {
-        engine.setGrainDensity(static_cast<float>(knobs_[1].getValue()));
-    };
-
-    // ── Knob 2: Pitch Randomization ───────────────────────────────────────────
-    setupKnob(knobs_[2], kKnobDefs[2].min, kKnobDefs[2].max,
-               kKnobDefs[2].defaultVal, kKnobDefs[2].suffix);
-    knobs_[2].onValueChange = [this, &engine]()
-    {
-        engine.setPitchRandomization(static_cast<float>(knobs_[2].getValue()));
-    };
-
-    // ── Knob 3: Position Randomization ───────────────────────────────────────
-    setupKnob(knobs_[3], kKnobDefs[3].min, kKnobDefs[3].max,
-               kKnobDefs[3].defaultVal, kKnobDefs[3].suffix);
-    knobs_[3].onValueChange = [this, &engine]()
-    {
-        engine.setPositionRandomization(static_cast<float>(knobs_[3].getValue()));
-    };
+        setupKnob(knobs_[i], kKnobDefs[i].min, kKnobDefs[i].max,
+                   kKnobDefs[i].defaultVal, kKnobDefs[i].suffix);
+        ParameterBinding::bindSlider(knobs_[i], apvts, knobParamIds[i]);
+    }
 
     // ── Labels ────────────────────────────────────────────────────────────────
     for (int i = 0; i < 4; ++i)
     {
         knobLabels_[i].setText(kKnobDefs[i].label, juce::dontSendNotification);
-        knobLabels_[i].setFont(juce::Font(juce::FontOptions(8.5f)));
+        knobLabels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
         knobLabels_[i].setColour(juce::Label::textColourId,
-                                  juce::Colour(kTextDimColour));
+                                  textDim());
         knobLabels_[i].setJustificationType(juce::Justification::centred);
 
         addAndMakeVisible(knobs_[i]);
@@ -104,18 +78,18 @@ GranularControlPanel::GranularControlPanel(MorphSnapProcessor& proc)
 void GranularControlPanel::paint(juce::Graphics& g)
 {
     // Panel background
-    g.setColour(juce::Colour(kBgColour).withAlpha(0.85f));
+    g.setColour(surface().withAlpha(0.85f));
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
 
     // Border
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.25f), 4.0f, 0.5f);
 
     const float h = static_cast<float>(getHeight());
 
     // Divider between left toggle section and knob section
     const float divX = 100.0f;
-    g.setColour(juce::Colour(kBorderColour));
+    g.setColour(border());
     g.drawLine(divX, 6.0f, divX, h - 6.0f, 0.5f);
 
     // Section labels
@@ -138,7 +112,7 @@ void GranularControlPanel::resized()
                                  84, btnH);
     }
 
-    // ── Center section: 4 knobs in a row ─────────────────────────────────────
+    // ── Center section: 4 knobs in a FlexBox row ──────────────────────────────
     {
         const int knobAreaX = 100 + pad;
         const int knobAreaW = getWidth() - knobAreaX - pad;
@@ -148,11 +122,19 @@ void GranularControlPanel::resized()
         const int totalH    = knobH + labelH + 4;
         const int startY    = topOffset + (h - topOffset - totalH) / 2;
 
-        // Distribute 4 knobs evenly across knobAreaW
-        const int spacing = knobAreaW / 4;
+        // FlexBox row with equal-width columns for each knob
+        juce::FlexBox knobRow;
+        knobRow.flexDirection = juce::FlexBox::Direction::row;
+
+        for (int i = 0; i < 4; ++i)
+            knobRow.items.add(juce::FlexItem().withFlex(1));
+        knobRow.performLayout(juce::Rectangle<int>(knobAreaX, 0, knobAreaW, h));
+
+        // Position knobs centered within each FlexBox column
+        const float colW = static_cast<float>(knobAreaW) / 4.0f;
         for (int i = 0; i < 4; ++i)
         {
-            const int cx = knobAreaX + spacing * i + spacing / 2;
+            const int cx = knobAreaX + static_cast<int>(colW * i + colW / 2.0f);
             knobs_[i].setBounds(cx - knobW / 2, startY, knobW, knobH);
             knobLabels_[i].setBounds(cx - knobW / 2, startY + knobH + 2,
                                       knobW, labelH);
@@ -165,9 +147,9 @@ void GranularControlPanel::resized()
 void GranularControlPanel::setupToggleButton(juce::TextButton& btn)
 {
     btn.setClickingTogglesState(true);
-    btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(kSurfaceColour));
-    btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(kAccentColour));
-    btn.setColour(juce::TextButton::textColourOffId,  juce::Colour(kTextColour));
+    btn.setColour(juce::TextButton::buttonColourId,   surfaceLit());
+    btn.setColour(juce::TextButton::buttonOnColourId, accent());
+    btn.setColour(juce::TextButton::textColourOffId,  textBright());
     btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
 }
 
@@ -180,11 +162,11 @@ void GranularControlPanel::setupKnob(juce::Slider& knob, double min, double max,
     knob.setValue(defaultVal, juce::dontSendNotification);
     knob.setTextValueSuffix(suffix);
     knob.setColour(juce::Slider::rotarySliderFillColourId,
-                   juce::Colour(kAccentColour));
+                   accent());
     knob.setColour(juce::Slider::rotarySliderOutlineColourId,
-                   juce::Colour(kSurfaceColour));
+                   surfaceLit());
     knob.setColour(juce::Slider::textBoxTextColourId,
-                   juce::Colour(kTextColour));
+                   textBright());
     knob.setColour(juce::Slider::textBoxOutlineColourId,
                    juce::Colours::transparentBlack);
 }
@@ -193,9 +175,9 @@ void GranularControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions(8.5f)));
-    g.setColour(juce::Colour(kTextDimColour));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }
 
-} // namespace morphsnap
+} // namespace more_phi

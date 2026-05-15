@@ -8,7 +8,7 @@
 #include <random>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 namespace {
 
@@ -63,7 +63,12 @@ public:
             && layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
     }
 
-    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    {
+        // Apply a slight gain reduction so wet != dry and passthrough detection
+        // (diffRatio < 1e-10) does not fire in OfflineBatchRenderer.
+        buffer.applyGain(0.9f);
+    }
     void processBlock(juce::AudioBuffer<double>&, juce::MidiBuffer&) override {}
 
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
@@ -138,7 +143,7 @@ private:
 juce::File createBroadbandInputFile()
 {
     auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getNonexistentChildFile("morphsnap_offline_guardrail_input", ".wav");
+        .getNonexistentChildFile("morephi_offline_guardrail_input", ".wav");
 
     juce::AudioBuffer<float> buffer(2, 4096);
     std::mt19937 generator(1337);
@@ -176,7 +181,7 @@ TEST_CASE("OfflineBatchRenderer keeps FabFilter trap params out of randomized re
     REQUIRE(inputFile.existsAsFile());
 
     const auto outputDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getNonexistentChildFile("morphsnap_offline_guardrail_output", "");
+        .getNonexistentChildFile("morephi_offline_guardrail_output", "");
     REQUIRE(outputDirectory.createDirectory());
 
     auto plugin = std::make_unique<FakeFabFilterPlugin>();

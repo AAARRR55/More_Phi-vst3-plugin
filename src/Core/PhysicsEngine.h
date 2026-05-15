@@ -1,5 +1,5 @@
 /*
- * MorphSnap — Core/PhysicsEngine.h
+ * More-Phi — Core/PhysicsEngine.h
  * Spring-damper elastic mode + Perlin noise drift.
  *
  * noexcept guarantee: All physics functions are noexcept because:
@@ -11,7 +11,7 @@
 
 #include <cmath>
 
-namespace morphsnap {
+namespace more_phi {
 
 enum class ElasticPreset { Slow, Medium, Heavy };
 enum class DriftMode     { Free, Locked, Orbit };
@@ -50,4 +50,4 @@ private:
     static float grad(int hash, float x, float y) noexcept;
 };
 
-} // namespace morphsnap
+} // namespace more_phi

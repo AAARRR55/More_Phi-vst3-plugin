@@ -1,21 +1,21 @@
 /*
- * MorphSnap — UI/AIStatusPanel.h
+ * More-Phi — UI/AIStatusPanel.h
  * Bottom bar: MCP server status, port, clients, token copy.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace morphsnap {
+namespace more_phi {
 
-class MorphSnapProcessor;
+class MorePhiProcessor;
 
 class AIStatusPanel : public juce::Component,
                       private juce::Timer,
                       private juce::Button::Listener
 {
 public:
-    explicit AIStatusPanel(MorphSnapProcessor& p);
+    explicit AIStatusPanel(MorePhiProcessor& p);
     void resized() override;
     void paint(juce::Graphics& g) override;
 
@@ -23,7 +23,7 @@ private:
     void timerCallback() override;
     void buttonClicked(juce::Button* b) override;
 
-    MorphSnapProcessor& proc_;
+    MorePhiProcessor& proc_;
     juce::Label statusLabel_;
     juce::Label portLabel_;
     juce::Label clientsLabel_;
@@ -31,4 +31,4 @@ private:
     juce::TextButton copyTokenBtn_{"Copy Token"};
 };
 
-} // namespace morphsnap
+} // namespace more_phi

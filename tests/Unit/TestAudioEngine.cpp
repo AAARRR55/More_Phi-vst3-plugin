@@ -1,5 +1,5 @@
 /*
- * MorphSnap — tests/Unit/TestAudioEngine.cpp
+ * More-Phi — tests/Unit/TestAudioEngine.cpp
  *
  * Catch2 v3 tests for audio engine specifications:
  *   - OversamplingWrapper lifecycle and latency reporting
@@ -20,6 +20,7 @@
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
 #include "Core/SnapshotBank.h"
+#include "Plugin/PluginProcessor.h"
 
 #include <juce_dsp/juce_dsp.h>
 #include <juce_core/juce_core.h>
@@ -30,7 +31,7 @@
 #include <vector>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Helpers
@@ -184,6 +185,50 @@ TEST_CASE("OversamplingWrapper: x4 upsample block has 4x the samples", "[oversam
 
     auto osBlock = os.upsample(inBlock);
     REQUIRE(osBlock.getNumSamples() == 64 * 4);
+}
+
+TEST_CASE("OversamplingWrapper: x2 and x4 produce finite downsampled output", "[oversampling][audio_domain]")
+{
+    const OversamplingFactor factors[] = {OversamplingFactor::x2, OversamplingFactor::x4};
+
+    for (auto factor : factors)
+    {
+        OversamplingWrapper os;
+        os.setFactor(factor);
+        os.prepare(128, 2, 48000.0);
+
+        juce::AudioBuffer<float> buffer(2, 128);
+        fillSine(buffer.getWritePointer(0), 128, 440.0f, 48000.0f, 0.5f);
+        fillSine(buffer.getWritePointer(1), 128, 880.0f, 48000.0f, 0.5f);
+
+        juce::dsp::AudioBlock<float> block(buffer);
+        auto osBlock = os.upsample(block);
+        for (size_t ch = 0; ch < osBlock.getNumChannels(); ++ch)
+        {
+            auto* data = osBlock.getChannelPointer(ch);
+            for (size_t i = 0; i < osBlock.getNumSamples(); ++i)
+                data[i] *= 0.75f;
+        }
+
+        os.downsample(block);
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto* data = buffer.getReadPointer(ch);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                REQUIRE(std::isfinite(data[i]));
+        }
+    }
+}
+
+TEST_CASE("MorePhiProcessor: inactive audio-domain path reports no default spectral or oversampling latency", "[audio_engine][latency]")
+{
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    REQUIRE(processor.getLatencySamples() == 0);
+
+    processor.releaseResources();
 }
 
 TEST_CASE("OversamplingWrapper: CPU overhead factor increases with factor", "[oversampling]")

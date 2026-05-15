@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/ValidationEngine.h
+ * More-Phi — AI/Dataset/ValidationEngine.h
  * Statistical validation for synthetic audio dataset generation.
  * Provides distribution matching tests, coverage metrics, and transfer evaluation.
  */
@@ -14,7 +14,7 @@
 #include <numeric>
 #include <cstdint>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Result of a single statistical distribution test */
 struct DistributionTestResult
@@ -424,4 +424,4 @@ private:
     juce::Random random_;               ///< Random number generator for report IDs
 };
 
-} // namespace morphsnap
+} // namespace more_phi

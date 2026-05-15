@@ -1,5 +1,5 @@
 /*
- * MorphSnap — AI/Dataset/ParameterSampler.h
+ * More-Phi — AI/Dataset/ParameterSampler.h
  * Advanced parameter sampling for synthetic audio dataset generation.
  * Provides Latin Hypercube Sampling, stratified sampling by genre,
  * and physics-informed constraint validation.
@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <functional>
 
-namespace morphsnap {
+namespace more_phi {
 
 /** Distribution type for parameter sampling */
 enum class DistributionType
@@ -208,4 +208,4 @@ private:
     unsigned int currentSeed_ = 42;
 };
 
-} // namespace morphsnap
+} // namespace more_phi
