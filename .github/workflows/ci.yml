@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PLUGIN_NAME: MorphSnap
+  PLUGIN_NAME: MorePhi
   PLUGIN_VERSION: 3.3.0
   CMAKE_VERSION: "3.28"
   PLUGINVAL_VERSION: "1.0.3"
@@ -55,9 +55,9 @@ jobs:
         run: |
           cmake -B build `
             -DCMAKE_BUILD_TYPE=Release `
-            -DMORPHSNAP_BUILD_TESTS=ON `
-            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF `
-            -DMORPHSNAP_MSVC_MP=1 `
+            -DMORE_PHI_BUILD_TESTS=ON `
+            -DMORE_PHI_COPY_PLUGIN_AFTER_BUILD=OFF `
+            -DMORE_PHI_MSVC_MP=1 `
             -A x64
 
       - name: Build Release
@@ -111,7 +111,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PLUGIN_NAME }}-${{ env.PLUGIN_VERSION }}-Windows-x64
-          path: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3/
+          path: build/MorePhi_artefacts/Release/VST3/MorePhi.vst3/
           if-no-files-found: warn
 
 
@@ -154,8 +154,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
-            -DMORPHSNAP_BUILD_TESTS=ON \
-            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+            -DMORE_PHI_BUILD_TESTS=ON \
+            -DMORE_PHI_COPY_PLUGIN_AFTER_BUILD=OFF
 
       - name: Build Universal Release
         run: cmake --build build --config Release --parallel 2
@@ -259,12 +259,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_CXX_COMPILER=clang++-17 \
             -DCMAKE_C_COMPILER=clang-17 \
-            -DMORPHSNAP_BUILD_TESTS=ON \
-            -DMORPHSNAP_ENABLE_SANITIZERS=ON \
-            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+            -DMORE_PHI_BUILD_TESTS=ON \
+            -DMORE_PHI_ENABLE_SANITIZERS=ON \
+            -DMORE_PHI_COPY_PLUGIN_AFTER_BUILD=OFF
 
       - name: Build tests
-        run: cmake --build build --config Debug --target MorphSnapTests --parallel $(nproc)
+        run: cmake --build build --config Debug --target MorePhiTests --parallel $(nproc)
 
       - name: Run tests under sanitizers
         working-directory: build

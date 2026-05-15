@@ -15,9 +15,15 @@
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"
 #include "PluginProfileDB.h"
+#include "Dataset/OfflineBatchRenderer.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
+#include <vector>
 
 namespace more_phi {
 
@@ -35,6 +41,39 @@ struct ToolDefinition
     const char* description;
     const char* inputSchema;
 };
+
+struct RenderCandidateRecord
+{
+    int index = 0;
+    bool success = false;
+    juce::String id;
+    juce::String outputPath;
+    float peakDb = 0.0f;
+    float rmsDb = -100.0f;
+    bool hasSilence = false;
+    bool hasClipping = false;
+    double renderTimeMs = 0.0;
+    juce::String errorMessage;
+};
+
+struct RenderJobRecord
+{
+    juce::String id;
+    juce::String status = "queued";
+    juce::String message;
+    juce::String inputPath;
+    juce::String outputDirectory;
+    juce::String pluginPath;
+    OfflineBatchProgress progress;
+    std::vector<RenderCandidateRecord> candidates;
+    bool completed = false;
+    bool success = false;
+    mutable std::mutex mutex;
+};
+
+static std::mutex gRenderJobsMutex;
+static std::map<std::string, std::shared_ptr<RenderJobRecord>> gRenderJobs;
+static std::atomic<uint64_t> gNextRenderJobId{1};
 
 static json parseSchema(const char* schemaText)
 {
@@ -74,7 +113,8 @@ static const ToolDefinition kCoreTools[] = {
     {"analysis.compare_render", "Compare two compact analysis summaries or compare a provided summary to current meters.", R"({"type":"object","properties":{"before":{"type":"object"},"after":{"type":"object"}}})"},
     {"mastering.plan_preview", "Generate a mastering plan without applying it.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
     {"mastering.apply_plan", "Alias for apply_mastering_plan.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-    {"mastering.render_batch", "Create dry-run mastering candidates from local analysis metrics.", R"({"type":"object","properties":{"candidate_count":{"type":"integer","default":3},"dry_run":{"type":"boolean","default":true},"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.render_batch", "Create dry-run mastering candidates or start an offline file-backed hosted-plugin render job.", R"({"type":"object","properties":{"candidate_count":{"type":"integer","default":3},"dry_run":{"type":"boolean","default":true},"input_path":{"type":"string"},"output_path":{"type":"string"},"plugin_path":{"type":"string"},"allow_passthrough":{"type":"boolean","default":false},"duration_seconds":{"type":"number"},"sample_rate":{"type":"number","default":48000},"block_size":{"type":"integer","default":512},"channels":{"type":"integer","default":2},"parallel_workers":{"type":"integer","default":1},"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.render_status", "Poll an offline mastering render job started by mastering.render_batch.", R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"},
     {"mastering.select_candidate", "Select a candidate ID returned by mastering.render_batch.", R"({"type":"object","properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"]})"},
     {"plugin_profile.audit_parameters", "Audit hosted plugin parameters into a versioned profile JSON object.", R"({"type":"object","properties":{}})"},
     {"plugin_profile.get", "Load a saved profile by ID, or audit the current hosted plugin when omitted.", R"({"type":"object","properties":{"profile_id":{"type":"string"}}})"},
@@ -94,6 +134,71 @@ static json planToJson(const MultiEffectPlan& plan)
         {"eq_prescription", plan.eqPrescriptionJSON.toStdString()}
     };
     return result;
+}
+
+static json candidateToJson(const RenderCandidateRecord& candidate)
+{
+    return json{
+        {"id", candidate.id.toStdString()},
+        {"index", candidate.index},
+        {"success", candidate.success},
+        {"output_path", candidate.outputPath.toStdString()},
+        {"peak_db", candidate.peakDb},
+        {"rms_db", candidate.rmsDb},
+        {"has_silence", candidate.hasSilence},
+        {"has_clipping", candidate.hasClipping},
+        {"render_time_ms", candidate.renderTimeMs},
+        {"error", candidate.errorMessage.toStdString()}
+    };
+}
+
+static json progressToJson(const OfflineBatchProgress& progress)
+{
+    return json{
+        {"completed", progress.completed},
+        {"total", progress.total},
+        {"percentage", progress.percentage},
+        {"status", progress.currentStatus.toStdString()},
+        {"elapsed_ms", progress.elapsedMs},
+        {"estimated_remaining_ms", progress.estimatedRemainingMs},
+        {"successful_renders", progress.successfulRenders},
+        {"failed_renders", progress.failedRenders}
+    };
+}
+
+static std::shared_ptr<RenderJobRecord> findRenderJob(const juce::String& jobId)
+{
+    const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
+    const auto it = gRenderJobs.find(jobId.toStdString());
+    return it != gRenderJobs.end() ? it->second : nullptr;
+}
+
+static juce::String makeRenderCandidateId(const juce::String& jobId, int index)
+{
+    return jobId + ":variation_" + juce::String::formatted("%04d", index);
+}
+
+static json renderJobToJson(const RenderJobRecord& job)
+{
+    const std::lock_guard<std::mutex> jobGuard(job.mutex);
+
+    json candidates = json::array();
+    for (const auto& candidate : job.candidates)
+        candidates.push_back(candidateToJson(candidate));
+
+    return json{
+        {"success", true},
+        {"job_id", job.id.toStdString()},
+        {"status", job.status.toStdString()},
+        {"completed", job.completed},
+        {"render_success", job.success},
+        {"message", job.message.toStdString()},
+        {"input_path", job.inputPath.toStdString()},
+        {"output_directory", job.outputDirectory.toStdString()},
+        {"plugin_path", job.pluginPath.toStdString()},
+        {"progress", progressToJson(job.progress)},
+        {"candidates", candidates}
+    };
 }
 
 static float getNumberProperty(const juce::var& object, const char* name, float fallback)
@@ -170,6 +275,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "mastering.plan_preview")      return previewMasteringPlan(params, p);
     if (method == "mastering.apply_plan")        return applyMasteringPlan(params, p);
     if (method == "mastering.render_batch")      return renderMasteringBatch(params, p);
+    if (method == "mastering.render_status")     return getMasteringRenderStatus(params);
     if (method == "mastering.select_candidate")  return selectMasteringCandidate(params, p);
     if (method == "plugin_profile.audit_parameters") return auditPluginProfile(p);
     if (method == "plugin_profile.get")          return getPluginProfile(params, p);

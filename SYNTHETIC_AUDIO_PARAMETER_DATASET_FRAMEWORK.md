@@ -7,13 +7,13 @@
 
 This framework provides a comprehensive methodology for generating high-quality synthetic datasets that map continuous numerical parameters from VST plugins to complex high-dimensional audio array outputs. The framework is designed for machine learning applications including parameter estimation, audio style transfer, and plugin behavior modeling.
 
-This framework is implemented in **MorphSnap v3.3.0**, a JUCE 8-based VST3/AU plugin. The C++ implementation is in [`src/AI/Dataset/`](src/AI/Dataset/), and Python dataset generators are available in the project root.
+This framework is implemented in **More-Phi v3.3.0**, a JUCE 8-based VST3/AU plugin. The C++ implementation is in [`src/AI/Dataset/`](src/AI/Dataset/), and Python dataset generators are available in the project root.
 
 ---
 
 ## Implementation Reference
 
-This framework is fully implemented in MorphSnap v3.3.0. The following sections reference the actual C++ and Python implementations.
+This framework is fully implemented in More-Phi v3.3.0. The following sections reference the actual C++ and Python implementations.
 
 ### C++ Implementation (src/AI/Dataset/)
 
@@ -875,7 +875,7 @@ Maintain a dataset card documenting:
 
 ## 9. References
 
-- **MorphSnap**: JUCE 8-based VST3/AU plugin (https://github.com/morphsynth/morphsnap)
+- **More-Phi**: JUCE 8-based VST3/AU plugin (https://github.com/morphsynth/morphsnap)
 - **Librosa**: Python library for audio feature extraction (https://librosa.org)
 - **WebDataset**: Large-scale data loading (https://webdataset.github.io/webdataset/)
 - **HDF5**: Hierarchical Data Format (https://www.hdfgroup.org)
@@ -1126,7 +1126,7 @@ Use three layers of feature extraction:
 | Temporal and dynamics | RMS, peak, crest factor, attack time, zero-crossing rate, transient density, envelope features | Captures dynamics processing behavior |
 | Perceptual and high-level | LUFS, true peak, dynamic range, brightness, roughness, sharpness, stereo width, learned embeddings | Captures listener-relevant changes |
 
-The existing MorphSnap `FeatureExtractor` already supports a practical global feature layer with 31 scalars plus frame-level sequences:
+The existing More-Phi `FeatureExtractor` already supports a practical global feature layer with 31 scalars plus frame-level sequences:
 
 - Spectral: MFCC, centroid, rolloff, flux, spread, flatness, chroma
 - Temporal: RMS, peak, crest factor, attack time, transient density, zero-crossing rate
@@ -1397,7 +1397,7 @@ The dataset is ready for model training when all of the following are true:
 - Audio QC flags are present and audited, not silently discarded.
 - Storage supports random access for analysis and streamed access for training.
 
-## 12. MorphSnap-Aligned Implementation Notes
+## 12. More-Phi-Aligned Implementation Notes
 
 This framework aligns with the current repository structure:
 

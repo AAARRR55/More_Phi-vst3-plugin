@@ -206,19 +206,19 @@ function Write-RecommendationBlock {
 
     if ($CauseUnion -contains "resource-exhaustion" -or $CauseUnion -contains "excessive-parallel-jobs") {
         Write-Host " - Keep --parallel 2 as default on this machine; use --parallel 1 when stability is more important than speed."
-        Write-Host " - Keep MORPHSNAP_MSVC_MP at 2 (or reduce to 1 if --parallel 4 is required)."
+        Write-Host " - Keep MORE_PHI_MSVC_MP at 2 (or reduce to 1 if --parallel 4 is required)."
     }
     if ($CauseUnion -contains "swap-or-disk-pressure") {
         Write-Host " - Free C: drive to at least 25 GB before builds."
         Write-Host " - Keep pagefile enabled and sized to 24-32 GB for this 16 GB RAM system."
-        Write-Host " - Consider building from D: with: cmake -S . -B D:/morphy-build -DMORPHSNAP_SAFE_BUILD_MODE=ON"
+        Write-Host " - Consider building from D: with: cmake -S . -B D:/morphy-build -DMORE_PHI_SAFE_BUILD_MODE=ON"
     }
     if ($CauseUnion -contains "possible-thermal-throttling") {
         Write-Host " - Improve cooling (fan profile, cooling pad, clean vents, hard surface)."
         Write-Host " - Re-run with --parallel 1 or 2 and compare clock ratio stability."
     }
     if ($CauseUnion -contains "cmake-or-toolchain-configuration-pressure") {
-        Write-Host " - Keep MORPHSNAP_ENABLE_LTO=OFF for local development."
+        Write-Host " - Keep MORE_PHI_ENABLE_LTO=OFF for local development."
         Write-Host " - Use safe preset for local work and reserve aggressive flags for CI/release."
     }
     if ($CauseUnion -contains "system-level-instability-signals") {
@@ -241,7 +241,7 @@ New-Item -ItemType Directory -Force -Path $resolvedLogDir | Out-Null
 $snapshot = Get-SystemSnapshot
 $events = @(Get-RecentCriticalEvents)
 
-Write-Host "=== MorphSnap Build Freeze Diagnostics ===" -ForegroundColor Cyan
+Write-Host "=== MorePhi Build Freeze Diagnostics ===" -ForegroundColor Cyan
 Write-Host ("Host: {0}" -f $snapshot.OS)
 Write-Host ("OS  : version {0}, build {1}" -f $snapshot.OSVersion, $snapshot.BuildNumber)
 Write-Host ("CPU : {0} ({1} logical processors, max {2} MHz)" -f $snapshot.CPU, $snapshot.LogicalProcessors, $snapshot.MaxClockMHz)

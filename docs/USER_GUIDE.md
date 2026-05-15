@@ -1,6 +1,6 @@
-# MorphSnap User Guide
+# More-Phi User Guide
 
-A complete guide to using MorphSnap, the AI-ready parameter morphing engine for audio plugins.
+A complete guide to using More-Phi, the AI-ready parameter morphing engine for audio plugins.
 
 ---
 
@@ -21,7 +21,7 @@ A complete guide to using MorphSnap, the AI-ready parameter morphing engine for 
 
 ## Introduction
 
-MorphSnap is a unique audio plugin that lets you:
+More-Phi is a unique audio plugin that lets you:
 - **Host other plugins** inside it (synths, effects, instruments)
 - **Capture snapshots** of parameter states
 - **Morph between sounds** in real-time using a 2D pad or 1D fader
@@ -41,9 +41,9 @@ MorphSnap is a unique audio plugin that lets you:
 
 ## Getting Started
 
-### Step 1: Add MorphSnap to Your DAW
+### Step 1: Add More-Phi to Your DAW
 
-1. Insert MorphSnap on an audio track or instrument track
+1. Insert More-Phi on an audio track or instrument track
 2. The plugin window opens showing the main interface
 
 ### Step 2: Load a Plugin to Host
@@ -190,7 +190,7 @@ Currently requires manually overwriting each slot or reloading the plugin.
 
 ### Meta Preset Manager
 
-MorphSnap provides its own internal preset system saving snapshot banks:
+More-Phi provides its own internal preset system saving snapshot banks:
 
 - **Banks:** 16 banks available (switchable via UI or MIDI CC#0)
 - **Presets:** 128 presets per bank
@@ -356,7 +356,7 @@ When triggering snapshots via MIDI, you can toggle **Full Recall vs Param-only R
 
 ### Setup
 
-1. Enable MIDI input on the track hosting MorphSnap
+1. Enable MIDI input on the track hosting More-Phi
 2. Route MIDI from controller or another track
 3. MIDI is processed automatically
 
@@ -366,7 +366,7 @@ When triggering snapshots via MIDI, you can toggle **Full Recall vs Param-only R
 
 ### What is MCP?
 
-MCP (Model Context Protocol) is a standard for AI assistants to interact with applications. MorphSnap runs an MCP server that lets AI tools:
+MCP (Model Context Protocol) is a standard for AI assistants to interact with applications. More-Phi runs an MCP server that lets AI tools:
 
 - Query plugin state
 - Modify parameters
@@ -378,7 +378,7 @@ MCP (Model Context Protocol) is a standard for AI assistants to interact with ap
 1. Check AI Status panel shows "MCP Running"
 2. Note the port number (default 30001)
 3. Configure your AI client to connect to localhost:30001
-4. AI can now send commands to MorphSnap
+4. AI can now send commands to More-Phi
 
 ### Example AI Workflows
 
@@ -446,7 +446,7 @@ MCP (Model Context Protocol) is a standard for AI assistants to interact with ap
 
 ## Keyboard Shortcuts
 
-Currently, MorphSnap does not have keyboard shortcuts. All interaction is via mouse, MIDI, or MCP.
+Currently, More-Phi does not have keyboard shortcuts. All interaction is via mouse, MIDI, or MCP.
 
 ---
 

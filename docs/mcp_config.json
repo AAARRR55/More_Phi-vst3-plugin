@@ -1,6 +1,6 @@
 {
     "mcpServers": {
-        "morphsnap": {
+        "morephi": {
             "command": "node",
             "args": [
                 "d:/morphy/docs/mcp_bridge.js"

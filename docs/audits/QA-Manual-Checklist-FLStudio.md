@@ -10,8 +10,8 @@
 
 | # | Test | Procedure | Result | Notes |
 |---|------|-----------|--------|-------|
-| 8.1.1 | Plugin scan | Open plugin browser, search "MorphSnap" | ☐ PASS ☐ FAIL | Should appear with correct name and version |
-| 8.1.2 | Instantiation | Add MorphSnap to mixer slot | ☐ PASS ☐ FAIL | Must load without crash; UI renders correctly |
+| 8.1.1 | Plugin scan | Open plugin browser, search "More-Phi" | ☐ PASS ☐ FAIL | Should appear with correct name and version |
+| 8.1.2 | Instantiation | Add More-Phi to mixer slot | ☐ PASS ☐ FAIL | Must load without crash; UI renders correctly |
 | 8.1.3 | Parameter list | Open "Browse parameters" panel | ☐ PASS ☐ FAIL | All automatable parameters must be visible |
 | 8.1.4 | Automation write | Right-click morph position, "Create automation clip", move parameter | ☐ PASS ☐ FAIL | DAW must record automation |
 | 8.1.5 | Automation playback | Play back recorded automation clip | ☐ PASS ☐ FAIL | Smooth morph movement, no zipper noise |
@@ -27,10 +27,10 @@
 
 | # | Test | Procedure | Result | Notes |
 |---|------|-----------|--------|-------|
-| 8.2.1 | Stack size | Host FabFilter Pro-Q 4 inside MorphSnap | ☐ PASS ☐ FAIL | Must not stack-overflow crash (4 MB stack configured) |
-| 8.2.2 | Wrapper compatibility | Use MorphSnap inside FL Studio plugin wrapper | ☐ PASS ☐ FAIL | Full functionality within wrapper |
-| 8.2.3 | Patcher | Add MorphSnap inside FL Studio Patcher | ☐ PASS ☐ FAIL | Full functionality — no crash or broken routing |
-| 8.2.4 | Fruity Envelope Controller | Route Fruity Envelope Controller output to MorphSnap CC1 | ☐ PASS ☐ FAIL | Morph position must follow envelope shape |
+| 8.2.1 | Stack size | Host FabFilter Pro-Q 4 inside More-Phi | ☐ PASS ☐ FAIL | Must not stack-overflow crash (4 MB stack configured) |
+| 8.2.2 | Wrapper compatibility | Use More-Phi inside FL Studio plugin wrapper | ☐ PASS ☐ FAIL | Full functionality within wrapper |
+| 8.2.3 | Patcher | Add More-Phi inside FL Studio Patcher | ☐ PASS ☐ FAIL | Full functionality — no crash or broken routing |
+| 8.2.4 | Fruity Envelope Controller | Route Fruity Envelope Controller output to More-Phi CC1 | ☐ PASS ☐ FAIL | Morph position must follow envelope shape |
 
 ---
 
@@ -49,7 +49,7 @@
 | # | Test | Procedure | Result | Notes |
 |---|------|-----------|--------|-------|
 | A.1 | Smooth morph | Create 2 snapshots with drastically different EQ curves, morph between them | ☐ PASS ☐ FAIL | Smooth spectral transition, no clicks/pops/zipper noise |
-| A.2 | MIDI note trigger | Route MIDI track to MorphSnap, play C3-B3 chromatically | ☐ PASS ☐ FAIL | Each note triggers correct snapshot slot |
+| A.2 | MIDI note trigger | Route MIDI track to More-Phi, play C3-B3 chromatically | ☐ PASS ☐ FAIL | Each note triggers correct snapshot slot |
 | A.3 | CC1 sweep | Automate CC1 from 0 to 127 and back | ☐ PASS ☐ FAIL | Smooth morph position follow, no zipper noise |
 
 ---

@@ -1,8 +1,8 @@
-# MorphSnap V2 Implementation — Agent Team Design
+# More-Phi V2 Implementation — Agent Team Design
 
 **Date:** 2026-02-26
 **Approach:** Module-Ownership (7 parallel agents, zero file conflicts)
-**Source Spec:** `docs/MORPHSNAP_V2_SPEC.md` (1512 lines)
+**Source Spec:** `docs/MORE_PHI_V2_SPEC.md` (1512 lines)
 
 ## Agent Roster
 
@@ -18,7 +18,7 @@
 
 ## Conventions
 
-- Namespace: `morphsnap`
+- Namespace: `morephi`
 - Audio thread: `noexcept`, zero alloc after `prepare()`, no locks
 - Headers: `#pragma once`, JUCE-style formatting
 - Interfaces: pure virtual, `I` prefix, `virtual ~I() = default`

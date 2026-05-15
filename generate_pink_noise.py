@@ -90,7 +90,7 @@ def main():
     print(f"Saved: {args.output} ({file_size_kb:.0f} KB, {num_samples} frames)")
     print()
     print("Next step: Load this WAV file into an FL Studio playlist track")
-    print("and route it through MorphSnap hosting Pro-Q 4.")
+    print("and route it through MorePhi hosting Pro-Q 4.")
 
 
 if __name__ == "__main__":

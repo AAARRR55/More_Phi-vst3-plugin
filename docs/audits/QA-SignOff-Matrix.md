@@ -1,4 +1,4 @@
-# QA Sign-Off Matrix — MorphSnap v3.3.0 Pre-Deployment
+# QA Sign-Off Matrix — More-Phi v3.3.0 Pre-Deployment
 
 **Release:** ________________  **Date:** ________________
 

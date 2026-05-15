@@ -109,7 +109,7 @@ SnappySnap operates as a **plugin host wrapper** with the following technical st
 
 #### 3.2.1 Audio Thread Processing (Real-Time)
 
-Based on the open-source MorphSnap implementation (which shares similar architecture):
+Based on the open-source More-Phi implementation (which shares similar architecture):
 
 ```cpp
 // Simplified process block flow
@@ -373,7 +373,7 @@ Protects critical parameters from morphing/randomization (volume, bypass, mute).
 Excludes discrete parameters (like oscillator waveforms or FX routing toggles) from morphing entirely, preventing clicks and pops during transitions.
 
 **Link Mode (Cross-Instance Sync):**
-Synchronizes morph positions across multiple MorphSnap instances using zero-latency shared memory. A "leader" broadcasts X/Y positions to "followers."
+Synchronizes morph positions across multiple More-Phi instances using zero-latency shared memory. A "leader" broadcasts X/Y positions to "followers."
 
 **Recall Toggle (Sustain):**
 When on, swapping snapshots uses full VST state chunks for an exact recall. When off, only parameters are recalled so hosted synth note tails can sustain during the transition.
@@ -645,7 +645,7 @@ The following technical details are **not officially documented**:
 
 | Reference | Relevance |
 |-----------|-----------|
-| MorphSnap Source Code | Architecture reference (similar implementation) |
+| More-Phi Source Code | Architecture reference (similar implementation) |
 | JUCE Framework | Plugin framework used |
 | MCP Specification | AI integration protocol |
 
@@ -655,7 +655,7 @@ The following technical details are **not officially documented**:
 |-------|------------|-------|
 | Core functionality | **High** | Well-documented on official site |
 | Pricing ($55 USD) | **High** | Confirmed in official FAQ |
-| Technical architecture | **Medium-High** | Inferred from features + MorphSnap code reference |
+| Technical architecture | **Medium-High** | Inferred from features + More-Phi code reference |
 | CPU/Latency specs | **Medium** | Not officially benchmarked |
 | User reviews | **Medium** | Limited (recent release) |
 | Developer history | **High** | Detailed on About page |

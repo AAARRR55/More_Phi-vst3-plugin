@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PLUGIN_NAME: MorphSnap
+  PLUGIN_NAME: MorePhi
 
 jobs:
   build-windows-vst3:
@@ -41,11 +41,11 @@ jobs:
           cmake -B build `
             -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DMORPHSNAP_BUILD_TESTS=OFF `
-            -DMORPHSNAP_COPY_PLUGIN_AFTER_BUILD=OFF
+            -DMORE_PHI_BUILD_TESTS=OFF `
+            -DMORE_PHI_COPY_PLUGIN_AFTER_BUILD=OFF
 
-      - name: Build MorphSnap_VST3
-        run: cmake --build build --config Release --target MorphSnap_VST3 --parallel 2
+      - name: Build MorePhi_VST3
+        run: cmake --build build --config Release --target MorePhi_VST3 --parallel 2
 
       - name: Collect VST3 artifact
         shell: pwsh

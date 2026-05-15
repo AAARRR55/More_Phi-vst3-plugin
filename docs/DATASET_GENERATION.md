@@ -1,4 +1,4 @@
-# MorphSnap Dataset Generation Guide
+# More-Phi Dataset Generation Guide
 
 **Version:** 3.3.0  
 **Last Updated:** March 2026
@@ -7,9 +7,9 @@
 
 ## Overview
 
-MorphSnap includes a comprehensive dataset generation system for creating synthetic audio training data for Machine Learning models. The system renders audio clips with various parameter configurations from hosted plugins and exports both the audio and corresponding parameter metadata.
+More-Phi includes a comprehensive dataset generation system for creating synthetic audio training data for Machine Learning models. The system renders audio clips with various parameter configurations from hosted plugins and exports both the audio and corresponding parameter metadata.
 
-> **Note:** Dataset V3 is always compiled. `-DMORPHSNAP_ENABLE_DATASET_V3=ON|OFF` is retained only as a deprecated compatibility flag (no-op).
+> **Note:** Dataset V3 is always compiled. `-DMORE_PHI_ENABLE_DATASET_V3=ON|OFF` is retained only as a deprecated compatibility flag (no-op).
 
 ---
 
@@ -236,9 +236,9 @@ CLI interface and configuration schema:
 
 **Command-Line Options:**
 ```bash
-morphsnap-dataset -c config.json                    # From config file
-morphsnap-dataset -o ./dataset -n 1000              # Direct options
-morphsnap-dataset -c config.json --dry-run          # Validate only
+morephi-dataset -c config.json                    # From config file
+morephi-dataset -o ./dataset -n 1000              # Direct options
+morephi-dataset -c config.json --dry-run          # Validate only
 
 Options:
   -h, --help           Show help message
@@ -409,7 +409,7 @@ Hung thread detection:
 ```json
 {
   "outputDirectory": "./dataset",
-  "datasetName": "morphsnap_dataset",
+  "datasetName": "morephi_dataset",
   "totalSamples": 1000,
   "randomSeed": 42,
   "sampleRate": 48000,
@@ -529,13 +529,13 @@ output_path/
 
 ### Standard Build
 ```bash
-cmake -B build -S . -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_ENABLE_DATASET_V3=OFF
 cmake --build build --config Release
 ```
 
 ### Compatibility-Flag Build (Equivalent Output)
 ```bash
-cmake -B build -S . -DMORPHSNAP_ENABLE_DATASET_V3=ON -DMORPHSNAP_BUILD_TESTS=ON
+cmake -B build -S . -DMORE_PHI_ENABLE_DATASET_V3=ON -DMORE_PHI_BUILD_TESTS=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 ```

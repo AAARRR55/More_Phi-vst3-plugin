@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MorphSnap is a JUCE 8-based VST3/AU audio plugin (C++20) that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, and AI integration via an embedded MCP server. Version 3.3.0.
+More-Phi is a JUCE 8-based VST3/AU audio plugin (C++20) that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, and AI integration via an embedded MCP server. Version 3.3.0.
 
 ## Build Commands
 
 ```bash
 # Configure (first time or after CMakeLists.txt changes)
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
 
 # Build Release
 cmake --build build --config Release
@@ -25,18 +25,18 @@ cd build && ctest --build-config Release --output-on-failure --parallel 4
 cd build && ctest -R "TestName" --output-on-failure
 
 # Run tests with sanitizers (Clang/GCC only)
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 cd build && ctest --build-config Debug --output-on-failure
 ```
 
-CMake options: `MORPHSNAP_BUILD_TESTS` (ON/OFF), `MORPHSNAP_COPY_PLUGIN_AFTER_BUILD` (OFF by default), `MORPHSNAP_ENABLE_SANITIZERS` (ASAN+UBSAN, Clang/GCC only).
+CMake options: `MORE_PHI_BUILD_TESTS` (ON/OFF), `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (OFF by default), `MORE_PHI_ENABLE_SANITIZERS` (ASAN+UBSAN, Clang/GCC only).
 
 Dependencies (all fetched automatically via FetchContent): JUCE 8.0.4, nlohmann/json 3.11.3, Catch2 v3.4.0.
 
 ## Architecture
 
-Everything is in the `morphsnap` namespace. The plugin entry point is `MorphSnapProcessor` (inherits `juce::AudioProcessor`), which owns all subsystems as member variables (no singletons except `InstanceRegistry`).
+Everything is in the `morephi` namespace. The plugin entry point is `MorePhiProcessor` (inherits `juce::AudioProcessor`), which owns all subsystems as member variables (no singletons except `InstanceRegistry`).
 
 ### Processing Pipeline (audio thread)
 
@@ -53,7 +53,7 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 
 | Layer | Key Classes | Role |
 |-------|------------|------|
-| `src/Plugin/` | `MorphSnapProcessor`, `MorphSnapEditor` | JUCE plugin entry points, owns all subsystems |
+| `src/Plugin/` | `MorePhiProcessor`, `MorePhiEditor` | JUCE plugin entry points, owns all subsystems |
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
 | `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner` | VST3/AU hosting, parameter read/write |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
@@ -90,7 +90,7 @@ Three thread domains with strict boundaries:
 
 ### Dataset Generation (V2/V3)
 
-MorphSnap includes a comprehensive dataset generation system for creating synthetic audio training data. **Dataset V3 is always compiled** (`MORPHSNAP_ENABLE_DATASET_V3` is retained as a deprecated compatibility flag/no-op).
+More-Phi includes a comprehensive dataset generation system for creating synthetic audio training data. **Dataset V3 is always compiled** (`MORE_PHI_ENABLE_DATASET_V3` is retained as a deprecated compatibility flag/no-op).
 
 **V2 Components (Sequential Pipeline):**
 - `DatasetGeneratorV2` — Main orchestrator integrating all modules
@@ -126,13 +126,13 @@ MorphSnap includes a comprehensive dataset generation system for creating synthe
 
 ## Tests
 
-Tests use Catch2 v3 and link against the `MorphSnap` shared-code target. Test sources:
+Tests use Catch2 v3 and link against the `More-Phi` shared-code target. Test sources:
 
 - `tests/Unit/` — Core engine unit tests (interpolation, physics, genetics, sidechain)
 - `tests/Integration/` — Plugin lifecycle and MCP integration
-- `tests/Performance/` — Benchmark suite (opt-in via `MORPHSNAP_BUILD_BENCHMARKS`)
+- `tests/Performance/` — Benchmark suite (opt-in via `MORE_PHI_BUILD_BENCHMARKS`)
 
-Tests compile with `MORPHSNAP_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
+Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 
 ## Platform Notes
 

@@ -1,12 +1,12 @@
-# MorphSnap API Reference
+# More-Phi API Reference
 
-This document describes the MCP (Model Context Protocol) API for MorphSnap, enabling AI assistants and external tools to control the plugin programmatically.
+This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically.
 
 ---
 
 ## Overview
 
-MorphSnap exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool calls for:
+More-Phi exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool calls for:
 - Plugin information queries
 - Parameter manipulation
 - Snapshot management
@@ -149,7 +149,7 @@ Initialize the MCP connection and get server capabilities.
         "tools": {}
     },
     "serverInfo": {
-        "name": "MorphSnap",
+        "name": "More-Phi",
         "version": "1.0.0"
     }
 }
@@ -208,7 +208,7 @@ Returns information about the currently hosted plugin.
 
 ### list_parameters
 
-Lists all parameters with their current values.
+Lists all hosted plugin parameters with their current values and mapping metadata.
 
 **Method:** `tools/call`
 
@@ -222,21 +222,28 @@ Lists all parameters with their current values.
 
 **Response:**
 ```json
-{
-    "parameters": [
-        { "index": 0, "name": "Master Volume", "value": 0.75, "defaultValue": 1.0 },
-        { "index": 1, "name": "Filter Cutoff", "value": 0.5, "defaultValue": 0.5 },
-        // ... more parameters
-    ],
-    "count": 472
-}
+[
+    {
+        "id": 0,
+        "index": 0,
+        "stableId": "master_volume",
+        "name": "Master Volume",
+        "value": 0.75,
+        "displayValue": "-3.0 dB",
+        "label": "dB",
+        "discrete": false,
+        "boolean": false,
+        "numSteps": 0,
+        "defaultValue": 1.0
+    }
+]
 ```
 
 ---
 
 ### get_parameter
 
-Get a single parameter by index.
+Get a single parameter by `stableId`, numeric `index`/`id`, or exact name.
 
 **Method:** `tools/call`
 
@@ -245,7 +252,7 @@ Get a single parameter by index.
 {
     "name": "get_parameter",
     "arguments": {
-        "index": 0
+        "stableId": "master_volume"
     }
 }
 ```
@@ -253,9 +260,16 @@ Get a single parameter by index.
 **Response:**
 ```json
 {
+    "id": 0,
     "index": 0,
+    "stableId": "master_volume",
     "name": "Master Volume",
     "value": 0.75,
+    "displayValue": "-3.0 dB",
+    "label": "dB",
+    "discrete": false,
+    "boolean": false,
+    "numSteps": 0,
     "defaultValue": 1.0
 }
 ```
@@ -264,7 +278,7 @@ Get a single parameter by index.
 
 ### set_parameter
 
-Set a single parameter value.
+Set a single parameter value. Identify the target by `stableId` when available, otherwise by numeric `index`/`id` or exact name.
 
 **Method:** `tools/call`
 
@@ -284,7 +298,9 @@ Set a single parameter value.
 {
     "success": true,
     "index": 0,
-    "value": 0.5
+    "value": 0.5,
+    "queued": 1,
+    "rejected": 0
 }
 ```
 
@@ -292,12 +308,13 @@ Set a single parameter value.
 - Value must be normalized (0.0 - 1.0)
 - Changes are applied audio-thread safe via lock-free queue
 - Effect may be delayed by one audio buffer
+- A full queue returns `success: false`, `error: "queue_full"`, and `queued: 0`
 
 ---
 
 ### set_parameters_batch
 
-Set multiple parameters atomically.
+Queue multiple parameter edits in one request. Each item accepts `stableId`, `index`/`id`, or exact `name`.
 
 **Method:** `tools/call`
 
@@ -307,9 +324,9 @@ Set multiple parameters atomically.
     "name": "set_parameters_batch",
     "arguments": {
         "parameters": [
-            { "index": 0, "value": 0.5 },
+            { "stableId": "master_volume", "value": 0.5 },
             { "index": 1, "value": 0.75 },
-            { "index": 2, "value": 0.25 }
+            { "name": "Filter Resonance", "value": 0.25 }
         ]
     }
 }
@@ -319,15 +336,22 @@ Set multiple parameters atomically.
 ```json
 {
     "success": true,
-    "count": 3
+    "queued": 3,
+    "applied": 3,
+    "requested": 3,
+    "rejected": 0,
+    "queueFailures": 0
 }
 ```
+
+If any item cannot be resolved or queued, `success` is `false` and the response includes
+`rejected`, `queueFailures`, and an `error` such as `partial_rejected` or `queue_full`.
 
 ---
 
 ### capture_snapshot
 
-Capture current parameter state to a snapshot slot.
+Capture the current hosted-plugin parameter state to a snapshot slot. By default, this also captures the hosted plugin's opaque state chunk on the message thread, outside the audio callback.
 
 **Method:** `tools/call`
 
@@ -336,7 +360,8 @@ Capture current parameter state to a snapshot slot.
 {
     "name": "capture_snapshot",
     "arguments": {
-        "slot": 0
+        "slot": 0,
+        "includeState": true
     }
 }
 ```
@@ -346,19 +371,22 @@ Capture current parameter state to a snapshot slot.
 {
     "success": true,
     "slot": 0,
-    "parameterCount": 472
+    "includeState": true,
+    "stateChunk": true
 }
 ```
 
 **Notes:**
 - Slot must be 0-11
 - Overwrites existing snapshot if slot is occupied
+- `includeState` may also be sent as `include_state`; default is `true`
+- Capture is performed by taking exclusive hosted-plugin state access. Audio processing skips hosted-plugin processing while this non-audio access is pending instead of blocking the audio thread.
 
 ---
 
 ### recall_snapshot
 
-Recall a snapshot from a slot.
+Recall a snapshot from a slot. Fast recall queues normalized parameter values through the real-time-safe parameter command path. Full recall also schedules the hosted plugin's opaque state chunk for the next message-thread maintenance tick.
 
 **Method:** `tools/call`
 
@@ -367,7 +395,8 @@ Recall a snapshot from a slot.
 {
     "name": "recall_snapshot",
     "arguments": {
-        "slot": 0
+        "slot": 0,
+        "mode": "full"
     }
 }
 ```
@@ -376,12 +405,16 @@ Recall a snapshot from a slot.
 ```json
 {
     "success": true,
-    "slot": 0
+    "slot": 0,
+    "queued": 472,
+    "mode": "full"
 }
 ```
 
 **Notes:**
 - Returns error if slot is empty
+- Use `mode: "fast"` for params-only recall. Full recall can also be requested with `full: true`, `includeState: true`, or `include_state: true`.
+- MIDI-triggered full recall keeps parameter recall on the audio-safe queue and defers opaque hosted-state recall to the message thread. This may complete on the next maintenance tick.
 
 ---
 
@@ -407,17 +440,17 @@ Set the morph cursor position.
 |-----------|------|-------|-------------|
 | x | float | 0.0 - 1.0 | Horizontal position |
 | y | float | 0.0 - 1.0 | Vertical position |
+| fader | float | 0.0 - 1.0 | Snap-fader position |
 | source | string | "xy" \| "fader" | Which input mode to use |
 
 **Response:**
 ```json
 {
-    "success": true,
-    "x": 0.5,
-    "y": 0.5,
-    "source": "xy"
+    "success": true
 }
 ```
+
+`set_morph_position` updates the processor atomics and cached APVTS raw values immediately, then posts host automation begin/set/end notifications from the message thread. Internal morph response is block-accurate.
 
 ---
 

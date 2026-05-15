@@ -63,7 +63,7 @@ verify_*.ps1
 # Parameter dumps & session data
 *_params.json
 *_params_live.json
-morphsnap_*.json
+morephi_*.json
 temp_params*.json
 neutron5_params.json
 params_list.json
@@ -74,7 +74,7 @@ ai-insights-*.txt
 mix-analyzer-*.json
 chain_verification.json
 spicy_verification_report.json
-morphsnap_connection_test.json
+morephi_connection_test.json
 
 # Agent/swarm configs
 .claude-flow/

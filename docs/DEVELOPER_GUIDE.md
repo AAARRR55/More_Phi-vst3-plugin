@@ -1,6 +1,6 @@
-# MorphSnap Developer Guide
+# More-Phi Developer Guide
 
-Guide for developers who want to build, modify, or contribute to MorphSnap.
+Guide for developers who want to build, modify, or contribute to More-Phi.
 
 ---
 
@@ -50,8 +50,8 @@ Guide for developers who want to build, modify, or contribute to MorphSnap.
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/morphsnap.git
-cd morphsnap
+git clone https://github.com/your-repo/morephi.git
+cd morephi
 
 # Configure and build
 cmake -B build -S .
@@ -78,13 +78,13 @@ cmake --build build --config RelWithDebInfo
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `MORPHSNAP_TRACK_ALLOCATIONS` | OFF | Enable allocation tracking in debug |
-| `MORPHSNAP_BUILD_TESTS` | ON | Build Catch2 test executable |
-| `MORPHSNAP_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
-| `MORPHSNAP_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
+| `MORE_PHI_TRACK_ALLOCATIONS` | OFF | Enable allocation tracking in debug |
+| `MORE_PHI_BUILD_TESTS` | ON | Build Catch2 test executable |
+| `MORE_PHI_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
+| `MORE_PHI_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
 
 ```bash
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_TRACK_ALLOCATIONS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
 ```
 
 ### Build Artifacts
@@ -93,16 +93,16 @@ After building, find outputs at:
 
 | Platform | Path |
 |----------|------|
-| Windows VST3 | `build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3` |
-| macOS VST3 | `build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3` |
-| macOS AU | `build/MorphSnap_artefacts/Release/AU/MorphSnap.component` |
+| Windows VST3 | `build/MorePhi_artefacts/Release/VST3/MorePhi.vst3` |
+| macOS VST3 | `build/MorePhi_artefacts/Release/VST3/MorePhi.vst3` |
+| macOS AU | `build/MorePhi_artefacts/Release/AU/More-Phi.component` |
 
 ---
 
 ## Project Structure
 
 ```
-morphsnap/
+morephi/
 ├── CMakeLists.txt          # Build configuration
 ├── README.md               # User documentation
 ├── LICENSE                 # MIT License
@@ -138,7 +138,7 @@ morphsnap/
 │   │   ├── MetaPresetManager.h/cpp
 │   │   └── PresetSerializer.h/cpp
 │   └── UI/                 # User interface
-│       ├── MorphSnapLookAndFeel.h/cpp
+│       ├── MorePhiLookAndFeel.h/cpp
 │       ├── MorphPad.h/cpp
 │       ├── SnapFader.h/cpp
 │       └── ...
@@ -155,7 +155,7 @@ morphsnap/
 
 ### Audio Thread Safety
 
-MorphSnap follows strict real-time audio guidelines:
+More-Phi follows strict real-time audio guidelines:
 
 1. **Zero allocations in processBlock** - All memory pre-allocated in prepareToPlay
 2. **Lock-free communication** - SPSC queues for thread messaging
@@ -229,7 +229,7 @@ MorphSnap follows strict real-time audio guidelines:
 ### C++ Style
 
 - **C++20** features allowed (concepts, ranges, etc.)
-- **Namespaces:** All code in `namespace morphsnap {}`
+- **Namespaces:** All code in `namespace more_phi {}`
 - **Naming:**
   - `PascalCase` for types
   - `camelCase_` for member variables (trailing underscore)
@@ -240,7 +240,7 @@ MorphSnap follows strict real-time audio guidelines:
 
 ```cpp
 /*
- * MorphSnap — Module/FileName.h
+ * More-Phi — Module/FileName.h
  * Brief description of the file.
  */
 #pragma once
@@ -250,7 +250,7 @@ MorphSnap follows strict real-time audio guidelines:
 
 #include "ProjectHeaders.h"
 
-namespace morphsnap {
+namespace more_phi {
 
 class ClassName
 {
@@ -269,7 +269,7 @@ private:
     int memberVariable_ = 0;
 };
 
-} // namespace morphsnap
+} // namespace more_phi
 ```
 
 ### Audio Thread Rules
@@ -318,7 +318,7 @@ Enable debug logging:
 
 ```cpp
 #if JUCE_DEBUG
-    DBG("MorphSnap: " << value);
+    DBG("More-Phi: " << value);
 #endif
 ```
 
@@ -326,7 +326,7 @@ Enable debug logging:
 
 Enable in build:
 ```bash
-cmake -B build -S . -DMORPHSNAP_TRACK_ALLOCATIONS=ON
+cmake -B build -S . -DMORE_PHI_TRACK_ALLOCATIONS=ON
 ```
 
 Use in code:
@@ -357,8 +357,8 @@ void processBlock(...)
 ### IDE Setup
 
 **Visual Studio:**
-1. Open `build/MorphSnap.sln`
-2. Set MorphSnap as startup project
+1. Open `build/More-Phi.sln`
+2. Set More-Phi as startup project
 3. Configure debugging to launch DAW
 
 **CLion:**
@@ -378,19 +378,19 @@ void processBlock(...)
 
 ```bash
 # Build tests
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
 cmake --build build --parallel 2
 
 # Run all wired tests
 ctest --test-dir build --output-on-failure
 
 # Optional: validate compatibility-flag permutations (V3 is always compiled)
-cmake -B build-v3 -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=ON
+cmake -B build-v3 -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=ON
 cmake --build build-v3 --parallel 2
 ctest --test-dir build-v3 --output-on-failure
 
 # Run benchmarks
-./build/tests/MorphSnapBenchmarks
+./build/tests/More-PhiBenchmarks
 ```
 
 ### Unit Test Pattern

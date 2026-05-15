@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document defines the validation strategy for the MorphSnap synthetic audio-parameter dataset framework. The framework is already fully implemented in `src/AI/Dataset/` with all 6 deliverables present. This design validates that it meets all success criteria.
+This document defines the validation strategy for the More-Phi synthetic audio-parameter dataset framework. The framework is already fully implemented in `src/AI/Dataset/` with all 6 deliverables present. This design validates that it meets all success criteria.
 
 ## Background
 

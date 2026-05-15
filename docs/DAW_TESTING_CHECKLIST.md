@@ -7,7 +7,7 @@ Automated integration tests cover the programmatic API contract — this checkli
 
 ## Pre-Test Setup
 - [ ] Build Release VST3: `cmake --build build --config Release`
-- [ ] Copy `MorphSnap.vst3` to system plugin folder
+- [ ] Copy `MorePhi.vst3` to system plugin folder
 - [ ] Rescan plugins in each DAW
 
 ---

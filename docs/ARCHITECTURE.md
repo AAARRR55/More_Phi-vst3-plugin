@@ -1,4 +1,4 @@
-# MorphSnap - Architecture Document
+# More-Phi - Architecture Document
 
 **Date:** 2026-03-04
 **Version:** 3.3.0
@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-MorphSnap is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
+More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
 
 ## Technology Stack
 
@@ -22,7 +22,7 @@ MorphSnap is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and pr
 
 ## Architecture Pattern
 
-MorphSnap follows a **layered plugin architecture** where:
+More-Phi follows a **layered plugin architecture** where:
 
 1. **Plugin layer** (entry point) owns all subsystem instances as member variables
 2. **Core layer** provides pure computation (audio-thread-safe, no I/O)
@@ -33,7 +33,7 @@ MorphSnap follows a **layered plugin architecture** where:
 ```
 ┌─────────────────────────────────────────────────┐
 │                  Plugin Layer                     │
-│         MorphSnapProcessor (owns all)             │
+│         MorePhiProcessor (owns all)             │
 ├──────────┬──────────┬───────────┬────────────────┤
 │  Core    │  Host    │   AI      │   UI            │
 │ (DSP)    │ (VST3)   │  (MCP)    │  (JUCE GUI)     │
@@ -55,7 +55,7 @@ MorphSnap follows a **layered plugin architecture** where:
 Three thread domains with strict boundaries:
 
 ### Audio Thread
-- **Entry:** `MorphSnapProcessor::processBlock()`
+- **Entry:** `MorePhiProcessor::processBlock()`
 - **Classes:** `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` (read side), `MIDIRouter`, `ModulationEngine`, `SpectralMorphEngine`, `GranularMorphEngine`
 - **Contract:** All methods `noexcept`, zero allocations after `prepare()`, no locks, no I/O
 - **Data flow:** Drains `LockFreeQueue` → processes MIDI → computes morph → applies to hosted plugin via `ParameterBridge`
@@ -75,7 +75,7 @@ Three thread domains with strict boundaries:
 | Primitive | Location | Purpose |
 |-----------|----------|----------|
 | Seqlock | `SnapshotBank` | Lock-free audio reads with retry; UI/MCP writes via SpinLock |
-| SPSC LockFreeQueue | `MorphSnapProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio |
+| SPSC LockFreeQueue | `MorePhiProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio |
 | Double-buffer | `ModulationMatrix` | Atomic route publish with mirror-copy |
 | `std::atomic<bool>` | `GranularMorphEngine::active_` | Thread-safe enable/disable |
 | `std::atomic<int>` | `ModulationMatrix::readIndex_` | Buffer swap index |
@@ -167,7 +167,7 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 - **Automated scripts**: Audio quality, real-time safety, VST3 validator (pluginval strictness 5)
 - **Sanitizers**: ASAN + UBSAN via Clang on Linux CI
 
-Tests compile with `MORPHSNAP_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
+Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 
 ## Deployment Architecture
 

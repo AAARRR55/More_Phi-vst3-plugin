@@ -16,9 +16,9 @@
 
 ### Resources
 
-- `morphsnap://plugin/state`: current mode, snapshots, mapped parameters.
-- `morphsnap://audio/context`: metering + analysis summaries.
-- `morphsnap://session/health`: connection state, queue depth, version.
+- `morephi://plugin/state`: current mode, snapshots, mapped parameters.
+- `morephi://audio/context`: metering + analysis summaries.
+- `morephi://session/health`: connection state, queue depth, version.
 
 ### Tools
 

@@ -214,6 +214,6 @@ def audit(dataset_dir, spectro_dir):
         print("  VERDICT: NEEDS IMPROVEMENT")
 
 if __name__ == "__main__":
-    ds = sys.argv[1] if len(sys.argv) > 1 else r"C:\MorphSnap_Datasets\proq4_14k"
-    sp = sys.argv[2] if len(sys.argv) > 2 else r"C:\MorphSnap_Datasets\proq4_14k_spectrograms"
+    ds = sys.argv[1] if len(sys.argv) > 1 else r"C:\MorePhi_Datasets\proq4_14k"
+    sp = sys.argv[2] if len(sys.argv) > 2 else r"C:\MorePhi_Datasets\proq4_14k_spectrograms"
     audit(ds, sp)

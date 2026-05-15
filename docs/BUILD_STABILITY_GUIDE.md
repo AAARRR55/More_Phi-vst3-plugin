@@ -17,15 +17,39 @@ If the machine feels unstable, switch to single-job build:
 cmake --build --preset windows-single --parallel 1
 ```
 
+If CMake reports a stale Visual Studio generator instance, refresh the build
+directory before retrying:
+
+```powershell
+cmake --preset windows-msvc-safe --fresh
+cmake --build --preset windows-single --parallel 1
+```
+
+If `vswhere` does not list Build Tools but `cl.exe` and `nmake.exe` exist on
+disk, use the Developer Command Prompt environment directly as a diagnostic
+fallback:
+
+```powershell
+cmd /d /s /c "`"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat`" && cmake --preset windows-nmake-release --fresh && cmake --build --preset windows-nmake-single"
+```
+
+If that fails with `cl : Command line error D8037 : cannot create temporary il
+file`, first point `TMP` and `TEMP` at a clean workspace temp folder. If the
+error persists, the compiler installation or Windows provider stack needs repair
+before More-Phi can be validated locally. Microsoft documents D8037 as a
+temporary-file creation failure:
+<https://learn.microsoft.com/en-us/cpp/error-messages/tool-errors/command-line-error-d8037>.
+
 ## 2) Preflight checks before heavy builds
 
 1. Keep `C:` free space at `>= 25 GB`.
 2. Keep pagefile enabled and sized to roughly `24-32 GB` for a 16 GB RAM system.
-3. Prefer building on a drive with more headroom (for example `D:`):
+3. Verify Visual Studio Build Tools are registered: `vswhere` should list the 2022 C++ build tools installation, and `MSBuild` should be available from a Developer PowerShell.
+4. Prefer building on a drive with more headroom (for example `D:`):
 
 ```powershell
 cmake -S . -B D:/morphy-build -G "Visual Studio 17 2022" -A x64 `
-  -DMORPHSNAP_SAFE_BUILD_MODE=ON -DMORPHSNAP_MSVC_MP=2 -DMORPHSNAP_ENABLE_LTO=OFF
+  -DMORE_PHI_SAFE_BUILD_MODE=ON -DMORE_PHI_MSVC_MP=2 -DMORE_PHI_ENABLE_LTO=OFF
 cmake --build D:/morphy-build --config Release --parallel 2
 ```
 
@@ -55,20 +79,20 @@ Output:
 
 Configured in `CMakeLists.txt`:
 
-- `MORPHSNAP_SAFE_BUILD_MODE` (default `ON`)
-- `MORPHSNAP_MSVC_MP` (default `2`, set `0` to disable `/MP`)
-- `MORPHSNAP_ENABLE_LTO` (default `OFF` for local stability)
+- `MORE_PHI_SAFE_BUILD_MODE` (default `ON`)
+- `MORE_PHI_MSVC_MP` (default `2`, set `0` to disable `/MP`)
+- `MORE_PHI_ENABLE_LTO` (default `OFF` for local stability)
 
 Recommended local values:
 
 ```powershell
--DMORPHSNAP_SAFE_BUILD_MODE=ON -DMORPHSNAP_MSVC_MP=2 -DMORPHSNAP_ENABLE_LTO=OFF
+-DMORE_PHI_SAFE_BUILD_MODE=ON -DMORE_PHI_MSVC_MP=2 -DMORE_PHI_ENABLE_LTO=OFF
 ```
 
 For aggressive CI/release only:
 
 ```powershell
--DMORPHSNAP_SAFE_BUILD_MODE=OFF -DMORPHSNAP_ENABLE_LTO=ON
+-DMORE_PHI_SAFE_BUILD_MODE=OFF -DMORE_PHI_ENABLE_LTO=ON
 ```
 
 ## 6) Acceptance checks

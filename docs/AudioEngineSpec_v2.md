@@ -1,4 +1,4 @@
-# MorphSnap v2 — Audio Engine & Development Workflow Specification
+# More-Phi v2 — Audio Engine & Development Workflow Specification
 
 Version: 2.0.0-draft
 Date: 2026-02-26
@@ -27,7 +27,7 @@ than hard-coded timing constants, so all rates are automatically correct.
 
 #### Internal Processing Precision: float32
 
-float32 is the correct choice for MorphSnap's processing domain:
+float32 is the correct choice for More-Phi's processing domain:
 
 1. **Parameter morphing operates in [0, 1] normalized space.** The LSB
    of a 32-bit float at 1.0 is ~1.19e-7, giving 24-bit effective
@@ -72,13 +72,13 @@ this ordering.
 
 #### Bit Depth Handling
 
-MorphSnap processes audio as float internally regardless of the DAW's
+More-Phi processes audio as float internally regardless of the DAW's
 bit depth setting. The DAW's audio engine (not the plugin) handles
 conversion between the session bit depth and float.
 
 For **dithering** when the session runs at 16-bit (e.g., for legacy
 hardware): apply TPDF (Triangular Probability Density Function) dither
-before writing to output buffers. This is relevant only if MorphSnap
+before writing to output buffers. This is relevant only if More-Phi
 ever writes audio samples — currently it does not (it is a FX/meta
 plugin). If audio pass-through is added in v2, add:
 
@@ -104,7 +104,7 @@ if (bitDepth_ <= 16) {
 #### Supported Range: 32 to 8192 samples
 
 The design is explicitly block-size independent. No algorithm in
-MorphSnap assumes a specific block size:
+More-Phi assumes a specific block size:
 
 - **Physics engine**: uses `dt = numSamples / sampleRate` — correct at
   any block size.
@@ -194,7 +194,7 @@ x8:            Mastering-grade, extremely CPU intensive. +~850% vs x1.
 
 #### FIR vs IIR Anti-Aliasing Filter Selection
 
-FIR (default for MorphSnap):
+FIR (default for More-Phi):
 - Linear phase — no pre-ringing that could corrupt snapshot transitions
 - Higher CPU (polyphase Kaiser, ~128 taps per stage)
 - Latency: ~(filterOrder / 2) / sampleRate per stage
@@ -240,7 +240,7 @@ Switching from Direct to Spectral mode changes the latency. The correct
 procedure:
 
 ```cpp
-void MorphSnapProcessor::setProcessingMode(ProcessingMode mode) {
+void MorePhiProcessor::setProcessingMode(ProcessingMode mode) {
     // Called on message thread
     processBlock must be paused (JUCE ensures this in prepareToPlay)
 
@@ -261,7 +261,7 @@ void MorphSnapProcessor::setProcessingMode(ProcessingMode mode) {
 After successfully loading a hosted plugin:
 
 ```cpp
-void MorphSnapProcessor::onHostedPluginLoaded() {
+void MorePhiProcessor::onHostedPluginLoaded() {
     if (auto* instance = hostManager.getLoadedPlugin()) {
         int pluginLatency = instance->getLatencySamples();
         latencyManager_.setHostedPluginLatency(pluginLatency);
@@ -277,14 +277,14 @@ void MorphSnapProcessor::onHostedPluginLoaded() {
 
 #### SIMD Strategy: Runtime Dispatch (Chosen over Compile-Time)
 
-MorphSnap distributes a single binary to users with varied CPUs. Runtime
+More-Phi distributes a single binary to users with varied CPUs. Runtime
 dispatch is mandatory:
 
 ```cpp
 // Pattern already established in MorphProcessor.cpp — extend this:
-#if defined(MORPHSNAP_USE_AVX)
+#if defined(MORE_PHI_USE_AVX)
     // AVX2 path: 8 floats/cycle
-#elif defined(MORPHSNAP_USE_SSE)
+#elif defined(MORE_PHI_USE_SSE)
     // SSE2 path: 4 floats/cycle
 #else
     // Scalar fallback
@@ -297,7 +297,7 @@ For v2, add ARM NEON detection for Apple Silicon:
 // Add to MorphProcessor.cpp SIMD detection block:
 #if defined(__ARM_NEON) || defined(__aarch64__)
     #include <arm_neon.h>
-    #define MORPHSNAP_USE_NEON 1
+    #define MORE_PHI_USE_NEON 1
 #endif
 ```
 
@@ -315,7 +315,7 @@ For v2, add ARM NEON detection for Apple Silicon:
 #### NEON Implementation (Apple Silicon)
 
 ```cpp
-#elif defined(MORPHSNAP_USE_NEON)
+#elif defined(MORE_PHI_USE_NEON)
 // ARM NEON path — 4 floats at once (128-bit registers)
 // On Apple Silicon, use NEON via arm_neon.h
 float32x4_t rateVec         = vdupq_n_f32(rate);
@@ -413,7 +413,7 @@ Two mechanisms are already in place:
 For audio signal path (v2), add a high-pass DC blocker:
 
 ```cpp
-// First-order DC blocker — add to audio processing chain if MorphSnap
+// First-order DC blocker — add to audio processing chain if More-Phi
 // ever passes audio (currently it only controls parameters).
 // R = 0.995 for 48 kHz; adjustable via sampleRate.
 class DCBlocker {
@@ -438,7 +438,7 @@ JUCE's `ScopedNoDenormals` sets the CPU's FTZ (Flush-To-Zero) and DAZ
 on ARM. Use it at the top of processBlock:
 
 ```cpp
-void MorphSnapProcessor::processBlock(juce::AudioBuffer<float>& buffer,
+void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                        juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;  // Must be first line
@@ -490,7 +490,7 @@ public:
 
 #### Bypass Behavior
 
-MorphSnap implements **latency-compensated bypass**, not true bypass:
+More-Phi implements **latency-compensated bypass**, not true bypass:
 
 - **True bypass**: Removes the plugin from the signal path entirely. Not
   possible from within a plugin — the DAW controls this.
@@ -551,8 +551,8 @@ find_library(ONNXRUNTIME_LIB
     HINTS ${ONNXRUNTIME_ROOT}/lib
     REQUIRED
 )
-target_link_libraries(MorphSnap PRIVATE ${ONNXRUNTIME_LIB})
-target_include_directories(MorphSnap PRIVATE ${ONNXRUNTIME_ROOT}/include)
+target_link_libraries(More-Phi PRIVATE ${ONNXRUNTIME_LIB})
+target_include_directories(More-Phi PRIVATE ${ONNXRUNTIME_ROOT}/include)
 ```
 
 Package management rationale:
@@ -601,7 +601,7 @@ Key design decisions:
 #### Unit Tests (Catch2 v3)
 
 Files:
-- `tests/Unit/test_morphsnap_unit.cpp` — LFQ, ParameterState, InterpolationEngine, SnapshotBank
+- `tests/Unit/test_morephi_unit.cpp` — LFQ, ParameterState, InterpolationEngine, SnapshotBank
 - `tests/Unit/TestPhysicsAndGenetic.cpp` — PhysicsEngine, GeneticEngine, SanityMode
 - `tests/Unit/TestAudioEngine.cpp` — OversamplingWrapper, buffer size invariants, SNR
 - `tests/Unit/TestDSPQuality.cpp` — LatencyManager, aliasing, monotonicity, smoothing
@@ -630,7 +630,7 @@ under TSan.
 #### Integration Tests
 
 `tests/Integration/` — Plugin lifecycle:
-- Load MorphSnap as a standalone AudioProcessor
+- Load More-Phi as a standalone AudioProcessor
 - Call prepareToPlay(48000, 512) → processBlock(silence) → releaseResources()
 - Verify no assertion failures, no memory leaks (run under ASAN)
 - State save/restore round-trip: getStateInformation → setStateInformation
@@ -655,7 +655,7 @@ For v2, add fuzzing with libFuzzer (Clang) targeting:
 // tests/Fuzz/FuzzPresetParser.cpp
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     juce::MemoryBlock block(data, size);
-    morphsnap::MorphSnapProcessor processor;
+    more_phi::MorePhiProcessor processor;
     // setStateInformation must not crash on arbitrary input
     processor.setStateInformation(data, static_cast<int>(size));
     return 0;
@@ -665,7 +665,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Feed arbitrary bytes as a JSON-RPC message
     std::string input(reinterpret_cast<const char*>(data), size);
-    morphsnap::MCPToolHandler handler(/* mock processor */);
+    more_phi::MCPToolHandler handler(/* mock processor */);
     // Must not crash, throw, or access violate
     handler.processMessage(input);
     return 0;
@@ -717,7 +717,7 @@ cmake -B build-cov \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage"
 
-cmake --build build-cov --target MorphSnapTests
+cmake --build build-cov --target MorePhiTests
 
 cd build-cov && ctest
 
@@ -737,7 +737,7 @@ Coverage targets:
 
 ```ini
 # docs/Doxyfile (key settings)
-PROJECT_NAME           = "MorphSnap Audio Engine"
+PROJECT_NAME           = "More-Phi Audio Engine"
 PROJECT_NUMBER         = 3.3.0
 OUTPUT_DIRECTORY       = docs/api
 INPUT                  = src/
@@ -749,7 +749,7 @@ GENERATE_LATEX         = NO
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 PREDEFINED             = DOXYGEN_SHOULD_SKIP_THIS \
-                         MORPHSNAP_TEST_MODE=0
+                         MORE_PHI_TEST_MODE=0
 
 # Only document public API — not internal implementation details
 EXTRACT_STATIC         = NO
@@ -819,8 +819,8 @@ git push origin v3.4.0
 
 # CI automatically triggers publish-release job.
 # Artifacts named:
-#   MorphSnap-3.4.0-Windows-x64.zip      (VST3)
-#   MorphSnap-3.4.0-macOS-Universal.zip  (VST3 + AU)
+#   More-Phi-3.4.0-Windows-x64.zip      (VST3)
+#   More-Phi-3.4.0-macOS-Universal.zip  (VST3 + AU)
 ```
 
 For pre-releases:
@@ -835,7 +835,7 @@ git tag -a v3.4.0-rc.1 -m "Release candidate 1"
 
 ### Audio Engine
 
-- [ ] Integrate OversamplingWrapper into MorphSnapProcessor::prepareToPlay
+- [ ] Integrate OversamplingWrapper into MorePhiProcessor::prepareToPlay
 - [ ] Integrate LatencyManager and call setLatencySamples() correctly
 - [ ] Add NEON SIMD path to applySmoothing for Apple Silicon
 - [ ] Implement DCBlocker for audio pass-through path

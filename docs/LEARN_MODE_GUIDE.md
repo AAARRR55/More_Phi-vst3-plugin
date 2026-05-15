@@ -1,4 +1,4 @@
-# MorphSnap Learn Mode - Implementation Guide
+# More-Phi Learn Mode - Implementation Guide
 
 > **Version**: 3.3.0  
 > **Feature**: AI Parameter Exposure Control & Token Optimization
@@ -7,7 +7,7 @@
 
 ## Overview
 
-Learn Mode is MorphSnap's intelligent parameter management system that:
+Learn Mode is More-Phi's intelligent parameter management system that:
 
 1. **Classifies parameters** by type (continuous, discrete, binary, etc.)
 2. **Tracks user behavior** to identify important parameters
@@ -250,7 +250,7 @@ display.status;                // "OK", "WARNING", "LIMIT_REACHED"
 ## Integration with Processor
 
 ```cpp
-class MorphSnapProcessor : public juce::AudioProcessor {
+class MorePhiProcessor : public juce::AudioProcessor {
     ParameterClassifier classifier_;
     DiscreteParameterHandler discreteHandler_;
     TokenOptimizer tokenOptimizer_;

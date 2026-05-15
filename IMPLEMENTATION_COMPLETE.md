@@ -1,4 +1,4 @@
-# MorphSnap v3.3.0 Implementation - Complete
+# More-Phi v3.3.0 Implementation - Complete
 
 > **Date**: February 24, 2026  
 > **Status**: All Critical Features Implemented
@@ -193,10 +193,10 @@ optimizer.setTokenBudget(budget);
 
 ### PluginProcessor Integration
 
-The new components are integrated into `MorphSnapProcessor`:
+The new components are integrated into `MorePhiProcessor`:
 
 ```cpp
-class MorphSnapProcessor {
+class MorePhiProcessor {
     // New v3.3.0 components
     ParameterClassifier      parameterClassifier_;
     DiscreteParameterHandler discreteHandler_;

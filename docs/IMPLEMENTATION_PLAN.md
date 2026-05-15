@@ -413,7 +413,7 @@ Comprehensive testing across all target DAWs to verify plugin compatibility, aut
 #include "Plugin/PluginProcessor.h"
 
 TEST_CASE("Plugin reports correct latency", "[DAW]") {
-    MorphSnapProcessor processor;
+    MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
 
     // Plugin should report zero latency (no delay)
@@ -421,7 +421,7 @@ TEST_CASE("Plugin reports correct latency", "[DAW]") {
 }
 
 TEST_CASE("Plugin handles sample rate changes", "[DAW]") {
-    MorphSnapProcessor processor;
+    MorePhiProcessor processor;
 
     processor.prepareToPlay(44100.0, 256);
     REQUIRE_NOTHROW(processor.processBlock(buffer, midi));
@@ -434,8 +434,8 @@ TEST_CASE("Plugin handles sample rate changes", "[DAW]") {
 }
 
 TEST_CASE("Plugin state persists correctly", "[DAW]") {
-    MorphSnapProcessor processor1;
-    MorphSnapProcessor processor2;
+    MorePhiProcessor processor1;
+    MorePhiProcessor processor2;
 
     // Configure processor1
     processor1.morphX = 0.75f;
@@ -548,10 +548,10 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 
 # Verify output
-ls build/MorphSnap_artefacts/Release/VST3/
+ls build/MorePhi_artefacts/Release/VST3/
 ```
 
-Expected output: `MorphSnap.vst3`
+Expected output: `MorePhi.vst3`
 
 ---
 

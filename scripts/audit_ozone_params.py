@@ -66,7 +66,7 @@ def list_parameters(host: str, port: int, token: Optional[str]) -> list:
 EQ_PATTERNS = {
     "freq":    re.compile(r"EQ.*Band\s*(\d+).*Freq(?:uency)?", re.I),
     "gain":    re.compile(r"EQ.*Band\s*(\d+).*Gain", re.I),
-    "q":       re.compile(r"EQ.*Band\s*(\d+).*[QBandwidth]", re.I),
+    "q":       re.compile(r"EQ.*Band\s*(\d+).*(?:Q|Bandwidth)", re.I),
     "type":    re.compile(r"EQ.*Band\s*(\d+).*(?:Type|Shape|Filter)", re.I),
     "enabled": re.compile(r"EQ.*Band\s*(\d+).*(?:Enabled?|On|Active)", re.I),
 }

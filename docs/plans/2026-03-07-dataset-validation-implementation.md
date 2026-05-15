@@ -19,7 +19,7 @@
 
 **Step 1: Build the test target**
 
-Run: `cmake --build build --config Release --target MorphSnapTestCode`
+Run: `cmake --build build --config Release --target More-PhiTestCode`
 Expected: Build succeeds with no errors
 
 **Step 2: Run dataset module tests**
@@ -1391,7 +1391,7 @@ Create `tests/Integration/TestDatasetIntegration.cpp`:
 
 ```cpp
 /*
- * MorphSnap -- tests/Integration/TestDatasetIntegration.cpp
+ * More-Phi -- tests/Integration/TestDatasetIntegration.cpp
  * Integration tests for dataset generation pipeline.
  */
 
@@ -1405,7 +1405,7 @@ Create `tests/Integration/TestDatasetIntegration.cpp`:
 #include <juce_audio_basics/juce_audio_basics.h>
 
 using Catch::Approx;
-using namespace morphsnap;
+using namespace more_phi;
 
 // =============================================================================
 //  V2 Pipeline Integration Tests
@@ -1417,7 +1417,7 @@ TEST_CASE("DatasetGeneratorV2: initialization succeeds", "[dataset][integration]
 
     DatasetGeneratorConfig config;
     config.outputDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                .getChildFile("morphsnap_test_dataset");
+                                .getChildFile("morephi_test_dataset");
     config.totalSamples = 10;
     config.randomSeed = 42;
     config.sampleRate = 48000.0;
@@ -1550,12 +1550,12 @@ set(INTEGRATION_TEST_SOURCES
 )
 
 # Add integration test target
-add_executable(MorphSnapIntegrationTests ${INTEGRATION_TEST_SOURCES})
-target_link_libraries(MorphSnapIntegrationTests PRIVATE
-    MorphSnapTestCode
+add_executable(More-PhiIntegrationTests ${INTEGRATION_TEST_SOURCES})
+target_link_libraries(More-PhiIntegrationTests PRIVATE
+    More-PhiTestCode
     Catch2::Catch2WithMain
 )
-catch_discover_tests(MorphSnapIntegrationTests)
+catch_discover_tests(More-PhiIntegrationTests)
 ```
 
 **Step 3: Build and run integration tests**

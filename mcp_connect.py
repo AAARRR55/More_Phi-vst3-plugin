@@ -1,8 +1,8 @@
 import socket, json, time, os, sys
 
-# SECURITY FIX: Token is now loaded from environment variable MORPHSNAP_TOKEN
+# SECURITY FIX: Token is now loaded from environment variable MORE_PHI_TOKEN
 # DO NOT hardcode tokens in the source code.
-TOKEN = os.environ.get("MORPHSNAP_TOKEN", "").strip()
+TOKEN = os.environ.get("MORE_PHI_TOKEN", "").strip()
 
 def send_rpc(sock, method, params=None, req_id=1):
     msg = {"jsonrpc": "2.0", "method": method, "id": req_id}
@@ -26,8 +26,8 @@ def send_rpc(sock, method, params=None, req_id=1):
 
 if not TOKEN:
     print("[!] ERROR: No bearer token configured!")
-    print("    Please set MORPHSNAP_TOKEN environment variable.")
-    print("    Example: $env:MORPHSNAP_TOKEN=\"your_token_here\" (PowerShell)")
+    print("    Please set MORE_PHI_TOKEN environment variable.")
+    print("    Example: $env:MORE_PHI_TOKEN=\"your_token_here\" (PowerShell)")
     sys.exit(1)
 
 try:

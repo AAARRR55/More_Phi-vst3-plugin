@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fully Automated Dataset Generator for MorphSnap with Hosted Plugin
+Fully Automated Dataset Generator for MorePhi with Hosted Plugin
 Crash-resistant with automatic retry and status monitoring
 
 See SYNTHETIC_AUDIO_PARAMETER_DATASET_FRAMEWORK.md for the complete
@@ -20,8 +20,8 @@ from datetime import datetime
 # Do NOT hardcode credentials in this file.
 #
 # Set environment variables:
-#   MORPHSNAP_TOKEN=<your_bearer_token>
-#   MORPHSNAP_PORT=30001
+#   MORE_PHI_TOKEN=<your_bearer_token>
+#   MORE_PHI_PORT=30001
 #
 # Or create a .env file in the same directory (add .env to .gitignore!)
 
@@ -39,8 +39,8 @@ def load_config():
                     key, value = line.split('=', 1)
                     os.environ.setdefault(key.strip(), value.strip())
     
-    token = os.environ.get('MORPHSNAP_TOKEN', '')
-    port = int(os.environ.get('MORPHSNAP_PORT', '30001'))
+    token = os.environ.get('MORE_PHI_TOKEN', '')
+    port = int(os.environ.get('MORE_PHI_PORT', '30001'))
     
     return token, port
 
@@ -55,11 +55,11 @@ DATASETS = [
     {"name": "Batch_005_Safe", "samples": 10, "duration": 0.5},
 ]
 
-OUTPUT_BASE = "C:/MorphSnap_Datasets"
+OUTPUT_BASE = "C:/MorePhi_Datasets"
 
 # ============================================================================
 
-class MorphSnapMCP:
+class MorePhiMCP:
     def __init__(self, port, token):
         self.port = port
         self.token = token.strip()
@@ -68,7 +68,7 @@ class MorphSnapMCP:
         self.authenticated = False
         
     def connect(self, timeout=10):
-        """Connect to MorphSnap MCP"""
+        """Connect to MorePhi MCP"""
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(timeout)
@@ -209,12 +209,12 @@ def generate_all_datasets():
     print()
     
     # Test connection first
-    print("Testing MorphSnap connection...")
-    mcp = MorphSnapMCP(PORT, BEARER_TOKEN)
+    print("Testing MorePhi connection...")
+    mcp = MorePhiMCP(PORT, BEARER_TOKEN)
     
     if not mcp.connect():
-        print("[FAIL] Cannot connect to MorphSnap")
-        print("Make sure FL Studio is running with MorphSnap loaded")
+        print("[FAIL] Cannot connect to MorePhi")
+        print("Make sure FL Studio is running with MorePhi loaded")
         return
     
     if not mcp.authenticate():
@@ -248,7 +248,7 @@ def generate_all_datasets():
         # Try to generate with retries
         max_retries = 3
         for attempt in range(max_retries):
-            mcp = MorphSnapMCP(PORT, BEARER_TOKEN)
+            mcp = MorePhiMCP(PORT, BEARER_TOKEN)
             
             if not mcp.connect():
                 print(f"       [Attempt {attempt+1}] Connection failed, waiting...")
@@ -348,11 +348,11 @@ if __name__ == "__main__":
         # Validate token
         if not BEARER_TOKEN:
             print("[!] ERROR: No bearer token configured!")
-            print("    Please set MORPHSNAP_TOKEN environment variable or create a .env file")
+            print("    Please set MORE_PHI_TOKEN environment variable or create a .env file")
             print()
             print("    Example .env file:")
-            print("    MORPHSNAP_TOKEN=your_token_here")
-            print("    MORPHSNAP_PORT=30001")
+            print("    MORE_PHI_TOKEN=your_token_here")
+            print("    MORE_PHI_PORT=30001")
             print()
             sys.exit(1)
         

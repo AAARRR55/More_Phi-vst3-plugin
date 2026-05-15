@@ -1,9 +1,9 @@
-# MorphSnap — New Features Reference
+# More-Phi — New Features Reference
 
 ## Overview
 
 This document covers features added during the Phase 4–5 hardening sprint.  
-All features are wired into `MorphSnapProcessor` via APVTS and exposed to DAW automation.
+All features are wired into `MorePhiProcessor` via APVTS and exposed to DAW automation.
 
 ---
 
@@ -46,8 +46,8 @@ void captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
 void recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
 ```
 
-- **Fast** — recalls only the `float[]` parameter snapshot (< 1µs, no allocations)
-- **Full** — also restores the binary state chunk from the hosted plugin (Kontakt, Serum, etc.)
+- **Fast** — recalls only the `float[]` parameter snapshot through the audio-thread-safe parameter queue
+- **Full** — also restores the binary state chunk from the hosted plugin (Kontakt, Serum, etc.) on the message-thread maintenance path
 
 ### State Persistence
 Serialized as `recallMode="0"` attribute on the root XML element.
@@ -144,14 +144,24 @@ All gates pass (Release build, AVX+SSE enabled):
 | `recallToggle` | Bool | `true` |
 
 ### Behavior
-- **On (default):** Full recall with state chunks (same as before)
+- **On (default):** Full recall with state chunks; MIDI-triggered state chunks are scheduled off the audio thread
 - **Off:** Calls `recallFast()` — params-only, notes sustain
+
+---
+
+## 5.1 Compatibility and Timing Boundaries
+
+- Internal morph, MIDI-triggered snapshot recall, and MCP morph-position updates are block-accurate.
+- Hosted plugin parameter and audio processing remain serialized through the audio callback; opaque hosted state capture/recall uses exclusive non-audio access, and audio skips hosted processing while that access is pending.
+- Mono and stereo main layouts are supported. Surround layouts are rejected/unsupported in this batch.
+- The audio-domain morph layer reports latency only for enabled processors. Disabled spectral/granular/oversampling paths do not add PDC.
+- External DAW matrix testing, `pluginval`, and Steinberg `vst3_validator` remain release gates to run when those tools or hosts are installed.
 
 ---
 
 ## 6. Link Mode (Cross-Instance Sync)
 
-**Purpose:** Synchronize morph position across multiple MorphSnap instances in the same DAW session.
+**Purpose:** Synchronize morph position across multiple More-Phi instances in the same DAW session.
 
 ### APVTS Parameter
 | ID | Type | Default |

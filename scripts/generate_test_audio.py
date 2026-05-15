@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MorphSnap Test Audio Generator
+MorePhi Test Audio Generator
 Generates broadband test signals for plugin parameter dataset generation.
 
 The Physics:

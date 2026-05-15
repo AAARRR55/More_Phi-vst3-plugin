@@ -1,4 +1,4 @@
-# MorphSnap High-Level Security & Quality Audit Plan (2026-03-07)
+# More-Phi High-Level Security & Quality Audit Plan (2026-03-07)
 
 ## Status: APPROVED
 ## Goal: Audit high-level integrations (MCP, JSON-RPC, AI Teacher Mode) with focus on local usage security and CPU spike mitigation.

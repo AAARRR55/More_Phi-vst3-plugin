@@ -3,7 +3,7 @@
 
 **Version:** 1.0  
 **Date:** 2026-03-03  
-**Project:** MorphSnap AI Dataset Generation Framework  
+**Project:** More-Phi AI Dataset Generation Framework  
 **Author:** Architect Mode Analysis
 
 ---
@@ -829,4 +829,4 @@ See `examples/dataset_generation_config.yaml` for complete configuration templat
 
 **Document Status:** Draft for Review  
 **Next Review Date:** 2026-03-10  
-**Contact:** MorphSnap Architecture Team
+**Contact:** More-Phi Architecture Team

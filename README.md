@@ -1,4 +1,4 @@
-# MorphSnap
+# More-Phi
 
 **Advanced Parameter Morphing Engine** — A VST3/AU plugin that hosts other plugins and morphs between parameter snapshots with physics-based interpolation and AI integration.
 
@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Plugin Hosting** — Load any VST3/AU plugin inside MorphSnap
+- **Plugin Hosting** — Load any VST3/AU plugin inside More-Phi
 - **12-Slot Snapshot System** — Capture and recall parameter states in clock layout
 - **2D Morph Pad** — XY pad with inverse-distance weighted interpolation
 - **1D Snap Fader** — Linear interpolation across occupied snapshots
@@ -23,7 +23,14 @@
 
 ### Windows
 
-1. Download `MorphSnap.vst3` from the [Releases](https://github.com/your-repo/releases) page
+1. Download and run `morphy-Setup-<version>.exe` from the [Releases](https://github.com/your-repo/releases) page
+2. Approve admin elevation when prompted
+3. Installer path is fixed to `C:\Program Files\Common Files\VST3\<plugin>.vst3`
+4. Rescan plugins in your DAW
+
+Manual install (alternative):
+
+1. Download `morphy.vst3` from Releases
 2. Copy to your VST3 folder:
    - `C:\Program Files\Common Files\VST3\` (all users)
    - `C:\Users\<username>\Documents\VST3\` (current user)
@@ -31,7 +38,7 @@
 
 ### macOS
 
-1. Download `MorphSnap.component` (AU) or `MorphSnap.vst3` from Releases
+1. Download `More-Phi.component` (AU) or `MorePhi.vst3` from Releases
 2. Copy to:
    - `/Library/Audio/Plug-Ins/Components/` (AU, all users)
    - `/Library/Audio/Plug-Ins/VST3/` (VST3, all users)
@@ -47,23 +54,27 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/morphsnap.git
-cd morphsnap
+git clone https://github.com/your-repo/morephi.git
+cd morephi
 
 # Configure and build
 cmake -B build -S .
 cmake --build build --config Release
 
 # Output location
-# Windows: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3
-# macOS: build/MorphSnap_artefacts/Release/VST3/MorphSnap.vst3
+# Windows: build/.../VST3/morphy.vst3 (or MorePhi.vst3 on legacy target names)
+# macOS: build/.../VST3/morphy.vst3 (or MorePhi.vst3 on legacy target names)
+
+# Optional: build a Windows installer .exe (requires Inno Setup 6)
+powershell -ExecutionPolicy Bypass -File ./scripts/build-installer.ps1
+# Output: dist/installer/morphy-Setup-<version>.exe
 ```
 
 Common build options:
 
-- `-DMORPHSNAP_BUILD_TESTS=ON` (default `ON`)
-- `-DMORPHSNAP_BUILD_BENCHMARKS=ON` (tests/bench target opt-in)
-- `-DMORPHSNAP_ENABLE_DATASET_V3=ON|OFF` (deprecated compatibility flag; V3 sources are always compiled)
+- `-DMORE_PHI_BUILD_TESTS=ON` (default `ON`)
+- `-DMORE_PHI_BUILD_BENCHMARKS=ON` (tests/bench target opt-in)
+- `-DMORE_PHI_ENABLE_DATASET_V3=ON|OFF` (deprecated compatibility flag; V3 sources are always compiled)
 
 ---
 
@@ -71,7 +82,7 @@ Common build options:
 
 ### 1. Load a Plugin
 
-1. Add MorphSnap to a track in your DAW
+1. Add More-Phi to a track in your DAW
 2. Click **"Load Plugin"** in the plugin browser panel
 3. Select a VST3 or AU plugin to host
 4. The hosted plugin's UI opens automatically
@@ -149,7 +160,7 @@ Common build options:
 
 ## MCP Integration
 
-MorphSnap includes a built-in MCP (Model Context Protocol) server for AI integration.
+More-Phi includes a built-in MCP (Model Context Protocol) server for AI integration.
 
 ### Connection Details
 - **Protocol:** JSON-RPC 2.0
@@ -165,10 +176,10 @@ MorphSnap includes a built-in MCP (Model Context Protocol) server for AI integra
 | `list_parameters` | - | Lists all parameters with current values |
 | `get_parameter` | `index` | Get a single parameter by index |
 | `set_parameter` | `index`, `value` | Set a parameter (audio-thread safe) |
-| `set_parameters_batch` | `parameters[]` | Set multiple parameters atomically |
-| `capture_snapshot` | `slot` | Capture current state to a slot (0-11) |
-| `recall_snapshot` | `slot` | Recall a snapshot slot |
-| `set_morph_position` | `x`, `y`, `source` | Set XY pad or fader position |
+| `set_parameters_batch` | `parameters[]` | Queue multiple parameter edits safely |
+| `capture_snapshot` | `slot`, `includeState` | Capture parameters and optional hosted state chunk to a slot (0-11) |
+| `recall_snapshot` | `slot`, `mode` | Recall a snapshot slot (`fast` params-only or `full` state recall) |
+| `set_morph_position` | `x`, `y`, `fader`, `source` | Set XY pad or fader position with automation notification |
 | `get_morph_state` | - | Get current morph position and mode |
 
 ### Example JSON-RPC Request
@@ -199,7 +210,7 @@ MorphSnap includes a built-in MCP (Model Context Protocol) server for AI integra
 - Automatically switches to fader mode when CC received
 
 ### Configuration
-MIDI mapping is automatic. Just enable MIDI input on the track hosting MorphSnap.
+MIDI mapping is automatic. Just enable MIDI input on the track hosting More-Phi.
 
 ---
 
@@ -217,7 +228,7 @@ MIDI mapping is automatic. Just enable MIDI input on the track hosting MorphSnap
 
 ### Plugin Crashes on Load (FL Studio)
 - FL Studio requires 4MB stack for plugin-in-plugin hosting
-- MorphSnap is configured with `/STACK:4194304` in CMake
+- More-Phi is configured with `/STACK:4194304` in CMake
 - If crashes persist, try increasing FL Studio's plugin stack size
 
 ### MCP Server Won't Start
@@ -269,20 +280,20 @@ cmake --build build --config Release
 
 ### Build with SIMD Diagnostics
 ```bash
-cmake -B build -S . -DMORPHSNAP_TRACK_ALLOCATIONS=ON
+cmake -B build -S . -DMORE_PHI_TRACK_ALLOCATIONS=ON
 cmake --build build --config Debug
 ```
 
 ### Run Tests
 ```bash
-cmake -B build -S . -DMORPHSNAP_BUILD_TESTS=ON -DMORPHSNAP_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 ```
 
 ### Optional Dataset V3 Compatibility-Flag Validation
 ```bash
-cmake -B build-v3 -S . -DMORPHSNAP_ENABLE_DATASET_V3=ON -DMORPHSNAP_BUILD_TESTS=ON
+cmake -B build-v3 -S . -DMORE_PHI_ENABLE_DATASET_V3=ON -DMORE_PHI_BUILD_TESTS=ON
 cmake --build build-v3 --parallel 2
 ctest --test-dir build-v3 --output-on-failure
 ```
@@ -333,7 +344,7 @@ This project's source code is released under the MIT License - See [LICENSE](LIC
 - **AGPLv3**: For open-source projects (requires making source available)
 - **Commercial License**: For closed-source/commercial distribution
 
-**Important**: If you distribute binary builds of MorphSnap, you must either:
+**Important**: If you distribute binary builds of More-Phi, you must either:
 1. Release your entire project under AGPLv3, OR
 2. Purchase a [JUCE commercial license](https://juce.com/pricing)
 

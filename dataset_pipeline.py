@@ -3,7 +3,7 @@
 dataset_pipeline.py — End-to-end dataset generation and feature extraction.
 
 Workflow:
-  1. RENDER: Calls MorphSnapCLI to generate dry/wet audio pairs with random
+  1. RENDER: Calls MorePhiCLI to generate dry/wet audio pairs with random
      safe parameter variations (Frequency, Gain, Q, Shape, Slope).
   2. EXTRACT: Converts every WAV to a Mel-Spectrogram (2D image tensor)
      and saves the paired (dry_spec, wet_spec, params) for ML training.
@@ -16,13 +16,13 @@ Usage:
   python dataset_pipeline.py generate --plugin "C:/Path/To/Pro-Q 4.vst3" --input pink_noise.wav -n 100000
 
   # Step 3: Extract spectrograms from existing renders
-  python dataset_pipeline.py extract --dataset-dir C:/MorphSnap_Datasets/run_001
+  python dataset_pipeline.py extract --dataset-dir C:/MorePhi_Datasets/run_001
 
   # All-in-one: generate + extract
   python dataset_pipeline.py full --plugin "C:/Path/To/Pro-Q 4.vst3" --input pink_noise.wav -n 10000
 
 Prerequisites:
-  - MorphSnapCLI.exe built in build/Release/
+  - MorePhiCLI.exe built in build/Release/
   - Pink noise or drum loop WAV as source audio
   - pip install numpy scipy librosa matplotlib
 """
@@ -42,8 +42,8 @@ import numpy as np
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-CLI_EXE = SCRIPT_DIR / "build" / "Release" / "MorphSnapCLI.exe"
-DEFAULT_OUTPUT = Path("C:/MorphSnap_Datasets")
+CLI_EXE = SCRIPT_DIR / "build" / "Release" / "MorePhiCLI.exe"
+DEFAULT_OUTPUT = Path("C:/MorePhi_Datasets")
 
 # Mel-Spectrogram defaults (matching standard audio ML configs)
 MEL_SAMPLE_RATE = 48000
@@ -56,25 +56,25 @@ MEL_FMAX = 20000.0
 # ── CLI Runner ───────────────────────────────────────────────────────────────
 
 def find_cli_exe() -> Path:
-    """Locate MorphSnapCLI.exe, checking multiple known locations."""
+    """Locate MorePhiCLI.exe, checking multiple known locations."""
     candidates = [
         CLI_EXE,
-        SCRIPT_DIR / "build_cli_fix" / "Release" / "MorphSnapCLI.exe",
-        SCRIPT_DIR / "build" / "Debug" / "MorphSnapCLI.exe",
+        SCRIPT_DIR / "build_cli_fix" / "Release" / "MorePhiCLI.exe",
+        SCRIPT_DIR / "build" / "Debug" / "MorePhiCLI.exe",
     ]
     for p in candidates:
         if p.exists():
             return p
-    print("[ERROR] MorphSnapCLI.exe not found. Searched:")
+    print("[ERROR] MorePhiCLI.exe not found. Searched:")
     for p in candidates:
         print(f"  {p}")
-    print("\nBuild it with: cmake --build build --config Release --target MorphSnapCLI")
+    print("\nBuild it with: cmake --build build --config Release --target MorePhiCLI")
     sys.exit(1)
 
 
 def run_cli(plugin_path: str, input_path: str, output_dir: str,
             variations: int, verbose: bool = False) -> bool:
-    """Run MorphSnapCLI.exe to render parameter variations."""
+    """Run MorePhiCLI.exe to render parameter variations."""
     exe = find_cli_exe()
     cmd = [
         str(exe),
@@ -100,7 +100,7 @@ def run_cli(plugin_path: str, input_path: str, output_dir: str,
         process.wait()
 
         if process.returncode != 0:
-            print(f"\n[ERROR] MorphSnapCLI exited with code {process.returncode}")
+            print(f"\n[ERROR] MorePhiCLI exited with code {process.returncode}")
             return False
 
         print(f"\n[OK] Render complete.")
@@ -186,7 +186,7 @@ def extract_spectrograms(dataset_dir: str, output_dir: str = None,
     """
     Extract Mel-Spectrograms from all rendered variations in a dataset directory.
 
-    Expected directory structure (from MorphSnapCLI):
+    Expected directory structure (from MorePhiCLI):
       dataset_dir/
         dry_source.wav          <- dry input audio
         variation_0000.wav      <- wet output (variation 0)
@@ -437,7 +437,7 @@ def run_smoke_test(plugin_path: str, input_path: str, output_base: str = None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MorphSnap Dataset Generation + Mel-Spectrogram Pipeline",
+        description="MorePhi Dataset Generation + Mel-Spectrogram Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -448,7 +448,7 @@ Examples:
   python dataset_pipeline.py generate --plugin "C:/VST3/Pro-Q 4.vst3" --input pink_noise.wav -n 10000
 
   # Extract spectrograms from existing renders
-  python dataset_pipeline.py extract --dataset-dir C:/MorphSnap_Datasets/run_001
+  python dataset_pipeline.py extract --dataset-dir C:/MorePhi_Datasets/run_001
 
   # Full pipeline: generate + extract
   python dataset_pipeline.py full --plugin "C:/VST3/Pro-Q 4.vst3" --input pink_noise.wav -n 10000

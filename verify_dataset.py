@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verify_dataset.py — Post-generation verification for MorphSnap dataset batches.
+verify_dataset.py — Post-generation verification for MorePhi dataset batches.
 
 Detects the 3 most common headless VST host failures:
   1. PASSTHROUGH: Plugin failed to load → wet output is identical to dry input
@@ -8,8 +8,8 @@ Detects the 3 most common headless VST host failures:
   3. DUPLICATES: Same parameters applied → multiple outputs are identical
 
 Usage:
-  python verify_dataset.py C:/MorphSnap_Datasets/smoke_test
-  python verify_dataset.py C:/MorphSnap_Datasets/run_001 --full
+  python verify_dataset.py C:/MorePhi_Datasets/smoke_test
+  python verify_dataset.py C:/MorePhi_Datasets/run_001 --full
 """
 
 import argparse
@@ -136,7 +136,7 @@ def verify_dataset(dataset_dir: str, full_check: bool = False):
     if not wet_files:
         print("[FAIL] No variation files found. The renderer produced no output.")
         print("  Possible causes:")
-        print("  - MorphSnapCLI crashed during rendering")
+        print("  - MorePhiCLI crashed during rendering")
         print("  - Plugin failed to load (check --verbose output)")
         print("  - Output directory mismatch")
         return False
@@ -357,7 +357,7 @@ def verify_dataset(dataset_dir: str, full_check: bool = False):
             print("  [CRITICAL] >50% of files are passthrough - the plugin is NOT loaded.")
             print()
             print("  Debugging steps:")
-            print("  1. Run: .\\build\\Release\\MorphSnapCLI.exe --plugin <path.vst3> --list-params --verbose")
+            print("  1. Run: .\\build\\Release\\MorePhiCLI.exe --plugin <path.vst3> --list-params --verbose")
             print("     If this shows 0 parameters, the plugin failed to load.")
             print("  2. Check the .vst3 path is correct and the plugin is 64-bit.")
             print("  3. Some plugins require a GUI framework - try running with a display available.")
@@ -391,7 +391,7 @@ def verify_dataset(dataset_dir: str, full_check: bool = False):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Verify MorphSnap dataset renders for passthrough/silence/duplicates"
+        description="Verify MorePhi dataset renders for passthrough/silence/duplicates"
     )
     parser.add_argument("dataset_dir", help="Path to the rendered dataset directory")
     parser.add_argument("--full", action="store_true",

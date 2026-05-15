@@ -1,5 +1,5 @@
 # .clang-tidy
-# MorphSnap v2 — clang-tidy configuration
+# MorePhi v2 — clang-tidy configuration
 #
 # Design philosophy:
 #   - Audio-thread safety is the top priority: no heap allocation,

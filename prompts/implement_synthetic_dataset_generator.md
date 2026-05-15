@@ -3,7 +3,7 @@
 ## Command
 
 ```bash
-ralph-loop "Implement Synthetic Audio Dataset Generator for MorphSnap.
+ralph-loop "Implement Synthetic Audio Dataset Generator for More-Phi.
 
 ## Overview
 Implement a comprehensive synthetic audio dataset generation system that produces ground-truth DSP parameter datasets for machine learning training. This system extends the existing DatasetGenerator to support systematic parameter space exploration, diverse audio content processing, and rich metadata labeling.
@@ -69,7 +69,7 @@ Implement a comprehensive synthetic audio dataset generation system that produce
 - Implement dataset integrity verification (all files present, metadata valid, no corruption)
 - Support incremental dataset extension and deduplication
 
-### 9. Integration with MorphSnap
+### 9. Integration with More-Phi
 - Extend existing DatasetGenerator class in src/AI/Dataset/
 - Integrate with IPluginHostManager for plugin hosting
 - Add MCP server endpoints for remote dataset generation control
