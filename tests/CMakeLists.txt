@@ -27,6 +27,8 @@ add_executable(MorePhiTests
     Unit/TestAIRegressions.cpp
     Unit/TestLLMSettings.cpp
     Unit/TestLLMSettingsStore.cpp
+    Unit/TestLLMConnectionValidator.cpp
+    Unit/TestLLMSettingsDialog.cpp
     Unit/TestOfflineBatchRenderer.cpp
     Unit/AudioBufferPoolTests.cpp
     Unit/SIMDAudioTests.cpp
@@ -115,6 +117,7 @@ catch_discover_tests(MorePhiTests
 # ── Standalone stdio MCP server tests ────────────────────────────────────────
 add_executable(MorePhiMcpServerTests
     Unit/TestStandaloneMcpServer.cpp
+    Unit/TestIZotopeIPCAssistant.cpp
 )
 
 target_link_libraries(MorePhiMcpServerTests PRIVATE

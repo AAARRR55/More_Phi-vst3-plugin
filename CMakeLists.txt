@@ -290,6 +290,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/LLMSettings.cpp
     src/AI/LLMSettingsStore.h
     src/AI/LLMSettingsStore.cpp
+    src/AI/LLMConnectionValidator.h
+    src/AI/LLMConnectionValidator.cpp
     src/AI/AIAssistant.h
     src/AI/AIAssistant.cpp
     src/AI/EQParameterTranslator.h
@@ -324,6 +326,11 @@ set(MORE_PHI_AI_SOURCES
     src/AI/OzoneParameterMap.cpp
     src/AI/OzonePlanApplicator.h
     src/AI/OzonePlanApplicator.cpp
+    src/AI/StandaloneMcp/OzonePluginBackend.h
+    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
+    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
+    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
+    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
     ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
     ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )
@@ -354,6 +361,8 @@ set(MORE_PHI_UI_SOURCES
     src/UI/ChatDisplay.cpp
     src/UI/AIChatPanel.h
     src/UI/AIChatPanel.cpp
+    src/UI/LLMSettingsDialog.h
+    src/UI/LLMSettingsDialog.cpp
     src/UI/MorphPad.h
     src/UI/MorphPad.cpp
     src/UI/SnapFader.h
@@ -437,6 +446,8 @@ add_executable(MorePhiCLI
 
 set(MORE_PHI_STANDALONE_MCP_CORE_SOURCES
     src/AI/StandaloneMcp/JsonRpc.h
+    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
+    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
     src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
     src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
     src/AI/StandaloneMcp/OzonePluginBackend.h

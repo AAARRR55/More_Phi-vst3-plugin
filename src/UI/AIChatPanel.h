@@ -5,6 +5,9 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
+#include "AI/LLMConnectionValidator.h"
+#include "AI/LLMSettingsStore.h"
 #include "ChatDisplay.h"
 
 namespace more_phi {
@@ -20,8 +23,19 @@ public:
 
 private:
     void submitPrompt();
+    void loadLLMSettings();
+    void refreshLLMToolbar();
+    void showLLMSettingsDialog();
 
     MorePhiProcessor& processor_;
+    LLMSettingsStore llmSettingsStore_;
+    LLMConnectionValidator llmValidator_;
+    LLMSettings llmSettings_;
+
+    juce::Label providerLabel_;
+    juce::Label statusChip_;
+    juce::TextButton settingsButton_{"LLM Settings"};
+
     ChatDisplay transcript_;
     juce::TextEditor prompt_;
     juce::TextButton sendButton_{"Send"};
@@ -31,3 +45,4 @@ private:
 };
 
 } // namespace more_phi
+
