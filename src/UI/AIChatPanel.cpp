@@ -125,19 +125,23 @@ void AIChatPanel::resized()
 {
     auto area = getLocalBounds().reduced(8);
 
-    auto toolbar = area.removeFromTop(30);
-    settingsButton_.setBounds(toolbar.removeFromRight(120).reduced(3, 1));
-    statusChip_.setBounds(toolbar.removeFromRight(150).reduced(3, 3));
+    // ── Toolbar row ──────────────────────────────────────────────────────────
+    auto toolbar = area.removeFromTop(28);
+    settingsButton_.setBounds(toolbar.removeFromRight(110).reduced(2, 1));
+    statusChip_.setBounds(toolbar.removeFromRight(90).reduced(4, 3));
     providerLabel_.setBounds(toolbar.reduced(0, 1));
 
-    area.removeFromTop(6);
+    area.removeFromTop(4);
 
-    auto inputRow = area.removeFromBottom(30);
-    transcript_.setBounds(area.reduced(0, 0));
-
-    clearButton_.setBounds(inputRow.removeFromRight(64).reduced(3, 1));
-    sendButton_.setBounds(inputRow.removeFromRight(64).reduced(3, 1));
+    // ── Input row ────────────────────────────────────────────────────────────
+    auto inputRow = area.removeFromBottom(34);
+    inputRow.removeFromTop(4);
+    clearButton_.setBounds(inputRow.removeFromRight(60).reduced(2, 1));
+    sendButton_ .setBounds(inputRow.removeFromRight(60).reduced(2, 1));
     prompt_.setBounds(inputRow.reduced(0, 1));
+
+    // ── Transcript fills the rest ─────────────────────────────────────────────
+    transcript_.setBounds(area);
 }
 
 } // namespace more_phi

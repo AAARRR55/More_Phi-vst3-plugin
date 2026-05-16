@@ -1,6 +1,6 @@
 /*
  * More-Phi - UI/ChatDisplay.h
- * Lightweight in-plugin assistant transcript view.
+ * Scrollable assistant transcript with proper multi-line layout.
  */
 #pragma once
 
@@ -12,33 +12,40 @@ namespace more_phi {
 class ChatDisplay final : public juce::Component
 {
 public:
-    enum class Role
-    {
-        System,
-        User,
-        Assistant
-    };
+    enum class Role { System, User, Assistant };
 
     struct Message
     {
-        Role role = Role::Assistant;
+        Role         role = Role::Assistant;
         juce::String text;
     };
 
     ChatDisplay();
 
     void addMessage(Role role, juce::String text);
-    /** Replace the text of the last message (any role). No-op if no messages exist. */
+    /** Replace the text of the last message. No-op if no messages exist. */
     void updateLastMessage(juce::String text);
     void clearMessages();
 
-    void paint(juce::Graphics& g) override;
+    void resized() override;
 
 private:
-    static juce::String roleLabel(Role role);
-    static juce::Colour roleColour(Role role);
+    // ── Scrollable canvas ────────────────────────────────────────────────────
+    class Canvas final : public juce::Component
+    {
+    public:
+        Canvas();
+        std::vector<Message> messages;
+        void paint(juce::Graphics& g) override;
+        /** Resize canvas height to fit all messages at the given viewport width. */
+        void layout(int viewportWidth);
+    };
 
-    std::vector<Message> messages_;
+    juce::Viewport viewport_;
+    Canvas         canvas_;
+
+    /** Relayout canvas and scroll to the newest message. */
+    void pushAndScroll();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChatDisplay)
 };
