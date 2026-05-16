@@ -93,7 +93,7 @@ void AIChatPanel::submitPrompt()
 
     prompt_.clear();
     transcript_.addMessage(ChatDisplay::Role::User, text);
-    transcript_.addMessage(ChatDisplay::Role::Assistant, "\u23f3 Thinking\u2026");
+    transcript_.addMessage(ChatDisplay::Role::Assistant, "Thinking...");
 
     chatPending_ = true;
     sendButton_.setEnabled(false);
@@ -113,7 +113,7 @@ void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::Strin
 
     if (!error.isEmpty())
     {
-        transcript_.updateLastMessage("\u26a0 " + error);
+        transcript_.updateLastMessage("[Error] " + error);
         return;
     }
 

@@ -476,7 +476,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
         juce::MessageManager::callAsync([callback, historyJson]()
         {
             callback({},
-                     "No LLM provider configured. Open \u2699 LLM Settings and configure a provider.",
+                     "No LLM provider configured. Open LLM Settings and configure a provider.",
                      historyJson);
         });
         return;
@@ -490,7 +490,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
     {
         juce::MessageManager::callAsync([callback, historyJson]()
         {
-            callback({}, "No API key configured. Open \u2699 LLM Settings.", historyJson);
+            callback({}, "No API key configured. Open LLM Settings.", historyJson);
         });
         return;
     }
@@ -498,7 +498,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
     {
         juce::MessageManager::callAsync([callback, historyJson]()
         {
-            callback({}, "No model selected. Open \u2699 LLM Settings and choose a model.", historyJson);
+            callback({}, "No model selected. Open LLM Settings and choose a model.", historyJson);
         });
         return;
     }
