@@ -21,7 +21,9 @@ AIChatPanel::AIChatPanel(MorePhiProcessor& processor)
     prompt_.setTextToShowWhenEmpty("Ask the assistant", juce::Colour(0xff8a93a3));
     prompt_.onReturnKey = [this]() { submitPrompt(); };
 
-    sendButton_.onClick  = [this]() { submitPrompt(); };
+    sendButton_.onClick   = [this]() { submitPrompt(); };
+    cancelButton_.onClick = [this]() { cancelChat(); };
+    cancelButton_.setEnabled(false);
     clearButton_.onClick = [this]()
     {
         transcript_.clearMessages();
@@ -34,6 +36,7 @@ AIChatPanel::AIChatPanel(MorePhiProcessor& processor)
     addAndMakeVisible(transcript_);
     addAndMakeVisible(prompt_);
     addAndMakeVisible(sendButton_);
+    addAndMakeVisible(cancelButton_);
     addAndMakeVisible(clearButton_);
 
     loadLLMSettings();
@@ -96,13 +99,44 @@ void AIChatPanel::submitPrompt()
     transcript_.addMessage(ChatDisplay::Role::Assistant, "Thinking...");
 
     chatPending_ = true;
+    chatStartMs_ = juce::Time::currentTimeMillis();
+    chatCancelled_ = std::make_shared<std::atomic<bool>>(false);
     sendButton_.setEnabled(false);
+    cancelButton_.setEnabled(true);
 
+    auto cancelled = chatCancelled_;
     llmChatClient_.chat(llmSettings_, conversationHistory_, text,
-        [this](juce::String replyText, juce::String errorMsg, juce::String updatedHistory)
+        [this, cancelled](juce::String replyText, juce::String errorMsg, juce::String updatedHistory)
         {
+            if (*cancelled) return; // request was cancelled by the user
             onChatReply(std::move(replyText), std::move(errorMsg), std::move(updatedHistory));
         });
+
+    scheduleThinkingUpdate();
+}
+
+void AIChatPanel::cancelChat()
+{
+    if (!chatPending_) return;
+    *chatCancelled_ = true;
+    chatPending_ = false;
+    sendButton_.setEnabled(true);
+    cancelButton_.setEnabled(false);
+    transcript_.updateLastMessage("(cancelled)");
+}
+
+void AIChatPanel::scheduleThinkingUpdate()
+{
+    if (!chatPending_) return;
+    const int secs = static_cast<int>((juce::Time::currentTimeMillis() - chatStartMs_) / 1000);
+    transcript_.updateLastMessage("Thinking... (" + juce::String(secs) + "s)");
+
+    juce::Component::SafePointer<AIChatPanel> safeThis(this);
+    juce::Timer::callAfterDelay(2000, [safeThis]()
+    {
+        if (safeThis != nullptr)
+            safeThis->scheduleThinkingUpdate();
+    });
 }
 
 void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::String updatedHistory)
@@ -110,6 +144,7 @@ void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::Strin
     // Called on message thread
     chatPending_ = false;
     sendButton_.setEnabled(true);
+    cancelButton_.setEnabled(false);
 
     if (!error.isEmpty())
     {
@@ -137,6 +172,7 @@ void AIChatPanel::resized()
     auto inputRow = area.removeFromBottom(34);
     inputRow.removeFromTop(4);
     clearButton_.setBounds(inputRow.removeFromRight(60).reduced(2, 1));
+    cancelButton_.setBounds(inputRow.removeFromRight(64).reduced(2, 1));
     sendButton_ .setBounds(inputRow.removeFromRight(60).reduced(2, 1));
     prompt_.setBounds(inputRow.reduced(0, 1));
 

@@ -213,7 +213,14 @@ void LLMSettingsDialog::testConnection()
 void LLMSettingsDialog::saveAndClose()
 {
     saveControlsIntoSelectedProvider();
-    draftSettings_.activateProviderIfValidated(selectedProviderId());
+    // Always activate the selected provider when the user explicitly saves.
+    // activateProviderIfValidated requires Active status, which is too strict: users
+    // may skip testing, or the test may fail due to cold-start / network conditions.
+    const auto pid = selectedProviderId();
+    if (selectedDraftProvider().apiKey.trim().isNotEmpty())
+        draftSettings_.activeProvider = pid;
+    else
+        draftSettings_.activateProviderIfValidated(pid); // fall back to guarded activation
 
     juce::String error;
     if (!store_.save(draftSettings_, error))
