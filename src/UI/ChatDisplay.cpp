@@ -25,6 +25,15 @@ void ChatDisplay::addMessage(Role role, juce::String text)
     repaint();
 }
 
+void ChatDisplay::updateLastMessage(juce::String text)
+{
+    if (messages_.empty())
+        return;
+
+    messages_.back().text = text.trim();
+    repaint();
+}
+
 void ChatDisplay::clearMessages()
 {
     messages_.clear();

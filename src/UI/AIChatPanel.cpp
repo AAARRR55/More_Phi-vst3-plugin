@@ -10,9 +10,8 @@ namespace more_phi {
 AIChatPanel::AIChatPanel(MorePhiProcessor& processor)
     : processor_(processor)
     , llmSettings_(LLMSettings::createDefault())
+    , llmChatClient_(processor)
 {
-    (void) processor_;
-
     providerLabel_.setJustificationType(juce::Justification::centredLeft);
     statusChip_.setJustificationType(juce::Justification::centred);
     settingsButton_.onClick = [this]() { showLLMSettingsDialog(); };
@@ -23,7 +22,11 @@ AIChatPanel::AIChatPanel(MorePhiProcessor& processor)
     prompt_.onReturnKey = [this]() { submitPrompt(); };
 
     sendButton_.onClick  = [this]() { submitPrompt(); };
-    clearButton_.onClick = [this]() { transcript_.clearMessages(); };
+    clearButton_.onClick = [this]()
+    {
+        transcript_.clearMessages();
+        conversationHistory_.clear();
+    };
 
     addAndMakeVisible(providerLabel_);
     addAndMakeVisible(statusChip_);
@@ -45,7 +48,7 @@ void AIChatPanel::loadLLMSettings()
         llmSettings_ = LLMSettings::createDefault();
         statusChip_.setText("Failed", juce::dontSendNotification);
         providerLabel_.setText("Provider: None", juce::dontSendNotification);
-        transcript_.addMessage(ChatDisplay::Role::Assistant, error);
+        transcript_.addMessage(ChatDisplay::Role::System, error);
     }
 }
 
@@ -70,12 +73,52 @@ void AIChatPanel::showLLMSettingsDialog()
         llmSettings_,
         llmSettingsStore_,
         llmValidator_,
-        [this](const LLMSettings& savedSettings) {
+        [this](const LLMSettings& savedSettings)
+        {
             llmSettings_ = savedSettings;
             refreshLLMToolbar();
         }));
 
     options.launchAsync();
+}
+
+void AIChatPanel::submitPrompt()
+{
+    if (chatPending_)
+        return;
+
+    auto text = prompt_.getText().trim();
+    if (text.isEmpty())
+        return;
+
+    prompt_.clear();
+    transcript_.addMessage(ChatDisplay::Role::User, text);
+    transcript_.addMessage(ChatDisplay::Role::Assistant, "\u23f3 Thinking\u2026");
+
+    chatPending_ = true;
+    sendButton_.setEnabled(false);
+
+    llmChatClient_.chat(llmSettings_, conversationHistory_, text,
+        [this](juce::String replyText, juce::String errorMsg, juce::String updatedHistory)
+        {
+            onChatReply(std::move(replyText), std::move(errorMsg), std::move(updatedHistory));
+        });
+}
+
+void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::String updatedHistory)
+{
+    // Called on message thread
+    chatPending_ = false;
+    sendButton_.setEnabled(true);
+
+    if (!error.isEmpty())
+    {
+        transcript_.updateLastMessage("\u26a0 " + error);
+        return;
+    }
+
+    conversationHistory_ = updatedHistory;
+    transcript_.updateLastMessage(text.isEmpty() ? "(empty response)" : text);
 }
 
 void AIChatPanel::resized()
@@ -95,18 +138,6 @@ void AIChatPanel::resized()
     clearButton_.setBounds(inputRow.removeFromRight(64).reduced(3, 1));
     sendButton_.setBounds(inputRow.removeFromRight(64).reduced(3, 1));
     prompt_.setBounds(inputRow.reduced(0, 1));
-}
-
-void AIChatPanel::submitPrompt()
-{
-    auto text = prompt_.getText().trim();
-    if (text.isEmpty())
-        return;
-
-    prompt_.clear();
-    transcript_.addMessage(ChatDisplay::Role::User, text);
-    transcript_.addMessage(ChatDisplay::Role::Assistant,
-                           "Assistant command routing is available through MCP.");
 }
 
 } // namespace more_phi

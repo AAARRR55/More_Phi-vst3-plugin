@@ -28,6 +28,8 @@ public:
     ChatDisplay();
 
     void addMessage(Role role, juce::String text);
+    /** Replace the text of the last message (any role). No-op if no messages exist. */
+    void updateLastMessage(juce::String text);
     void clearMessages();
 
     void paint(juce::Graphics& g) override;

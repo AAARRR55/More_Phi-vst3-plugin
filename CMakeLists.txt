@@ -292,6 +292,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/LLMSettingsStore.cpp
     src/AI/LLMConnectionValidator.h
     src/AI/LLMConnectionValidator.cpp
+    src/AI/LLMChatClient.h
+    src/AI/LLMChatClient.cpp
     src/AI/AIAssistant.h
     src/AI/AIAssistant.cpp
     src/AI/EQParameterTranslator.h
@@ -306,6 +308,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/ParameterContextBuilder.cpp
     src/AI/PluginProfileDB.h
     src/AI/PluginProfileDB.cpp
+    src/AI/PluginSemanticMapper.h
+    src/AI/PluginSemanticMapper.cpp
     src/AI/TrackAssistantStore.h
     src/AI/TrackAssistantStore.cpp
     src/AI/OSKeychain.h
