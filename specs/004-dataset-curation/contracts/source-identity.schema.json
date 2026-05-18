@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://more-phi.local/schemas/source-identity.schema.json",
+  "title": "Neural Mastering Source Identity Group",
+  "type": "object",
+  "examples": [
+    {
+      "sourceIdentityId": "source-placeholder-song",
+      "datasetIds": [
+        "sonicmaster-dataset"
+      ],
+      "workId": "placeholder-work",
+      "artistId": "placeholder-artist",
+      "albumOrSessionId": "placeholder-session",
+      "upstreamCatalogId": "placeholder-upstream-id",
+      "derivedFamilyIds": [
+        "placeholder-degradation-family"
+      ],
+      "splitAssignment": "holdout",
+      "knownOverlaps": []
+    }
+  ],
+  "additionalProperties": false,
+  "required": [
+    "sourceIdentityId",
+    "datasetIds",
+    "splitAssignment",
+    "derivedFamilyIds",
+    "knownOverlaps"
+  ],
+  "properties": {
+    "sourceIdentityId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "datasetIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "workId": {
+      "type": "string"
+    },
+    "artistId": {
+      "type": "string"
+    },
+    "albumOrSessionId": {
+      "type": "string"
+    },
+    "upstreamCatalogId": {
+      "type": "string"
+    },
+    "derivedFamilyIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "splitAssignment": {
+      "enum": [
+        "train",
+        "validation",
+        "test",
+        "holdout",
+        "excluded"
+      ]
+    },
+    "knownOverlaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "datasetId",
+          "overlapType",
+          "resolution"
+        ],
+        "properties": {
+          "datasetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "overlapType": {
+            "enum": [
+              "same-work",
+              "same-artist",
+              "same-session",
+              "derived-render",
+              "suspected"
+            ]
+          },
+          "resolution": {
+            "enum": [
+              "same-split",
+              "excluded",
+              "requires-review"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

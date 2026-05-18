@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://more-phi.local/schemas/release-eligibility.schema.json",
+  "title": "Neural Mastering Dataset Release Eligibility Decision",
+  "type": "object",
+  "examples": [
+    {
+      "decisionId": "eligibility-research-mix-v1",
+      "scope": {
+        "scopeType": "dataset-mix",
+        "ids": [
+          "sonicmaster-dataset",
+          "cambridge-mt"
+        ]
+      },
+      "eligibility": "research-ready",
+      "blockingIssues": [
+        "legal-review",
+        "mixed-licenses"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "source-identity-report",
+        "split-report",
+        "quality-screen"
+      ],
+      "owner": "ML/data owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Research-only until item-level rights and split evidence are complete."
+    }
+  ],
+  "additionalProperties": false,
+  "required": [
+    "decisionId",
+    "scope",
+    "eligibility",
+    "blockingIssues",
+    "requiredEvidence",
+    "owner",
+    "decisionDate"
+  ],
+  "properties": {
+    "decisionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeType",
+        "ids"
+      ],
+      "properties": {
+        "scopeType": {
+          "enum": [
+            "dataset",
+            "subset",
+            "item",
+            "dataset-mix"
+          ]
+        },
+        "ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "eligibility": {
+      "enum": [
+        "research-ready",
+        "prototype-ready",
+        "commercial-blocked",
+        "commercial-review-required",
+        "commercial-ready",
+        "rejected"
+      ]
+    },
+    "blockingIssues": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "missing-rights",
+          "mixed-licenses",
+          "source-leakage",
+          "quality-mismatch",
+          "missing-provenance",
+          "legal-review",
+          "unknown-license",
+          "non-commercial-only",
+          "educational-only",
+          "share-alike-obligation",
+          "gated-access",
+          "rejected-source"
+        ]
+      }
+    },
+    "requiredEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "license-ledger",
+          "checksums",
+          "source-identity-report",
+          "split-report",
+          "quality-screen",
+          "objective-metrics",
+          "listening-evidence",
+          "legal-approval",
+          "attribution-package"
+        ]
+      }
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decisionDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "reviewNotes": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eligibility": {
+            "const": "commercial-ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "blockingIssues": {
+            "maxItems": 0
+          }
+        },
+        "required": [
+          "reviewNotes"
+        ]
+      }
+    }
+  ]
+}

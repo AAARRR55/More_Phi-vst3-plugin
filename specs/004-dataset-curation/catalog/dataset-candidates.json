@@ -1,0 +1,433 @@
+{
+  "schemaVersion": 1,
+  "candidates": [
+    {
+      "id": "sonicmaster-dataset",
+      "name": "SonicMasterDataset",
+      "sourceUrl": "https://huggingface.co/datasets/amaai-lab/SonicMasterDataset",
+      "sourceCategory": "open-source",
+      "datasetType": "paired",
+      "scaleSummary": "Approximately 166k paired degraded/high-quality music rows; about 506 GB; 44.1 kHz examples visible.",
+      "audioFormat": {
+        "sampleRate": 44100,
+        "channels": "stereo",
+        "encoding": "FLAC",
+        "alignmentNotes": "Input and target FLAC fields are paired; source identity must be audited before split use."
+      },
+      "labelingType": "Paired degraded/high-quality audio with degradation metadata, prompts, genre, and quality metadata.",
+      "recommendedRole": [
+        "primary-paired-training"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 5,
+      "licensePostureId": "license-sonicmaster-dataset",
+      "overfittingRiskId": "risk-sonicmaster-dataset",
+      "requiredFollowUps": [
+        "Audit source IDs and Jamendo-derived provenance before ingestion.",
+        "Capture item-level attribution and checksum records.",
+        "Hold out original source works across train, validation, and test."
+      ],
+      "evidenceLinks": [
+        "https://huggingface.co/datasets/amaai-lab/SonicMasterDataset",
+        "https://arxiv.org/abs/2508.03448"
+      ]
+    },
+    {
+      "id": "cambridge-mt",
+      "name": "Cambridge-MT Mixing Secrets Library",
+      "sourceUrl": "https://www.cambridge-mt.com/ms/mtk/",
+      "sourceCategory": "industry-standard",
+      "datasetType": "multitrack",
+      "scaleSummary": "625 projects; 16/24-bit WAV at 44.1 kHz; includes many mastering-tagged projects.",
+      "audioFormat": {
+        "sampleRate": 44100,
+        "channels": "stereo and multitrack stems",
+        "encoding": "WAV",
+        "alignmentNotes": "Project files and unmastered mixes require per-project selection and manual verification."
+      },
+      "labelingType": "Raw multitracks, mixes, previews, and some unmastered mix WAVs.",
+      "recommendedRole": [
+        "synthetic-pair-generation"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 4,
+      "licensePostureId": "license-cambridge-mt",
+      "overfittingRiskId": "risk-cambridge-mt",
+      "requiredFollowUps": [
+        "Keep all use non-commercial unless copyright-holder permission is obtained.",
+        "Track project-level rights and contributor metadata.",
+        "Deduplicate against MUSDB18-HQ, MedleyDB, and SolidStateBusComp."
+      ],
+      "evidenceLinks": [
+        "https://www.cambridge-mt.com/ms/mtk/"
+      ]
+    },
+    {
+      "id": "solidstatebuscomp",
+      "name": "SolidStateBusComp / Diff-SSL-G-Comp",
+      "sourceUrl": "https://huggingface.co/datasets/amphion/SolidStateBusComp",
+      "sourceCategory": "open-source",
+      "datasetType": "effect-specific",
+      "scaleSummary": "175 unmastered songs, 220 parameter combinations, about 2.5k hours, about 4.8 TB.",
+      "audioFormat": {
+        "sampleRate": "not fixed in curation report",
+        "channels": "stereo",
+        "encoding": "audio files from gated Hugging Face dataset",
+        "alignmentNotes": "Same sources repeated across many compressor settings; split by source song only."
+      },
+      "labelingType": "Input/output pairs from SSL bus-compressor processing.",
+      "recommendedRole": [
+        "auxiliary-pretraining"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 4,
+      "licensePostureId": "license-solidstatebuscomp",
+      "overfittingRiskId": "risk-solidstatebuscomp",
+      "requiredFollowUps": [
+        "Use only for dynamics/compressor subtask research.",
+        "Respect CC BY-NC and Cambridge-derived constraints.",
+        "Group all parameter sweeps from one source song into the same split."
+      ],
+      "evidenceLinks": [
+        "https://huggingface.co/datasets/amphion/SolidStateBusComp",
+        "https://www.yichenggu.com/SolidStateBusComp/"
+      ]
+    },
+    {
+      "id": "musdb18-hq",
+      "name": "MUSDB18-HQ",
+      "sourceUrl": "https://sigsep.github.io/datasets/musdb.html",
+      "sourceCategory": "academic",
+      "datasetType": "multitrack",
+      "scaleSummary": "150 full-length tracks, about 10 hours, stereo 44.1 kHz, 22.7 GB HQ WAV.",
+      "audioFormat": {
+        "sampleRate": 44100,
+        "channels": "stereo stems and mixtures",
+        "encoding": "WAV",
+        "alignmentNotes": "Use original train/test split and deduplicate upstream project overlap."
+      },
+      "labelingType": "Mixture plus drums, bass, vocals, and other stems.",
+      "recommendedRole": [
+        "synthetic-pair-generation"
+      ],
+      "recommendationStatus": "conditional",
+      "compatibilityScore": 4,
+      "licensePostureId": "license-musdb18-hq",
+      "overfittingRiskId": "risk-musdb18-hq",
+      "requiredFollowUps": [
+        "Capture per-track license and academic access status.",
+        "Deduplicate with Cambridge-MT and MedleyDB origins.",
+        "Use stem synthesis rather than treating mixture as verified mastered target."
+      ],
+      "evidenceLinks": [
+        "https://sigsep.github.io/datasets/musdb.html"
+      ]
+    },
+    {
+      "id": "medleydb-2",
+      "name": "MedleyDB 2.0",
+      "sourceUrl": "https://medleydb.weebly.com/description.html",
+      "sourceCategory": "academic",
+      "datasetType": "multitrack",
+      "scaleSummary": "196 multitracks with raw audio, processed stems, mix files, metadata, genre labels, and annotations.",
+      "audioFormat": {
+        "sampleRate": 44100,
+        "channels": "multitrack and mix",
+        "encoding": "16-bit WAV",
+        "alignmentNotes": "Mixes may or may not be mastered; mastered status is not labeled."
+      },
+      "labelingType": "Raw audio, processed stems, mix hierarchy, metadata, and annotations.",
+      "recommendedRole": [
+        "synthetic-pair-generation"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 4,
+      "licensePostureId": "license-medleydb-2",
+      "overfittingRiskId": "risk-medleydb-2",
+      "requiredFollowUps": [
+        "Keep non-commercial/share-alike restrictions isolated.",
+        "Split by song and artist.",
+        "Use controlled synthetic targets rather than direct mastered labels."
+      ],
+      "evidenceLinks": [
+        "https://medleydb.weebly.com/description.html",
+        "https://medleydb.weebly.com/index.html"
+      ]
+    },
+    {
+      "id": "moisesdb",
+      "name": "MoisesDB",
+      "sourceUrl": "https://github.com/moises-ai/moises-db",
+      "sourceCategory": "open-source",
+      "datasetType": "multitrack",
+      "scaleSummary": "Public multitrack/stem dataset with about 14 hours reported in secondary literature.",
+      "audioFormat": {
+        "sampleRate": "varies by item",
+        "channels": "mixture and hierarchical stems",
+        "encoding": "dataset-provided audio",
+        "alignmentNotes": "Stem taxonomy and bleed metadata must be normalized before synthesis."
+      },
+      "labelingType": "Hierarchical stems, mixture, genre, activity, and bleed metadata.",
+      "recommendedRole": [
+        "synthetic-pair-generation"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 4,
+      "licensePostureId": "license-moisesdb",
+      "overfittingRiskId": "risk-moisesdb",
+      "requiredFollowUps": [
+        "Respect CC BY-NC-SA restrictions.",
+        "Normalize stem taxonomy before pair generation.",
+        "Keep source-level split isolation."
+      ],
+      "evidenceLinks": [
+        "https://github.com/moises-ai/moises-db"
+      ]
+    },
+    {
+      "id": "open-multitrack-testbed",
+      "name": "Open Multitrack Testbed",
+      "sourceUrl": "https://qmro.qmul.ac.uk/xmlui/handle/123456789/22148?show=full",
+      "sourceCategory": "academic",
+      "datasetType": "multitrack",
+      "scaleSummary": "Described as a large and diverse open multitrack repository with metadata.",
+      "audioFormat": {
+        "sampleRate": "requires item-level verification",
+        "channels": "multitrack, mixes, and processed versions where available",
+        "encoding": "requires item-level verification",
+        "alignmentNotes": "Current catalog access and item-level licenses must be verified."
+      },
+      "labelingType": "Multitrack audio, metadata, mixes/processed versions, and process parameters where available.",
+      "recommendedRole": [
+        "synthetic-pair-generation",
+        "hold"
+      ],
+      "recommendationStatus": "conditional",
+      "compatibilityScore": 3,
+      "licensePostureId": "license-open-multitrack-testbed",
+      "overfittingRiskId": "risk-open-multitrack-testbed",
+      "requiredFollowUps": [
+        "Verify current downloadable catalog.",
+        "Confirm item-level license terms.",
+        "Screen file consistency and process-parameter availability."
+      ],
+      "evidenceLinks": [
+        "https://qmro.qmul.ac.uk/xmlui/handle/123456789/22148?show=full"
+      ]
+    },
+    {
+      "id": "slakh2100",
+      "name": "Slakh2100",
+      "sourceUrl": "https://zenodo.org/records/4599666",
+      "sourceCategory": "academic",
+      "datasetType": "synthetic",
+      "scaleSummary": "2,100 tracks, 145 hours, about 105 GB FLAC.",
+      "audioFormat": {
+        "sampleRate": 44100,
+        "channels": "mono sources and mixtures",
+        "encoding": "16-bit FLAC",
+        "alignmentNotes": "Mono synthetic material; stereo use must be explicitly labeled synthetic."
+      },
+      "labelingType": "Synthetic sources, mixtures, aligned MIDI, and metadata.",
+      "recommendedRole": [
+        "auxiliary-pretraining",
+        "pipeline-debugging"
+      ],
+      "recommendationStatus": "conditional",
+      "compatibilityScore": 3,
+      "licensePostureId": "license-slakh2100",
+      "overfittingRiskId": "risk-slakh2100",
+      "requiredFollowUps": [
+        "Exclude known duplicate MIDI omitted tracks.",
+        "Label all stereo conversions as synthetic.",
+        "Do not use as professional mastering evidence."
+      ],
+      "evidenceLinks": [
+        "https://zenodo.org/records/4599666"
+      ]
+    },
+    {
+      "id": "mtg-jamendo",
+      "name": "MTG-Jamendo",
+      "sourceUrl": "https://github.com/MTG/mtg-jamendo-dataset",
+      "sourceCategory": "open-source",
+      "datasetType": "reference-only",
+      "scaleSummary": "55k+ full tracks with metadata and provided splits.",
+      "audioFormat": {
+        "sampleRate": "varies by source track",
+        "channels": "full music tracks",
+        "encoding": "Jamendo-hosted audio",
+        "alignmentNotes": "Reference-only; no unmastered counterpart."
+      },
+      "labelingType": "Genre, instrument, mood/theme tags, artist metadata, and split files.",
+      "recommendedRole": [
+        "reference-distribution"
+      ],
+      "recommendationStatus": "research-only",
+      "compatibilityScore": 3,
+      "licensePostureId": "license-mtg-jamendo",
+      "overfittingRiskId": "risk-mtg-jamendo",
+      "requiredFollowUps": [
+        "Capture item-level licenses from audio license files.",
+        "Use as reference distribution only unless degraded pairs are generated.",
+        "Obtain separate authorization before commercial use."
+      ],
+      "evidenceLinks": [
+        "https://github.com/MTG/mtg-jamendo-dataset"
+      ]
+    },
+    {
+      "id": "fma",
+      "name": "Free Music Archive Dataset",
+      "sourceUrl": "https://github.com/mdeff/fma",
+      "sourceCategory": "academic",
+      "datasetType": "reference-only",
+      "scaleSummary": "106,574 tracks; 917 GiB full set; 30-second and full-length subsets.",
+      "audioFormat": {
+        "sampleRate": "varies by subset",
+        "channels": "full music tracks",
+        "encoding": "MP3 in common subsets; full set requires quality screening",
+        "alignmentNotes": "Reference-only; no paired unmastered counterpart."
+      },
+      "labelingType": "Genre taxonomy, metadata, and extracted features.",
+      "recommendedRole": [
+        "reference-distribution",
+        "auxiliary-pretraining"
+      ],
+      "recommendationStatus": "conditional",
+      "compatibilityScore": 3,
+      "licensePostureId": "license-fma",
+      "overfittingRiskId": "risk-fma",
+      "requiredFollowUps": [
+        "Filter by item-level audio license.",
+        "Screen for codec artifacts and low-quality sources.",
+        "Split by artist and album."
+      ],
+      "evidenceLinks": [
+        "https://github.com/mdeff/fma"
+      ]
+    },
+    {
+      "id": "odaq",
+      "name": "Open Dataset of Audio Quality",
+      "sourceUrl": "https://arxiv.org/abs/2401.00197",
+      "sourceCategory": "academic",
+      "datasetType": "quality-benchmark",
+      "scaleSummary": "Original release reports 240 stereo samples and 26 expert ratings per sample; expanded work reports 10,080 scores.",
+      "audioFormat": {
+        "sampleRate": "varies by benchmark release",
+        "channels": "stereo",
+        "encoding": "benchmark-provided reference and processed audio",
+        "alignmentNotes": "Held-out perceptual validation only."
+      },
+      "labelingType": "Subjective audio-quality ratings and processed/reference examples.",
+      "recommendedRole": [
+        "perceptual-validation"
+      ],
+      "recommendationStatus": "validation-only",
+      "compatibilityScore": 3,
+      "licensePostureId": "license-odaq",
+      "overfittingRiskId": "risk-odaq",
+      "requiredFollowUps": [
+        "Reserve for metric calibration only.",
+        "Do not include in model training manifests.",
+        "Record release-specific license and audio checksums."
+      ],
+      "evidenceLinks": [
+        "https://arxiv.org/abs/2401.00197",
+        "https://arxiv.org/abs/2504.00742"
+      ]
+    },
+    {
+      "id": "aam",
+      "name": "Artificial Audio Multitracks",
+      "sourceUrl": "https://link.springer.com/article/10.1186/s13636-023-00278-7",
+      "sourceCategory": "academic",
+      "datasetType": "synthetic",
+      "scaleSummary": "3,000 artificial multitrack music pieces with precise annotations.",
+      "audioFormat": {
+        "sampleRate": "requires dataset-level verification",
+        "channels": "single-instrument tracks and mix track",
+        "encoding": "requires dataset-level verification",
+        "alignmentNotes": "Synthetic corpus; dataset license must be verified separately from article license."
+      },
+      "labelingType": "Synthetic multitracks, mix track, and annotation-derived labels.",
+      "recommendedRole": [
+        "pipeline-debugging",
+        "auxiliary-pretraining"
+      ],
+      "recommendationStatus": "conditional",
+      "compatibilityScore": 2,
+      "licensePostureId": "license-aam",
+      "overfittingRiskId": "risk-aam",
+      "requiredFollowUps": [
+        "Verify dataset license and access path.",
+        "Keep excluded from real-music quality evidence.",
+        "Label all results as synthetic pretraining or pipeline tests."
+      ],
+      "evidenceLinks": [
+        "https://link.springer.com/article/10.1186/s13636-023-00278-7"
+      ]
+    },
+    {
+      "id": "commercial-stem-stores",
+      "name": "Commercial Stem and Multitrack Stores",
+      "sourceUrl": "https://www.multitracks.com/terms/",
+      "sourceCategory": "commercial",
+      "datasetType": "commercial-source",
+      "scaleSummary": "Potentially high-quality and variable scale, but ordinary access is account-bound and contract-limited.",
+      "audioFormat": {
+        "sampleRate": "varies by product",
+        "channels": "paid stems and multitracks",
+        "encoding": "varies by product",
+        "alignmentNotes": "Do not ingest without negotiated ML/data rights."
+      },
+      "labelingType": "Commercial stems or multitracks, often without dataset redistribution/training rights.",
+      "recommendedRole": [
+        "hold"
+      ],
+      "recommendationStatus": "hold",
+      "compatibilityScore": 1,
+      "licensePostureId": "license-commercial-stem-stores",
+      "overfittingRiskId": "risk-commercial-stem-stores",
+      "requiredFollowUps": [
+        "Obtain custom written license covering ML training and derived artifacts.",
+        "Confirm redistribution, retention, and attribution obligations.",
+        "Do not ingest under ordinary consumer terms."
+      ],
+      "evidenceLinks": [
+        "https://www.multitracks.com/terms/"
+      ]
+    },
+    {
+      "id": "streaming-leaked-uploads",
+      "name": "Streaming Services, Public Uploads, and Leaked Stems",
+      "sourceUrl": "https://www.multitracks.com/terms/",
+      "sourceCategory": "rejected-source",
+      "datasetType": "commercial-source",
+      "scaleSummary": "Massive but uncontrolled and rights-unsafe.",
+      "audioFormat": {
+        "sampleRate": "varies",
+        "channels": "mastered audio or unofficial extracted stems",
+        "encoding": "varies",
+        "alignmentNotes": "Rejected; no ingestion or derivative dataset construction."
+      },
+      "labelingType": "No defensible training labels or provenance.",
+      "recommendedRole": [
+        "reject"
+      ],
+      "recommendationStatus": "rejected",
+      "compatibilityScore": 1,
+      "licensePostureId": "license-streaming-leaked-uploads",
+      "overfittingRiskId": "risk-streaming-leaked-uploads",
+      "requiredFollowUps": [
+        "Exclude from all training, validation, and benchmarking.",
+        "Document rejection if proposed again."
+      ],
+      "evidenceLinks": [
+        "https://www.multitracks.com/terms/"
+      ],
+      "notes": "Representative terms reference is included to show that ordinary account-bound access is not a dataset training license."
+    }
+  ]
+}

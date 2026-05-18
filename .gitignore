@@ -114,3 +114,13 @@ temp_processor.h
 # Terraform state inside Dataset cloud
 **/.terraform/
 **/.terraform.lock.hcl
+
+# Spec-kit required C++ patterns
+bin/
+obj/
+*.o
+*.so
+*.a
+*.exe
+.idea/
+.env*

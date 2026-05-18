@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://more-phi.local/schemas/license-ledger.schema.json",
+  "title": "Neural Mastering Dataset License Ledger Entry",
+  "type": "object",
+  "examples": [
+    {
+      "ledgerEntryId": "ledger-sonicmaster-placeholder",
+      "datasetId": "sonicmaster-dataset",
+      "itemId": "placeholder-item-id",
+      "sourceUrl": "https://huggingface.co/datasets/amaai-lab/SonicMasterDataset",
+      "declaredLicense": "cc-by-2.0",
+      "licensePattern": "attribution",
+      "commercialEligibility": "requires-review",
+      "requiresAttribution": true,
+      "requiresShareAlike": false,
+      "nonCommercialOnly": false,
+      "upstreamLicenseRequired": true,
+      "approvalStatus": "not-reviewed",
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "approvalNotes": "Placeholder record; replace with item-level source and approval data before ingestion."
+    }
+  ],
+  "additionalProperties": false,
+  "required": [
+    "ledgerEntryId",
+    "datasetId",
+    "itemId",
+    "sourceUrl",
+    "declaredLicense",
+    "licensePattern",
+    "commercialEligibility",
+    "requiresAttribution",
+    "requiresShareAlike",
+    "nonCommercialOnly",
+    "upstreamLicenseRequired",
+    "approvalStatus",
+    "checksum",
+    "approvalNotes"
+  ],
+  "properties": {
+    "ledgerEntryId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "datasetId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "itemId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "declaredLicense": {
+      "type": "string",
+      "minLength": 1
+    },
+    "licensePattern": {
+      "enum": [
+        "permissive",
+        "attribution",
+        "non-commercial",
+        "share-alike",
+        "educational-only",
+        "mixed-per-track",
+        "gated",
+        "unknown",
+        "rejected"
+      ]
+    },
+    "commercialEligibility": {
+      "enum": [
+        "eligible",
+        "blocked",
+        "requires-review",
+        "unknown"
+      ]
+    },
+    "requiresAttribution": {
+      "type": "boolean"
+    },
+    "requiresShareAlike": {
+      "type": "boolean"
+    },
+    "nonCommercialOnly": {
+      "type": "boolean"
+    },
+    "upstreamLicenseRequired": {
+      "type": "boolean"
+    },
+    "approvalStatus": {
+      "enum": [
+        "not-reviewed",
+        "research-approved",
+        "commercial-approved",
+        "blocked",
+        "rejected"
+      ]
+    },
+    "checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "enum": [
+            "sha256",
+            "sha512"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 32
+        }
+      }
+    },
+    "attributionText": {
+      "type": "string"
+    },
+    "approvalNotes": {
+      "type": "string"
+    },
+    "reviewedBy": {
+      "type": "string"
+    },
+    "reviewedOn": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "nonCommercialOnly": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "commercialEligibility": {
+            "enum": [
+              "blocked",
+              "requires-review"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "approvalStatus": {
+            "const": "commercial-approved"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "commercialEligibility": {
+            "const": "eligible"
+          }
+        },
+        "required": [
+          "reviewedBy",
+          "reviewedOn"
+        ]
+      }
+    }
+  ]
+}

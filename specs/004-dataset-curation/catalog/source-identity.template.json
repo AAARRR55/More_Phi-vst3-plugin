@@ -1,0 +1,23 @@
+{
+  "sourceIdentityId": "source-placeholder-work",
+  "datasetIds": [
+    "sonicmaster-dataset"
+  ],
+  "workId": "replace-with-original-work-id",
+  "artistId": "replace-with-artist-or-creator-id",
+  "albumOrSessionId": "replace-with-album-project-or-session-id",
+  "upstreamCatalogId": "replace-with-jamendo-fma-cambridge-or-other-source-id",
+  "derivedFamilyIds": [
+    "replace-with-shared-stem-degradation-render-or-parameter-family-id"
+  ],
+  "splitAssignment": "holdout",
+  "knownOverlaps": [
+    {
+      "datasetId": "replace-with-overlapping-dataset-id",
+      "overlapType": "suspected",
+      "resolution": "requires-review",
+      "notes": "Replace with overlap evidence and resolution before validation metrics are accepted."
+    }
+  ],
+  "notes": "All variants sharing this source identity must remain in the same split."
+}
