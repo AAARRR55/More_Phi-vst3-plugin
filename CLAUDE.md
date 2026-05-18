@@ -173,3 +173,8 @@ CMakePresets.json defines cross-platform configure/build/test presets beyond the
 - AU is built only on macOS; non-macOS builds emit VST3 only.
 - `ParameterState` uses fixed arrays for up to 2048 parameters; `SnapshotBank` heap-allocates its 12-slot array to avoid host stack pressure.
 - SIMD tuning is scoped to `src/Core/SIMDAudio.cpp` (`/arch:AVX2` on MSVC or `-mavx2 -msse4.1` on Clang/GCC when x86 is detected).
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

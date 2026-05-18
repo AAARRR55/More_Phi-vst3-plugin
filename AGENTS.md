@@ -36,7 +36,7 @@ Dependencies (all fetched automatically via FetchContent): JUCE 8.0.4, nlohmann/
 
 ## Architecture
 
-Everything is in the `morephi` namespace. The plugin entry point is `MorePhiProcessor` (inherits `juce::AudioProcessor`), which owns all subsystems as member variables (no singletons except `InstanceRegistry`).
+Everything is in the `more_phi` namespace. The plugin entry point is `MorePhiProcessor` (inherits `juce::AudioProcessor`), which owns all subsystems as member variables (no singletons except `InstanceRegistry`).
 
 ### Processing Pipeline (audio thread)
 
@@ -141,3 +141,8 @@ Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 - AU format only built on macOS; Windows builds VST3 only
 - `ParameterState` uses fixed `std::array<float, 2048>` (no heap allocation) for real-time safety
 - `SnapshotBank` heap-allocates its 12-slot array (~384 KB) to avoid stack overflow in hosts with small thread stacks
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
