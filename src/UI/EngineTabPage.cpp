@@ -54,10 +54,20 @@ void EngineTabPage::paint(juce::Graphics& g)
 void EngineTabPage::resized()
 {
     auto area = getLocalBounds();
+    const bool compact = area.getWidth() < 760;
 
     // Top row: HybridBlendPanel — full width, fixed height.
     blendPanel_->setBounds(area.removeFromTop(kBlendPanelHeight));
     area.removeFromTop(kGapBelowBlend);
+
+    if (compact)
+    {
+        auto spectralArea = area.removeFromTop(area.getHeight() / 2);
+        area.removeFromTop(kGapBetweenSides);
+        spectralPanel_->setBounds(spectralArea);
+        granularPanel_->setBounds(area);
+        return;
+    }
 
     // Bottom row: Spectral (left) and Granular (right) — FlexBox with equal flex
     juce::FlexBox bottom;

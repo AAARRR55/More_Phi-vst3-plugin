@@ -55,14 +55,17 @@ void LLMSettingsDialog::configureControls()
     };
     modelCombo_.onChange = [this]() {
         selectedDraftProvider().selectedModel = modelCombo_.getText();
+        clearSelectedProviderValidation();
         refreshButtonStates();
     };
     apiKeyEditor_.onTextChange = [this]() {
         selectedDraftProvider().apiKey = apiKeyEditor_.getText();
+        clearSelectedProviderValidation();
         refreshButtonStates();
     };
     baseUrlEditor_.onTextChange = [this]() {
         selectedDraftProvider().customBaseUrl = baseUrlEditor_.getText();
+        clearSelectedProviderValidation();
         refreshButtonStates();
     };
 
@@ -157,6 +160,15 @@ void LLMSettingsDialog::setStatusMessage(const juce::String& message, LLMValidat
 {
     const auto display = message.isNotEmpty() ? message : toDisplayString(status);
     statusLabel_.setText(display, juce::dontSendNotification);
+}
+
+void LLMSettingsDialog::clearSelectedProviderValidation()
+{
+    auto& provider = selectedDraftProvider();
+    provider.validationStatus = LLMValidationStatus::Untested;
+    provider.validationTimestampMs = 0;
+    provider.validationMessage.clear();
+    setStatusMessage({}, provider.validationStatus);
 }
 
 void LLMSettingsDialog::fetchModels()

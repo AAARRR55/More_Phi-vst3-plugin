@@ -39,10 +39,16 @@
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include <array>
+#include <memory>
 #include <vector>
 // <mutex> removed — all synchronization uses juce::SpinLock for real-time safety
 
 namespace more_phi {
+
+namespace standalone_mcp {
+class IZotopeIPCAssistant;
+class IZotopeIPCDiscovery;
+}
 
 class MorePhiProcessor : public juce::AudioProcessor,
                           private juce::Timer
@@ -91,7 +97,13 @@ public:
     MorphProcessor&    getMorphProcessor()                 { return morphProcessor; }
     MCPServer&         getMCPServer()                      { return mcpServer; }
     const MCPServer&   getMCPServer() const                { return mcpServer; }
+    standalone_mcp::IZotopeIPCDiscovery& getIZotopeIPCDiscovery();
+    standalone_mcp::IZotopeIPCAssistant& getIZotopeIPCAssistant();
     const InstanceIdentity& getInstanceIdentity() const   { return instanceIdentity_; }
+
+#if MORE_PHI_TEST_MODE
+    void startPendingMCPServerForTesting() { startMCPServerIfNeeded(); }
+#endif
     
     // ── New v3.3.0 accessors ─────────────────────────────────────────────────
     ParameterClassifier&      getParameterClassifier()      { return parameterClassifier_; }
@@ -158,6 +170,7 @@ public:
                              float normalizedValue,
                              ParameterEditSource source = ParameterEditSource::UI,
                              bool holdAgainstMorph = true);
+    bool enqueueParameterBatch(const std::vector<ParamCommand>& commands);
     int enqueueParameterState(const std::vector<float>& normalizedValues,
                               ParameterEditSource source = ParameterEditSource::UI,
                               bool holdAgainstMorph = true);
@@ -182,8 +195,28 @@ public:
     float getCommandQueueUsage() const;  // Returns usage as ratio [0,1]
     bool isCommandQueueHealthy() const;   // Returns false if >80% full
     int  getCommandQueueCapacity() const { return static_cast<int>(COMMAND_QUEUE_CAPACITY); }
+    size_t getCommandQueueFreeSpaceApprox() const { return commandQueue.freeSpaceApprox(); }
+    size_t getPendingParameterCommandCountApprox() const
+    {
+        const auto free = commandQueue.freeSpaceApprox();
+        return free >= LockFreeQueue<ParamCommand, COMMAND_QUEUE_CAPACITY>::usableCapacity()
+            ? 0
+            : LockFreeQueue<ParamCommand, COMMAND_QUEUE_CAPACITY>::usableCapacity() - free;
+    }
 
-    // Performance profiling (for CPU spike diagnosis)
+    struct ParameterCommandFlushResult
+    {
+        int pendingBefore = 0;
+        int drained = 0;
+        int pendingAfter = 0;
+        bool pluginUnavailable = false;
+        bool exclusiveAccessTimedOut = false;
+    };
+
+    ParameterCommandFlushResult flushPendingParameterCommandsForAssistant(int maxCommands = 2048,
+                                                                          int timeoutMs = 50);
+
+    juce::uint64 getProcessorGenerationToken() const noexcept { return processorGenerationToken_; }
     PerformanceProfiler& getProfiler() { return profiler_; }
     const PerformanceProfiler& getProfiler() const { return profiler_; }
     void resetProfiler() { profiler_.reset(); }
@@ -191,17 +224,47 @@ public:
     void dumpProfilingReportToConsole() const; // Log profiling report to DBG output
 
     // ── Morph state: UI/MCP writes, audio thread reads ───────────────────────
-    void  setMorphX(float v)         { morphX_.store(v,        std::memory_order_relaxed); }
+    void  setMorphX(float v)
+    {
+        const float clamped = juce::jlimit(0.0f, 1.0f, v);
+        morphX_.store(clamped, std::memory_order_relaxed);
+        if (rawParams_.morphX != nullptr)
+            rawParams_.morphX->store(clamped, std::memory_order_relaxed);
+    }
     float getMorphX()  const         { return morphX_.load(    std::memory_order_relaxed); }
-    void  setMorphY(float v)         { morphY_.store(v,        std::memory_order_relaxed); }
+    void  setMorphY(float v)
+    {
+        const float clamped = juce::jlimit(0.0f, 1.0f, v);
+        morphY_.store(clamped, std::memory_order_relaxed);
+        if (rawParams_.morphY != nullptr)
+            rawParams_.morphY->store(clamped, std::memory_order_relaxed);
+    }
     float getMorphY()  const         { return morphY_.load(    std::memory_order_relaxed); }
-    void  setFaderPos(float v)       { faderPos_.store(v,      std::memory_order_relaxed); }
+    void  setFaderPos(float v)
+    {
+        const float clamped = juce::jlimit(0.0f, 1.0f, v);
+        faderPos_.store(clamped, std::memory_order_relaxed);
+        if (rawParams_.faderPos != nullptr)
+            rawParams_.faderPos->store(clamped, std::memory_order_relaxed);
+    }
     float getFaderPos() const        { return faderPos_.load(  std::memory_order_relaxed); }
-    void  setMorphSource(int v)      { morphSource_.store(v,   std::memory_order_relaxed); }
+    void  setMorphSource(int v)
+    {
+        const int clamped = juce::jlimit(0, 1, v);
+        morphSource_.store(clamped, std::memory_order_relaxed);
+        if (rawParams_.morphSource != nullptr)
+            rawParams_.morphSource->store(static_cast<float>(clamped), std::memory_order_relaxed);
+    }
     int   getMorphSource() const     { return morphSource_.load(std::memory_order_relaxed); }
 
     // ── Physics: UI writes, audio thread reads ────────────────────────────────
-    void  setPhysicsMode(int v)      { physicsMode_.store(v,    std::memory_order_relaxed); }
+    void  setPhysicsMode(int v)
+    {
+        const int clamped = juce::jlimit(0, 2, v);
+        physicsMode_.store(clamped, std::memory_order_relaxed);
+        if (rawParams_.physicsMode != nullptr)
+            rawParams_.physicsMode->store(static_cast<float>(clamped), std::memory_order_relaxed);
+    }
     int   getPhysicsMode() const     { return physicsMode_.load(std::memory_order_relaxed); }
     void  setElasticPreset(int v)    { elasticPreset_.store(v,  std::memory_order_relaxed); }
     int   getElasticPreset() const   { return elasticPreset_.load(std::memory_order_relaxed); }
@@ -265,6 +328,32 @@ public:
 
     // ── Automated mastering engine ────────────────────────────────────────────
     AutoMasteringEngine& getAutoMasteringEngine() noexcept { return autoMasteringEngine_; }
+
+    struct TransportContextSnapshot
+    {
+        bool available = false;
+        bool playing = false;
+        bool looping = false;
+        double bpm = 0.0;
+        int timeSigNumerator = 4;
+        int timeSigDenominator = 4;
+        double ppqPosition = 0.0;
+        double secondsPosition = 0.0;
+    };
+
+    TransportContextSnapshot getTransportContextSnapshot() const noexcept
+    {
+        return {
+            transportAvailable_.load(std::memory_order_relaxed),
+            transportPlaying_.load(std::memory_order_relaxed),
+            transportLooping_.load(std::memory_order_relaxed),
+            transportBpm_.load(std::memory_order_relaxed),
+            transportTimeSigNumerator_.load(std::memory_order_relaxed),
+            transportTimeSigDenominator_.load(std::memory_order_relaxed),
+            transportPpqPosition_.load(std::memory_order_relaxed),
+            transportSecondsPosition_.load(std::memory_order_relaxed)
+        };
+    }
 
 #if MORE_PHI_TEST_MODE
     void testResizeExternalEditHolds(int count)
@@ -331,9 +420,12 @@ private:
     MorphProcessor     morphProcessor;
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
+    std::unique_ptr<standalone_mcp::IZotopeIPCDiscovery> ipcDiscovery_;
+    std::unique_ptr<standalone_mcp::IZotopeIPCAssistant> ipcAssistant_;
     LinkBroadcaster    linkBroadcaster_;
     InstanceIdentity   instanceIdentity_;
-    
+    juce::uint64       processorGenerationToken_ = 0;
+
     // ── New v3.3.0 components ────────────────────────────────────────────────
     ParameterClassifier      parameterClassifier_;
     DiscreteParameterHandler discreteHandler_;
@@ -403,13 +495,27 @@ private:
 
     void clearLiveEditHoldsAudioThread() noexcept;
     bool shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept;
+    int drainParameterCommandQueue(int cachedParamCount,
+                                   int maxCommands,
+                                   juce::AudioPluginInstance* exclusivePlugin = nullptr) noexcept;
     void requestFullStateRecallFromAudioThread(int slot) noexcept;
     // Named capacity constant (avoids magic number in queue declaration).
     static constexpr size_t COMMAND_QUEUE_CAPACITY = 8192;
     LockFreeQueue<ParamCommand, COMMAND_QUEUE_CAPACITY> commandQueue;
+    juce::SpinLock commandConsumerLock_;
     double currentSampleRate = 44100.0;
     int    currentBlockSize  = 512;
     std::atomic<bool> prepared{false};
+
+    // Audio thread writes host playhead data; MCP/UI read snapshots only.
+    std::atomic<bool> transportAvailable_{false};
+    std::atomic<bool> transportPlaying_{false};
+    std::atomic<bool> transportLooping_{false};
+    std::atomic<double> transportBpm_{0.0};
+    std::atomic<int> transportTimeSigNumerator_{4};
+    std::atomic<int> transportTimeSigDenominator_{4};
+    std::atomic<double> transportPpqPosition_{0.0};
+    std::atomic<double> transportSecondsPosition_{0.0};
 
     // State restoration guard: blocks morph processing until hosted plugin is fully restored
     std::atomic<bool> isRestoring_{false};
@@ -445,6 +551,7 @@ private:
 
     /** Sync cached atomics from APVTS values (automation/preset source of truth). */
     void syncStateFromAPVTS();
+    void updateTransportContextSnapshot(juce::AudioPlayHead* playHead) noexcept;
     void cacheRawParameterPointers();
     void requestMessageThreadMaintenance() noexcept;
     bool hasPendingMessageThreadWork() const noexcept;
@@ -458,6 +565,7 @@ private:
         std::atomic<float>* morphX = nullptr;
         std::atomic<float>* morphY = nullptr;
         std::atomic<float>* faderPos = nullptr;
+        std::atomic<float>* morphSource = nullptr;
         std::atomic<float>* physicsMode = nullptr;
         std::atomic<float>* smoothing = nullptr;
         std::atomic<float>* driftSpeed = nullptr;

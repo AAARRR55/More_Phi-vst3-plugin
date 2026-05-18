@@ -57,7 +57,11 @@ void BrickwallLimiter::reset() noexcept
 
 void BrickwallLimiter::processBlock(juce::AudioBuffer<float>& buf) noexcept
 {
-    if (!enabled_.load(std::memory_order_relaxed)) return;
+    if (!enabled_.load(std::memory_order_relaxed))
+    {
+        truePeak_.processBlock(buf);
+        return;
+    }
 
     const int ns  = buf.getNumSamples();
     const int nch = std::min(buf.getNumChannels(), kMaxChannels);
@@ -115,6 +119,8 @@ void BrickwallLimiter::processBlock(juce::AudioBuffer<float>& buf) noexcept
 
         writePos_ = (writePos_ + 1) % kLookaheadBufSize;
     }
+
+    truePeak_.processBlock(buf);
 
     // Update gain reduction meter
     const float grDB = (maxGainReduction < 1.0f && maxGainReduction > 1e-12f)

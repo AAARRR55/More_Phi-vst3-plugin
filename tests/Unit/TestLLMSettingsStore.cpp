@@ -9,7 +9,7 @@ namespace {
 juce::File makeConfigFile()
 {
     auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getNonexistentChildFile("morephi_llm_settings_store", "");
+        .getChildFile("morephi_llm_settings_store_" + juce::Uuid().toString());
     REQUIRE(directory.createDirectory().wasOk());
     return directory.getChildFile("llm_settings.json");
 }

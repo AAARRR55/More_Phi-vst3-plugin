@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cctype>
 #include <limits>
+#include <map>
 #include <optional>
 #include <regex>
 #include <string>
@@ -394,8 +396,31 @@ std::vector<SemanticControl> SemanticPluginProfile::classify(const std::vector<P
     std::vector<SemanticControl> controls;
     controls.reserve(descriptors.size());
 
-    for (const auto& descriptor : descriptors)
-        controls.push_back(classifyOne(descriptor));
+    std::map<std::string, int> usedSemanticIds;
+    for (size_t i = 0; i < descriptors.size(); ++i)
+    {
+        auto control = classifyOne(descriptors[i]);
+        const auto baseSemanticId = control.semanticId;
+        auto candidate = baseSemanticId;
+
+        if (usedSemanticIds[candidate.toStdString()] > 0)
+        {
+            const int suffixIndex = control.parameterIndex >= 0 ? control.parameterIndex : static_cast<int>(i);
+            const auto stableSuffix = juce::String(".param_") + juce::String(suffixIndex);
+            candidate = baseSemanticId + stableSuffix;
+
+            int disambiguator = 2;
+            while (usedSemanticIds[candidate.toStdString()] > 0)
+            {
+                candidate = baseSemanticId + stableSuffix + "_" + juce::String(disambiguator);
+                ++disambiguator;
+            }
+        }
+
+        control.semanticId = candidate;
+        ++usedSemanticIds[candidate.toStdString()];
+        controls.push_back(std::move(control));
+    }
 
     return controls;
 }
@@ -478,11 +503,29 @@ SemanticActionPlan SemanticPluginProfile::planSafeAction(const juce::var& params
         {"semantic_id", semanticId.toStdString()}
     };
 
-    const auto* control = findControl(controls, semanticId);
-    if (control == nullptr)
+    const SemanticControl* control = nullptr;
+    int matchingControls = 0;
+    for (const auto& candidate : controls)
+    {
+        if (candidate.semanticId != semanticId)
+            continue;
+
+        control = &candidate;
+        ++matchingControls;
+    }
+
+    if (matchingControls == 0)
     {
         plan.error = "semantic_control_not_found";
         plan.message = "No semantic control matched the requested semantic_id.";
+        return plan;
+    }
+
+    if (matchingControls > 1)
+    {
+        plan.error = "semantic_control_ambiguous";
+        plan.message = "Multiple semantic controls matched the requested semantic_id.";
+        plan.actionJson["match_count"] = matchingControls;
         return plan;
     }
 

@@ -5,6 +5,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "Core/InterpolationEngine.h"
 #include "UI/Theme/MorePhiTheme.h"
+#include "UI/Bindings/ParameterBinding.h"
 
 namespace more_phi {
 
@@ -253,12 +254,12 @@ void MorphPad::paint(juce::Graphics& g)
         g.setColour(bank.isOccupied(i) ? padDot() : padDotEmpty());
         g.fillEllipse(dotX - dotR, dotY - dotR, dotR * 2, dotR * 2);
 
-        // Slot number — scaled proportionally
-        float slotFontSize = radius * 0.06f;
-        g.setColour(textSlot().withAlpha(0.6f));
+        // Slot number — scaled proportionally with a minimum floor
+        float slotFontSize = juce::jmax(radius * 0.06f, 10.0f);
+        g.setColour(textSlot().withAlpha(0.7f));
         g.setFont(slotFontSize);
-        float labelW = radius * 0.08f;
-        float labelH = radius * 0.07f;
+        float labelW = juce::jmax(radius * 0.08f, 12.0f);
+        float labelH = juce::jmax(radius * 0.07f, 14.0f);
         g.drawText(juce::String(i + 1),
                    juce::Rectangle<float>(dotX - labelW, dotY + dotR + 2.0f, labelW * 2, labelH),
                    juce::Justification::centred);
@@ -356,13 +357,16 @@ void MorphPad::paint(juce::Graphics& g)
     g.setColour(padTrail());
     g.fillEllipse(cx - cursorR, cy - cursorR, cursorR * 2, cursorR * 2);
 
-    // Mode label (top-left corner of pad)
-    const char* modeNames[] = {"2D Pad", "Fader", "Elastic", "Drift"};
-    int modeIdx = juce::jlimit(0, 3, proc_.getPhysicsMode());
-    g.setColour(textDim().withAlpha(0.7f));
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
-    g.drawText(juce::String("Mode: ") + modeNames[modeIdx],
-               bounds.toNearestInt().withHeight(16).translated(8, 4),
+    // Mode label (top-left corner of pad) — now shows source + physics mode
+    const char* sourceNames[] = {"2D Pad", "Fader"};
+    const char* physNames[] = {"Direct", "Elastic", "Drift"};
+    int srcIdx = juce::jlimit(0, 1, proc_.getMorphSource());
+    int physIdx = juce::jlimit(0, 2, proc_.getPhysicsMode());
+    float modeFontSize = juce::jmax(bounds.getHeight() * 0.14f, 10.0f);
+    g.setColour(textDim().withAlpha(0.8f));
+    g.setFont(modeFontSize);
+    g.drawText(juce::String(sourceNames[srcIdx]) + " \u00B7 " + juce::String(physNames[physIdx]),
+               bounds.toNearestInt().withHeight(20).translated(8, 4),
                juce::Justification::centredLeft);
 }
 
@@ -390,6 +394,7 @@ void MorphPad::updatePosition(juce::Point<float> pos)
     if (auto* py = proc_.getAPVTS().getParameter("morphY"))
         py->setValueNotifyingHost(y);
 
+    ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 0, 2);
     proc_.setMorphSource(0);  // XY mode
     needsRepaint_ = true;
     repaint();

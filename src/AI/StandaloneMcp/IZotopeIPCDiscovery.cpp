@@ -1,10 +1,12 @@
 #include "IZotopeIPCDiscovery.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 namespace more_phi::standalone_mcp {
 
@@ -74,6 +76,87 @@ juce::String standardBase64(const uint8_t* data, size_t size)
     if (data == nullptr || size == 0)
         return {};
     return juce::Base64::toBase64(data, size);
+}
+
+std::vector<uint8_t> copyBytes(const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> copied(size);
+    if (data != nullptr && size > 0)
+        std::memcpy(copied.data(), data, size);
+    return copied;
+}
+
+bool decodeBase64(const std::string& encoded, std::vector<uint8_t>& decoded)
+{
+    juce::MemoryBlock block;
+    juce::MemoryOutputStream stream(block, false);
+    if (!juce::Base64::convertFromBase64(stream, juce::String(encoded)))
+        return false;
+
+    stream.flush();
+    decoded.resize(block.getSize());
+    if (!decoded.empty())
+        std::memcpy(decoded.data(), block.getData(), block.getSize());
+    return true;
+}
+
+struct DiffSummary
+{
+    size_t changedBytes = 0;
+    bool rangesTruncated = false;
+    json ranges = json::array();
+};
+
+DiffSummary diffBytes(const std::vector<uint8_t>& previous,
+                      const std::vector<uint8_t>& current,
+                      size_t absoluteOffset,
+                      size_t maxRanges,
+                      bool includeChangedBytes)
+{
+    static constexpr size_t kMaxInlineChangedBytes = 256;
+
+    DiffSummary summary;
+    if (previous.size() != current.size() || previous.empty())
+        return summary;
+
+    for (size_t i = 0; i < current.size();)
+    {
+        if (previous[i] == current[i])
+        {
+            ++i;
+            continue;
+        }
+
+        const auto start = i;
+        while (i < current.size() && previous[i] != current[i])
+            ++i;
+
+        const auto length = i - start;
+        summary.changedBytes += length;
+
+        if (summary.ranges.size() >= maxRanges)
+        {
+            summary.rangesTruncated = true;
+            continue;
+        }
+
+        json range{
+            {"offset", absoluteOffset + start},
+            {"length", length}
+        };
+
+        if (includeChangedBytes)
+        {
+            const auto inlineBytes = std::min(length, kMaxInlineChangedBytes);
+            range["previous_hex"] = hexEncode(previous.data() + start, inlineBytes);
+            range["current_hex"] = hexEncode(current.data() + start, inlineBytes);
+            range["bytes_truncated"] = inlineBytes < length;
+        }
+
+        summary.ranges.push_back(std::move(range));
+    }
+
+    return summary;
 }
 
 } // namespace
@@ -377,12 +460,173 @@ ToolCallOutcome IZotopeIPCDiscovery::dump(const IpcDumpArgs& args) const
     }, false};
 }
 
-#if MORE_PHI_TEST_MODE
+ToolCallOutcome IZotopeIPCDiscovery::capture(const IpcCaptureArgs& args) const
+{
+    if (!isAttached())
+        return makeToolError("not_attached", "Attach to an iZotope IPC segment before capture.");
+
+    if (args.sizeBytes == 0 || args.sizeBytes > kMaxCaptureSize)
+        return makeToolError("invalid_range", "capture size_bytes must be between 1 and 1048576.");
+    if (args.offset > mappedSize || args.sizeBytes > mappedSize - args.offset)
+        return rangeError("capture", args.offset, args.sizeBytes);
+    if (args.durationMs > kMaxCaptureDurationMs)
+        return makeToolError("invalid_duration", "capture duration_ms must be at most 60000.");
+    if (args.intervalMs == 0 || args.intervalMs > 1000)
+        return makeToolError("invalid_interval", "capture interval_ms must be between 1 and 1000.");
+    if (args.maxChanges == 0 || args.maxChanges > kMaxCaptureChanges)
+        return makeToolError("invalid_max_changes", "capture max_changes must be between 1 and 1000.");
+    if (args.maxRangesPerChange == 0 || args.maxRangesPerChange > kMaxChangeRanges)
+        return makeToolError("invalid_max_ranges", "capture max_ranges_per_change must be between 1 and 512.");
+
+    const auto* begin = mappedBytes + args.offset;
+    std::vector<uint8_t> previous;
+
+    if (args.baselineBase64 && !args.baselineBase64->empty())
+    {
+        if (!decodeBase64(*args.baselineBase64, previous))
+            return makeToolError("invalid_baseline_base64");
+        if (previous.size() != args.sizeBytes)
+            return makeToolError("baseline_size_mismatch",
+                "baseline_base64 must decode to exactly size_bytes bytes.");
+    }
+    else
+    {
+        previous = copyBytes(begin, args.sizeBytes);
+    }
+
+    std::unique_ptr<juce::FileOutputStream> outputStream;
+    std::string outputPath;
+    if (args.outputPath && !args.outputPath->empty())
+    {
+        const juce::File outputFile{juce::String(*args.outputPath)};
+        if (auto parent = outputFile.getParentDirectory(); parent.getFullPathName().isNotEmpty())
+            parent.createDirectory();
+
+        outputStream = outputFile.createOutputStream();
+        if (outputStream == nullptr || !outputStream->openedOk())
+            return makeToolError("capture_open_failed", "Could not open output_path for writing.");
+
+        outputPath = outputFile.getFullPathName().toStdString();
+    }
+
+    json changes = json::array();
+    size_t sampleCount = 0;
+    size_t changesRecorded = 0;
+    size_t totalChangedBytes = 0;
+    bool truncated = false;
+
+    const auto start = std::chrono::steady_clock::now();
+
+    auto elapsedMs = [&]() -> size_t
+    {
+        return static_cast<size_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count());
+    };
+
+    auto recordCurrent = [&](size_t sampleIndex) -> bool
+    {
+        const auto current = copyBytes(begin, args.sizeBytes);
+        ++sampleCount;
+
+        const auto diff = diffBytes(
+            previous, current, args.offset, args.maxRangesPerChange, args.includeChangedBytes);
+
+        previous = current;
+        if (diff.changedBytes == 0)
+            return true;
+
+        totalChangedBytes += diff.changedBytes;
+
+        json event{
+            {"sample_index", sampleIndex},
+            {"elapsed_ms", elapsedMs()},
+            {"changed_bytes", diff.changedBytes},
+            {"changed_ranges", diff.ranges},
+            {"ranges_truncated", diff.rangesTruncated},
+            {"frame_candidates", frameCandidates(args.offset, current.data(), current.size(), args.maxFrames)}
+        };
+
+        if (outputStream != nullptr)
+        {
+            const auto line = event.dump();
+            outputStream->write(line.data(), line.size());
+            outputStream->write("\n", 1);
+        }
+
+        if (changes.size() < args.maxChanges)
+            changes.push_back(std::move(event));
+
+        ++changesRecorded;
+        if (changesRecorded >= args.maxChanges)
+        {
+            truncated = true;
+            return false;
+        }
+
+        return true;
+    };
+
+    size_t sampleIndex = 0;
+    if (args.baselineBase64 && !args.baselineBase64->empty())
+    {
+        if (!recordCurrent(sampleIndex++))
+        {
+            if (outputStream != nullptr)
+                outputStream->flush();
+            return {json{
+                {"success", true},
+                {"segment_name", attachedSegmentName},
+                {"offset", args.offset},
+                {"size_bytes", args.sizeBytes},
+                {"duration_ms", args.durationMs},
+                {"interval_ms", args.intervalMs},
+                {"sample_count", sampleCount},
+                {"changes_recorded", changesRecorded},
+                {"total_changed_bytes", totalChangedBytes},
+                {"truncated", truncated},
+                {"output_path", outputPath},
+                {"changes", changes}
+            }, false};
+        }
+    }
+    else
+    {
+        ++sampleCount; // initial baseline copy
+        sampleIndex = 1;
+    }
+
+    while (elapsedMs() < args.durationMs)
+    {
+        const auto remainingMs = args.durationMs - elapsedMs();
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::min(args.intervalMs, remainingMs)));
+
+        if (!recordCurrent(sampleIndex++))
+            break;
+    }
+
+    if (outputStream != nullptr)
+        outputStream->flush();
+
+    return {json{
+        {"success", true},
+        {"segment_name", attachedSegmentName},
+        {"offset", args.offset},
+        {"size_bytes", args.sizeBytes},
+        {"duration_ms", args.durationMs},
+        {"interval_ms", args.intervalMs},
+        {"sample_count", sampleCount},
+        {"changes_recorded", changesRecorded},
+        {"total_changed_bytes", totalChangedBytes},
+        {"truncated", truncated},
+        {"output_path", outputPath},
+        {"changes", changes}
+    }, false};
+}
+
 void IZotopeIPCDiscovery::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)
 {
     fakeSegments[std::move(name)] = std::move(bytes);
 }
-#endif
 
 std::unique_ptr<IZotopeIPCDiscovery> createIZotopeIPCDiscovery()
 {

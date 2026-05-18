@@ -35,7 +35,7 @@ namespace juce {
 
 namespace more_phi {
 
-class ParameterBridge;  // forward
+class IParameterBridge;  // forward
 
 /** Controls how snapshots are recalled.
  *  Fast: normalized floats only (instant, works for most plugins)
@@ -57,14 +57,14 @@ public:
 
     // Called during prepareToPlay to set parameter upper bound for safe copies.
     void prepare(int maxParamCount);
-    void capture(int slot, const ParameterBridge& bridge);
+    void capture(int slot, const IParameterBridge& bridge);
     void captureValues(int slot, const std::vector<float>& values);
     void captureValuesWithNames(int slot, const float* values, int count, const juce::StringArray& names);
-    void recall(int slot, ParameterBridge& bridge) const;
+    void recall(int slot, IParameterBridge& bridge) const;
 
     // Params-only recall: skips state chunk even in Full mode.
     // Used when Recall Toggle is off to sustain notes during snapshot switches.
-    void recallFast(int slot, ParameterBridge& bridge) const;
+    void recallFast(int slot, IParameterBridge& bridge) const;
 
     // Full mode: capture/recall opaque VST3 state chunks alongside parameters
     void captureStateChunk(int slot, juce::AudioPluginInstance* plugin);

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -65,6 +66,15 @@ ToolCallOutcome makeToolError(std::string error, std::string message = {})
     if (!message.empty())
         body["message"] = std::move(message);
     return {body, true};
+}
+
+json makeApplyError(std::string code, int index, std::string message)
+{
+    return {
+        {"code", std::move(code)},
+        {"index", index},
+        {"message", std::move(message)}
+    };
 }
 
 juce::AudioPluginInstance* acquirePlugin(IPluginHostManager& host,
@@ -296,6 +306,73 @@ ToolCallOutcome HostedOzonePluginBackend::setParameter(int index, float value)
     return {json{
         {"success", true},
         {"parameter", parameterDescriptorToJson(index, true)}
+    }, false};
+}
+
+ToolCallOutcome HostedOzonePluginBackend::applyAssistantParameters(const AssistantParameterApplyArgs& args)
+{
+    if (!hasLoadedPlugin())
+        return pluginNotLoaded();
+
+    const int count = bridge->getParameterCount();
+    json errors = json::array();
+
+    for (const auto& decision : args.parameters)
+    {
+        if (decision.index < 0 || decision.index >= count)
+        {
+            errors.push_back(makeApplyError(
+                "parameter_index_out_of_range",
+                decision.index,
+                "Assistant parameter index is outside the hosted plugin parameter range."));
+            continue;
+        }
+
+        if (!std::isfinite(decision.value) || decision.value < 0.0 || decision.value > 1.0)
+        {
+            errors.push_back(makeApplyError(
+                "parameter_value_out_of_range",
+                decision.index,
+                "Assistant parameter value must be finite and normalized between 0.0 and 1.0."));
+        }
+    }
+
+    if (!errors.empty())
+    {
+        return {json{
+            {"success", false},
+            {"error", "assistant_apply_failed"},
+            {"apply_result", {
+                {"applied", false},
+                {"requested_count", static_cast<int>(args.parameters.size())},
+                {"applied_count", 0},
+                {"parameters", json::array()},
+                {"errors", errors}
+            }}
+        }, true};
+    }
+
+    json applied = json::array();
+    for (const auto& decision : args.parameters)
+    {
+        bridge->setParameterNormalized(decision.index, static_cast<float>(decision.value));
+        applied.push_back({
+            {"index", decision.index},
+            {"value", decision.value},
+            {"success", true},
+            {"parameter", parameterDescriptorToJson(decision.index, true)}
+        });
+    }
+
+    return {json{
+        {"success", true},
+        {"apply_result", {
+            {"applied", true},
+            {"requested_count", static_cast<int>(args.parameters.size())},
+            {"applied_count", static_cast<int>(applied.size())},
+            {"parameters", applied},
+            {"errors", json::array()}
+        }}
     }, false};
 }
 

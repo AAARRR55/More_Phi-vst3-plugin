@@ -16,17 +16,21 @@ MultiEffectPlan ChainPlanExecutor::executePlan(int   genreIndex,
                                                float correlationMS)
 {
     MultiEffectPlan plan = buildPlan(genreIndex, dynamicRange, spectralTilt, correlationMS);
-    lastPlan_  = plan;
+    applyPlan(plan);
+    return plan;
+}
+
+int ChainPlanExecutor::applyPlan(const MultiEffectPlan& plan)
+{
+    if (!plan.valid)
+        return 0;
+
+    lastPlan_ = plan;
 
     if (callback_) callback_(plan);
 
-    {
-        const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
-        if (ozoneApplicator_ != nullptr)
-            ozoneApplicator_->apply(plan);
-    }
-
-    return plan;
+    const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+    return ozoneApplicator_ != nullptr ? ozoneApplicator_->apply(plan) : 0;
 }
 
 MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,
@@ -78,7 +82,9 @@ MultiEffectPlan ChainPlanExecutor::stepDynamicsAssessment(float dynamicRange)
     else
         plan.compressionNeed = 0.8f;
 
-    plan.useNeuralComp = (dynamicRange > 6.f);
+    // Keep the public field for API compatibility, but do not claim a neural
+    // compressor is active while the ONNX backend is still a stub.
+    plan.useNeuralComp = false;
     return plan;
 }
 

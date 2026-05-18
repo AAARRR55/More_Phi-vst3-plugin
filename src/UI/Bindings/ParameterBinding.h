@@ -14,6 +14,24 @@ inline void setValueWithGesture(juce::AudioProcessorParameter& parameter, float 
     parameter.endChangeGesture();
 }
 
+inline bool setChoiceIndexWithGesture(juce::AudioProcessorValueTreeState& apvts,
+                                      const juce::String& parameterId,
+                                      int choiceIndex,
+                                      int choiceCount)
+{
+    auto* parameter = apvts.getParameter(parameterId);
+    if (parameter == nullptr || choiceCount <= 0)
+        return false;
+
+    const int clampedIndex = juce::jlimit(0, choiceCount - 1, choiceIndex);
+    const float normalised = choiceCount <= 1
+        ? 0.0f
+        : static_cast<float>(clampedIndex) / static_cast<float>(choiceCount - 1);
+
+    setValueWithGesture(*parameter, normalised);
+    return true;
+}
+
 namespace detail {
 
 template <typename Component, typename Attachment>

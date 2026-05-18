@@ -1,5 +1,6 @@
 /* More-Phi — UI/MorePhiLookAndFeel.cpp */
 #include "MorePhiLookAndFeel.h"
+#include <cmath>
 
 namespace more_phi {
 
@@ -8,8 +9,9 @@ MorePhiLookAndFeel::MorePhiLookAndFeel()
     // Global defaults
     setColour(juce::ResizableWindow::backgroundColourId, backgroundDark);
     setColour(juce::TextButton::buttonColourId, surfaceColour);
+    setColour(juce::TextButton::buttonOnColourId, accentCoral);
     setColour(juce::TextButton::textColourOffId, textPrimary);
-    setColour(juce::TextButton::textColourOnId, accentCoral);
+    setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     setColour(juce::ComboBox::backgroundColourId, surfaceColour);
     setColour(juce::ComboBox::textColourId, textPrimary);
     setColour(juce::ComboBox::outlineColourId, borderColour);
@@ -28,6 +30,57 @@ MorePhiLookAndFeel::MorePhiLookAndFeel()
     setDefaultSansSerifTypefaceName("Segoe UI");
 }
 
+// ── Font Scaling ─────────────────────────────────────────────────────────────
+
+float MorePhiLookAndFeel::getScaledFontSize(float baseSize, float editorWidth, float minSize)
+{
+    const float scale = editorWidth / kBaselineWidth;
+    const float clampedScale = juce::jlimit(0.75f, 1.3f, scale);
+    return juce::jmax(minSize, baseSize * clampedScale);
+}
+
+juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float editorWidth,
+                                                float minSize, int style)
+{
+    return juce::Font(juce::FontOptions("Segoe UI",
+                                         getScaledFontSize(baseSize, editorWidth, minSize),
+                                         style));
+}
+
+float MorePhiLookAndFeel::getScaledFontSize(float baseSize) const
+{
+    return getScaledFontSize(baseSize, editorWidth_, kMinControlLabel);
+}
+
+float MorePhiLookAndFeel::getScaledFontSize(float baseSize, float minSize) const
+{
+    return getScaledFontSize(baseSize, editorWidth_, minSize);
+}
+
+juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, int style) const
+{
+    return makeScaledFont(baseSize, editorWidth_, kMinControlLabel, style);
+}
+
+juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float minSize, int style) const
+{
+    return makeScaledFont(baseSize, editorWidth_, minSize, style);
+}
+
+juce::Font MorePhiLookAndFeel::makeRoleFont(FontRole role, int style) const
+{
+    switch (role)
+    {
+        case FontRole::Title:   return makeScaledFont(20.0f, 16.0f, style);
+        case FontRole::Section: return makeScaledFont(10.5f, kMinSectionLabel, style);
+        case FontRole::Control: return makeScaledFont(12.0f, kMinControlLabel, style);
+        case FontRole::Value:   return makeScaledFont(11.0f, kMinValueLabel, style);
+        case FontRole::Micro:   return makeScaledFont(10.0f, kMinModeLabel, style);
+    }
+
+    return makeScaledFont(12.0f, kMinControlLabel, style);
+}
+
 // ── Buttons ──────────────────────────────────────────────────────────────────
 
 void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
@@ -38,7 +91,11 @@ void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
     bool toggled = button.getToggleState();
 
     // Background gradient
-    juce::Colour bg = toggled ? accentCoral : surfaceLight;
+    juce::Colour bg = toggled
+        ? button.findColour(juce::TextButton::buttonOnColourId)
+        : button.findColour(juce::TextButton::buttonColourId);
+    if (bg.isTransparent())
+        bg = toggled ? accentCoral : surfaceLight;
     if (isDown) bg = bg.darker(0.2f);
     else if (isOver) bg = bg.brighter(0.08f);
 
@@ -63,10 +120,12 @@ void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
 void MorePhiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
                                             bool /*isOver*/, bool /*isDown*/)
 {
-    auto font = juce::Font(juce::FontOptions("Segoe UI", 12.0f, juce::Font::plain));
+    auto font = makeRoleFont(FontRole::Control);
     font.setFallbackEnabled(true);
     g.setFont(font);
-    g.setColour(button.getToggleState() ? juce::Colours::white : textPrimary);
+    g.setColour(button.getToggleState()
+        ? button.findColour(juce::TextButton::textColourOnId)
+        : button.findColour(juce::TextButton::textColourOffId));
     g.drawText(button.getButtonText(), button.getLocalBounds(),
                juce::Justification::centred);
 }
@@ -74,42 +133,91 @@ void MorePhiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& but
 // ── Rotary Knobs ─────────────────────────────────────────────────────────────
 
 void MorePhiLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
-                                              float sliderPos, float startAngle, float endAngle,
-                                              juce::Slider&)
+                                              float sliderPos, float, float,
+                                              juce::Slider& slider)
 {
-    const float radius = juce::jmin(w, h) * 0.5f - 4.0f;
-    const float cx = x + w * 0.5f;
-    const float cy = y + h * 0.5f;
-    const float angle = startAngle + sliderPos * (endAngle - startAngle);
+    auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
+                                         static_cast<float>(w), static_cast<float>(h)).reduced(4.0f);
+    const float diameter = juce::jmin(bounds.getWidth(), bounds.getHeight());
+    const float radius = diameter * 0.5f;
+    const auto centre = bounds.getCentre();
+    const float cx = centre.x;
+    const float cy = centre.y;
 
-    // Background track (full arc)
+    if (radius <= 6.0f)
+        return;
+
+    constexpr float startAngle = juce::MathConstants<float>::pi * 1.25f;
+    constexpr float endAngle   = juce::MathConstants<float>::pi * 2.75f;
+    const float clampedPos = juce::jlimit(0.0f, 1.0f, sliderPos);
+    const float angle = startAngle + clampedPos * (endAngle - startAngle);
+    const float alpha = slider.isEnabled() ? 1.0f : 0.38f;
+    const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
+
+    const juce::Colour fillColour =
+        slider.findColour(juce::Slider::rotarySliderFillColourId).withMultipliedAlpha(alpha);
+    const juce::Colour outlineColour =
+        slider.findColour(juce::Slider::rotarySliderOutlineColourId).withMultipliedAlpha(alpha);
+    const juce::Colour pointerColour = textPrimary.withMultipliedAlpha(alpha);
+    const float stroke = juce::jlimit(3.0f, 5.5f, radius * 0.12f);
+
     juce::Path bgArc;
-    bgArc.addCentredArc(cx, cy, radius, radius, 0.0f, startAngle, endAngle, true);
-    g.setColour(surfaceLight);
-    g.strokePath(bgArc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved,
-                                              juce::PathStrokeType::rounded));
+    bgArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f, startAngle, endAngle, true);
+    g.setColour(outlineColour);
+    g.strokePath(bgArc, juce::PathStrokeType(stroke, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
 
-    // Value arc (filled portion)
-    if (sliderPos > 0.0f)
+    if (bipolar)
+    {
+        const float centreNorm = static_cast<float>(
+            (0.0 - slider.getMinimum()) / (slider.getMaximum() - slider.getMinimum()));
+        const float centreAngle = startAngle + centreNorm * (endAngle - startAngle);
+        if (std::abs(clampedPos - centreNorm) > 0.001f)
+        {
+            juce::Path valueArc;
+            if (clampedPos >= centreNorm)
+                valueArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f,
+                                        centreAngle, angle, true);
+            else
+                valueArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f,
+                                        angle, centreAngle, true);
+
+            g.setColour(clampedPos >= centreNorm ? fillColour : accentPurple.withMultipliedAlpha(alpha));
+            g.strokePath(valueArc, juce::PathStrokeType(stroke, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+        }
+    }
+    else if (clampedPos > 0.001f)
     {
         juce::Path valueArc;
-        valueArc.addCentredArc(cx, cy, radius, radius, 0.0f, startAngle, angle, true);
-        g.setColour(accentCoral);
-        g.strokePath(valueArc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+        valueArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f,
+                                startAngle, angle, true);
+        g.setColour(fillColour);
+        g.strokePath(valueArc, juce::PathStrokeType(stroke, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
     }
 
-    // Center dot
-    g.setColour(surfaceColour);
-    g.fillEllipse(cx - radius * 0.6f, cy - radius * 0.6f, radius * 1.2f, radius * 1.2f);
+    const float insetRadius = radius * 0.62f;
+    g.setColour(surfaceColour.withMultipliedAlpha(alpha));
+    g.fillEllipse(cx - insetRadius, cy - insetRadius, insetRadius * 2.0f, insetRadius * 2.0f);
+    g.setColour(borderColour.withMultipliedAlpha(alpha));
+    g.drawEllipse(cx - insetRadius, cy - insetRadius, insetRadius * 2.0f, insetRadius * 2.0f, 0.5f);
 
-    // Pointer line
     juce::Path pointer;
-    const float pointerLength = radius * 0.5f;
-    pointer.addRectangle(-1.5f, -pointerLength, 3.0f, pointerLength);
+    const float pointerLength = radius * 0.68f;
+    const float pointerWidth = juce::jlimit(2.0f, 3.0f, radius * 0.07f);
+    pointer.addRectangle(-pointerWidth * 0.5f, -pointerLength,
+                         pointerWidth, pointerLength + radius * 0.16f);
     pointer.applyTransform(juce::AffineTransform::rotation(angle).translated(cx, cy));
-    g.setColour(textPrimary);
+    g.setColour(pointerColour);
     g.fillPath(pointer);
+
+    const float tipRadius = pointerWidth * 0.75f;
+    const float tipDist = pointerLength + radius * 0.08f;
+    const float tipX = cx + std::sin(angle) * tipDist;
+    const float tipY = cy - std::cos(angle) * tipDist;
+    g.setColour(fillColour);
+    g.fillEllipse(tipX - tipRadius, tipY - tipRadius, tipRadius * 2.0f, tipRadius * 2.0f);
 }
 
 // ── Linear Slider ────────────────────────────────────────────────────────────
@@ -195,7 +303,10 @@ void MorePhiLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int w, int h
 void MorePhiLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
 {
     g.setColour(label.findColour(juce::Label::textColourId));
-    g.setFont(label.getFont());
+    auto font = label.getFont();
+    if (font.getHeight() < kMinValueLabel)
+        font.setHeight(kMinValueLabel);
+    g.setFont(font);
 
     auto textArea = label.getBorderSize().subtractedFrom(label.getLocalBounds());
     g.drawFittedText(label.getText(), textArea, label.getJustificationType(),

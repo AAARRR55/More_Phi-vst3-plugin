@@ -19,7 +19,7 @@
  * Intelligence (all on message thread):
  *   - NeuralCompressor updates dynamics params every 30ms
  *   - EQParameterTranslator applies genre warm-start to EQ bands 0–7
- *   - ChainPlanExecutor runs 5-step CoT reasoning every 30s
+ *   - ChainPlanExecutor runs a 5-step heuristic rule planner every 30s
  *   - GenreClassifier classifies genre every 30s
  *   - LoudnessNormalizer.updateCorrectionGain() called every 100ms
  *   - MonoCompatibilityChecker checks fold-down every 1s
@@ -43,9 +43,13 @@
 #include "StereoImager.h"
 #include "HarmonicExciter.h"
 #include "BrickwallLimiter.h"
+#include "TruePeakEstimator.h"
 #include "LUFSMeter.h"
 #include "LoudnessNormalizer.h"
 #include "MonoCompatibilityChecker.h"
+#include "MeterWindowAccumulator.h"
+#include "RealtimeSpectrumAnalyzer.h"
+#include "StereoFieldAnalyzer.h"
 #include "NeuralCompressor.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
@@ -61,7 +65,7 @@ public:
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    void prepare(double sampleRate, int maxBlockSize);
+    void prepare(double sampleRate, int maxBlockSize, bool startIntelligence = true);
     void reset() noexcept;
 
     // ── Activation (any thread — atomic) ─────────────────────────────────────
@@ -78,14 +82,28 @@ public:
      */
     void processBlock(juce::AudioBuffer<float>& buf) noexcept;
 
+    /**
+     * Non-mutating live analysis tap. Updates LUFS, true peak, spectrum, and
+     * stereo-field meters from the supplied buffer without applying mastering
+     * processing or changing the audio.
+     */
+    void analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept;
+
     // ── Metering (any thread) ─────────────────────────────────────────────────
 
     [[nodiscard]] float getLUFSMomentary()  const noexcept { return lufs_.getMomentary(); }
     [[nodiscard]] float getLUFSShortTerm()  const noexcept { return lufs_.getShortTerm(); }
     [[nodiscard]] float getLUFSIntegrated() const noexcept { return lufs_.getIntegrated(); }
     [[nodiscard]] float getLRA()            const noexcept { return lufs_.getLRA(); }
-    [[nodiscard]] float getTruePeak_dBTP()  const noexcept { return limiter_.getGainReductionDB(); }
+    [[nodiscard]] float getTruePeak_dBTP()  const noexcept { return analysisTruePeak_.getTruePeak_dBTP(); }
+    [[nodiscard]] float getLimiterGainReductionDB() const noexcept { return limiter_.getGainReductionDB(); }
     [[nodiscard]] float getGainReductionDB(int band) const noexcept { return dynamics_.getGainReductionDB(band); }
+    [[nodiscard]] MeterWindowAccumulator::WindowStatistics computeMeterWindow(float windowSeconds) const noexcept
+    {
+        return meterWindow_.computeWindow(windowSeconds);
+    }
+    [[nodiscard]] bool isGenreClassifierModelLoaded() const noexcept { return genreClassifier_.isModelLoaded(); }
+    [[nodiscard]] bool isNeuralCompressorModelLoaded() const noexcept { return neuralComp_.isModelLoaded(); }
 
     // ── Chain access (message thread — for ABCompareEngine etc.) ─────────────
 
@@ -96,6 +114,10 @@ public:
     MultibandDynamicsProcessor&   getDynamics()         noexcept { return dynamics_; }
     GenreClassifier&              getGenreClassifier()  noexcept { return genreClassifier_; }
     ChainPlanExecutor&            getChainPlanner()     noexcept { return chainPlanner_; }
+    RealtimeSpectrumAnalyzer&     getSpectrumAnalyzer() noexcept { return spectrumAnalyzer_; }
+    StereoFieldAnalyzer&          getStereoFieldAnalyzer() noexcept { return stereoFieldAnalyzer_; }
+    const RealtimeSpectrumAnalyzer& getSpectrumAnalyzer() const noexcept { return spectrumAnalyzer_; }
+    const StereoFieldAnalyzer&    getStereoFieldAnalyzer() const noexcept { return stereoFieldAnalyzer_; }
 
     // ── Loudness target (any thread) ──────────────────────────────────────────
 
@@ -104,6 +126,7 @@ public:
 private:
     void timerCallback() override;
     void applyPlan(const MultiEffectPlan& plan);
+    void updateAnalysisWindow(const juce::AudioBuffer<float>& buf) noexcept;
     void sumBands(juce::AudioBuffer<float> bands[MultibandSplitter::kNumBands],
                   juce::AudioBuffer<float>& out) noexcept;
 
@@ -115,9 +138,13 @@ private:
     StereoImager                stereo_;
     HarmonicExciter             exciter_;
     BrickwallLimiter            limiter_;
+    TruePeakEstimator           analysisTruePeak_;
     LUFSMeter                   lufs_;
     LoudnessNormalizer          normalizer_;
     MonoCompatibilityChecker    monoChecker_;
+    MeterWindowAccumulator      meterWindow_;
+    RealtimeSpectrumAnalyzer    spectrumAnalyzer_;
+    StereoFieldAnalyzer         stereoFieldAnalyzer_;
 
     // ── Intelligence layer ────────────────────────────────────────────────────
     NeuralCompressor            neuralComp_;
@@ -131,10 +158,13 @@ private:
     std::atomic<bool> active_ { false };
     double sampleRate_  = 48000.0;
     int    blockSize_   = 512;
+    double analysisElapsedSeconds_ = 0.0;
+    int    analysisSamplesSinceWindowSample_ = 0;
 
     // Timer tick counters (message thread only)
     int tickCount_            = 0;
     int plannerUpdateInterval_= 300;  // ~30s at 10Hz timer
+    float smoothedSpectralTilt_ = 0.0f;
 };
 
 } // namespace more_phi

@@ -29,8 +29,8 @@ MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
         };
         addAndMakeVisible(knobs_[i]);
 
-        labels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 8.0f, juce::Font::plain)));
-        labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff888888));
+        labels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+        labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
         labels_[i].setJustificationType(juce::Justification::centred);
         labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);
         addAndMakeVisible(labels_[i]);
@@ -46,8 +46,8 @@ void MacroKnobStrip::resized()
     for (int i = 0; i < 8; ++i)
     {
         auto col = b.removeFromLeft(w);
-        labels_[i].setBounds(col.removeFromBottom(16));
-        knobs_[i].setBounds(col.reduced(2));
+        labels_[i].setBounds(col.removeFromBottom(18));
+        knobs_[i].setBounds(col.reduced(4));
     }
 }
 

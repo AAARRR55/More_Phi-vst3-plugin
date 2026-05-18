@@ -33,15 +33,32 @@ private:
     static juce::String recallSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String setMorphPosition(const juce::var& params, MorePhiProcessor& p);
     static juce::String getMorphState(MorePhiProcessor& p);
+    static juce::String runSelfTest(const juce::var& params, MorePhiProcessor& p);
+    static juce::String listMorePhiParameters(MorePhiProcessor& p);
+    static juce::String getMorePhiParameter(const juce::var& params, MorePhiProcessor& p);
+    static juce::String setMorePhiParameter(const juce::var& params, MorePhiProcessor& p);
+    static juce::String setMorePhiParameters(const juce::var& params, MorePhiProcessor& p);
 
     // ── Ozone mastering tools ────────────────────────────────────────────────
+
+    /** Tool: ozone.audit_parameters — discover Ozone parameter indices from the hosted plugin. */
+    static juce::String auditOzoneParameters(const juce::var& params, MorePhiProcessor& p);
 
     /** Tool: get_mastering_state — returns LUFS meters, Ozone hosting status, and key parameter values. */
     static juce::String getMasteringState(MorePhiProcessor& p);
 
-    /** Tool: apply_mastering_plan — runs ChainPlanExecutor with provided analysis inputs.
+    /** Tool: apply_mastering_plan — runs the heuristic ChainPlanExecutor with provided analysis inputs.
      *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
     static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
+
+    // ── iZotope IPC Assistant tools ─────────────────────────────────────────
+    static juce::String izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p);
+    static juce::String izotopeIpcDetach(MorePhiProcessor& p);
+    static juce::String izotopeIpcStatus(MorePhiProcessor& p);
+    static juce::String izotopeIpcSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String izotopeIpcDump(const juce::var& params, MorePhiProcessor& p);
+    static juce::String izotopeIpcCapture(const juce::var& params, MorePhiProcessor& p);
+    static juce::String ozoneRunAssistantIpc(const juce::var& params, MorePhiProcessor& p);
 
     // ── Ozone Track Assistant tools (guide-aligned) ──────────────────────────
 
@@ -55,7 +72,7 @@ private:
                                                const InstanceIdentity& identity);
 
     /** Tool: ozone.track.analyze — return LUFS/dBTP/DR metrics with streaming-target
-     *  comparison and Ozone mastering plan recommendation. */
+     *  comparison and heuristic mastering plan recommendation. */
     static juce::String ozoneTrackAnalyze(const juce::var& params, MorePhiProcessor& p,
                                           const InstanceIdentity& identity);
 
@@ -65,10 +82,13 @@ private:
                                          const InstanceIdentity& identity);
 
     // MCP v1 workflow tools
+    static juce::String diagnoseParameterPipeline(const juce::var& params, MorePhiProcessor& p);
     static juce::String scanHostedPlugin(const juce::var& params, MorePhiProcessor& p);
     static juce::String loadHostedPlugin(const juce::var& params, MorePhiProcessor& p);
     static juce::String captureHostedState(const juce::var& params, MorePhiProcessor& p);
     static juce::String getAnalysisSummary(MorePhiProcessor& p);
+    static juce::String getSpectrumAnalysis(const juce::var& params, MorePhiProcessor& p);
+    static juce::String getStereoFieldAnalysis(MorePhiProcessor& p);
     static juce::String captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p);
     static juce::String compareAnalysis(const juce::var& params, MorePhiProcessor& p);
     static juce::String previewMasteringPlan(const juce::var& params, MorePhiProcessor& p);
@@ -76,8 +96,12 @@ private:
     static juce::String getMasteringRenderStatus(const juce::var& params);
     static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p);
     static juce::String auditPluginProfile(MorePhiProcessor& p);
+    static juce::String describePluginSemantics(MorePhiProcessor& p);
+    static juce::String applySafePluginAction(const juce::var& params, MorePhiProcessor& p);
+    static juce::String restoreSafePluginSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String getPluginProfile(const juce::var& params, MorePhiProcessor& p);
     static juce::String savePluginProfile(const juce::var& params, MorePhiProcessor& p);
+    static juce::String describePluginSemanticMap(const juce::var& params, MorePhiProcessor& p);
 
     // Multi-instance tools
     static juce::String getInstanceInfo(const InstanceIdentity& id);

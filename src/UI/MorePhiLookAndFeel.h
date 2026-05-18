@@ -17,6 +17,25 @@ public:
     // ── Color Palette (Stitch-derived) ───────────────────────────────────────
     static constexpr float cornerRadius = 8.0f;
 
+    // Baseline editor width for font scaling calculations
+    static constexpr float kBaselineWidth = 920.0f;
+
+    // Minimum font sizes — nothing goes below these, ever
+    static constexpr float kMinSectionLabel  = 9.0f;
+    static constexpr float kMinControlLabel  = 10.0f;
+    static constexpr float kMinValueLabel    = 10.0f;
+    static constexpr float kMinSlotNumber    = 9.0f;
+    static constexpr float kMinModeLabel     = 10.0f;
+
+    enum class FontRole
+    {
+        Title,
+        Section,
+        Control,
+        Value,
+        Micro
+    };
+
     // Backgrounds
     const juce::Colour backgroundDark  {0xff0d1b2a};  // Deep navy
     const juce::Colour surfaceColour   {0xff16213e};  // Surface navy
@@ -53,6 +72,29 @@ public:
                        int bx, int by, int bw, int bh, juce::ComboBox&) override;
     void drawPopupMenuBackground(juce::Graphics&, int w, int h) override;
     void drawLabel(juce::Graphics&, juce::Label&) override;
+
+    // ── Font Scaling Helpers ─────────────────────────────────────────────────
+    // Scales a base font size proportionally to editor width, with a floor.
+    // Call with current editor width; returns size clamped to [minSize, baseSize*1.3].
+    static float getScaledFontSize(float baseSize, float editorWidth, float minSize);
+
+    // Convenience: creates a scaled juce::Font with the given typeface and style.
+    static juce::Font makeScaledFont(float baseSize, float editorWidth,
+                                      float minSize, int style = juce::Font::plain);
+
+    // Non-static convenience that uses the global editor width reference.
+    float getScaledFontSize(float baseSize, float minSize) const;
+    float getScaledFontSize(float baseSize) const;
+    juce::Font makeScaledFont(float baseSize, float minSize,
+                              int style = juce::Font::plain) const;
+    juce::Font makeScaledFont(float baseSize, int style = juce::Font::plain) const;
+    juce::Font makeRoleFont(FontRole role, int style = juce::Font::plain) const;
+
+    // Settable reference width — updated by MorePhiEditor::resized().
+    void setEditorWidth(float w) { editorWidth_ = w; }
+
+private:
+    mutable float editorWidth_ = 920.0f;
 };
 
 } // namespace more_phi

@@ -60,6 +60,7 @@ public:
 
     juce::String getParameterLabel(int index) const;
     juce::String getParameterDisplayValue(int index) const;
+    juce::String getParameterDisplayValueAtNormalized(int index, float normalizedValue) const;
     float getParameterDefault(int index) const;
     juce::StringArray getParameterValueStrings(int index) const;
     juce::String getParameterStableID(int index) const;

@@ -22,6 +22,14 @@ TEST_CASE("Validator builds provider-specific model fetch requests", "[unit][ai]
 
     auto compatibleRequest = LLMConnectionValidator::buildFetchModelsRequestForTest(LLMProviderId::OpenAICompatible, settings);
     CHECK(compatibleRequest.url == "https://compatible.example/v1/models");
+
+    settings.customBaseUrl = "http://localhost:8080/v1";
+    compatibleRequest = LLMConnectionValidator::buildFetchModelsRequestForTest(LLMProviderId::OpenAICompatible, settings);
+    CHECK(compatibleRequest.url == "http://localhost:8080/v1/models");
+
+    auto nvidiaPromptRequest = LLMConnectionValidator::buildTestPromptRequestForTest(LLMProviderId::NVIDIA, settings);
+    CHECK(nvidiaPromptRequest.url == "https://integrate.api.nvidia.com/v1/chat/completions");
+    CHECK(nvidiaPromptRequest.timeoutMs == 120000);
 }
 
 TEST_CASE("Validator rejects missing API key and invalid compatible base URL", "[unit][ai][llm][validator]")
@@ -38,6 +46,15 @@ TEST_CASE("Validator rejects missing API key and invalid compatible base URL", "
     result = LLMConnectionValidator::validateInputsForTest(LLMProviderId::OpenAICompatible, settings, LLMValidationOperation::FetchModels);
     CHECK_FALSE(result.success);
     CHECK(result.message.containsIgnoreCase("Base URL"));
+
+    settings.customBaseUrl = "http://localhost:8080/v1";
+    result = LLMConnectionValidator::validateInputsForTest(LLMProviderId::OpenAICompatible, settings, LLMValidationOperation::FetchModels);
+    CHECK(result.success);
+
+    settings.customBaseUrl = "http://example.com/v1";
+    result = LLMConnectionValidator::validateInputsForTest(LLMProviderId::OpenAICompatible, settings, LLMValidationOperation::FetchModels);
+    CHECK_FALSE(result.success);
+    CHECK(result.message.containsIgnoreCase("localhost"));
 }
 
 TEST_CASE("Validator parses OpenAI-style and Anthropic-style model lists", "[unit][ai][llm][validator]")
@@ -58,6 +75,24 @@ TEST_CASE("Validator parses OpenAI-style and Anthropic-style model lists", "[uni
     REQUIRE(anthropic.success);
     REQUIRE(anthropic.models.size() == 1);
     CHECK(anthropic.models[0] == "claude-a");
+
+    const auto compatibleModelsObject = LLMConnectionValidator::parseModelListForTest(
+        LLMProviderId::OpenAICompatible,
+        200,
+        R"json({"models":[{"name":"local-a"},{"model":"local-b"}]})json");
+    REQUIRE(compatibleModelsObject.success);
+    REQUIRE(compatibleModelsObject.models.size() == 2);
+    CHECK(compatibleModelsObject.models[0] == "local-a");
+    CHECK(compatibleModelsObject.models[1] == "local-b");
+
+    const auto compatibleStringArray = LLMConnectionValidator::parseModelListForTest(
+        LLMProviderId::OpenAICompatible,
+        200,
+        R"json(["local-c","local-d"])json");
+    REQUIRE(compatibleStringArray.success);
+    REQUIRE(compatibleStringArray.models.size() == 2);
+    CHECK(compatibleStringArray.models[0] == "local-c");
+    CHECK(compatibleStringArray.models[1] == "local-d");
 }
 
 TEST_CASE("Validator reports auth failure and malformed model responses", "[unit][ai][llm][validator]")
@@ -84,6 +119,12 @@ TEST_CASE("Validator parses test prompt responses and requires OK", "[unit][ai][
         200,
         R"json({"content":[{"type":"text","text":"OK"}]})json");
     CHECK(anthropicSuccess.success);
+
+    const auto openAITextSuccess = LLMConnectionValidator::parseTestPromptForTest(
+        LLMProviderId::OpenAICompatible,
+        200,
+        R"json({"choices":[{"text":"OK"}]})json");
+    CHECK(openAITextSuccess.success);
 
     const auto promptFailure = LLMConnectionValidator::parseTestPromptForTest(
         LLMProviderId::OpenAI,

@@ -431,33 +431,17 @@ TransferEvaluationResult ValidationEngine::evaluateTransferLearning(
 {
     TransferEvaluationResult result;
     result.benchmarkName = benchmarkType;
-
-    // This is a placeholder implementation that estimates transfer performance
-    // In a real implementation, this would:
-    // 1. Load synthetic and real datasets
-    // 2. Train a model on synthetic data
-    // 3. Evaluate zero-shot on real data
-    // 4. Fine-tune on real data and re-evaluate
-
-    // Check if directories exist
-    if (!syntheticDataDir.exists() || !realDataDir.exists())
-    {
-        result.zeroShotAccuracy = 0.0f;
-        result.fineTunedAccuracy = 0.0f;
-        result.performanceGap = 1.0f;
-        return result;
-    }
-
-    // Count samples in each directory (simplified estimation)
-    int syntheticCount = 0;
-    int realCount = 0;
+    result.evaluationAvailable = false;
+    result.status = "unavailable";
+    result.method = "not_run";
+    result.reason = "transfer_evaluation_requires_real_benchmark_pipeline";
 
     if (syntheticDataDir.isDirectory())
     {
         for (const auto& entry : juce::RangedDirectoryIterator(syntheticDataDir, false, "*.wav;*.json", juce::File::findFiles))
         {
             (void)entry;
-            ++syntheticCount;
+            ++result.syntheticSamplesUsed;
         }
     }
 
@@ -466,42 +450,9 @@ TransferEvaluationResult ValidationEngine::evaluateTransferLearning(
         for (const auto& entry : juce::RangedDirectoryIterator(realDataDir, false, "*.wav;*.json", juce::File::findFiles))
         {
             (void)entry;
-            ++realCount;
+            ++result.realSamplesUsed;
         }
     }
-
-    result.syntheticSamplesUsed = syntheticCount;
-    result.realSamplesUsed = realCount;
-
-    // Estimate transfer performance based on dataset characteristics
-    // This is a simplified model - real evaluation would train actual models
-
-    // Base accuracy depends on benchmark type
-    float baseAccuracy = 0.5f;  // Default for classification
-    if (benchmarkType == "regression")
-    {
-        baseAccuracy = 0.3f;  // Lower for regression tasks
-    }
-    else if (benchmarkType == "generation")
-    {
-        baseAccuracy = 0.4f;
-    }
-
-    // Zero-shot accuracy improves with more synthetic data
-    const float synthBonus = std::min(0.3f, syntheticCount / 10000.0f);
-    result.zeroShotAccuracy = baseAccuracy + synthBonus;
-
-    // Fine-tuned accuracy improves with real data
-    const float realBonus = std::min(0.25f, realCount / 1000.0f);
-    result.fineTunedAccuracy = result.zeroShotAccuracy + realBonus;
-
-    // Performance gap (target: <15%)
-    result.performanceGap = result.fineTunedAccuracy - result.zeroShotAccuracy;
-
-    // Add some per-class metrics (placeholder)
-    result.perClassMetrics["class_0"] = result.zeroShotAccuracy * 0.95f;
-    result.perClassMetrics["class_1"] = result.zeroShotAccuracy * 1.05f;
-    result.perClassMetrics["class_2"] = result.zeroShotAccuracy * 0.9f;
 
     return result;
 }
@@ -581,8 +532,9 @@ ValidationReport ValidationEngine::generateReport(
     // Compute coverage metrics
     report.coverage = computeCoverageMetrics(syntheticSamples, dimensions, gridRes);
 
-    // Compute overall score and determine pass/fail
-    report.overallScore = computeOverallScore(report);
+    // Compute weighted heuristic score and determine pass/fail
+    report.weightedHeuristicScore = computeOverallScore(report);
+    report.overallScore = report.weightedHeuristicScore;
 
     // Determine overall pass (must meet minimum thresholds)
     bool volumeOk = report.coverage.volumeCoverageRatio >= 0.75f;
@@ -615,7 +567,8 @@ ValidationReport ValidationEngine::generateReport(
     summary << "Timestamp: " << juce::Time(report.timestamp).formatted("%Y-%m-%d %H:%M:%S").toStdString() << "\n\n";
 
     summary << "Overall Result: " << (report.overallPassed ? "PASSED" : "FAILED") << "\n";
-    summary << "Overall Score: " << std::fixed << std::setprecision(1) << report.overallScore << "/100\n\n";
+    summary << "Weighted Heuristic Score: " << std::fixed << std::setprecision(1) << report.weightedHeuristicScore << "/100\n";
+    summary << "Score Method: weighted_heuristic_score (not a scientific validity score)\n\n";
 
     summary << "Coverage Metrics:\n";
     summary << "  Volume Coverage: " << std::fixed << std::setprecision(2)
@@ -678,6 +631,20 @@ bool ValidationEngine::exportReportAsJson(const juce::File& outputFile, const Va
     json["timestamp"] = report.timestamp;
     json["overallPassed"] = report.overallPassed;
     json["overallScore"] = report.overallScore;
+    json["weightedHeuristicScore"] = report.weightedHeuristicScore;
+    json["scoreMethod"] = report.scoreMethod.toStdString();
+    json["scoreLimitations"] = nlohmann::json::array({
+        "weighted heuristic score summarizes coverage and distribution checks only",
+        "score is not an objective scientific validity measure"
+    });
+    json["scoreWeights"] = {
+        {"volumeCoverage", report.scoreWeights.volumeCoverage},
+        {"gridCoverage", report.scoreWeights.gridCoverage},
+        {"boundaryCoverage", report.scoreWeights.boundaryCoverage},
+        {"ksTests", report.scoreWeights.ksTests},
+        {"mmdTests", report.scoreWeights.mmdTests},
+        {"wassersteinTests", report.scoreWeights.wassersteinTests}
+    };
     json["summary"] = report.summary.toStdString();
 
     // Distribution tests
@@ -741,7 +708,8 @@ bool ValidationEngine::exportReportAsMarkdown(const juce::File& outputFile, cons
 
     md << "## Overall Result\n\n";
     md << "**Status:** " << (report.overallPassed ? "✅ PASSED" : "❌ FAILED") << "\n\n";
-    md << "**Score:** " << std::fixed << std::setprecision(1) << report.overallScore << "/100\n\n";
+    md << "**Score:** " << std::fixed << std::setprecision(1) << report.weightedHeuristicScore << "/100\n\n";
+    md << "**Score Method:** weighted_heuristic_score; this summarizes coverage and distribution checks, not objective scientific validity.\n\n";
 
     md << "---\n\n";
 
@@ -792,17 +760,24 @@ bool ValidationEngine::exportReportAsMarkdown(const juce::File& outputFile, cons
     writeTestTable("Maximum Mean Discrepancy Tests", report.mmdTests);
     writeTestTable("Wasserstein Distance Tests", report.wassersteinTests);
 
-    // Transfer Evaluation
+    // Transfer evaluation
     if (!report.transfer.benchmarkName.isEmpty())
     {
         md << "## Transfer Learning Evaluation\n\n";
         md << "**Benchmark:** " << report.transfer.benchmarkName.toStdString() << "\n\n";
-        md << "| Metric | Value |\n";
-        md << "|--------|-------|\n";
-        md << "| Zero-Shot Accuracy | " << std::fixed << std::setprecision(2)
-           << report.transfer.zeroShotAccuracy * 100.0f << "% |\n";
-        md << "| Fine-Tuned Accuracy | " << report.transfer.fineTunedAccuracy * 100.0f << "% |\n";
-        md << "| Performance Gap | " << report.transfer.performanceGap * 100.0f << "% |\n\n";
+        md << "**Status:** " << report.transfer.status.toStdString() << "\n\n";
+        md << "**Method:** " << report.transfer.method.toStdString() << "\n\n";
+        md << "**Reason:** " << report.transfer.reason.toStdString() << "\n\n";
+
+        if (report.transfer.evaluationAvailable)
+        {
+            md << "| Metric | Value |\n";
+            md << "|--------|-------|\n";
+            md << "| Zero-Shot Accuracy | " << std::fixed << std::setprecision(2)
+               << report.transfer.zeroShotAccuracy * 100.0f << "% |\n";
+            md << "| Fine-Tuned Accuracy | " << report.transfer.fineTunedAccuracy * 100.0f << "% |\n";
+            md << "| Performance Gap | " << report.transfer.performanceGap * 100.0f << "% |\n\n";
+        }
     }
 
     // Recommendations
@@ -1278,8 +1253,8 @@ float ValidationEngine::computeOverallScore(const ValidationReport& report)
     score += wassersteinScore * 0.15f;
     totalWeight += 0.50f;
 
-    // Transfer evaluation (weight: 10%)
-    if (!report.transfer.benchmarkName.isEmpty())
+    // Transfer evaluation (unavailable until a real benchmark pipeline runs)
+    if (report.transfer.evaluationAvailable)
     {
         const float transferScore = report.transfer.fineTunedAccuracy * 100.0f;
         score += transferScore * 0.10f;
@@ -1333,16 +1308,23 @@ void ValidationEngine::generateRecommendations(ValidationReport& report)
     // Transfer learning recommendations
     if (!report.transfer.benchmarkName.isEmpty())
     {
-        if (report.transfer.performanceGap > 0.15f)
+        if (!report.transfer.evaluationAvailable)
         {
-            report.warnings.add("Large performance gap in transfer learning ("
-                + juce::String(report.transfer.performanceGap * 100.0f, 1)
-                + "%): synthetic data may not fully represent real distribution");
+            report.warnings.add(juce::String("Transfer learning evaluation was not run: ") + report.transfer.reason);
         }
-
-        if (report.transfer.zeroShotAccuracy < 0.5f)
+        else
         {
-            report.recommendations.add("Low zero-shot accuracy: increase synthetic data diversity or volume");
+            if (report.transfer.performanceGap > 0.15f)
+            {
+                report.warnings.add("Large performance gap in transfer learning ("
+                    + juce::String(report.transfer.performanceGap * 100.0f, 1)
+                    + "%): synthetic data may not fully represent real distribution");
+            }
+
+            if (report.transfer.zeroShotAccuracy < 0.5f)
+            {
+                report.recommendations.add("Low zero-shot accuracy: increase synthetic data diversity or volume");
+            }
         }
     }
 
@@ -1391,6 +1373,10 @@ nlohmann::json ValidationEngine::coverageToJson(const CoverageMetrics& coverage)
 nlohmann::json ValidationEngine::transferToJson(const TransferEvaluationResult& transfer)
 {
     nlohmann::json json;
+    json["evaluationAvailable"] = transfer.evaluationAvailable;
+    json["status"] = transfer.status.toStdString();
+    json["method"] = transfer.method.toStdString();
+    json["reason"] = transfer.reason.toStdString();
     json["zeroShotAccuracy"] = transfer.zeroShotAccuracy;
     json["fineTunedAccuracy"] = transfer.fineTunedAccuracy;
     json["performanceGap"] = transfer.performanceGap;
@@ -1398,6 +1384,10 @@ nlohmann::json ValidationEngine::transferToJson(const TransferEvaluationResult& 
     json["syntheticSamplesUsed"] = transfer.syntheticSamplesUsed;
     json["realSamplesUsed"] = transfer.realSamplesUsed;
     json["trainingTimeSeconds"] = transfer.trainingTimeSeconds;
+    json["limitations"] = nlohmann::json::array({
+        "transfer metrics are unavailable until a real trained benchmark is executed",
+        "file counts are reported for context but are not converted into accuracy estimates"
+    });
 
     json["perClassMetrics"] = nlohmann::json::object();
     for (const auto& [key, value] : transfer.perClassMetrics)

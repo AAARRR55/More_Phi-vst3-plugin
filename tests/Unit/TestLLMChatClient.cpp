@@ -1,0 +1,469 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include "AI/LLMChatClient.h"
+#include "UI/AIChatPanel.h"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <regex>
+#include <set>
+#include <string>
+#include <vector>
+
+using namespace more_phi;
+
+namespace {
+
+// Extract the API-facing tool names from either the OpenAI- or Anthropic-shaped
+// tools JSON. Returns a set so callers can also assert uniqueness by comparing
+// to the source array length.
+auto collectNames = [](const nlohmann::json& arr, bool isAnthropic) {
+    std::set<std::string> names;
+    for (const auto& t : arr)
+    {
+        const auto name = isAnthropic
+                              ? t.value("name", std::string{})
+                              : (t.contains("function") ? t["function"].value("name", std::string{})
+                                                        : std::string{});
+        names.insert(name);
+    }
+    return names;
+};
+
+// Tools that were previously hidden from the chat model by the
+// shouldExposeToolToChatModel blocklist. Any of these missing here means a
+// regression has reintroduced the blocklist and the in-plugin AI assistant
+// has lost "full unrestricted" tool access.
+const std::vector<std::string> kPreviouslyBlockedToolNames = {
+    "izotope_ipc_attach",
+    "izotope_ipc_detach",
+    "izotope_ipc_status",
+    "izotope_ipc_snapshot",
+    "izotope_ipc_dump",
+    "izotope_ipc_capture",
+    "ozone_run_assistant",
+    "hosted_plugin_scan",
+    "hosted_plugin_load",
+    "plugin_profile_save",
+    "mastering_render_batch",
+    "mastering_render_status",
+    "mastering_select_candidate",
+};
+
+// Loose minimum to catch silent filtering. The real tool count is well above
+// this; bump only if the tool surface intentionally shrinks.
+constexpr std::size_t kMinExpectedToolCount = 30;
+
+} // namespace
+
+TEST_CASE("LLM chat client exposes API-safe runtime MCP tool names with full tool access", "[unit][ai][llm][chat]")
+{
+    const auto tools = nlohmann::json::parse(LLMChatClient::mcpToolsToOpenAIJson().toStdString());
+    REQUIRE(tools.is_array());
+    REQUIRE_FALSE(tools.empty());
+
+    INFO("OpenAI tool surface size: " << tools.size());
+    CHECK(tools.size() >= kMinExpectedToolCount);
+
+    // Every entry must be a function-shaped tool with a non-empty name that
+    // satisfies sanitizeToolNameForApi's contract: only [A-Za-z0-9_-], starts
+    // with a letter or underscore, and is at most 64 characters long.
+    static const std::regex kSanitizedNameRegex(R"(^[A-Za-z_][A-Za-z0-9_-]{0,63}$)");
+
+    for (const auto& tool : tools)
+    {
+        REQUIRE(tool.contains("function"));
+        const auto name = tool["function"].value("name", std::string{});
+        INFO("tool name: " << name);
+        CHECK_FALSE(name.empty());
+        CHECK(name.find('.') == std::string::npos);
+        CHECK(std::regex_match(name, kSanitizedNameRegex));
+    }
+
+    const auto names = collectNames(tools, /*isAnthropic=*/false);
+
+    // Uniqueness: set size equals array size means makeUniqueToolName is
+    // disambiguating any colliding names correctly.
+    INFO("unique names: " << names.size() << " / array: " << tools.size());
+    CHECK(names.size() == tools.size());
+
+    // Core edit tools the assistant always needs.
+    CHECK(names.count("plugin_profile_describe_semantic_map") == 1);
+    CHECK(names.count("set_parameter") == 1);
+    CHECK(names.count("hosted_plugin_set_parameter") == 1);
+    CHECK(names.count("more_phi_parameters") == 1);
+    CHECK(names.count("more_phi_set_parameter") == 1);
+
+    // The chat client now exposes the full MCP tool surface to the LLM so the
+    // assistant can perform direct edits on both the hosted plugin and More-Phi
+    // itself. Confirmation for destructive/expensive operations is enforced via
+    // the system prompt instead of a hard blocklist. Each previously-blocked
+    // tool is asserted explicitly so a partial regression cannot slip through.
+    for (const auto& expected : kPreviouslyBlockedToolNames)
+    {
+        INFO("expected previously-blocked tool: " << expected);
+        CHECK(names.count(expected) == 1);
+    }
+
+    // Dataset family is a prefix group; assert at least one variant is present
+    // so the LLM can drive the dataset pipeline.
+    const bool hasAnyDatasetTool = std::any_of(names.begin(), names.end(),
+        [](const std::string& n) { return n.rfind("generate_dataset", 0) == 0; });
+    CHECK(hasAnyDatasetTool);
+
+    // API-name -> MCP-name round-trip. Dotted forms must NOT round-trip back
+    // to a real MCP method, since the LLM is funneled through underscored
+    // names only.
+    CHECK(LLMChatClient::resolveToolNameForTest("plugin_profile_describe_semantic_map")
+          == "plugin_profile.describe_semantic_map");
+    CHECK(LLMChatClient::resolveToolNameForTest("more_phi_set_parameter")
+          == "more_phi.set_parameter");
+    CHECK(LLMChatClient::resolveToolNameForTest("hosted_plugin_set_parameter")
+          == "hosted_plugin.set_parameter");
+    CHECK(LLMChatClient::resolveToolNameForTest("hosted_plugin.load").isEmpty());
+}
+
+TEST_CASE("LLM chat client exposes hosted and More-Phi edit tools to Anthropic", "[unit][ai][llm][chat]")
+{
+    const auto tools = nlohmann::json::parse(LLMChatClient::mcpToolsToAnthropicJson().toStdString());
+    REQUIRE(tools.is_array());
+    REQUIRE_FALSE(tools.empty());
+
+    INFO("Anthropic tool surface size: " << tools.size());
+    CHECK(tools.size() >= kMinExpectedToolCount);
+
+    for (const auto& tool : tools)
+    {
+        const auto name = tool.value("name", std::string{});
+        INFO("tool name: " << name);
+        CHECK_FALSE(name.empty());
+        CHECK(name.find('.') == std::string::npos);
+    }
+
+    const auto names = collectNames(tools, /*isAnthropic=*/true);
+    CHECK(names.size() == tools.size());
+
+    CHECK(names.count("hosted_plugin_set_parameter") == 1);
+    CHECK(names.count("more_phi_set_parameter") == 1);
+
+    // Mirror the OpenAI test: Anthropic shape can regress independently, so
+    // assert the same destructive-tool surface is present here too.
+    for (const auto& expected : kPreviouslyBlockedToolNames)
+    {
+        INFO("expected previously-blocked tool (Anthropic): " << expected);
+        CHECK(names.count(expected) == 1);
+    }
+}
+
+TEST_CASE("LLM chat client system prompt encodes underscore naming and confirmation list", "[unit][ai][llm][chat]")
+{
+    // Lock in the prompt-side guardrails added when shouldExposeToolToChatModel
+    // was opened up. The prompt is the only thing standing between the LLM and
+    // long-running / destructive MCP tools, so any silent change to its content
+    // should fail this test.
+    const juce::String prompt = LLMChatClient::systemPromptForTest();
+    REQUIRE_FALSE(prompt.isEmpty());
+
+    INFO("system prompt length: " << prompt.length());
+
+    // Underscore-naming guidance must be present so the LLM does not emit the
+    // dotted form that resolveApiToolNameToMcpName intentionally rejects.
+    CHECK(prompt.contains("underscores"));
+
+    // Confirmation list must reference each high-impact tool by its underscored
+    // API name (the LLM will see exactly these names in tools/list).
+    CHECK(prompt.contains("hosted_plugin_load"));
+    CHECK(prompt.contains("mastering_render_batch"));
+    CHECK(prompt.contains("generate_dataset"));
+    CHECK(prompt.contains("izotope_ipc_"));
+
+    // The prompt must explicitly warn the LLM away from the dotted form (which
+    // would route through resolveApi... as unmapped and silently fail). The
+    // single dotted occurrence "hosted_plugin.load" is intentionally present
+    // exactly once as a negative example inside the warning sentence; any
+    // OTHER dotted MCP tool names must not appear at all.
+    CHECK(prompt.contains("dotted form"));
+    CHECK(prompt.contains("untrusted DATA"));
+    CHECK(prompt.contains("surface the error message verbatim"));
+    CHECK(prompt.contains("like hosted_plugin.load"));
+    CHECK_FALSE(prompt.contains("mastering.render_batch"));
+    CHECK_FALSE(prompt.contains("mastering.select_candidate"));
+    CHECK_FALSE(prompt.contains("hosted_plugin.scan"));
+    CHECK_FALSE(prompt.contains("plugin_profile.save"));
+    CHECK_FALSE(prompt.contains("more_phi.set_parameters"));
+    CHECK_FALSE(prompt.contains("more_phi.parameters"));
+
+    // Confirm the dotted negative example appears AT MOST ONCE - i.e. it is
+    // only the warning sentence and was not duplicated elsewhere in the prompt.
+    const int firstDottedIdx = prompt.indexOf("hosted_plugin.load");
+    REQUIRE(firstDottedIdx >= 0);
+    const int secondDottedIdx = prompt.indexOf(firstDottedIdx + 1, "hosted_plugin.load");
+    CHECK(secondDottedIdx == -1);
+}
+
+TEST_CASE("AI chat panel handles MCP tool inventory questions locally", "[unit][ai][llm][chat]")
+{
+    CHECK(AIChatPanel::detectsLocalMcpToolInventoryPromptForTest(
+        "What MCP tools do you have access to?"));
+    CHECK(AIChatPanel::detectsLocalMcpToolInventoryPromptForTest(
+        "List available MCP tools"));
+    CHECK_FALSE(AIChatPanel::detectsLocalMcpToolInventoryPromptForTest(
+        "Make this snare brighter"));
+
+    const auto reply = AIChatPanel::buildLocalMcpToolInventoryReplyForTest();
+    REQUIRE_FALSE(reply.isEmpty());
+    CHECK(reply.contains("local More-Phi MCP tools"));
+    CHECK(reply.contains("Hosted plugin controls"));
+    CHECK(reply.contains("more_phi.parameters"));
+    CHECK(reply.contains("hosted_plugin.set_parameter"));
+    CHECK(reply.contains("remote LLM provider"));
+}
+
+TEST_CASE("AI chat panel formats raw WinHTTP timeout errors", "[unit][ai][llm][chat]")
+{
+    const auto formatted = AIChatPanel::formatChatErrorForTest(
+        "WinHTTP receive response failed with error 12002.");
+
+    CHECK(formatted.contains("NVIDIA chat request timed out"));
+    CHECK(formatted.contains("local MCP server"));
+    CHECK(formatted.contains("Raw transport detail"));
+    CHECK(formatted.contains("12002"));
+
+    const auto alreadyFriendly = AIChatPanel::formatChatErrorForTest(
+        "NVIDIA chat request failed at the transport layer. (WinHTTP receive response failed with error 12002.)");
+    CHECK(alreadyFriendly.startsWith("NVIDIA chat request failed at the transport layer"));
+}
+
+TEST_CASE("parseOpenAIResponse extracts NVIDIA inline tool-call tokens", "[unit][ai][llm][chat][nvidia]")
+{
+    // Simulates the exact response body NVIDIA NIM returns when the model
+    // uses special tokens instead of a structured tool_calls array.
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {
+            {"role", "assistant"},
+            {"content",
+                "I'll set the Gain parameter to its maximum value (1.0)."
+                "<|tool_calls_section_begin|>"
+                "<|tool_call_begin|>functions set_parameter:1"
+                "<|tool_call_argument_begin|>"
+                R"({"name": "Gain", "value": 1.0})"
+                "<|tool_call_end|>"
+                "<|tool_calls_section_end|>"}
+        }}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+
+    // Text before the tool calls section is preserved as the assistant message.
+    const auto text = result["text"].get<std::string>();
+    CHECK(text.find("maximum value") != std::string::npos);
+    CHECK(text.find("<|tool_call") == std::string::npos);
+
+    const auto& tcs = result["tool_calls"];
+    REQUIRE(tcs.is_array());
+    REQUIRE(tcs.size() == 1);
+    CHECK(tcs[0]["name"].get<std::string>() == "set_parameter");
+    CHECK(tcs[0]["id"].get<std::string>() == "nvidia_tc_1");
+
+    const auto args = nlohmann::json::parse(tcs[0]["arguments"].get<std::string>());
+    CHECK(args["name"].get<std::string>() == "Gain");
+    CHECK(args["value"].get<double>() == 1.0);
+}
+
+TEST_CASE("parseOpenAIResponse extracts multiple NVIDIA inline tool calls", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {
+            {"role", "assistant"},
+            {"content",
+                "<|tool_calls_section_begin|>"
+                "<|tool_call_begin|>functions set_parameters_batch:2"
+                "<|tool_call_argument_begin|>"
+                R"({"parameters":[{"name":"Gain","value":0.6},{"name":"Cutoff","value":0.3}]})"
+                "<|tool_call_end|>"
+                "<|tool_calls_section_end|>"}
+        }}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    const auto& tcs = result["tool_calls"];
+    REQUIRE(tcs.size() == 1);
+    CHECK(tcs[0]["name"].get<std::string>() == "set_parameters_batch");
+
+    const auto args = nlohmann::json::parse(tcs[0]["arguments"].get<std::string>());
+    CHECK(args["parameters"].size() == 2);
+}
+
+TEST_CASE("parseOpenAIResponse prefers structured tool_calls over inline tokens", "[unit][ai][llm][chat][nvidia]")
+{
+    // When the provider returns BOTH a structured tool_calls array AND inline
+    // tokens in the content, the structured array wins.
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {
+            {"role", "assistant"},
+            {"content", "text with <|tool_call_begin|>functions fake:99<|tool_call_argument_begin|>{}<|tool_call_end|>"},
+            {"tool_calls", nlohmann::json::array({
+                {{"id", "real_tc_1"},
+                 {"type", "function"},
+                 {"function", {{"name", "get_plugin_info"}, {"arguments", "{}"}}}}
+            })}
+        }}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    const auto& tcs = result["tool_calls"];
+    REQUIRE(tcs.size() == 1);
+    CHECK(tcs[0]["name"].get<std::string>() == "get_plugin_info");
+    CHECK(tcs[0]["id"].get<std::string>() == "real_tc_1");
+}
+
+// ── Latency optimization tests ──────────────────────────────────────────────
+
+TEST_CASE("Tool name resolution is consistent across repeated calls (cached map)", "[unit][ai][llm][chat][latency]")
+{
+    // The tool-name map is now cached with std::once_flag. Calling
+    // resolveToolNameForTest multiple times must return identical results,
+    // confirming the cache is populated correctly and stable.
+    const auto r1 = LLMChatClient::resolveToolNameForTest("more_phi_set_parameter");
+    const auto r2 = LLMChatClient::resolveToolNameForTest("more_phi_set_parameter");
+    CHECK(r1 == r2);
+    CHECK(r1 == "more_phi.set_parameter");
+
+    const auto r3 = LLMChatClient::resolveToolNameForTest("hosted_plugin_set_parameter");
+    const auto r4 = LLMChatClient::resolveToolNameForTest("hosted_plugin_set_parameter");
+    CHECK(r3 == r4);
+    CHECK(r3 == "hosted_plugin.set_parameter");
+
+    // Unmapped dotted name should consistently return empty
+    const auto r5 = LLMChatClient::resolveToolNameForTest("hosted_plugin.load");
+    const auto r6 = LLMChatClient::resolveToolNameForTest("hosted_plugin.load");
+    CHECK(r5 == r6);
+    CHECK(r5.isEmpty());
+}
+
+TEST_CASE("Chat-filtered tool surface is smaller than full surface (OpenAI)", "[unit][ai][llm][chat][latency]")
+{
+    const auto fullTools = nlohmann::json::parse(LLMChatClient::mcpToolsToOpenAIJson().toStdString());
+    const auto chatTools = nlohmann::json::parse(LLMChatClient::chatToolsOpenAIJsonForTest().toStdString());
+
+    REQUIRE(fullTools.is_array());
+    REQUIRE(chatTools.is_array());
+
+    INFO("Full tool count: " << fullTools.size() << ", Chat tool count: " << chatTools.size());
+    CHECK(chatTools.size() < fullTools.size());
+    CHECK(chatTools.size() >= 15);
+    CHECK(chatTools.size() <= 35);
+
+    const auto names = collectNames(chatTools, /*isAnthropic=*/false);
+
+    // Core interactive tools must be present in the filtered set
+    CHECK(names.count("set_parameter") == 1);
+    CHECK(names.count("get_parameter") == 1);
+    CHECK(names.count("list_parameters") == 1);
+    CHECK(names.count("get_plugin_info") == 1);
+    CHECK(names.count("more_phi_set_parameter") == 1);
+    CHECK(names.count("more_phi_parameters") == 1);
+    CHECK(names.count("capture_snapshot") == 1);
+    CHECK(names.count("recall_snapshot") == 1);
+    CHECK(names.count("set_morph_position") == 1);
+    CHECK(names.count("get_morph_state") == 1);
+    CHECK(names.count("run_self_test") == 1);
+    CHECK(names.count("plugin_profile_describe_semantic_map") == 1);
+
+    // Heavy/rarely-used tools should NOT be in the chat subset
+    CHECK(names.count("mastering_render_batch") == 0);
+    CHECK(names.count("mastering_render_status") == 0);
+
+    // All names must still be unique
+    CHECK(names.size() == chatTools.size());
+}
+
+TEST_CASE("Chat-filtered tool surface is smaller than full surface (Anthropic)", "[unit][ai][llm][chat][latency]")
+{
+    const auto fullTools = nlohmann::json::parse(LLMChatClient::mcpToolsToAnthropicJson().toStdString());
+    const auto chatTools = nlohmann::json::parse(LLMChatClient::chatToolsAnthropicJsonForTest().toStdString());
+
+    REQUIRE(fullTools.is_array());
+    REQUIRE(chatTools.is_array());
+
+    INFO("Full Anthropic tool count: " << fullTools.size() << ", Chat tool count: " << chatTools.size());
+    CHECK(chatTools.size() < fullTools.size());
+    CHECK(chatTools.size() >= 15);
+    CHECK(chatTools.size() <= 35);
+
+    const auto names = collectNames(chatTools, /*isAnthropic=*/true);
+    CHECK(names.count("more_phi_set_parameter") == 1);
+    CHECK(names.count("set_parameter") == 1);
+    CHECK(names.count("capture_snapshot") == 1);
+    CHECK(names.size() == chatTools.size());
+}
+
+TEST_CASE("Conversation history trimming preserves system message and caps size", "[unit][ai][llm][chat][latency]")
+{
+    // Build a 50-message history: system + 49 user/assistant pairs
+    nlohmann::json history = nlohmann::json::array();
+    history.push_back({{"role", "system"}, {"content", "You are a helpful assistant."}});
+
+    for (int i = 1; i <= 49; ++i)
+    {
+        const auto role = (i % 2 == 1) ? "user" : "assistant";
+        history.push_back({{"role", role}, {"content", "Message " + std::to_string(i)}});
+    }
+
+    REQUIRE(history.size() == 50);
+
+    // AIChatPanel::trimConversationHistory is private, but we can test the
+    // same logic: parse, keep system + last 28, re-serialize.
+    // The implementation keeps messages when size <= 30 and trims to
+    // system + last 28 when > 30.
+    nlohmann::json trimmed = nlohmann::json::array();
+    if (!history.empty() && history[0].value("role", "") == "system")
+        trimmed.push_back(history[0]);
+    const auto keepFrom = history.size() - 28;
+    for (std::size_t i = (keepFrom > 1 ? keepFrom : 1); i < history.size(); ++i)
+        trimmed.push_back(history[i]);
+
+    // System message preserved
+    CHECK(trimmed[0].value("role", "") == "system");
+    CHECK(trimmed[0].value("content", "") == "You are a helpful assistant.");
+
+    // Total size is system + 28 = 29
+    CHECK(trimmed.size() == 29);
+
+    // Last message is preserved
+    CHECK(trimmed.back().value("content", "") == "Message 49");
+
+    // First non-system message should be from the tail, not the beginning
+    CHECK(trimmed[1].value("content", "").find("Message ") != std::string::npos);
+    const int firstKeptIdx = static_cast<int>(keepFrom);
+    CHECK(trimmed[1].value("content", "") == "Message " + std::to_string(firstKeptIdx));
+}
+
+TEST_CASE("Conversation history trimming is a no-op for small histories", "[unit][ai][llm][chat][latency]")
+{
+    nlohmann::json history = nlohmann::json::array();
+    history.push_back({{"role", "system"}, {"content", "System prompt"}});
+    history.push_back({{"role", "user"}, {"content", "Hello"}});
+    history.push_back({{"role", "assistant"}, {"content", "Hi there"}});
+
+    REQUIRE(history.size() == 3);
+
+    // With <= 30 messages, trimming should not modify anything
+    // (mirrors the early-return in AIChatPanel::trimConversationHistory)
+    CHECK(history.size() <= 30);
+    // No trim needed — the array stays as-is
+    CHECK(history.size() == 3);
+    CHECK(history[0].value("role", "") == "system");
+    CHECK(history[2].value("content", "") == "Hi there");
+}

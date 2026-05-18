@@ -8,6 +8,8 @@
 #include "LLMConnectionValidator.h" // ILLMHttpClient, LLMHttpRequest/Response
 #include "LLMSettings.h"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -34,6 +36,9 @@ public:
     /** text, errorMessage, updatedHistoryJson */
     using ReplyCallback = std::function<void(juce::String, juce::String, juce::String)>;
 
+    /** iteration (1-based), maxIterations, status description */
+    using ProgressCallback = std::function<void(int, int, juce::String)>;
+
     explicit LLMChatClient(MorePhiProcessor& processor);
     LLMChatClient(MorePhiProcessor& processor, std::shared_ptr<ILLMHttpClient> httpClient);
 
@@ -44,7 +49,8 @@ public:
     void chat(const LLMSettings& settings,
               const juce::String& historyJson,
               const juce::String& userMessage,
-              ReplyCallback callback);
+              ReplyCallback callback,
+              ProgressCallback progress = nullptr);
 
     // ── Visible for testing ────────────────────────────────────────────────
     /** Convert MCPToolHandler::getToolList() JSON into OpenAI tools array JSON. */
@@ -52,6 +58,22 @@ public:
 
     /** Convert MCPToolHandler::getToolList() JSON into Anthropic tools array JSON. */
     static juce::String mcpToolsToAnthropicJson();
+
+    /** Resolve an LLM API-safe tool alias back to the MCP tool name. */
+    static juce::String resolveToolNameForTest(const juce::String& apiToolName);
+
+    /** Return the active system prompt used by the chat agent. */
+    static juce::String systemPromptForTest();
+
+    /** Return the chat-filtered OpenAI tools array JSON (reduced surface). */
+    static juce::String chatToolsOpenAIJsonForTest();
+
+    /** Return the chat-filtered Anthropic tools array JSON (reduced surface). */
+    static juce::String chatToolsAnthropicJsonForTest();
+
+    /** Parse an OpenAI-format response body and return extracted tool calls as JSON.
+     *  Exposed for testing the NVIDIA inline-token fallback parser. */
+    static juce::String parseOpenAIResponseForTest(int statusCode, const juce::String& body);
 
 private:
     struct ToolCall
@@ -72,12 +94,12 @@ private:
     static juce::String buildOpenAIRequestBody(const LLMProviderSettings& ps,
                                                const juce::String& model,
                                                const std::string& messagesJson,
-                                               const juce::String& toolsJson);
+                                               const nlohmann::json& toolsArray);
 
     static juce::String buildAnthropicRequestBody(const LLMProviderSettings& ps,
                                                    const juce::String& model,
                                                    const std::string& messagesJson,
-                                                   const juce::String& toolsJson);
+                                                   const nlohmann::json& toolsArray);
 
     static LLMHttpRequest buildHttpRequest(LLMProviderId id,
                                            const LLMProviderSettings& ps,
@@ -103,9 +125,11 @@ private:
     MorePhiProcessor&               processor_;
     std::shared_ptr<ILLMHttpClient> httpClient_;
 
-    static constexpr int kMaxToolIterations = 8;
-    static constexpr int kMaxTokens         = 4096;
-    static constexpr int kTimeoutMs         = 60000;
+    static constexpr int kMaxToolIterations  = 8;
+    static constexpr int kMaxTokens          = 4096;
+    static constexpr int kTimeoutMs          = 60000;   // default (OpenAI, Anthropic)
+    static constexpr int kTimeoutMsNvidia    = 120000;  // NVIDIA NIM cold-start (reduced from 300s)
+    static constexpr int kAgentLoopTimeoutMs = 90000;   // overall agent loop budget
 
     static const char* const kSystemPrompt;
 };

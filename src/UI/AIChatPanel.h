@@ -22,8 +22,17 @@ public:
 
     void resized() override;
 
+    static bool detectsLocalMcpToolInventoryPromptForTest(const juce::String& text);
+    static juce::String buildLocalMcpToolInventoryReplyForTest();
+    static juce::String formatChatErrorForTest(const juce::String& error);
+
 private:
     void submitPrompt();
+    void trimConversationHistory();
+    bool tryHandleLocalDiagnosticPrompt(const juce::String& text);
+    static bool isLocalMcpToolInventoryPrompt(const juce::String& text);
+    static juce::String buildLocalMcpToolInventoryReply();
+    static juce::String formatChatErrorForDisplay(const juce::String& error);
     void cancelChat();
     void loadLLMSettings();
     void refreshLLMToolbar();
@@ -59,4 +68,3 @@ private:
 };
 
 } // namespace more_phi
-

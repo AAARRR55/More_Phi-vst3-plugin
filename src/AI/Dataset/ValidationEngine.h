@@ -56,17 +56,33 @@ struct CoverageMetrics
 /** Result of synthetic-to-real transfer evaluation */
 struct TransferEvaluationResult
 {
-    float zeroShotAccuracy = 0.0f;       ///< Accuracy without fine-tuning
-    float fineTunedAccuracy = 0.0f;      ///< Accuracy after fine-tuning on real data
-    float performanceGap = 0.0f;         ///< Gap between synthetic-only and real (Target: <15%)
+    bool evaluationAvailable = false;     ///< True only when a real benchmark has run
+    juce::String status = "unavailable"; ///< unavailable | completed
+    juce::String method = "not_run";     ///< Evaluation method identifier
+    juce::String reason = "transfer_evaluation_requires_real_benchmark_pipeline";
+    float zeroShotAccuracy = 0.0f;       ///< Reported only when evaluationAvailable is true
+    float fineTunedAccuracy = 0.0f;      ///< Reported only when evaluationAvailable is true
+    float performanceGap = 0.0f;         ///< Reported only when evaluationAvailable is true
     juce::String benchmarkName;          ///< Name of the benchmark task
     std::map<juce::String, float> perClassMetrics;  ///< Per-class accuracy metrics
-    int syntheticSamplesUsed = 0;        ///< Number of synthetic samples used
-    int realSamplesUsed = 0;             ///< Number of real samples used
+    int syntheticSamplesUsed = 0;        ///< Number of synthetic files observed
+    int realSamplesUsed = 0;             ///< Number of real files observed
     float trainingTimeSeconds = 0.0f;    ///< Time spent training
 
     /** Default constructor */
     TransferEvaluationResult() = default;
+};
+
+/** Component weights used by the weighted heuristic dataset score. */
+struct ValidationScoreWeights
+{
+    float volumeCoverage = 0.15f;
+    float gridCoverage = 0.15f;
+    float boundaryCoverage = 0.10f;
+    float ksTests = 0.20f;
+    float mmdTests = 0.15f;
+    float wassersteinTests = 0.15f;
+    float transferEvaluation = 0.10f;
 };
 
 /** Complete validation report for a synthetic dataset */
@@ -88,7 +104,10 @@ struct ValidationReport
 
     // Summary
     bool overallPassed = false;          ///< True if all critical tests pass
-    float overallScore = 0.0f;           ///< Weighted score (0-100)
+    float overallScore = 0.0f;           ///< Legacy alias for weightedHeuristicScore
+    float weightedHeuristicScore = 0.0f; ///< Weighted heuristic score (0-100), not a scientific validity score
+    juce::String scoreMethod = "weighted_heuristic_score";
+    ValidationScoreWeights scoreWeights;
     juce::String summary;                ///< Human-readable summary
     juce::StringArray recommendations;   ///< List of recommendations for improvement
     juce::StringArray warnings;          ///< List of warnings or issues
@@ -391,7 +410,7 @@ private:
     juce::String generateReportId();
 
     /**
-     * Compute overall score from individual test results.
+     * Compute weighted heuristic score from individual test results.
      */
     float computeOverallScore(const ValidationReport& report);
 

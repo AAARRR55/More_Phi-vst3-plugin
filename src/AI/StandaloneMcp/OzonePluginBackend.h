@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace more_phi {
 
@@ -19,6 +20,24 @@ struct ToolCallOutcome
 {
     nlohmann::json body;
     bool isError = false;
+
+    static ToolCallOutcome error(std::string msg)
+    {
+        return {nlohmann::json{{"error", std::move(msg)}}, true};
+    }
+    static ToolCallOutcome success(std::string jsonStr)
+    {
+        auto parsed = nlohmann::json::parse(jsonStr, nullptr, false);
+        return {parsed.is_discarded() ? nlohmann::json{{"text", std::move(jsonStr)}}
+                                      : std::move(parsed), false};
+    }
+    bool isSuccess() const { return !isError; }
+    std::string errorMessage() const
+    {
+        return body.contains("error") && body["error"].is_string()
+                   ? body["error"].get<std::string>() : std::string{};
+    }
+    std::string text() const { return body.dump(); }
 };
 
 struct ParameterListArgs
@@ -34,6 +53,17 @@ struct RunAssistantArgs
     double analysisSeconds = 30.0;
 };
 
+struct AssistantParameterDecision
+{
+    int index = -1;
+    double value = 0.0;
+};
+
+struct AssistantParameterApplyArgs
+{
+    std::vector<AssistantParameterDecision> parameters;
+};
+
 class OzonePluginBackend
 {
 public:
@@ -41,6 +71,7 @@ public:
 
     virtual ToolCallOutcome getParameters(const ParameterListArgs& args) = 0;
     virtual ToolCallOutcome setParameter(int index, float value) = 0;
+    virtual ToolCallOutcome applyAssistantParameters(const AssistantParameterApplyArgs& args) = 0;
     virtual ToolCallOutcome runMasterAssistant(const RunAssistantArgs& args) = 0;
     virtual ToolCallOutcome getState() = 0;
     virtual ToolCallOutcome setState(const std::string& stateBase64) = 0;
@@ -55,6 +86,7 @@ public:
 
     ToolCallOutcome getParameters(const ParameterListArgs& args) override;
     ToolCallOutcome setParameter(int index, float value) override;
+    ToolCallOutcome applyAssistantParameters(const AssistantParameterApplyArgs& args) override;
     ToolCallOutcome runMasterAssistant(const RunAssistantArgs& args) override;
     ToolCallOutcome getState() override;
     ToolCallOutcome setState(const std::string& stateBase64) override;

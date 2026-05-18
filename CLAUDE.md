@@ -4,140 +4,172 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-More-Phi is a JUCE 8-based VST3/AU audio plugin (C++20) that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, and AI integration via an embedded MCP server. Version 3.3.0.
+More-Phi is a JUCE 8-based C++20 VST3/AU audio plugin that hosts other plugins and morphs between parameter snapshots using parameter interpolation, physics modes, audio-domain engines, genetic breeding, and AI control through MCP. The project version in CMake is 3.3.0.
+
+Everything is in the `more_phi` namespace unless a submodule states otherwise. The plugin entry point is `MorePhiProcessor` (`src/Plugin/PluginProcessor.*`), which owns subsystem instances directly; avoid adding singletons except for the existing cross-instance `InstanceRegistry`.
 
 ## Build Commands
 
 ```bash
-# Configure (first time or after CMakeLists.txt changes)
+# Generic configure/build with tests
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
+cmake --build build --config Release --parallel 2
 
-# Build Release
-cmake --build build --config Release
+# Debug build
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug --parallel 2
 
-# Build Debug
-cmake --build build --config Debug
+# Run all tests from a generic build directory
+ctest --test-dir build --build-config Release --output-on-failure --parallel 4
 
-# Run all tests
-cd build && ctest --build-config Release --output-on-failure --parallel 4
+# Run a single Catch2/CTest test by name or regex
+ctest --test-dir build --build-config Release -R "TestName" --output-on-failure
 
-# Run a single test by name (Catch2 test names)
-cd build && ctest -R "TestName" --output-on-failure
+# Build standalone tools only
+cmake --build build --config Release --target MorePhiCLI MorePhiMcpServer
 
-# Run tests with sanitizers (Clang/GCC only)
-cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
-cd build && ctest --build-config Debug --output-on-failure
+# Build benchmarks (opt-in)
+cmake -B build-bench -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_BUILD_BENCHMARKS=ON
+cmake --build build-bench --config Release --target MorePhiBenchmarks
+
+# Sanitizer build (Clang/GCC only)
+cmake -B build-asan -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-asan --config Debug --parallel 2
+ctest --test-dir build-asan --build-config Debug --output-on-failure
 ```
 
-CMake options: `MORE_PHI_BUILD_TESTS` (ON/OFF), `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (OFF by default), `MORE_PHI_ENABLE_SANITIZERS` (ASAN+UBSAN, Clang/GCC only).
+Windows local build presets are configured for stability on mid-range machines:
 
-Dependencies (all fetched automatically via FetchContent): JUCE 8.0.4, nlohmann/json 3.11.3, Catch2 v3.4.0.
+```bash
+# Safe local plugin build; tests are disabled in this preset
+cmake --preset windows-msvc-safe
+cmake --build --preset windows-safe --parallel 2
+
+# Single-job fallback if the machine is unstable
+cmake --build --preset windows-single --parallel 1
+
+# Debug build with presets
+cmake --preset windows-msvc-debug
+cmake --build --preset windows-debug --parallel 2
+
+# Full Windows release/test configure preset
+cmake --preset windows-msvc-release
+cmake --build build/windows-msvc-release --config Release --parallel 2
+ctest --preset windows-tests
+```
+
+Useful CMake options:
+
+- `MORE_PHI_BUILD_TESTS` (default `ON`) — adds `tests/`.
+- `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (default `OFF`) — copies built plugin to the system plugin folder.
+- `MORE_PHI_ENABLE_SANITIZERS` (default `OFF`) — ASAN/UBSAN for Clang/GCC Debug builds.
+- `MORE_PHI_SAFE_BUILD_MODE` (default `ON`) — conservative MSVC linker/build settings.
+- `MORE_PHI_MSVC_MP` (default `2`) — MSVC `/MP` worker count; set `0` to disable.
+- `MORE_PHI_ENABLE_LTO` (default `OFF`) — Release LTO, intended for CI/release rather than local stability.
+- `MORE_PHI_BUILD_COMPREHENSIVE_E2E` (default `OFF`) — adds generated comprehensive VST3 E2E suite; tracks experimental APIs.
+- `MORE_PHI_ENABLE_DATASET_V3` is a deprecated compatibility flag; Dataset V3 sources are always compiled.
+
+Dependencies are fetched by CMake: JUCE 8.0.4, nlohmann/json 3.11.3, and Catch2 v3.4.0.
+
+## Build Targets and Executables
+
+- `MorePhi` — JUCE plugin target; emits VST3 on all platforms and AU on macOS.
+- `MorePhiCLI` — offline hosted-plugin dataset/render CLI from `src/CLI/main.cpp`.
+- `MorePhiMcpCore` — static core for the standalone MCP server.
+- `MorePhiMcpServer` — stdio JSON-RPC MCP executable from `src/AI/StandaloneMcp/StandaloneMcpMain.cpp`.
+- `MorePhiTests` — active Catch2 unit/integration test executable.
+- `MorePhiMcpServerTests` — standalone MCP server tests.
+- `MorePhiBenchmarks` — optional benchmark target when `MORE_PHI_BUILD_BENCHMARKS=ON`.
+
+The CLI usage string is `morephi-dataset --plugin <path.vst3> --input <dry.wav> [options]`, with `--list-params`, `--dry-run`, `--config-dir`, `--duration`, `--variations`, and `--workers` options.
 
 ## Architecture
 
-Everything is in the `morephi` namespace. The plugin entry point is `MorePhiProcessor` (inherits `juce::AudioProcessor`), which owns all subsystems as member variables (no singletons except `InstanceRegistry`).
-
-### Processing Pipeline (audio thread)
-
-```
-processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcessor → ParameterBridge → hosted plugin
-```
-
-1. **LockFreeQueue** (`ParamCommand` ring buffer, 8192 capacity) — UI/MCP threads enqueue parameter changes, audio thread drains them
-2. **MIDIRouter** — Notes C3-B3 trigger snapshot recall, CC1 drives fader position
-3. **MorphProcessor** — Orchestrates: physics engine → interpolation engine → smoothing → output vector
-4. **ParameterBridge** — Applies normalized float vector to hosted plugin's parameters
-
 ### Layer Responsibilities
 
-| Layer | Key Classes | Role |
-|-------|------------|------|
-| `src/Plugin/` | `MorePhiProcessor`, `MorePhiEditor` | JUCE plugin entry points, owns all subsystems |
-| `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
-| `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner` | VST3/AU hosting, parameter read/write |
-| `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
-| `src/MIDI/` | `MIDIRouter` | Note triggers + CC routing |
-| `src/Preset/` | `MetaPresetManager`, `PresetSerializer` | Meta-preset save/load |
-| `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, etc. | All UI components |
+| Layer | Key Classes / Targets | Role |
+|-------|------------------------|------|
+| `src/Plugin/` | `MorePhiProcessor`, `MorePhiEditor` | JUCE plugin entry point, APVTS parameter layout, audio lifecycle, state persistence, subsystem ownership |
+| `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank`, modulation/audio-domain/mastering classes | Real-time-safe morphing, DSP, analysis, modulation, spectral/granular/formant engines, mastering processors |
+| `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner`, `IPluginHostManager` | Hosted VST3/AU lifecycle, parameter reads/writes, test seams |
+| `src/AI/` | `MCPServer`, `MCPToolHandler`, `MCPToolsExtended`, `AIAssistant`, `TokenOptimizer`, Ozone/LLM/dataset classes | Embedded TCP MCP server, AI tools, LLM settings, Ozone Track Assistant integration, dataset generation |
+| `src/AI/StandaloneMcp/` | `StandaloneMcpServer`, `OzonePluginBackend`, `IZotopeIPCDiscovery`, `JsonRpc` | Stdio MCP executable for standalone Ozone/iZotope workflows |
+| `src/MIDI/` | `MIDIRouter` | Snapshot note triggers and CC morph routing |
+| `src/Preset/` | `MetaPresetManager`, `PresetSerializer`, `PresetLibrary`, `CloudSyncClient` | Meta-preset and preset-library persistence |
+| `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, panels | JUCE editor components and message-thread interaction |
 
-### Threading Model
+### Audio Processing Pipeline
 
-Three thread domains with strict boundaries:
+`MorePhiProcessor::processBlock()` is the audio-thread entry point:
 
-- **Audio thread**: `processBlock()`, `MorphProcessor::process()`, `InterpolationEngine`, `PhysicsEngine` — all `noexcept`, zero allocations after `prepare()`, no locks
-- **Message thread**: UI components, Timer callbacks (deferred plugin loading), MCP connection handling
-- **MCP thread**: `MCPServer::run()` — accepts JSON-RPC connections, enqueues parameter changes via `LockFreeQueue`
+```text
+sync APVTS atomics
+→ drain LockFreeQueue<ParamCommand, 8192>
+→ MIDIRouter note/CC handling
+→ SnapshotBank recall/capture data paths
+→ MorphProcessor: physics → interpolation → discrete snap → smoothing
+→ ModulationEngine and optional audio-domain engines
+→ ParameterBridge applies normalized values
+→ PluginHostManager processes hosted plugin audio
+```
+
+Core real-time constraints: do not allocate, lock, block, perform I/O, or throw on the audio path. Pre-size buffers in `prepareToPlay()` or subsystem `prepare()` methods. Message/MCP/UI code should communicate to audio through atomics, lock-free queues, or existing handoff mechanisms.
+
+### Thread Domains
+
+- **Audio thread**: `processBlock()`, `MorphProcessor::process()`, interpolation/physics/modulation/audio-domain processing, command queue drain, hosted plugin parameter application.
+- **Message thread**: UI components, JUCE timers, deferred hosted-plugin loading, MCP startup trigger, full-state recall maintenance, Ozone parameter-map refresh, audio-domain reconfiguration.
+- **MCP/connection threads**: Embedded `MCPServer` TCP JSON-RPC handling, auth/rate limiting, tool dispatch; parameter changes must enqueue back to the processor rather than touching audio state directly.
+- **Background workers**: `ThreadPool`, `ChainPlanExecutor`, dataset/offline rendering work.
+- **Standalone MCP process**: `MorePhiMcpServer` runs stdio JSON-RPC independently of the plugin instance.
 
 ### Key Concurrency Primitives
 
-- **Seqlock** in `SnapshotBank` — Audio thread reads snapshot data lock-free with retry; UI/MCP writes serialize via `SpinLock` + sequence counter
-- **SPSC LockFreeQueue** — Power-of-2 ring buffer with cache-line-aligned indices; used for `ParamCommand` from UI/MCP → audio thread
-- **Atomics** (`memory_order_relaxed`) — All morph position, physics mode, and toggle state transferred between UI and audio threads
-- **Touch detection** — Prevents morph from overwriting manual knob changes using per-parameter cooldown counters
-
-### Interfaces for Testability
-
-`IPluginHostManager`, `IParameterBridge`, `IMCPServer` (all in `Host/IPluginHostManager.h`) — abstract interfaces that enable mock injection in tests.
+- `SnapshotBank` uses a seqlock-style reader path for audio-thread reads; writers serialize with `juce::SpinLock`.
+- `LockFreeQueue<ParamCommand, 8192>` transfers UI/MCP/assistant parameter edits to the audio thread.
+- APVTS-backed and internal morph/physics flags use relaxed atomics for simple UI/MCP-to-audio state.
+- `ModulationMatrix` publishes route buffers with a double-buffered atomic index.
+- Touch/live-edit hold state prevents morph output from immediately overwriting manual hosted-plugin edits.
+- Hosted plugin exclusive use is mediated through `PluginHostManager`; do not bypass it for cross-thread plugin access.
 
 ### State Persistence
 
-`getStateInformation`/`setStateInformation` serialize: APVTS parameters + snapshot bank (base64-encoded floats in XML) + hosted plugin description + opaque VST3 state chunk. Plugin reload on state restore uses Timer-based deferred loading with retry logic (max 10 attempts) to handle DAW threading constraints.
+`getStateInformation()` / `setStateInformation()` serialize APVTS XML, snapshot-bank values, hosted plugin description, hosted plugin opaque state chunks, and modulation routes. Hosted plugin reload after state restore is deferred through `juce::Timer` retries to satisfy DAW/JUCE threading constraints.
 
-### Parameter Classification (v3.3.0)
+### AI and MCP
 
-`ParameterClassifier` categorizes hosted plugin parameters (Continuous, Discrete, Binary, Frequency, Decibel, Enumeration) for Learn Mode. `DiscreteParameterHandler` ensures discrete/binary parameters snap to valid steps during morphing rather than interpolating through invalid intermediate values. `TokenOptimizer` manages AI token budgets by selecting which parameters to expose.
+The embedded MCP server is tied to a `MorePhiProcessor` instance. It uses localhost TCP ports allocated by `InstanceRegistry` starting at 30001, per-instance identity and bearer-token authentication, and `TokenOptimizer` request limits. Tool handlers should return JSON-RPC 2.0 compatible responses and use `enqueueParameterSet()` / `enqueueParameterState()` for parameter writes.
 
-### Dataset Generation (V2/V3)
+Ozone Track Assistant support flows through `OzoneParameterMap`, `OzonePlanApplicator`, `AutoMasteringEngine`, and `ChainPlanExecutor`; Ozone-specific parameter changes are skipped safely when no Ozone 11 mapping is available.
 
-More-Phi includes a comprehensive dataset generation system for creating synthetic audio training data. **Dataset V3 is always compiled** (`MORE_PHI_ENABLE_DATASET_V3` is retained as a deprecated compatibility flag/no-op).
+The standalone MCP server is a separate stdio server under `src/AI/StandaloneMcp/`, sharing host/plugin support through `MorePhiMcpCore` instead of the plugin's embedded TCP server.
 
-**V2 Components (Sequential Pipeline):**
-- `DatasetGeneratorV2` — Main orchestrator integrating all modules
-- `ParameterSampler` — Latin Hypercube Sampling, stratified sampling
-- `AudioContentLibrary` — Source audio management with genre classification
-- `PluginChainEngine` — Sequential multi-plugin chains (EQ, Dynamics, Mastering)
-- `EnhancedRenderPipeline` — Multi-segment rendering (Full/Transient/SteadyState)
-- `FeatureExtractor` — MFCC, LUFS, spectral, temporal, perceptual features
-- `MetadataWriter` — JSON/CSV/Parquet export
-- `ValidationEngine` — KS test, MMD, coverage metrics
-- `DatasetOrganizer` — Train/Val/Test splits, directory management
-- `DatasetConfig` — CLI interface, JSON schema validation
+### Dataset Generation
 
-**V3 Components (Optional Modular Pipeline):**
-- `DatasetGeneratorV3` — High-performance async pipeline orchestrator
-- `TaskQueue` — MPMC priority queue with backpressure
-- `WorkerPool` — Parallel batch processing threads
-- `ResourceMonitor` — Adaptive CPU/RAM throttling
-- `ProgressTracker` — Real-time progress & ETA
-- `CheckpointManager` — Crash recovery
-- `WatchdogTimer` — Hung thread detection
-- `GenerationLogger` — Structured JSON logging
+Dataset code lives under `src/AI/Dataset/` and is compiled into the plugin/CLI. V2 is the sequential pipeline (`DatasetGeneratorV2`, sampler, audio library, plugin chain, render pipeline, feature extraction, metadata, validation, organizer). V3 is the modular async pipeline (`DatasetGeneratorV3`, scheduling, worker pool, monitoring, checkpointing, watchdog) and is always compiled despite the deprecated compatibility option.
 
-### Genetic Engine
+### Audio-Domain and Mastering Engines
 
-`GeneticEngine::breed()` crosses two snapshots with configurable crossover ratio and mutation strength. `SanityConfig` protects dangerous parameters (Volume, Pitch, Bypass) from modification during breed/randomize. `smartRandomize()` only mutates user-learned parameters.
-
-### Physics Modes
-
-- **Direct**: Raw cursor position → interpolation (no physics)
-- **Elastic**: Spring-damper system (`ElasticState` with position + velocity), three presets (Slow/Medium/Heavy)
-- **Drift**: Perlin noise wandering around target with speed/distance/chaos controls, three modes (Free/Locked/Orbit)
+In addition to parameter morphing, `MorePhiProcessor` owns spectral, granular, formant, VAE-stub, oversampling, latency, and hybrid-blend components. Mastering processors include multiband dynamics, adaptive EQ, stereo imaging, excitation, true-peak/loudness analysis, normalization, limiter, realtime spectrum/stereo analyzers, and `AutoMasteringEngine`.
 
 ## Tests
 
-Tests use Catch2 v3 and link against the `More-Phi` shared-code target. Test sources:
+Tests use Catch2 v3 and link against the JUCE shared-code target. Active tests are registered with `catch_discover_tests()` from `tests/CMakeLists.txt`:
 
-- `tests/Unit/` — Core engine unit tests (interpolation, physics, genetics, sidechain)
-- `tests/Integration/` — Plugin lifecycle and MCP integration
-- `tests/Performance/` — Benchmark suite (opt-in via `MORE_PHI_BUILD_BENCHMARKS`)
+- `MorePhiTests`: unit tests plus plugin lifecycle, MCP, and dataset integration tests.
+- `MorePhiMcpServerTests`: standalone stdio MCP server tests.
+- Optional validator tests are added when `vst3_validator` (Windows) or `auval` (macOS) is available; `pluginval` validation (strictness level 5) is also registered when the `pluginval` executable is on `PATH`.
+- `MorePhiBenchmarks` is built only with `MORE_PHI_BUILD_BENCHMARKS=ON`.
 
-Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
+Legacy Morphy-era tests under old paths are intentionally excluded from active CMake targets. Tests compile with `MORE_PHI_TEST_MODE=1`; plugin-linked tests use `JUCE_STANDALONE_APPLICATION=0`, while standalone MCP tests use `JUCE_STANDALONE_APPLICATION=1`.
 
 ## Platform Notes
 
-- Windows builds set `/STACK:4194304` (4 MB) for FL Studio compatibility with plugin-in-plugin hosting
-- `cmake/PatchJuceForMSVC.cmake` patches JUCE headers that conflict with Windows macros
-- AU format only built on macOS; Windows builds VST3 only
-- `ParameterState` uses fixed `std::array<float, 2048>` (no heap allocation) for real-time safety
-- `SnapshotBank` heap-allocates its 12-slot array (~384 KB) to avoid stack overflow in hosts with small thread stacks
+CMakePresets.json defines cross-platform configure/build/test presets beyond the Windows ones listed above: `macos-universal-release`, `macos-arm64-debug`, `macos-x64-debug`, `linux-gcc-release`, `linux-clang-asan`, and CI variants `ci-windows` / `ci-macos` with corresponding build and test presets. The `windows-nmake-release` / `windows-nmake-single` presets use NMake Makefiles and require a VS Developer Command Prompt.
+
+- Windows builds set a 4 MB stack for plugin-in-plugin host compatibility.
+- `cmake/PatchJuceForMSVC.cmake` patches JUCE headers that conflict with Windows macros.
+- Windows local builds default to conservative `/MP2`, safe linker threading, and no LTO; use `docs/BUILD_STABILITY_GUIDE.md` if builds freeze or exhaust resources.
+- AU is built only on macOS; non-macOS builds emit VST3 only.
+- `ParameterState` uses fixed arrays for up to 2048 parameters; `SnapshotBank` heap-allocates its 12-slot array to avoid host stack pressure.
+- SIMD tuning is scoped to `src/Core/SIMDAudio.cpp` (`/arch:AVX2` on MSVC or `-mavx2 -msse4.1` on Clang/GCC when x86 is detected).

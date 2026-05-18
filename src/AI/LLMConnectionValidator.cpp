@@ -28,6 +28,38 @@ bool isValidHttpsUrl(const juce::String& value)
            && !trimmed.containsChar(' ');
 }
 
+bool isLoopbackHost(const juce::String& host)
+{
+    const auto normalized = host.trim().toLowerCase();
+    return normalized == "localhost"
+        || normalized == "127.0.0.1"
+        || normalized == "::1"
+        || normalized == "[::1]";
+}
+
+bool isValidOpenAICompatibleUrl(const juce::String& value)
+{
+    const auto trimmed = value.trim();
+    if (trimmed.containsChar(' '))
+        return false;
+
+    if (isValidHttpsUrl(trimmed))
+        return true;
+
+    if (!trimmed.startsWithIgnoreCase("http://") || trimmed.length() <= 7)
+        return false;
+
+    const auto withoutScheme = trimmed.substring(7);
+    const auto slashIndex = withoutScheme.indexOfChar('/');
+    const auto authority = slashIndex >= 0 ? withoutScheme.substring(0, slashIndex)
+                                           : withoutScheme;
+    const auto host = authority.startsWithChar('[')
+        ? authority.upToFirstOccurrenceOf("]", true, false)
+        : authority.upToFirstOccurrenceOf(":", false, false);
+
+    return isLoopbackHost(host);
+}
+
 juce::String baseUrlFor(LLMProviderId providerId, const LLMProviderSettings& settings)
 {
     const auto& definition = getLLMProviderDefinition(providerId);
@@ -39,7 +71,7 @@ juce::String baseUrlFor(LLMProviderId providerId, const LLMProviderSettings& set
 int timeoutFor(LLMProviderId providerId, LLMValidationOperation operation) noexcept
 {
     if (providerId == LLMProviderId::NVIDIA)
-        return operation == LLMValidationOperation::TestPrompt ? 90000 : 30000;
+        return operation == LLMValidationOperation::TestPrompt ? 120000 : 30000;
 
     return operation == LLMValidationOperation::TestPrompt ? 30000 : 20000;
 }
@@ -62,6 +94,61 @@ juce::String authHeadersFor(LLMProviderId providerId, const juce::String& apiKey
     return "Authorization: Bearer " + apiKey + "\r\ncontent-type: application/json\r\n";
 }
 
+void addModelId(juce::StringArray& models, const nlohmann::json& item)
+{
+    if (item.is_string())
+    {
+        models.add(juce::String(item.get<std::string>()));
+        return;
+    }
+
+    if (!item.is_object())
+        return;
+
+    static constexpr const char* keys[] { "id", "name", "model" };
+    for (const auto* key : keys)
+    {
+        if (item.contains(key) && item[key].is_string())
+        {
+            models.add(juce::String(item[key].get<std::string>()));
+            return;
+        }
+    }
+}
+
+void collectModels(juce::StringArray& models, const nlohmann::json& value)
+{
+    if (!value.is_array())
+        return;
+
+    for (const auto& item : value)
+        addModelId(models, item);
+}
+
+juce::String extractTextContent(const nlohmann::json& content)
+{
+    if (content.is_string())
+        return juce::String(content.get<std::string>());
+
+    if (!content.is_array())
+        return {};
+
+    juce::String text;
+    for (const auto& block : content)
+    {
+        if (block.is_string())
+        {
+            text += juce::String(block.get<std::string>());
+        }
+        else if (block.is_object() && block.contains("text") && block["text"].is_string())
+        {
+            text += juce::String(block["text"].get<std::string>());
+        }
+    }
+
+    return text;
+}
+
 juce::String extractOpenAIText(const nlohmann::json& root)
 {
     if (!root.contains("choices") || !root["choices"].is_array() || root["choices"].empty())
@@ -69,13 +156,18 @@ juce::String extractOpenAIText(const nlohmann::json& root)
 
     const auto& first = root["choices"].front();
     if (!first.contains("message") || !first["message"].is_object())
+    {
+        if (first.contains("text"))
+            return extractTextContent(first["text"]);
+
         return {};
+    }
 
     const auto& message = first["message"];
-    if (!message.contains("content") || !message["content"].is_string())
+    if (!message.contains("content"))
         return {};
 
-    return juce::String(message["content"].get<std::string>());
+    return extractTextContent(message["content"]);
 }
 
 juce::String extractAnthropicText(const nlohmann::json& root)
@@ -93,6 +185,31 @@ juce::String extractAnthropicText(const nlohmann::json& root)
 }
 
 #if JUCE_WINDOWS
+const char* winHttpFriendlyText(DWORD code)
+{
+    // Translate the most common WinHTTP transport errors so users see actionable
+    // guidance instead of a bare numeric code. Reference: winhttp.h ERROR_WINHTTP_*.
+    switch (code)
+    {
+        case 12002: return "request timed out";
+        case 12007: return "host name could not be resolved (check DNS / internet connection)";
+        case 12029: return "could not connect to the server (check the base URL and your firewall)";
+        case 12030: return "connection was aborted by the server";
+        case 12175: return "TLS/SSL handshake failed (check certificate / proxy)";
+        default:    return nullptr;
+    }
+}
+
+LLMHttpResponse winHttpFailure(const char* stage, DWORD errorCode = GetLastError())
+{
+    juce::String message = juce::String("WinHTTP ") + stage + " failed with error "
+                         + juce::String(static_cast<int>(errorCode));
+    if (const char* friendly = winHttpFriendlyText(errorCode))
+        message += juce::String(" (") + friendly + ")";
+    message += ".";
+    return {-static_cast<int>(errorCode), message, {}};
+}
+
 struct WinHttpHandle
 {
     HINTERNET handle = nullptr;
@@ -127,10 +244,12 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
     parts.dwExtraInfoLength = static_cast<DWORD>(-1);
 
     if (!WinHttpCrackUrl(urlWide.c_str(), static_cast<DWORD>(urlWide.size()), 0, &parts))
-        return {};
+        return winHttpFailure("URL parse");
 
-    if (parts.nScheme != INTERNET_SCHEME_HTTPS)
-        return {};
+    const bool isHttps = parts.nScheme == INTERNET_SCHEME_HTTPS;
+    const bool isHttp = parts.nScheme == INTERNET_SCHEME_HTTP;
+    if (!isHttps && !isHttp)
+        return {-1, "WinHTTP request failed: only http:// and https:// URLs are supported.", {}};
 
     const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
     std::wstring path(parts.lpszUrlPath, parts.dwUrlPathLength);
@@ -152,17 +271,17 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
                                       WINHTTP_NO_PROXY_BYPASS,
                                       0));
     if (session.handle == nullptr)
-        return {};
+        return winHttpFailure("session open");
 
     WinHttpSetTimeouts(session,
-                       request.timeoutMs,
-                       request.timeoutMs,
-                       request.timeoutMs,
-                       request.timeoutMs);
+                       (std::min)(request.timeoutMs, 10000),  // DNS resolve
+                       (std::min)(request.timeoutMs, 15000),  // connect
+                       (std::min)(request.timeoutMs, 30000),  // send
+                       request.timeoutMs);                     // receive (full timeout for LLM generation)
 
     WinHttpHandle connection(WinHttpConnect(session, host.c_str(), parts.nPort, 0));
     if (connection.handle == nullptr)
-        return {};
+        return winHttpFailure("connect");
 
     const auto method = request.method == LLMHttpMethod::Post ? L"POST" : L"GET";
     WinHttpHandle httpRequest(WinHttpOpenRequest(connection,
@@ -171,9 +290,9 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
                                                  nullptr,
                                                  WINHTTP_NO_REFERER,
                                                  WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                 WINHTTP_FLAG_SECURE));
+                                                 isHttps ? WINHTTP_FLAG_SECURE : 0));
     if (httpRequest.handle == nullptr)
-        return {};
+        return winHttpFailure("request open");
 
     const auto headers = toWideString(request.extraHeaders);
     if (!headers.empty())
@@ -183,7 +302,7 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
                                       static_cast<DWORD>(headers.size()),
                                       WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE))
         {
-            return {};
+            return winHttpFailure("add headers");
         }
     }
 
@@ -200,11 +319,11 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
                             bodyBytes,
                             0))
     {
-        return {};
+        return winHttpFailure("send request");
     }
 
     if (!WinHttpReceiveResponse(httpRequest, nullptr))
-        return {};
+        return winHttpFailure("receive response");
 
     DWORD statusCode = 0;
     DWORD statusCodeSize = sizeof(statusCode);
@@ -214,6 +333,8 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
                         &statusCode,
                         &statusCodeSize,
                         WINHTTP_NO_HEADER_INDEX);
+    if (statusCode == 0)
+        return winHttpFailure("query status");
 
     juce::MemoryOutputStream responseBody;
     for (;;)
@@ -280,8 +401,15 @@ LLMValidationResult LLMConnectionValidator::validateInputsForTest(LLMProviderId 
         return inputError("Missing API key.");
 
     const auto baseUrl = baseUrlFor(providerId, settings);
-    if (!isValidHttpsUrl(baseUrl))
-        return inputError("Invalid OpenAI Compatible Base URL. Use an https:// URL.");
+    if (providerId == LLMProviderId::OpenAICompatible)
+    {
+        if (!isValidOpenAICompatibleUrl(baseUrl))
+            return inputError("Invalid OpenAI Compatible Base URL. Use https://, or http://localhost for a local server.");
+    }
+    else if (!isValidHttpsUrl(baseUrl))
+    {
+        return inputError("Invalid provider Base URL. Use an https:// URL.");
+    }
 
     if (operation == LLMValidationOperation::TestPrompt && settings.selectedModel.trim().isEmpty())
         return inputError("Missing model selection.");
@@ -334,20 +462,20 @@ LLMModelFetchResult LLMConnectionValidator::parseModelListForTest(LLMProviderId 
     if (statusCode == 401 || statusCode == 403)
         return modelError("Authentication failed while fetching models.");
     if (statusCode <= 0)
-        return modelError("Network timeout while fetching models.");
+        return modelError(body.isNotEmpty() ? body : "Network timeout while fetching models.");
     if (statusCode < 200 || statusCode >= 300)
         return modelError("Model list request failed with HTTP " + juce::String(statusCode) + ".");
 
     try
     {
         const auto root = nlohmann::json::parse(body.toStdString());
-        if (!root.contains("data") || !root["data"].is_array())
-            return modelError("Unsupported model list response format.");
-
         juce::StringArray models;
-        for (const auto& item : root["data"])
-            if (item.is_object() && item.contains("id") && item["id"].is_string())
-                models.add(juce::String(item["id"].get<std::string>()));
+        if (root.contains("data"))
+            collectModels(models, root["data"]);
+        if (models.isEmpty() && root.contains("models"))
+            collectModels(models, root["models"]);
+        if (models.isEmpty() && root.is_array())
+            collectModels(models, root);
 
         models.removeEmptyStrings();
         models.removeDuplicates(false);
@@ -367,7 +495,7 @@ LLMValidationResult LLMConnectionValidator::parseTestPromptForTest(LLMProviderId
     if (statusCode == 401 || statusCode == 403)
         return inputError("Authentication failed while testing the provider.");
     if (statusCode <= 0)
-        return inputError("Network timeout while testing the provider.");
+        return inputError(body.isNotEmpty() ? body : "Network timeout while testing the provider.");
     if (statusCode < 200 || statusCode >= 300)
         return inputError("Test prompt failed with HTTP " + juce::String(statusCode) + ".");
 
@@ -421,6 +549,35 @@ void LLMConnectionValidator::testConnectionAsync(LLMProviderId providerId, LLMPr
 
     auto client = httpClient_;
     std::thread([client, providerId, settings = std::move(settings), callback = std::move(callback)]() mutable {
+        if (providerId == LLMProviderId::NVIDIA)
+        {
+            const auto request = buildFetchModelsRequestForTest(providerId, settings);
+            const auto response = client->execute(request);
+            auto models = parseModelListForTest(providerId, response.statusCode, response.body);
+            LLMValidationResult result;
+            if (!models.success)
+            {
+                result = {false, models.status, "NVIDIA model endpoint check failed: " + models.message};
+            }
+            else if (!models.models.contains(settings.selectedModel.trim()))
+            {
+                result = {false,
+                          LLMValidationStatus::Failed,
+                          "NVIDIA endpoint is reachable, but the selected model was not returned by /models."};
+            }
+            else
+            {
+                result = {true,
+                          LLMValidationStatus::Active,
+                          "NVIDIA endpoint reachable and selected model is available."};
+            }
+
+            juce::MessageManager::callAsync([callback = std::move(callback), result = std::move(result)]() mutable {
+                callback(std::move(result));
+            });
+            return;
+        }
+
         const auto request = buildTestPromptRequestForTest(providerId, settings);
         const auto response = client->execute(request);
         auto result = parseTestPromptForTest(providerId, response.statusCode, response.body);

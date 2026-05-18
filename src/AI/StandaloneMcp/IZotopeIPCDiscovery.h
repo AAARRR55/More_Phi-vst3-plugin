@@ -51,6 +51,20 @@ struct IpcDumpArgs
     size_t sizeBytes = 64u * 1024u;
 };
 
+struct IpcCaptureArgs
+{
+    size_t offset = 0;
+    size_t sizeBytes = 4096;
+    size_t durationMs = 2000;
+    size_t intervalMs = 25;
+    size_t maxChanges = 64;
+    size_t maxRangesPerChange = 64;
+    size_t maxFrames = 16;
+    bool includeChangedBytes = false;
+    std::optional<std::string> baselineBase64;
+    std::optional<std::string> outputPath;
+};
+
 class IZotopeIPCDiscovery
 {
 public:
@@ -62,16 +76,19 @@ public:
     ToolCallOutcome status() const;
     ToolCallOutcome snapshot(const IpcSnapshotArgs& args) const;
     ToolCallOutcome dump(const IpcDumpArgs& args) const;
+    ToolCallOutcome capture(const IpcCaptureArgs& args) const;
 
-#if MORE_PHI_TEST_MODE
     void setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes);
-#endif
 
 private:
     static constexpr size_t kDefaultMappedSize = 4u * 1024u * 1024u;
     static constexpr size_t kMaxMappedSize = 64u * 1024u * 1024u;
     static constexpr size_t kMaxSnapshotSize = 256u * 1024u;
     static constexpr size_t kMaxDumpSize = 16u * 1024u * 1024u;
+    static constexpr size_t kMaxCaptureSize = 1024u * 1024u;
+    static constexpr size_t kMaxCaptureDurationMs = 60u * 1000u;
+    static constexpr size_t kMaxCaptureChanges = 1000;
+    static constexpr size_t kMaxChangeRanges = 512;
     static constexpr uint32_t kMagicIzot = 0x495A4F54u;
 
     const uint8_t* mappedBytes = nullptr;

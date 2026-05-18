@@ -23,8 +23,8 @@ public:
 private:
     MorePhiProcessor& processor;
 
-    // SanityMode toggle
-    juce::ToggleButton sanityToggle_{"Sanity Mode"};
+    // Safety mode selectors
+    juce::TextButton sanityToggle_{"Sanity"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> sanityAttach_;
 
     // RecallMode selector
@@ -40,7 +40,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> scThreshAttach_;
 
     // Listen Mode toggle
-    juce::ToggleButton listenToggle_{"Listen"};
+    juce::TextButton listenToggle_{"Listen"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> listenAttach_;
 
     // Recall Toggle (sustain notes across snapshot switches)
@@ -51,7 +51,7 @@ private:
     void updateRecallButtons();
 
     // Link Mode toggle
-    juce::ToggleButton linkToggle_{"Link"};
+    juce::TextButton linkToggle_{"Link"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> linkAttach_;
 
     // Output gain + bypass

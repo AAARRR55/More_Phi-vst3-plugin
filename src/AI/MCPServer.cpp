@@ -86,7 +86,7 @@ void MCPServer::ConnectionThread::run()
     constexpr int MAX_READ_ERRORS = 3;
     constexpr int MAX_REQUEST_BYTES = 256 * 1024;
 
-    while (!threadShouldExit() && socket_->isConnected() && !writeError)
+    while (!threadShouldExit() && !writeError)
     {
         try
         {
@@ -170,7 +170,18 @@ void MCPServer::ConnectionThread::run()
                 if (threadShouldExit()) break;
             }
         }
-        catch (...) { break; }
+        catch (...)
+        {
+            owner_.logError("connection", "Unhandled exception in connection thread");
+            const auto response = juce::String(json{
+                {"jsonrpc", "2.0"},
+                {"error", {{"code", -32603}, {"message", "Connection thread internal error"}}},
+                {"id", nullptr}
+            }.dump()) + "\n";
+            if (socket_ != nullptr && socket_->isConnected())
+                socket_->write(response.toRawUTF8(), static_cast<int>(response.getNumBytesAsUTF8()));
+            break;
+        }
     }
     owner_.connectedClients_--;
 }
@@ -275,10 +286,7 @@ void MCPServer::run()
 
 bool MCPServer::createServerListener()
 {
-    if (serverSocket_.createListener(port_, "127.0.0.1"))
-        return true;
-
-    return serverSocket_.createListener(port_, {});
+    return serverSocket_.createListener(port_, "127.0.0.1");
 }
 
 juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& authenticated)

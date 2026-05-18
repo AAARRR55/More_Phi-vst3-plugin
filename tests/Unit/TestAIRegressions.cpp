@@ -8,6 +8,7 @@
 #include "AI/MCPToolsExtended.h"
 #include "AI/MCPToolHandler.h"
 #include "AI/MCPEQTool.h"
+#include "AI/SemanticPluginProfile.h"
 #include "AI/TokenOptimizer.h"
 #include "Core/ParameterClassifier.h"
 #include "Core/VAEMorphEngine.h"
@@ -139,6 +140,302 @@ void fillCommandQueueLeaving(MorePhiProcessor& processor, int freeSlots)
 }
 
 } // namespace
+
+TEST_CASE("SemanticPluginProfile classifies EQ and limiter controls", "[unit][ai][semantic]")
+{
+    auto descriptors = makeTestDescriptors({
+        "Band 1 Frequency",
+        "Band 1 Gain",
+        "Band 1 Q",
+        "Bypass",
+        "Limiter Ceiling",
+        "Stereo Width"
+    });
+    descriptors[3].boolean = true;
+    descriptors[3].discrete = true;
+    descriptors[3].numSteps = 2;
+
+    const auto controls = SemanticPluginProfile::classify(descriptors);
+
+    const auto* frequency = SemanticPluginProfile::findControl(controls, "eq.band_1.frequency");
+    REQUIRE(frequency != nullptr);
+    REQUIRE(frequency->parameterIndex == 0);
+    REQUIRE(frequency->role == "eq_band_frequency");
+    REQUIRE(frequency->unit == "Hz");
+    REQUIRE(frequency->safety == "safe");
+
+    const auto* gain = SemanticPluginProfile::findControl(controls, "eq.band_1.gain");
+    REQUIRE(gain != nullptr);
+    REQUIRE(gain->parameterIndex == 1);
+    REQUIRE(gain->role == "eq_band_gain");
+    REQUIRE(gain->unit == "dB");
+    REQUIRE(gain->safety == "safe");
+    REQUIRE(gain->maxStepDb == Approx(3.0f));
+    REQUIRE(gain->minDeltaDb == Approx(-6.0f));
+    REQUIRE(gain->maxDeltaDb == Approx(3.0f));
+
+    const auto* q = SemanticPluginProfile::findControl(controls, "eq.band_1.q");
+    REQUIRE(q != nullptr);
+    REQUIRE(q->parameterIndex == 2);
+    REQUIRE(q->role == "eq_band_q");
+    REQUIRE(q->safety == "safe");
+
+    const auto* bypass = SemanticPluginProfile::findControl(controls, "locked.bypass");
+    REQUIRE(bypass != nullptr);
+    REQUIRE(bypass->parameterIndex == 3);
+    REQUIRE(bypass->safety == "locked");
+
+    const auto* ceiling = SemanticPluginProfile::findControl(controls, "limiter.ceiling");
+    REQUIRE(ceiling != nullptr);
+    REQUIRE(ceiling->parameterIndex == 4);
+    REQUIRE(ceiling->role == "limiter_ceiling");
+    REQUIRE(ceiling->safety == "caution");
+
+    const auto* width = SemanticPluginProfile::findControl(controls, "imager.width");
+    REQUIRE(width != nullptr);
+    REQUIRE(width->parameterIndex == 5);
+    REQUIRE(width->role == "imager_width");
+    REQUIRE(width->safety == "caution");
+
+    const auto json = SemanticPluginProfile::controlsToJson(descriptors, controls);
+    REQUIRE(json.is_array());
+    REQUIRE(json.size() == descriptors.size());
+    REQUIRE(json[3]["parameter"]["boolean"].get<bool>());
+    REQUIRE(json[3]["safety"].get<std::string>() == "locked");
+}
+
+TEST_CASE("SemanticPluginProfile semantic IDs ignore display values", "[unit][ai][semantic]")
+{
+    auto descriptors = makeTestDescriptors({
+        "Frequency",
+        "Band 999999999999999999999999999999999 Frequency",
+        "Node 2 Gain"
+    });
+    descriptors[0].displayValue = "1000 Hz";
+    descriptors[1].displayValue = "250 Hz";
+
+    const auto controls = SemanticPluginProfile::classify(descriptors);
+
+    const auto* frequency = SemanticPluginProfile::findControl(controls, "eq.frequency");
+    REQUIRE(frequency != nullptr);
+    REQUIRE(frequency->parameterIndex == 0);
+    REQUIRE(controls[1].semanticId == "eq.frequency.param_1");
+    REQUIRE(controls[1].parameterIndex == 1);
+    REQUIRE(SemanticPluginProfile::findControl(controls, "eq.band_1000.frequency") == nullptr);
+    REQUIRE(SemanticPluginProfile::findControl(controls, "eq.band_999999999999999999999999999999999.frequency") == nullptr);
+
+    const auto* nodeGain = SemanticPluginProfile::findControl(controls, "eq.band_2.gain");
+    REQUIRE(nodeGain != nullptr);
+    REQUIRE(nodeGain->parameterIndex == 2);
+}
+
+TEST_CASE("SemanticPluginProfile disambiguates duplicate semantic IDs", "[unit][ai][semantic]")
+{
+    const auto controls = SemanticPluginProfile::classify(makeTestDescriptors({
+        "Gain",
+        "Gain",
+        "Frequency",
+        "Frequency"
+    }));
+
+    REQUIRE(controls.size() == 4);
+    REQUIRE(controls[0].semanticId == "eq.gain");
+    REQUIRE(controls[1].semanticId == "eq.gain.param_1");
+    REQUIRE(controls[2].semanticId == "eq.frequency");
+    REQUIRE(controls[3].semanticId == "eq.frequency.param_3");
+}
+
+TEST_CASE("ParameterBridge getParameterDescriptor uses test descriptors", "[unit][ai][semantic]")
+{
+    MorePhiProcessor processor;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    auto descriptor = processor.getParameterBridge().getParameterDescriptor(0);
+
+    REQUIRE(descriptor.index == 0);
+    REQUIRE(descriptor.name == "Band 1 Gain");
+}
+
+TEST_CASE("ParameterBridge display value samples test descriptors with clamping", "[unit][ai][semantic]")
+{
+    MorePhiProcessor processor;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    REQUIRE(processor.getParameterBridge().getParameterDisplayValueAtNormalized(0, -0.25f) == "0.000");
+    REQUIRE(processor.getParameterBridge().getParameterDisplayValueAtNormalized(0, 0.25f) == "0.250");
+    REQUIRE(processor.getParameterBridge().getParameterDisplayValueAtNormalized(0, 1.25f) == "1.000");
+    REQUIRE(processor.getParameterBridge().getParameterDisplayValueAtNormalized(1, 0.25f).isEmpty());
+}
+
+TEST_CASE("MCP tool list exposes semantic profile tools", "[unit][ai][semantic][mcp]")
+{
+    const auto tools = MCPToolHandler::getToolList();
+    REQUIRE(tools.contains("plugin_profile.describe_semantics"));
+    REQUIRE(tools.contains("plugin_profile.apply_safe_action"));
+    REQUIRE(tools.contains("plugin_profile.restore_safe_snapshot"));
+}
+
+TEST_CASE("MCP plugin profile audit includes semantic controls", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Frequency", "Band 1 Gain", "Band 1 Q"}));
+
+    const auto response = MCPToolHandler::handle("plugin_profile.audit_parameters", juce::var(), processor, identity);
+    const auto parsed = nlohmann::json::parse(response.toStdString());
+
+    REQUIRE(parsed.value("success", false));
+    REQUIRE(parsed.value("semantic_control_count", 0) >= 3);
+}
+
+TEST_CASE("MCP safe action rejects locked controls", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    auto descriptors = makeTestDescriptors({"Bypass"});
+    descriptors[0].boolean = true;
+    descriptors[0].discrete = true;
+    descriptors[0].numSteps = 2;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(std::move(descriptors));
+
+    juce::DynamicObject::Ptr action = new juce::DynamicObject();
+    action->setProperty("type", "set_semantic_normalized");
+    action->setProperty("semantic_id", "locked.bypass");
+    action->setProperty("normalized_value", 1.0);
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("action", juce::var(action.get()));
+    req->setProperty("allow_caution", false);
+    req->setProperty("dry_run", false);
+
+    const auto response = MCPToolHandler::handle("plugin_profile.apply_safe_action", juce::var(req.get()), processor, identity);
+    const auto parsed = nlohmann::json::parse(response.toStdString());
+
+    REQUIRE_FALSE(parsed.value("success", true));
+    REQUIRE(parsed.value("error", std::string{}) == "control_locked");
+}
+
+TEST_CASE("MCP safe normalized action queues safe control and returns snapshot", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    juce::DynamicObject::Ptr action = new juce::DynamicObject();
+    action->setProperty("type", "set_semantic_normalized");
+    action->setProperty("semantic_id", "eq.band_1.gain");
+    action->setProperty("normalized_value", 0.48);
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("action", juce::var(action.get()));
+
+    const auto response = MCPToolHandler::handle("plugin_profile.apply_safe_action", juce::var(req.get()), processor, identity);
+    const auto parsed = nlohmann::json::parse(response.toStdString());
+
+    REQUIRE(parsed.value("success", false));
+    REQUIRE(parsed.value("queued", 0) == 1);
+    const auto snapshotId = parsed.value("snapshot_id", std::string{});
+    REQUIRE(snapshotId.rfind("safe_action_", 0) == 0);
+}
+
+TEST_CASE("MCP safe action rejects when parameter edits are pending", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    REQUIRE(processor.enqueueParameterSet(0, 0.25f,
+                                          MorePhiProcessor::ParameterEditSource::MCP,
+                                          true));
+
+    juce::DynamicObject::Ptr action = new juce::DynamicObject();
+    action->setProperty("type", "set_semantic_normalized");
+    action->setProperty("semantic_id", "eq.band_1.gain");
+    action->setProperty("normalized_value", 0.48);
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("action", juce::var(action.get()));
+
+    const auto response = MCPToolHandler::handle("plugin_profile.apply_safe_action", juce::var(req.get()), processor, identity);
+    const auto parsed = nlohmann::json::parse(response.toStdString());
+
+    REQUIRE_FALSE(parsed.value("success", true));
+    REQUIRE(parsed.value("error", std::string{}) == "pending_parameter_edits");
+    REQUIRE(parsed.value("queued", -1) == 0);
+    REQUIRE(parsed.value("pending", 0) >= 1);
+}
+
+TEST_CASE("MCP restores safe action snapshot through parameter queue", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    juce::DynamicObject::Ptr action = new juce::DynamicObject();
+    action->setProperty("type", "set_semantic_normalized");
+    action->setProperty("semantic_id", "eq.band_1.gain");
+    action->setProperty("normalized_value", 0.48);
+
+    juce::DynamicObject::Ptr applyReq = new juce::DynamicObject();
+    applyReq->setProperty("action", juce::var(action.get()));
+
+    const auto applyResponse = MCPToolHandler::handle("plugin_profile.apply_safe_action", juce::var(applyReq.get()), processor, identity);
+    const auto applyParsed = nlohmann::json::parse(applyResponse.toStdString());
+    REQUIRE(applyParsed.value("success", false));
+    const auto snapshotId = applyParsed.value("snapshot_id", std::string{});
+    REQUIRE_FALSE(snapshotId.empty());
+
+    juce::DynamicObject::Ptr restoreReq = new juce::DynamicObject();
+    restoreReq->setProperty("snapshot_id", juce::String(snapshotId));
+
+    const auto restoreResponse = MCPToolHandler::handle("plugin_profile.restore_safe_snapshot", juce::var(restoreReq.get()), processor, identity);
+    const auto restoreParsed = nlohmann::json::parse(restoreResponse.toStdString());
+
+    REQUIRE(restoreParsed.value("success", false));
+    REQUIRE(restoreParsed.value("snapshot_id", std::string{}) == snapshotId);
+    REQUIRE(restoreParsed.value("queued", 0) >= 1);
+}
+
+TEST_CASE("MCP safe action snapshot restore rejects changed parameter layout", "[unit][ai][semantic][mcp]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 1 Gain"}));
+
+    juce::DynamicObject::Ptr action = new juce::DynamicObject();
+    action->setProperty("type", "set_semantic_normalized");
+    action->setProperty("semantic_id", "eq.band_1.gain");
+    action->setProperty("normalized_value", 0.48);
+
+    juce::DynamicObject::Ptr applyReq = new juce::DynamicObject();
+    applyReq->setProperty("action", juce::var(action.get()));
+
+    const auto applyResponse = MCPToolHandler::handle("plugin_profile.apply_safe_action", juce::var(applyReq.get()), processor, identity);
+    const auto applyParsed = nlohmann::json::parse(applyResponse.toStdString());
+    REQUIRE(applyParsed.value("success", false));
+    const auto snapshotId = applyParsed.value("snapshot_id", std::string{});
+    REQUIRE_FALSE(snapshotId.empty());
+
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Band 2 Gain"}));
+
+    juce::DynamicObject::Ptr restoreReq = new juce::DynamicObject();
+    restoreReq->setProperty("snapshot_id", juce::String(snapshotId));
+
+    const auto restoreResponse = MCPToolHandler::handle("plugin_profile.restore_safe_snapshot", juce::var(restoreReq.get()), processor, identity);
+    const auto restoreParsed = nlohmann::json::parse(restoreResponse.toStdString());
+
+    REQUIRE_FALSE(restoreParsed.value("success", true));
+    REQUIRE(restoreParsed.value("error", std::string{}) == "snapshot_context_mismatch");
+    REQUIRE(restoreParsed.value("queued", -1) == 0);
+}
 
 TEST_CASE("ParameterClassifier token estimation/optimization paths do not deadlock", "[unit][ai][classifier]")
 {
@@ -488,6 +785,173 @@ TEST_CASE("MCP set_morph_position survives the following APVTS processBlock sync
     REQUIRE(rawX->load(std::memory_order_relaxed) == Approx(0.2f).margin(0.001f));
     REQUIRE(rawY->load(std::memory_order_relaxed) == Approx(0.8f).margin(0.001f));
     REQUIRE(rawFader->load(std::memory_order_relaxed) == Approx(0.35f).margin(0.001f));
+
+    processor.releaseResources();
+}
+
+TEST_CASE("MCP tool list includes diagnose_parameter_pipeline", "[unit][ai][mcp][pipeline]")
+{
+    const auto tools = MCPToolHandler::getToolList();
+    REQUIRE(tools.contains("diagnose_parameter_pipeline"));
+}
+
+TEST_CASE("diagnose_parameter_pipeline reports blocked stages when no plugin loaded", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+    REQUIRE(static_cast<bool>(parsed.getProperty("success", false)));
+
+    const auto stage2 = parsed.getProperty("stage2_parameterResolution", {});
+    REQUIRE(stage2.getProperty("status", "").toString() == "blocked");
+    REQUIRE(static_cast<int>(stage2.getProperty("parameterCount", -1)) == 0);
+
+    const auto stage4 = parsed.getProperty("stage4_flush", {});
+    REQUIRE_FALSE(static_cast<bool>(stage4.getProperty("pluginAvailable", true)));
+
+    const auto stage6 = parsed.getProperty("stage6_drainWrite", {});
+    REQUIRE(stage6.getProperty("status", "").toString() == "no_parameters");
+}
+
+TEST_CASE("diagnose_parameter_pipeline reports healthy stages with test descriptors", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.prepareToPlay(44100.0, 64);
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain", "Cutoff", "Resonance"}));
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+    REQUIRE(static_cast<bool>(parsed.getProperty("success", false)));
+
+    const auto stage3 = parsed.getProperty("stage3_commandQueue", {});
+    REQUIRE(static_cast<bool>(stage3.getProperty("healthy", false)));
+    REQUIRE(static_cast<int>(stage3.getProperty("usagePercent", -1)) == 0);
+
+    const auto stage5 = parsed.getProperty("stage5_processBlock", {});
+    REQUIRE(static_cast<bool>(stage5.getProperty("isPrepared", false)));
+    REQUIRE_FALSE(static_cast<bool>(stage5.getProperty("isRestoring", true)));
+    REQUIRE(stage5.getProperty("status", "").toString() == "ok");
+
+    const auto stage7 = parsed.getProperty("stage7_morphOverwrite", {});
+    REQUIRE(static_cast<int>(stage7.getProperty("snapshotsOccupied", -1)) == 0);
+    REQUIRE(stage7.getProperty("status", "").toString() == "ok_no_morph");
+
+    processor.releaseResources();
+}
+
+TEST_CASE("diagnose_parameter_pipeline reports queue health under load", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain"}));
+
+    fillCommandQueueLeaving(processor, 0);
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+
+    const auto stage3 = parsed.getProperty("stage3_commandQueue", {});
+    REQUIRE_FALSE(static_cast<bool>(stage3.getProperty("healthy", true)));
+    REQUIRE(static_cast<int>(stage3.getProperty("usagePercent", -1)) > 90);
+    REQUIRE(stage3.getProperty("status", "").toString() == "warning_high_usage");
+}
+
+TEST_CASE("diagnose_parameter_pipeline param_index reports per-parameter state", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain", "Cutoff"}));
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("index", 1);
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(req.get()), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+
+    const auto paramDiag = parsed.getProperty("parameterDiagnostic", {});
+    REQUIRE_FALSE(paramDiag.isVoid());
+    REQUIRE(static_cast<int>(paramDiag.getProperty("index", -1)) == 1);
+    REQUIRE(static_cast<bool>(paramDiag.getProperty("exists", false)));
+    REQUIRE(paramDiag.getProperty("name", "").toString() == "Cutoff");
+}
+
+TEST_CASE("diagnose_parameter_pipeline param_index reports nonexistent for out-of-range", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain"}));
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("index", 999);
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(req.get()), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+
+    const auto paramDiag = parsed.getProperty("parameterDiagnostic", {});
+    REQUIRE_FALSE(paramDiag.isVoid());
+    REQUIRE_FALSE(static_cast<bool>(paramDiag.getProperty("exists", true)));
+}
+
+TEST_CASE("diagnose_parameter_pipeline reports live edit holds when active", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.prepareToPlay(44100.0, 64);
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain", "Cutoff"}));
+
+    processor.testResizeExternalEditHolds(2);
+    processor.testMarkExternalEditHold(0, 0.5f, 0.5f, 0.0f);
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("index", 0);
+
+    const auto response = MCPToolHandler::handle("diagnose_parameter_pipeline", juce::var(req.get()), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+
+    const auto stage7 = parsed.getProperty("stage7_morphOverwrite", {});
+    REQUIRE(static_cast<int>(stage7.getProperty("liveEditHoldsActive", -1)) >= 1);
+
+    const auto paramDiag = parsed.getProperty("parameterDiagnostic", {});
+    REQUIRE(static_cast<bool>(paramDiag.getProperty("liveEditHeld", false)));
+
+    processor.releaseResources();
+}
+
+TEST_CASE("MCP set_parameter flush reports pluginUnavailable when no hosted plugin", "[unit][ai][mcp][pipeline]")
+{
+    MorePhiProcessor processor;
+    InstanceIdentity identity;
+    processor.prepareToPlay(44100.0, 64);
+    processor.getParameterBridge().setParameterDescriptorsForTesting(
+        makeTestDescriptors({"Gain"}));
+
+    juce::DynamicObject::Ptr req = new juce::DynamicObject();
+    req->setProperty("index", 0);
+    req->setProperty("value", 0.75);
+
+    const auto response = MCPToolHandler::handle("set_parameter", juce::var(req.get()), processor, identity);
+    const auto parsed = juce::JSON::parse(response);
+    REQUIRE_FALSE(parsed.isVoid());
+
+    REQUIRE(static_cast<bool>(parsed.getProperty("success", false)));
+
+    const auto flush = parsed.getProperty("flush", {});
+    REQUIRE_FALSE(flush.isVoid());
+    REQUIRE(static_cast<bool>(flush.getProperty("plugin_unavailable", false)));
 
     processor.releaseResources();
 }

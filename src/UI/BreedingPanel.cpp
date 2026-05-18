@@ -153,6 +153,7 @@ void BreedingPanel::randomizeMorphPosition()
         ParameterBinding::setValueWithGesture(*px, x);
     if (auto* py = proc_.getAPVTS().getParameter("morphY"))
         ParameterBinding::setValueWithGesture(*py, y);
+    ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 0, 2);
 
     statusLabel_.setText("Randomized position: X " + juce::String(x, 2)
                              + " / Y " + juce::String(y, 2),

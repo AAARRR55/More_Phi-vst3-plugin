@@ -13,6 +13,7 @@
 #include <atomic>
 #include <array>
 #include <cstddef>
+#include <iterator>
 #include <juce_core/juce_core.h>
 
 namespace more_phi {
@@ -58,6 +59,31 @@ public:
             return false;  // full
         buffer_[head] = item;
         head_.store(next, std::memory_order_release);
+        return true;
+    }
+
+    template <typename Range>
+    [[nodiscard]] bool pushRange(const Range& items)
+    {
+        const juce::SpinLock::ScopedLockType guard(pushMutex_);
+        const size_t count = static_cast<size_t>(std::distance(std::begin(items), std::end(items)));
+        if (count == 0)
+            return true;
+
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        const size_t used = (head - tail) & mask_;
+        if (count > usableCapacity() - used)
+            return false;
+
+        size_t write = head;
+        for (const auto& item : items)
+        {
+            buffer_[write] = item;
+            write = (write + 1) & mask_;
+        }
+
+        head_.store(write, std::memory_order_release);
         return true;
     }
 

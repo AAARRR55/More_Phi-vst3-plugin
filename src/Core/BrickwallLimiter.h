@@ -79,6 +79,12 @@ public:
         return gainReductionDB_.load(std::memory_order_relaxed);
     }
 
+    /** Current output true peak in dBTP. */
+    [[nodiscard]] float getTruePeak_dBTP() const noexcept
+    {
+        return truePeak_.getTruePeak_dBTP();
+    }
+
     /** Returns the current lookahead latency in samples at the prepared sample rate. */
     [[nodiscard]] int getLookaheadSamples() const noexcept { return lookaheadSamples_; }
 

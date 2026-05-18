@@ -1,457 +1,369 @@
 # More-Phi User Guide
 
-A complete guide to using More-Phi, the AI-ready parameter morphing engine for audio plugins.
+Welcome to More-Phi, an AI-ready parameter morphing engine for sound design, performance, and exploratory mixing. This guide teaches workflows: start with a hosted plugin, capture sounds, morph between them, and use advanced tools when you are ready.
 
----
+> Screenshot placeholder: `[Screenshot: More-Phi loaded in a DAW with a hosted synth or effect]`
 
-## Table of Contents
+## Quick Navigation
 
-1. [Introduction](#introduction)
-2. [Getting Started](#getting-started)
-3. [The Interface](#the-interface)
-4. [Working with Snapshots](#working-with-snapshots)
-5. [Morphing](#morphing)
-6. [Physics Modes](#physics-modes)
-7. [Genetic Breeding](#genetic-breeding)
-8. [MIDI Control](#midi-control)
-9. [AI Integration](#ai-integration)
-10. [Tips & Tricks](#tips--tricks)
+- [First-Time Setup](#first-time-setup)
+- [Set Up Your First Hosted Plugin](#set-up-your-first-hosted-plugin)
+- [Create Your First Morphing Project](#create-your-first-morphing-project)
+- [Manage Snapshots](#manage-snapshots)
+- [Morph Between Sounds](#morph-between-sounds)
+- [Use Physics Modes](#use-physics-modes)
+- [Use Genetic Sound Design](#use-genetic-sound-design)
+- [Control More-Phi with MIDI](#control-more-phi-with-midi)
+- [Use AI and MCP Features](#use-ai-and-mcp-features)
+- [Advanced Feature Walkthroughs](#advanced-feature-walkthroughs)
+- [Best Practices](#best-practices)
 
----
+## First-Time Setup
 
-## Introduction
+### Goal
 
-More-Phi is a unique audio plugin that lets you:
-- **Host other plugins** inside it (synths, effects, instruments)
-- **Capture snapshots** of parameter states
-- **Morph between sounds** in real-time using a 2D pad or 1D fader
-- **Apply physics** to create organic, evolving movements
-- **Breed new sounds** using genetic algorithms
-- **Connect AI assistants** via MCP for automated control
+Install More-Phi, load it in your DAW, and confirm it is ready to host another plugin.
 
-### Use Cases
+### Before You Start
 
-- Sound design and preset exploration
-- Live performance with expressive control
-- Ambient/drone texture generation
-- AI-assisted music production
-- Creating smooth transitions between presets
+You need:
 
----
+- A DAW that supports VST3 or AU plugins.
+- At least one installed VST3/AU instrument or effect to host inside More-Phi.
+- Audio routed through the track where More-Phi is inserted.
 
-## Getting Started
+### Steps
 
-### Step 1: Add More-Phi to Your DAW
+1. Install or copy the More-Phi plugin bundle into your system plugin folder.
+2. Open your DAW and rescan plugins.
+3. Insert **More-Phi** on an audio, instrument, or bus track.
+4. Confirm the More-Phi window opens and shows:
+   - Title bar with output meter.
+   - Plugin browser row.
+   - MorphPad and Snap Fader.
+   - Bottom tab section.
+   - AI status bar.
 
-1. Insert More-Phi on an audio track or instrument track
-2. The plugin window opens showing the main interface
+> Screenshot placeholder: `[Screenshot: Empty More-Phi instance before loading a hosted plugin]`
 
-### Step 2: Load a Plugin to Host
+### Success Check
 
-1. Find the **Plugin Browser** panel (right side)
-2. Click **"Load Plugin"**
-3. Select a VST3 or AU plugin from your installed plugins
-4. The hosted plugin's interface opens automatically
+You are ready when the plugin browser row says **No plugin loaded** and the interface responds to resizing and tab changes.
 
-### Step 3: Create Your First Snapshot
+## Set Up Your First Hosted Plugin
 
-1. Tweak the hosted plugin's parameters to create a sound you like
-2. **Double-click** anywhere on the circular **MorphPad**
-3. A red dot appears indicating a captured snapshot
-4. The slot number shows below the dot
+### Goal
 
-### Step 4: Create More Snapshots
+Load a synth, effect, or mastering plugin inside More-Phi.
 
-1. Modify the hosted plugin's parameters for a different sound
-2. Double-click again to capture another snapshot
-3. Repeat to fill up to 12 snapshot slots
+### Steps
 
-### Step 5: Morph Between Sounds
+1. Click **Load** in the plugin browser row.
+2. Wait for plugin scanning if this is your first launch.
+3. Choose a plugin from the popup list.
+4. Confirm the plugin name appears in the browser row.
+5. Click **Show** or **Open Plugin** to bring up the hosted plugin's own editor.
+6. Play audio or MIDI through the track to confirm sound passes through the hosted plugin.
 
-1. Click and drag on the **MorphPad**
-2. Watch parameters smoothly interpolate between snapshots
-3. The cursor shows your current morph position
-4. Closer snapshots have more influence
+> Screenshot placeholder: `[Screenshot: Plugin browser row with loaded hosted plugin name]`
 
----
+### Tips
 
-## The Interface
+- If the hosted plugin changes latency, More-Phi reports latency back to the DAW.
+- Loading a different hosted plugin clears old snapshots because the parameter layout has changed.
+- Keep the hosted plugin editor open while designing your first snapshots.
 
-### MorphPad (Center)
+## Create Your First Morphing Project
 
-The circular 2D control surface where morphing happens.
+### Goal
 
-- **Clock Layout:** 12 snapshot positions arranged like a clock face
-- **Red Dots:** Occupied snapshot slots
-- **Purple Dots:** Empty snapshot slots
-- **Cursor:** Your current morph position
-- **Trail:** Shows recent cursor movement
+Capture multiple sound states and morph between them from the central pad.
 
-### Mode Bar (Left)
+### Steps
 
-Selects the physics behavior:
+1. Load a hosted plugin.
+2. Open the hosted plugin editor.
+3. Design a sound you like.
+4. Click **Capture** in the plugin browser row, or double-click near a slot on the MorphPad.
+5. Change the hosted plugin to a different sound.
+6. Capture another snapshot.
+7. Repeat until you have two or more occupied slots.
+8. Drag the MorphPad cursor between the occupied slots.
+9. Listen for smooth transitions as More-Phi interpolates parameters.
 
-| Button | Mode | Description |
-|--------|------|-------------|
-| Direct | Instant | Cursor follows input exactly |
-| Elastic | Spring | Cursor bounces to target with physics |
-| Drift | Perlin | Cursor wanders organically |
+> Diagram placeholder: `[Diagram: Three occupied snapshot slots arranged around the MorphPad with interpolation weights from cursor position]`
 
-### Snap Fader (Left, Vertical)
+### Success Check
 
-Alternative linear control through snapshots:
+You should hear the hosted plugin move between captured sounds as you drag the MorphPad.
 
-- Drag up/down to morph through snapshots in order
-- Markers show occupied snapshot positions
-- Automatically switches to fader mode when used
+## Manage Snapshots
 
-### Macro Knobs (Bottom)
+Snapshots are the foundation of More-Phi. A snapshot stores normalized hosted-plugin parameters and, when enabled, the hosted plugin's state chunk.
 
-8 assignable knobs for quick access to hosted plugin parameters:
+### Capture a Snapshot
 
-- Right-click to assign a parameter
-- Drag to adjust the assigned parameter
-- Great for performance control
+1. Set the hosted plugin to the sound you want.
+2. Use one of these capture methods:
+   - Click **Capture** to use the next empty slot.
+   - Double-click a MorphPad slot area.
+   - Use an MCP command such as `capture_snapshot`.
+3. Watch the slot indicator change to show it is occupied.
 
-### Plugin Browser (Right)
+### Recall a Snapshot
 
-Manage hosted plugins:
+1. Click an occupied snapshot dot.
+2. Or trigger snapshots with MIDI notes C3-B3.
+3. Or call `recall_snapshot` from an MCP client.
 
-- **Load:** Open plugin selector dialog
-- **Unload:** Remove current hosted plugin
-- **Rescan:** Refresh plugin list
+### Overwrite a Snapshot
 
-### AI Status Panel (Right, Bottom)
+1. Create the new sound in the hosted plugin.
+2. Capture into an occupied slot.
+3. The previous stored values are replaced.
 
-Monitor MCP server status:
+### Choose Fast or Full Recall
 
-- **MCP Status:** Running/Stopped
-- **Port:** Server port (default 30001)
-- **Clients:** Number of connected AI clients
-- **Copy Token:** Copy authentication token
+Use the **Fast** and **Full** buttons in the bottom control strip.
 
-### Breeding Panel (Bottom, Right)
+| Mode | Best for | Behavior |
+|---|---|---|
+| Fast | Performance, sustained notes, quick switching | Recalls normalized parameter values only. |
+| Full | Exact preset/state restoration | Also restores the hosted plugin's opaque state chunk through the safe deferred path. |
 
-Genetic sound design tools:
+### Sustain Notes During Recalls
 
-- **Breed:** Combine two snapshots into a new one
-- **Mutate:** Randomly vary a snapshot
-- **Randomize:** Jump to random morph position
-- **Smart Randomize:** DAW-automatable trigger for randomization
+Keep **Recall Toggle** enabled when you want MIDI-triggered recalls to avoid interrupting sustained notes.
 
-### Safety & Link Controls (Bottom)
+## Morph Between Sounds
 
-Advanced control toggles:
+### Use the MorphPad
 
-- **Sanity Mode:** Protects volume/bypass parameters during morphing
-- **Listen Mode:** Excludes discrete toggles/dropdowns from morphing to prevent clicks
-- **Link Mode (Amber):** Synchronizes morph position across multiple plugin instances
+1. Capture at least two snapshots.
+2. Drag inside the circular MorphPad.
+3. Move closer to a snapshot to give it more influence.
+4. Move toward the center to blend multiple occupied slots.
 
----
+Best for:
 
-## Working with Snapshots
+- Expressive performance.
+- Sound design exploration.
+- Nonlinear transitions between several sounds.
 
-### Capturing Snapshots
+### Use the Snap Fader
 
-**Method 1: Double-click**
-1. Position your sound in the hosted plugin
-2. Double-click near an empty slot on the MorphPad
-3. Snapshot captures to nearest slot
+1. Capture multiple snapshots.
+2. Drag the vertical Snap Fader.
+3. Move up or down to travel through snapshots in sequence.
 
-**Method 2: AI Command**
-```
-capture_snapshot(slot: 0)
-```
+Best for:
 
-### Recalling Snapshots
+- Planned progressions.
+- Build-ups and breakdowns.
+- DAW automation lanes.
 
-**Method 1: Click on Dot**
-1. Click directly on a red snapshot dot
-2. Parameters jump to that snapshot's values
+### Use Output Gain and Bypass
 
-**Method 2: MIDI Note**
-- Notes C3-B3 trigger snapshots 1-12
-- Works even during playback
+The **Output Gain** knob controls More-Phi's final output level. The **Bypass** button bypasses the plugin processing path.
 
-**Method 3: AI Command**
-```
-recall_snapshot(slot: 0)
-```
+> Screenshot placeholder: `[Screenshot: Bottom control strip output section with gain knob and bypass button]`
 
-### Overwriting Snapshots
+## Use Physics Modes
 
-1. Create a new sound
-2. Double-click on an existing snapshot dot
-3. Old snapshot is replaced
-
-### Clearing All Snapshots
-
-Currently requires manually overwriting each slot or reloading the plugin.
-
-### Meta Preset Manager
-
-More-Phi provides its own internal preset system saving snapshot banks:
-
-- **Banks:** 16 banks available (switchable via UI or MIDI CC#0)
-- **Presets:** 128 presets per bank
-- Total configuration saves as JSON containing all APVTS values and 12 snapshot slots.
-
----
-
-## Morphing
-
-### XY Pad Morphing
-
-The MorphPad uses **inverse-distance weighted interpolation**:
-
-1. Each occupied snapshot has a position on the pad
-2. Your cursor position determines influence weights
-3. Closer snapshots have stronger influence
-4. All snapshots contribute based on distance
-
-**Example:** If you have snapshots at 12, 3, and 6 o'clock:
-- Cursor at center = equal blend of all three
-- Cursor near 12 o'clock = mostly that snapshot
-
-### Fader Morphing
-
-The Snap Fader provides **linear interpolation**:
-
-1. Snapshots are ordered by capture sequence
-2. Fader position determines position in sequence
-3. Smooth crossfade between adjacent snapshots
-
-**Best for:** Creating smooth progressions through sounds
-
-### Switching Between Modes
-
-- Using the MorphPad automatically sets **XY mode**
-- Using the Snap Fader automatically sets **Fader mode**
-- The active mode shows in the status display
-
----
-
-## Physics Modes
+Physics modes change how the morph cursor moves toward your input.
 
 ### Direct Mode
 
-**Behavior:** Cursor follows your input exactly.
+Use **Direct** when you need precise, immediate control.
 
-**Best for:**
-- Precise control
-- Recording automation
-- Live performance
-
-**Tips:**
-- Use with automation recording
-- Good for dramatic instant changes
+1. Select **Direct** in the mode bar.
+2. Drag the MorphPad or Snap Fader.
+3. The cursor follows your motion immediately.
 
 ### Elastic Mode
 
-**Behavior:** Cursor acts like a spring, bouncing to your target.
+Use **Elastic** for smooth motion with a spring-like feel.
 
-**Controls:**
-- Spring tension (how fast it moves)
-- Damping (how quickly it settles)
+1. Select **Elastic**.
+2. Move the target position.
+3. Let the cursor catch up and settle into place.
 
-**Best for:**
-- Smooth transitions
-- Natural movement
-- Reducing jittery automation
-
-**Tips:**
-- Great for ambient and pads
-- Let go and watch it settle
-- Creates interesting bounce effects
+Best for pads, drones, risers, and transitions that should feel alive.
 
 ### Drift Mode
 
-**Behavior:** Cursor wanders around your target position using Perlin noise.
+Use **Drift** for evolving movement around the target.
 
-**Controls:**
-- **Speed:** How fast it moves
-- **Distance:** How far from target it wanders
-- **Chaos:** Randomness of movement
+1. Select **Drift**.
+2. Set a target position on the MorphPad.
+3. Let More-Phi wander organically around that point.
 
-**Best for:**
-- Evolving textures
-- Ambient soundscapes
-- Generative music
+Best for ambient textures, modulation beds, and generative movement.
 
-**Tips:**
-- Set target to center and let it wander
-- Low chaos = smooth, organic movement
-- High chaos = unpredictable variation
+## Use Genetic Sound Design
 
----
+The breeding panel creates new material from existing snapshots.
 
-## Genetic Breeding
+### Breed Two Snapshots
 
-### Breed (Crossover)
+1. Capture at least two snapshots.
+2. Click **Breed**.
+3. More-Phi chooses two occupied snapshots, blends their values, applies the result, and stores it in the next empty slot.
+4. Listen to the result and decide whether to keep designing from it.
 
-Combines two snapshots to create a new one:
+### Mutate a Snapshot
 
-1. Click **"Breed"**
-2. Two random occupied snapshots are selected
-3. Their parameters are blended with random weights
-4. New snapshot is created in an empty slot
+1. Capture at least one snapshot.
+2. Click **Mutate**.
+3. More-Phi selects a snapshot, adds small randomized parameter variations, applies the result, and stores it in a slot.
 
-**Result:** A hybrid sound combining characteristics of both parents
+### Randomize Morph Position
 
-### Mutate
+1. Click **Randomize**.
+2. The MorphPad position jumps to a random X/Y coordinate.
+3. Use this to discover unexpected blends between existing snapshots.
 
-Randomly varies a snapshot's parameters:
+> Screenshot placeholder: `[Screenshot: Breeding panel with Breed, Mutate, Randomize, and status label]`
 
-1. Click **"Mutate"**
-2. A random snapshot is selected
-3. Each parameter gets a small random change
-4. New snapshot is created in an empty slot
+## Control More-Phi with MIDI
 
-**Result:** A variation of the original with subtle differences
+### Trigger Snapshots with Notes
 
-### Randomize
+1. Route MIDI to the track hosting More-Phi.
+2. Play notes C3 through B3.
+3. Each note recalls one of the 12 snapshot slots.
 
-Jumps to a random morph position:
+### Control Morphing with CC
 
-1. Click **"Randomize"**
-2. Morph cursor jumps to random X/Y position
-3. Creates unexpected sound combinations
+1. Send Mod Wheel / CC 1 to the track.
+2. More-Phi switches to fader-style morph control.
+3. Automate CC 1 in the DAW for repeatable transitions.
 
-**Best for:** Happy accidents and exploration
+### Use Sidechain Triggering
 
----
+1. Route a sidechain signal to More-Phi's sidechain input bus.
+2. Enable the **SC** sidechain toggle.
+3. Adjust the threshold knob.
+4. When the sidechain RMS crosses the threshold, More-Phi cycles snapshots.
 
-## MIDI Control
+Best for rhythmic preset cycling, drum-triggered texture changes, and sidechain-reactive sound design.
 
-### Snapshot Triggers
+## Use AI and MCP Features
 
-| MIDI Note | Snapshot |
-|-----------|----------|
-| C3 (60) | Slot 1 (12 o'clock) |
-| C#3 (61) | Slot 2 (1 o'clock) |
-| D3 (62) | Slot 3 (2 o'clock) |
-| ... | ... |
-| B3 (71) | Slot 12 (11 o'clock) |
+More-Phi includes a local MCP server for AI clients and external tools.
 
-**Behavior:**
-- Only triggers if snapshot slot is occupied
-- Instant recall (no morphing)
+### Start or Stop MCP
 
-### Continuous Control
+1. Locate the AI status bar at the bottom.
+2. Click **Start MCP** if the status says **MCP: OFF**.
+3. Confirm the panel shows **MCP: ON** and a port number.
+4. Click **Copy Token** to copy the bearer token for your MCP client.
 
-| MIDI CC | Function |
-|---------|----------|
-| CC 1 (Mod Wheel) | Snap Fader position |
-| CC 0 | Bank Select (1-16) |
+### Connect an AI Client
 
-**Behavior:**
-- Automatically switches to Fader mode
-- Full range (0-127) maps to 0.0-1.0
+1. Configure the client to connect to localhost at the displayed port.
+2. Provide the copied bearer token during initialization.
+3. Use tool calls for plugin info, snapshots, morphing, analysis, or semantic safe actions.
 
-### Recall Toggle (Sustain)
+### Understand Analysis and Mastering Output
 
-When triggering snapshots via MIDI, you can toggle **Full Recall vs Param-only Recall**:
-- **On (Default):** Full VST state chunk recall.
-- **Off (Sustain):** Fast param-only recall. This allows synth notes to sustain while switching snapshots.
+More-Phi's AI/MCP layer can inspect audio measurements and propose mastering actions, but the outputs are intentionally labeled so you can tell measured data from heuristics.
 
-### Setup
+- `analysis.get_summary` reports deterministic DSP meter snapshots. LUFS values are lightweight BS.1770-style rolling estimates, and true peak is a `4x_polyphase_fir_estimate`.
+- `analysis.get_spectrum` uses a Hann-window FFT over a mono-sum signal. Anti-phase left/right content can cancel in this view, so use the warning fields when interpreting stereo material.
+- `analysis.get_stereo_field` reports mid/side energy, banded mid-side correlation, and side-to-mid ratios. It is not a perceptual stereo-width model.
+- `analysis.capture_window` reports rolling min/max/mean/p10/p50/p90 statistics only when meter history exists.
+- Mastering previews are deterministic heuristic rule-engine suggestions. Review `measured_inputs`, `rules_applied`, and the `recommendation_type` fields before applying changes.
+- Genre classifier and neural compressor inference are unavailable unless real model backends are loaded; fallback statuses mean default or heuristic behavior is active.
+- Dataset validation's `weighted_heuristic_score` summarizes component checks for convenience and should not be treated as a scientific validity score.
 
-1. Enable MIDI input on the track hosting More-Phi
-2. Route MIDI from controller or another track
-3. MIDI is processed automatically
+### Configure LLM Settings
 
----
+1. Open the AI tab or settings control that launches **LLM Settings**.
+2. Choose a provider.
+3. Enter an API key.
+4. Confirm the base URL.
+5. Click **Fetch Models**.
+6. Select a model.
+7. Click **Test Connection**.
+8. Click **Save**.
 
-## AI Integration
+> Screenshot placeholder: `[Screenshot: LLM Settings dialog with Provider, API Key, Base URL, Model, Fetch Models, Test Connection, Save, and Cancel]`
 
-### What is MCP?
+### Use Semantic Safe Actions
 
-MCP (Model Context Protocol) is a standard for AI assistants to interact with applications. More-Phi runs an MCP server that lets AI tools:
+If your AI client supports More-Phi's semantic profile tools, prefer them over raw parameter writes.
 
-- Query plugin state
-- Modify parameters
-- Capture and recall snapshots
-- Control morphing
+Recommended workflow:
 
-### Connecting an AI Assistant
+1. Call `plugin_profile.describe_semantics`.
+2. Choose a semantic control such as `eq.band_1.gain`.
+3. Call `plugin_profile.apply_safe_action` with `dry_run: true`.
+4. Review the planned action.
+5. Call it again with `dry_run: false`.
+6. Save the returned `snapshot_id`.
+7. If the result is not better, call `plugin_profile.restore_safe_snapshot`.
 
-1. Check AI Status panel shows "MCP Running"
-2. Note the port number (default 30001)
-3. Configure your AI client to connect to localhost:30001
-4. AI can now send commands to More-Phi
+## Advanced Feature Walkthroughs
 
-### Example AI Workflows
+### Walkthrough: Build an Evolving Pad Texture
 
-**"Analyze my sound and suggest improvements"**
-```
-1. AI calls get_plugin_info()
-2. AI calls list_parameters()
-3. AI analyzes current parameter values
-4. AI suggests parameter changes
-5. AI can apply changes via set_parameter()
-```
+1. Load a pad synth inside More-Phi.
+2. Capture a warm, closed-filter snapshot at slot 1.
+3. Capture a brighter, wider snapshot at slot 4.
+4. Capture a noisy or modulated variation at slot 8.
+5. Select **Drift** mode.
+6. Place the cursor between the three snapshots.
+7. Enable **Listen Mode** to avoid abrupt discrete parameter jumps.
+8. Record the output or DAW automation while the cursor drifts.
 
-**"Create a smooth transition between these presets"**
-```
-1. AI captures current state (slot 0)
-2. AI calls set_morph_position to move cursor
-3. AI captures at different positions (slots 1-4)
-4. AI records automation moving through positions
-```
+### Walkthrough: Create a Performance Macro Scene
 
-**"Evolve a new sound from my favorites"**
-```
-1. AI identifies best snapshots
-2. AI uses breeding logic to combine them
-3. AI applies mutations for variation
-4. AI iterates until satisfied
-```
+1. Load an effect plugin such as a delay, reverb, or multi-effect.
+2. Capture dry/subtle, medium, and extreme effect snapshots.
+3. Use the Snap Fader to move through the progression.
+4. Assign useful hosted parameters to the macro knobs.
+5. Enable **Sanity Mode** to protect critical parameters.
+6. Record fader movement as automation.
 
----
+### Walkthrough: Mastering Preview with AI Assistance
 
-## Tips & Tricks
+1. Load a mastering-oriented hosted plugin.
+2. Start MCP and connect an AI client.
+3. Use analysis tools to inspect spectrum, stereo field, and levels.
+4. Preview a mastering plan before applying it.
+5. Apply small semantic safe actions first.
+6. Use rollback snapshots if the result becomes worse.
+
+## Best Practices
 
 ### Sound Design
 
-1. **Start with extremes:** Capture very different sounds for more dramatic morphing
-2. **Use physics:** Drift mode creates endless variations without manual input
-3. **Breed for surprise:** Genetic operations often create unexpected useful sounds
+- Capture snapshots that are meaningfully different.
+- Avoid capturing only tiny variations unless you want subtle motion.
+- Use Listen Mode when morphing plugins with many switches or dropdowns.
+- Use Sanity Mode before breeding or randomizing level-sensitive effects.
 
 ### Performance
 
-1. **Map MIDI:** Use a controller for expressive live control
-2. **Prepare snapshots:** Set up 12 sounds before the show
-3. **Use Elastic mode:** Smoother transitions than direct mode
+- Use Fast recall for live playing.
+- Use Full recall when exact hosted-plugin preset restoration matters more than speed.
+- Keep output gain conservative when breeding or mutating snapshots.
+- Test MIDI note ranges before a live set.
 
-### Automation
+### AI Automation
 
-1. **Record in Direct mode:** Clean automation curves
-2. **Switch modes after:** Apply physics to recorded automation
-3. **Use AI:** Let AI assistants create complex automation patterns
+- Prefer semantic profile tools over raw `set_parameter` calls.
+- Use `dry_run` for first-time AI actions.
+- Keep rollback snapshot IDs until you decide the result is safe.
+- Avoid automating bypass, mute, preset, license, or quality-mode controls.
 
-### Workflow
+### Troubleshooting While Learning
 
-1. **Save often:** Plugin state saves with your project
-2. **Name your snapshots:** Remember what each sound represents
-3. **Document successful breeds:** Some combinations are worth remembering
+If nothing changes when you morph:
 
-### Troubleshooting
-
-1. **No sound:** Check hosted plugin is loaded and receiving MIDI
-2. **Parameters not changing:** Some plugins don't expose all parameters
-3. **CPU spikes:** Reduce physics complexity or increase buffer size
-4. **MCP won't connect:** Check firewall and port availability
-
----
-
-## Keyboard Shortcuts
-
-Currently, More-Phi does not have keyboard shortcuts. All interaction is via mouse, MIDI, or MCP.
-
----
-
-## Further Reading
-
-- [API Reference](API_REFERENCE.md) - For developers and AI integration
-- [Architecture](ARCHITECTURE.md) - Technical details
-- [Developer Guide](DEVELOPER_GUIDE.md) - Building and contributing
+1. Confirm a hosted plugin is loaded.
+2. Capture at least two snapshots.
+3. Confirm the hosted plugin has continuous parameters.
+4. Disable Bypass.
+5. Check that audio or MIDI is reaching the track.

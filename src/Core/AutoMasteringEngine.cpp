@@ -17,7 +17,7 @@ AutoMasteringEngine::~AutoMasteringEngine()
     eqTranslator_.stop();
 }
 
-void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize)
+void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool startIntelligence)
 {
     sampleRate_ = sampleRate;
     blockSize_  = maxBlockSize;
@@ -29,18 +29,26 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize)
     stereo_.prepare(sampleRate, maxBlockSize);
     exciter_.prepare(sampleRate, maxBlockSize);
     limiter_.prepare(sampleRate, maxBlockSize);
+    analysisTruePeak_.prepare(sampleRate, maxBlockSize);
     lufs_.prepare(sampleRate, maxBlockSize);
     normalizer_.prepare(sampleRate, lufs_);
+    spectrumAnalyzer_.prepare(sampleRate, maxBlockSize);
+    stereoFieldAnalyzer_.prepare(sampleRate, maxBlockSize);
+    meterWindow_.reset();
+    analysisElapsedSeconds_ = 0.0;
+    analysisSamplesSinceWindowSample_ = 0;
 
     // Pre-allocate band buffers
     for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
         bandBuffers_[b].setSize(2, maxBlockSize);
 
     // Wire intelligence layer
-    neuralComp_.prepare(dynamics_, sampleRate);
-    neuralComp_.start();
-
-    genreClassifier_.start();
+    if (startIntelligence)
+    {
+        neuralComp_.prepare(dynamics_, sampleRate);
+        neuralComp_.start();
+        genreClassifier_.start();
+    }
 
     eqTranslator_.setUpdateCallback([this](int band, const AdaptiveEQ::BandParams& p)
     {
@@ -62,8 +70,13 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize)
     // Apply genre warm-start defaults immediately
     eqTranslator_.applyHeuristicWarmStart("neutral");
 
-    // Start the 10 Hz orchestration timer
-    startTimerHz(10);
+    // Start the 10 Hz orchestration timer only for the autonomous mastering
+    // engine. Hosted-plugin metering uses analyzeBlock() and must not start
+    // background plan updates.
+    if (startIntelligence)
+        startTimerHz(10);
+    else
+        stopTimer();
 }
 
 void AutoMasteringEngine::reset() noexcept
@@ -74,8 +87,15 @@ void AutoMasteringEngine::reset() noexcept
     stereo_.reset();
     exciter_.reset();
     limiter_.reset();
+    analysisTruePeak_.reset();
     lufs_.reset();
     normalizer_.reset();
+    meterWindow_.reset();
+    spectrumAnalyzer_.reset();
+    stereoFieldAnalyzer_.reset();
+    smoothedSpectralTilt_ = 0.0f;
+    analysisElapsedSeconds_ = 0.0;
+    analysisSamplesSinceWindowSample_ = 0;
     for (auto& b : bandBuffers_)
         b.clear();
 }
@@ -134,6 +154,7 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
 
     // ── Stage 8: Brickwall limiter ────────────────────────────────────────
     limiter_.processBlock(buf);
+    analysisTruePeak_.processBlock(buf);
 
     // ── Stage 9: LUFS metering ────────────────────────────────────────────
     lufs_.processBlock(buf.getArrayOfReadPointers(), buf.getNumChannels(), buf.getNumSamples());
@@ -144,8 +165,88 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     // ── Stage 11: M/S decode ──────────────────────────────────────────────
     MSMatrix::decodeBuffer(buf);
 
+    spectrumAnalyzer_.processBlock(buf);
+    stereoFieldAnalyzer_.processBlock(buf);
+    updateAnalysisWindow(buf);
+
     // ── Mono compatibility check (accumulate; check fires on message thread)
     monoChecker_.accumulateSamples(buf);
+}
+
+void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept
+{
+    const int ns  = buf.getNumSamples();
+    const int nch = buf.getNumChannels();
+    if (ns == 0 || nch == 0)
+        return;
+
+    lufs_.processBlock(buf.getArrayOfReadPointers(), nch, ns);
+    analysisTruePeak_.processBlock(buf);
+    spectrumAnalyzer_.processBlock(buf);
+    stereoFieldAnalyzer_.processBlock(buf);
+    updateAnalysisWindow(buf);
+}
+
+void AutoMasteringEngine::updateAnalysisWindow(const juce::AudioBuffer<float>& buf) noexcept
+{
+    const int ns = buf.getNumSamples();
+    const int nch = buf.getNumChannels();
+    if (ns <= 0 || nch <= 0 || sampleRate_ <= 0.0)
+        return;
+
+    double sumSquares = 0.0;
+    int sampleCount = 0;
+    for (int ch = 0; ch < nch; ++ch)
+    {
+        const float* data = buf.getReadPointer(ch);
+        for (int i = 0; i < ns; ++i)
+        {
+            const double v = static_cast<double>(data[i]);
+            sumSquares += v * v;
+            ++sampleCount;
+        }
+    }
+
+    analysisElapsedSeconds_ += static_cast<double>(ns) / sampleRate_;
+    analysisSamplesSinceWindowSample_ += ns;
+
+    const int sampleInterval = std::max(1, static_cast<int>(sampleRate_ * 0.1));
+    if (analysisSamplesSinceWindowSample_ < sampleInterval)
+        return;
+
+    const int samplesToEmit = analysisSamplesSinceWindowSample_ / sampleInterval;
+    analysisSamplesSinceWindowSample_ %= sampleInterval;
+
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrum;
+    const bool hasSpectrum = spectrumAnalyzer_.getSnapshot(spectrum);
+
+    StereoFieldAnalyzer::StereoFieldSnapshot stereo;
+    const bool hasStereo = stereoFieldAnalyzer_.getSnapshot(stereo);
+
+    MeterWindowAccumulator::MeterSample sample;
+    sample.timestampSeconds = analysisElapsedSeconds_;
+    sample.rms = sampleCount > 0
+        ? static_cast<float>(std::sqrt(sumSquares / static_cast<double>(sampleCount)))
+        : 0.0f;
+    sample.lufsMomentary = getLUFSMomentary();
+    sample.lufsShortTerm = getLUFSShortTerm();
+    sample.lufsIntegrated = getLUFSIntegrated();
+    sample.lra = getLRA();
+    sample.truePeakDBTP = getTruePeak_dBTP();
+    sample.limiterGRDB = getLimiterGainReductionDB();
+    sample.spectralCentroidHz = hasSpectrum ? spectrum.spectralCentroid : 0.0f;
+    sample.spectralTiltDBPerOctave = hasSpectrum ? spectrum.spectralTilt : 0.0f;
+    sample.stereoWidth = hasStereo ? stereo.stereoWidth : 0.0f;
+    sample.midBandCorrelation = hasStereo ? stereo.correlation[2] : 0.0f;
+
+    for (int emitted = 0; emitted < samplesToEmit; ++emitted)
+    {
+        const int intervalsFromEnd = samplesToEmit - emitted - 1;
+        sample.timestampSeconds = analysisElapsedSeconds_
+            - static_cast<double>(analysisSamplesSinceWindowSample_
+                + intervalsFromEnd * sampleInterval) / sampleRate_;
+        meterWindow_.pushSample(sample);
+    }
 }
 
 void AutoMasteringEngine::timerCallback()
@@ -155,6 +256,22 @@ void AutoMasteringEngine::timerCallback()
     // Every 1 tick (100ms): update loudness normalizer correction gain
     normalizer_.updateCorrectionGain();
 
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrumSnapshot;
+    if (spectrumAnalyzer_.getSnapshot(spectrumSnapshot) && spectrumSnapshot.frameIndex > 0)
+    {
+        constexpr float smoothing = 0.1f;
+        smoothedSpectralTilt_ += smoothing * (spectrumSnapshot.spectralTilt - smoothedSpectralTilt_);
+    }
+
+    float correlationMS = 0.7f;
+    StereoFieldAnalyzer::StereoFieldSnapshot stereoSnapshot;
+    if (stereoFieldAnalyzer_.getSnapshot(stereoSnapshot) && stereoSnapshot.frameIndex > 0)
+    {
+        correlationMS = stereoSnapshot.correlation[2] < 0.0f
+            ? stereoSnapshot.correlation[2]
+            : std::clamp(1.0f - stereoSnapshot.stereoWidth, 0.0f, 1.0f);
+    }
+
     // Every 300 ticks (30s): run chain planner
     if (tickCount_ % plannerUpdateInterval_ == 0)
     {
@@ -162,7 +279,7 @@ void AutoMasteringEngine::timerCallback()
         const int   genre = genreClassifier_.getTopGenre();
 
         // Run on this timer callback (message thread) — non-blocking heuristic
-        chainPlanner_.executePlan(genre, lra, 0.f, 0.7f);
+        chainPlanner_.executePlan(genre, lra, smoothedSpectralTilt_, correlationMS);
     }
 }
 

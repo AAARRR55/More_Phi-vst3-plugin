@@ -18,6 +18,10 @@ endif()
 
 # ── Unit test executable ────────────────────────────────────────────────────────
 # Legacy Morphy-era tests under tests/src are intentionally excluded.
+option(MORE_PHI_BUILD_COMPREHENSIVE_E2E
+       "Build the generated comprehensive VST3 E2E suite. Off by default because it tracks experimental APIs."
+       OFF)
+
 add_executable(MorePhiTests
     Unit/test_more_phi_unit.cpp
     Unit/TestPhysicsAndGenetic.cpp
@@ -28,6 +32,7 @@ add_executable(MorePhiTests
     Unit/TestLLMSettings.cpp
     Unit/TestLLMSettingsStore.cpp
     Unit/TestLLMConnectionValidator.cpp
+    Unit/TestLLMChatClient.cpp
     Unit/TestLLMSettingsDialog.cpp
     Unit/TestOfflineBatchRenderer.cpp
     Unit/AudioBufferPoolTests.cpp
@@ -36,6 +41,10 @@ add_executable(MorePhiTests
     Integration/TestPluginLifecycle.cpp
     Integration/TestMCPIntegration.cpp
     Integration/TestDatasetIntegration.cpp
+    Integration/TestUserManualFeatureSurface.cpp
+    Integration/TestVST3ParameterAutomation.cpp
+    Integration/TestVST3MidiAndSidechain.cpp
+    Integration/TestVST3AudioSignalAccuracy.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
@@ -59,12 +68,18 @@ add_executable(MorePhiTests
     Unit/TestE2ESignalPath.cpp
     # Module 7: AI / MCP Server (P2)
     Unit/TestMCPServerUnit.cpp
+    Unit/TestAutomationControlPlane.cpp
     # Ozone 11 mastering integration
     Unit/TestOzoneIntegration.cpp
     # Realtime mastering analysis
+    Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
 )
+
+if(MORE_PHI_BUILD_COMPREHENSIVE_E2E)
+    target_sources(MorePhiTests PRIVATE Integration/TestVST3ComprehensiveE2E.cpp)
+endif()
 
 # Link the compiled plugin objects in (shared) so the test binary has access
 # to ParameterState, LockFreeQueue, InterpolationEngine, SnapshotBank
@@ -174,14 +189,34 @@ if(MORE_PHI_BUILD_BENCHMARKS)
     endif()
 endif()
 
-# VST3 validation (optional, needs vst3_validator on PATH)
-if(WIN32)
+# VST3 validation (optional, needs external validator tooling)
+if(TARGET MorePhi_VST3)
+    set(MORE_PHI_VST3_VALIDATION_PLUGIN
+        "$<TARGET_GENEX_EVAL:MorePhi_VST3,$<TARGET_PROPERTY:MorePhi_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
+
     find_program(VST3_VALIDATOR_EXE vst3_validator)
-    if(VST3_VALIDATOR_EXE)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(VST3_VALIDATOR_EXE AND Python3_Interpreter_FOUND)
         add_test(NAME VST3Validation
-            COMMAND ${VST3_VALIDATOR_EXE} -r $<TARGET_FILE:MorePhi_VST3>
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/scripts/run_vst3_validator.py
+                --validator ${VST3_VALIDATOR_EXE}
+                --plugin ${MORE_PHI_VST3_VALIDATION_PLUGIN}
+                --output ${CMAKE_BINARY_DIR}/vst3_validator_results.json
+                --junit ${CMAKE_BINARY_DIR}/vst3_validator_junit.xml
+                --strict
         )
-        set_tests_properties(VST3Validation PROPERTIES TIMEOUT 120 LABELS validation)
+        set_tests_properties(VST3Validation PROPERTIES TIMEOUT 300 LABELS validation)
+    endif()
+
+    find_program(PLUGINVAL_EXE pluginval)
+    if(PLUGINVAL_EXE)
+        add_test(NAME PluginvalValidation
+            COMMAND ${PLUGINVAL_EXE}
+                --strictness-level 5
+                --validate ${MORE_PHI_VST3_VALIDATION_PLUGIN}
+        )
+        set_tests_properties(PluginvalValidation PROPERTIES TIMEOUT 300 LABELS validation)
     endif()
 endif()
 

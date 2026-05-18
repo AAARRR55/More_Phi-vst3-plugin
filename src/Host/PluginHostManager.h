@@ -29,6 +29,13 @@ public:
     void unloadPlugin() override;
     bool hasPlugin() const override { return hostedPluginPtr_.load(std::memory_order_acquire) != nullptr; }
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
+
+    /**
+     * Forward the owning DAW playhead to the hosted plugin.
+     * Some hosted processors use this to determine whether transport is
+     * running and to populate VST3 process context for analysis features.
+     */
+    void setPlayHead(juce::AudioPlayHead* playHead) noexcept;
     
     juce::AudioPluginInstance* getPlugin() override { return hostedPluginPtr_.load(std::memory_order_acquire); }
     const juce::AudioPluginInstance* getPlugin() const override { return hostedPluginPtr_.load(std::memory_order_acquire); }
@@ -139,6 +146,7 @@ private:
     static constexpr int MAX_EXCEPTION_LOG_ENTRIES = 4;
     std::atomic<int> exceptionLogCursor_{0};
     std::array<std::atomic<const char*>, MAX_EXCEPTION_LOG_ENTRIES> exceptionLog_{};
+    std::atomic<juce::AudioPlayHead*> playHead_{nullptr};
 
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;

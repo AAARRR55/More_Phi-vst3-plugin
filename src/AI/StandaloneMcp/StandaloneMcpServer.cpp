@@ -89,12 +89,55 @@ double optionalNumber(const json& args, const char* key, double fallback)
     return args[key].get<double>();
 }
 
+ToolCallOutcome assistantResultInvalid(std::string message)
+{
+    return {json{
+        {"success", false},
+        {"error", "assistant_result_invalid"},
+        {"message", std::move(message)},
+        {"apply_result", {
+            {"applied", false},
+            {"requested_count", 0},
+            {"applied_count", 0},
+            {"parameters", json::array()},
+            {"errors", json::array({{
+                {"code", "assistant_result_invalid"},
+                {"message", "AssistantResult parameters were missing or malformed."}
+            }})}
+        }}
+    }, true};
+}
+
+ToolCallOutcome parseAssistantApplyArgs(const json& body, AssistantParameterApplyArgs& out)
+{
+    if (!body.contains("parameters") || !body["parameters"].is_array())
+        return assistantResultInvalid("parameters array is missing.");
+
+    for (const auto& item : body["parameters"])
+    {
+        if (!item.is_object() || !item.contains("index") || !item["index"].is_number_integer()
+            || !item.contains("value") || !item["value"].is_number())
+        {
+            return assistantResultInvalid("parameters entries must contain integer index and numeric value.");
+        }
+
+        out.parameters.push_back({
+            item["index"].get<int>(),
+            item["value"].get<double>()
+        });
+    }
+
+    return {json{{"success", true}}, false};
+}
+
 } // namespace
 
 StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> backendIn,
-                                         std::unique_ptr<IZotopeIPCDiscovery> ipcDiscoveryIn)
+                                         std::unique_ptr<IZotopeIPCDiscovery> ipcDiscoveryIn,
+                                         std::unique_ptr<IZotopeIPCAssistant> ipcAssistantIn)
     : backend(std::move(backendIn)),
-      ipcDiscovery(std::move(ipcDiscoveryIn))
+      ipcDiscovery(std::move(ipcDiscoveryIn)),
+      ipcAssistant(std::move(ipcAssistantIn))
 {
     tools = {
         {
@@ -227,6 +270,61 @@ StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> bac
                 {"required", {"output_path"}}
             },
             {{"title", "Dump iZotope IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+        },
+        {
+            "izotope_ipc_capture",
+            "Capture iZotope IPC Diffs",
+            "Sample a bounded read-only IPC memory window and record byte changes for reverse-engineering Assistant activity.",
+            {
+                {"type", "object"},
+                {"properties", {
+                    {"offset", integerProperty("Byte offset within the mapped segment.", 0, 0)},
+                    {"size_bytes", integerProperty("Number of bytes to sample, capped by the backend.", 1, 4096)},
+                    {"duration_ms", integerProperty("Total live capture duration. Use 0 with baseline_base64 for one-shot diff.", 0, 2000)},
+                    {"interval_ms", integerProperty("Delay between live samples.", 1, 25)},
+                    {"max_changes", integerProperty("Maximum changed samples to record before stopping.", 1, 64)},
+                    {"max_ranges_per_change", integerProperty("Maximum changed byte ranges stored for each changed sample.", 1, 64)},
+                    {"max_frames", integerProperty("Maximum candidate IZOT frames reported per changed sample.", 0, 16)},
+                    {"baseline_base64", stringProperty("Optional previous snapshot bytes for one-shot before/after diffing.")},
+                    {"output_path", stringProperty("Optional local JSONL file path for changed-sample events.")},
+                    {"include_changed_bytes", {
+                        {"type", "boolean"},
+                        {"default", false},
+                        {"description", "Include previous/current hex snippets for changed byte ranges."}
+                    }}
+                }}
+            },
+            {{"title", "Capture iZotope IPC Diffs"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+        },
+        {
+            "ozone_run_assistant",
+            "Run Ozone Assistant via IPC",
+            "Experimental Windows-first tool that injects an AssistantRequest into a manifest-defined iZotope IPC ring buffer and waits for AssistantResult parameter decisions.",
+            {
+                {"type", "object"},
+                {"properties", {
+                    {"schema_path", stringProperty("Path to the versioned IPC schema manifest JSON. Falls back to IZOTOPE_IPC_SCHEMA_PATH.")},
+                    {"segment_name", stringProperty("Explicit shared-memory segment name. Falls back to IZOTOPE_IPC_SEGMENT_NAME or manifest template + daw_process_id.")},
+                    {"daw_process_id", integerProperty("Optional DAW process ID for manifest segment_name_template replacement.", 1, 0)},
+                    {"ozone_instance_id", integerProperty("Optional explicit Ozone IPC instance ID.", 1, 0)},
+                    {"plugin_name_query", stringProperty("Case-insensitive registry name query used when ozone_instance_id is not supplied.")},
+                    {"timeout_ms", integerProperty("Maximum time to wait for AssistantResult.", 0, 10000)},
+                    {"poll_interval_ms", integerProperty("Delay between AssistantResult polling attempts.", 1, 10)},
+                    {"observer_id", integerProperty("Synthetic observer sender ID for AssistantRequest.", 1, 0x7fffffff)},
+                    {"allow_unsafe_write", {
+                        {"type", "boolean"},
+                        {"default", false},
+                        {"description", "Must be true, with MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE=1, before any IPC write occurs."}
+                    }},
+                    {"apply_result", {
+                        {"type", "boolean"},
+                        {"default", false},
+                        {"description", "Apply AssistantResult parameter decisions to the hosted Ozone plugin. Defaults to capture-only."}
+                    }}
+                }},
+                {"required", {"allow_unsafe_write"}}
+            },
+            {{"title", "Run Ozone Assistant via IPC"}, {"destructiveHint", true}, {"idempotentHint", false}, {"openWorldHint", true}}
         }
     };
 }
@@ -432,6 +530,102 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
             parsed.sizeBytes = *size;
 
         outcome = ipcDiscovery->dump(parsed);
+    }
+    else if (name == "izotope_ipc_capture")
+    {
+        if (args.contains("offset") && !optionalSize(args, "offset"))
+            return invalidParams(id, "offset must be a non-negative integer.");
+        if (args.contains("size_bytes") && !optionalSize(args, "size_bytes"))
+            return invalidParams(id, "size_bytes must be a non-negative integer.");
+        if (args.contains("duration_ms") && !optionalSize(args, "duration_ms"))
+            return invalidParams(id, "duration_ms must be a non-negative integer.");
+        if (args.contains("interval_ms") && !optionalSize(args, "interval_ms"))
+            return invalidParams(id, "interval_ms must be a non-negative integer.");
+        if (args.contains("max_changes") && !optionalSize(args, "max_changes"))
+            return invalidParams(id, "max_changes must be a non-negative integer.");
+        if (args.contains("max_ranges_per_change") && !optionalSize(args, "max_ranges_per_change"))
+            return invalidParams(id, "max_ranges_per_change must be a non-negative integer.");
+        if (args.contains("max_frames") && !optionalSize(args, "max_frames"))
+            return invalidParams(id, "max_frames must be a non-negative integer.");
+
+        IpcCaptureArgs parsed;
+        if (auto offset = optionalSize(args, "offset"))
+            parsed.offset = *offset;
+        if (auto size = optionalSize(args, "size_bytes"))
+            parsed.sizeBytes = *size;
+        if (auto duration = optionalSize(args, "duration_ms"))
+            parsed.durationMs = *duration;
+        if (auto interval = optionalSize(args, "interval_ms"))
+            parsed.intervalMs = *interval;
+        if (auto maxChanges = optionalSize(args, "max_changes"))
+            parsed.maxChanges = *maxChanges;
+        if (auto maxRanges = optionalSize(args, "max_ranges_per_change"))
+            parsed.maxRangesPerChange = *maxRanges;
+        if (auto maxFrames = optionalSize(args, "max_frames"))
+            parsed.maxFrames = *maxFrames;
+
+        parsed.baselineBase64 = optionalString(args, "baseline_base64");
+        parsed.outputPath = optionalString(args, "output_path");
+        parsed.includeChangedBytes = optionalBool(args, "include_changed_bytes", false);
+
+        outcome = ipcDiscovery->capture(parsed);
+    }
+    else if (name == "ozone_run_assistant")
+    {
+        if (args.contains("daw_process_id") && !optionalSize(args, "daw_process_id"))
+            return invalidParams(id, "daw_process_id must be a non-negative integer.");
+        if (args.contains("ozone_instance_id") && !optionalSize(args, "ozone_instance_id"))
+            return invalidParams(id, "ozone_instance_id must be a non-negative integer.");
+        if (args.contains("timeout_ms") && !optionalSize(args, "timeout_ms"))
+            return invalidParams(id, "timeout_ms must be a non-negative integer.");
+        if (args.contains("poll_interval_ms") && !optionalSize(args, "poll_interval_ms"))
+            return invalidParams(id, "poll_interval_ms must be a non-negative integer.");
+        if (args.contains("observer_id") && !optionalSize(args, "observer_id"))
+            return invalidParams(id, "observer_id must be a non-negative integer.");
+        if (args.contains("allow_unsafe_write") && !args["allow_unsafe_write"].is_boolean())
+            return invalidParams(id, "allow_unsafe_write must be a boolean.");
+        if (args.contains("apply_result") && !args["apply_result"].is_boolean())
+            return invalidParams(id, "apply_result must be a boolean.");
+
+        IpcAssistantRunArgs parsed;
+        parsed.schemaPath = optionalString(args, "schema_path");
+        parsed.segmentName = optionalString(args, "segment_name");
+        if (auto pid = optionalSize(args, "daw_process_id"))
+            parsed.dawProcessId = static_cast<uint32_t>(*pid);
+        if (auto ozoneId = optionalSize(args, "ozone_instance_id"))
+            parsed.ozoneInstanceId = static_cast<uint32_t>(*ozoneId);
+        if (auto query = optionalString(args, "plugin_name_query"); query && !query->empty())
+            parsed.pluginNameQuery = *query;
+        if (auto timeout = optionalSize(args, "timeout_ms"))
+            parsed.timeoutMs = *timeout;
+        if (auto interval = optionalSize(args, "poll_interval_ms"))
+            parsed.pollIntervalMs = *interval;
+        if (auto observer = optionalSize(args, "observer_id"))
+            parsed.observerId = static_cast<uint32_t>(*observer);
+        parsed.allowUnsafeWrite = optionalBool(args, "allow_unsafe_write", false);
+
+        outcome = ipcAssistant->runAssistant(parsed);
+        if (!outcome.isError && optionalBool(args, "apply_result", false))
+        {
+            AssistantParameterApplyArgs applyArgs;
+            auto parseOutcome = parseAssistantApplyArgs(outcome.body, applyArgs);
+            if (parseOutcome.isError)
+            {
+                parseOutcome.body["parameters"] = outcome.body.value("parameters", json::array());
+                outcome = std::move(parseOutcome);
+            }
+            else
+            {
+                auto applyOutcome = backend->applyAssistantParameters(applyArgs);
+                outcome.body["apply_result"] = applyOutcome.body.value("apply_result", json::object());
+                if (applyOutcome.isError)
+                {
+                    outcome.body["success"] = false;
+                    outcome.body["error"] = applyOutcome.body.value("error", "assistant_apply_failed");
+                    outcome.isError = true;
+                }
+            }
+        }
     }
 
     return JsonRpc::makeToolResult(id, outcome.body, outcome.isError);

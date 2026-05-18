@@ -551,6 +551,57 @@ TEST_CASE("ValidationEngine: coverage metrics in valid range", "[dataset][valida
     REQUIRE(coverage.gridCoverage <= 1.0f);
 }
 
+TEST_CASE("ValidationEngine: transfer evaluation reports unavailable instead of simulated accuracy", "[dataset][validation]")
+{
+    ValidationEngine engine;
+    const auto syntheticDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("morephi_synth_transfer_unit", "");
+    const auto realDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getNonexistentChildFile("morephi_real_transfer_unit", "");
+
+    syntheticDir.createDirectory();
+    realDir.createDirectory();
+
+    auto syntheticFile = syntheticDir.getChildFile("synthetic.json");
+    auto realFile = realDir.getChildFile("real.json");
+    syntheticFile.replaceWithText("{}");
+    realFile.replaceWithText("{}");
+
+    const auto result = engine.evaluateTransferLearning(syntheticDir, realDir, "classification");
+
+    REQUIRE_FALSE(result.evaluationAvailable);
+    REQUIRE(result.status == "unavailable");
+    REQUIRE(result.method == "not_run");
+    REQUIRE(result.reason == "transfer_evaluation_requires_real_benchmark_pipeline");
+    REQUIRE(result.zeroShotAccuracy == 0.0f);
+    REQUIRE(result.fineTunedAccuracy == 0.0f);
+    REQUIRE(result.performanceGap == 0.0f);
+    REQUIRE(result.syntheticSamplesUsed == 1);
+    REQUIRE(result.realSamplesUsed == 1);
+
+    syntheticDir.deleteRecursively();
+    realDir.deleteRecursively();
+}
+
+TEST_CASE("ValidationEngine: report exposes weighted heuristic score metadata", "[dataset][validation]")
+{
+    ValidationEngine engine;
+    std::vector<std::vector<float>> samples;
+    for (int i = 0; i < 20; ++i)
+        samples.push_back({ static_cast<float>(i) / 20.0f, static_cast<float>(i % 5) / 5.0f });
+
+    const auto report = engine.generateReport(samples, samples);
+
+    REQUIRE(report.scoreMethod == "weighted_heuristic_score");
+    REQUIRE(report.overallScore == report.weightedHeuristicScore);
+    REQUIRE(report.scoreWeights.volumeCoverage == 0.15f);
+    REQUIRE(report.scoreWeights.gridCoverage == 0.15f);
+    REQUIRE(report.scoreWeights.boundaryCoverage == 0.10f);
+    REQUIRE(report.scoreWeights.ksTests == 0.20f);
+    REQUIRE(report.scoreWeights.mmdTests == 0.15f);
+    REQUIRE(report.scoreWeights.wassersteinTests == 0.15f);
+}
+
 // =============================================================================
 //  DatasetOrganizer Tests
 // =============================================================================

@@ -56,7 +56,8 @@ void AIStatusPanel::timerCallback()
 
     portLabel_.setText(running ? "Port: " + juce::String(mcp.getPort()) : "",
                        juce::dontSendNotification);
-    clientsLabel_.setText(running ? "Clients: " + juce::String(mcp.getConnectedClients()) : "",
+    const int clients = mcp.getConnectedClients();
+    clientsLabel_.setText(running && clients > 0 ? "Ext.clients: " + juce::String(clients) : "",
                            juce::dontSendNotification);
 
     toggleBtn_.setButtonText(running ? "Stop MCP" : "Start MCP");

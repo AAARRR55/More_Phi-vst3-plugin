@@ -11,6 +11,7 @@ import json
 import sys
 import os
 import argparse
+import shutil
 from pathlib import Path
 from typing import Dict, List, Any
 import xml.etree.ElementTree as ET
@@ -33,12 +34,19 @@ class VST3Validator:
 
     def _find_validator(self) -> str:
         """Attempt to locate the VST3 validator automatically."""
+        for executable_name in ("vst3_validator", "vst3validator"):
+            validator_on_path = shutil.which(executable_name)
+            if validator_on_path:
+                return validator_on_path
+
         possible_paths = []
 
         if sys.platform == "win32":
             possible_paths = [
                 "C:/Program Files/Steinberg/VST3SDK/vst3_validator.exe",
                 "C:/Program Files (x86)/Steinberg/VST3SDK/vst3_validator.exe",
+                "C:/Program Files/Steinberg/VST3SDK/validator/vst3_validator.exe",
+                "C:/Program Files (x86)/Steinberg/VST3SDK/validator/vst3_validator.exe",
             ]
         elif sys.platform == "darwin":
             possible_paths = [
@@ -196,12 +204,17 @@ class VST3Validator:
         """
         root = ET.Element("testsuite")
         root.set("name", "VST3 Validation")
-        root.set("tests", str(len(results.get("tests", []))))
+        validation_tests = results.get("tests", [])
+        error_messages = list(results.get("errors", []))
+        if results.get("error"):
+            error_messages.insert(0, str(results["error"]))
+
+        root.set("tests", str(len(validation_tests) + len(error_messages)))
         root.set("failures", str(results.get("summary", {}).get("failed", 0)))
-        root.set("errors", str(results.get("summary", {}).get("errors", 0)))
+        root.set("errors", str(len(error_messages)))
 
         # Add test cases
-        for test in results.get("tests", []):
+        for test in validation_tests:
             testcase = ET.SubElement(root, "testcase")
             testcase.set("name", test["name"])
             testcase.set("classname", "VST3Validator")
@@ -211,7 +224,7 @@ class VST3Validator:
                 failure.set("message", "Test failed")
 
         # Add errors as test cases
-        for error in results.get("errors", []):
+        for error in error_messages:
             testcase = ET.SubElement(root, "testcase")
             testcase.set("name", f"Error: {error}")
             error_elem = ET.SubElement(testcase, "error")
@@ -228,15 +241,15 @@ class VST3Validator:
         print("="*60)
 
         status = results.get("status", "unknown")
-        status_symbol = {
-            "passed": "✓",
-            "failed": "✗",
-            "warning": "⚠",
-            "error": "✗",
-            "timeout": "⏱"
-        }.get(status, "?")
+        status_label = {
+            "passed": "PASSED",
+            "failed": "FAILED",
+            "warning": "WARNING",
+            "error": "ERROR",
+            "timeout": "TIMEOUT"
+        }.get(status, str(status).upper())
 
-        print(f"\nOverall Status: {status_symbol} {status.upper()}")
+        print(f"\nOverall Status: {status_label}")
 
         summary = results.get("summary", {})
         if summary:

@@ -4,8 +4,11 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cmath>
 #include <cstring>
 #include <thread>
 
@@ -30,12 +33,12 @@ constexpr size_t kMaxMappedSize = 64u * 1024u * 1024u;
 constexpr uint32_t kDefaultMagicIzot = 0x495A4F54u;
 constexpr uint32_t kBroadcastTarget = 0xffffffffu;
 
-ToolCallOutcome makeToolError(std::string error, std::string message = {})
+ToolCallOutcome makeToolError(std::string code, std::string message = {})
 {
-    json body{{"success", false}, {"error", std::move(error)}};
-    if (!message.empty())
-        body["message"] = std::move(message);
-    return {body, true};
+    if (message.empty())
+        message = code;
+
+    return {json{{"success", false}, {"error", std::move(message)}, {"code", std::move(code)}}, true};
 }
 
 std::string envString(const char* key)
@@ -171,10 +174,12 @@ uint32_t magicFromString(const std::string& text)
     if (text.size() != 4)
         return 0;
 
-    return (static_cast<uint32_t>(static_cast<uint8_t>(text[0])) << 24u)
-        | (static_cast<uint32_t>(static_cast<uint8_t>(text[1])) << 16u)
-        | (static_cast<uint32_t>(static_cast<uint8_t>(text[2])) << 8u)
-        | static_cast<uint32_t>(static_cast<uint8_t>(text[3]));
+    // String magic is a wire-byte literal. Numeric manifest magic remains an
+    // exact uint32 value for native fourcc-style schemas.
+    return static_cast<uint32_t>(static_cast<uint8_t>(text[0]))
+        | (static_cast<uint32_t>(static_cast<uint8_t>(text[1])) << 8u)
+        | (static_cast<uint32_t>(static_cast<uint8_t>(text[2])) << 16u)
+        | (static_cast<uint32_t>(static_cast<uint8_t>(text[3])) << 24u);
 }
 
 struct FrameLayout
@@ -416,12 +421,126 @@ bool validateMappedRange(size_t mappedSize, size_t offset, size_t bytes)
     return offset <= mappedSize && bytes <= mappedSize - offset;
 }
 
+bool validateFrameRange(const FrameLayout& frame, size_t frameSize)
+{
+    return frame.magicOffset + 4 <= frameSize
+        && frame.versionOffset + 2 <= frameSize
+        && frame.messageTypeOffset + 2 <= frameSize
+        && frame.senderIdOffset + 4 <= frameSize
+        && frame.targetIdOffset + 4 <= frameSize
+        && frame.payloadSizeOffset + 4 <= frameSize
+        && frame.timestampOffset + 8 <= frameSize;
+}
+
+bool validateManifestRanges(size_t mappedSize, const IpcSchemaManifest& manifest, std::string& error)
+{
+    if (!validateMappedRange(mappedSize, manifest.ring.readIndexOffset, 4)
+        || !validateMappedRange(mappedSize, manifest.ring.writeIndexOffset, 4)
+        || !validateMappedRange(mappedSize, manifest.ring.dataOffset, manifest.ring.capacityBytes)
+        || !validateMappedRange(mappedSize, manifest.registry.offset,
+            manifest.registry.entrySize * manifest.registry.maxEntries))
+    {
+        error = "schema bounds invalid: manifest layout exceeds mapped_size_bytes";
+        return false;
+    }
+
+    return true;
+}
+
+void useDefaultFlatManifest(IpcSchemaManifest& manifest)
+{
+    manifest.mappedSizeBytes = 4u * 1024u * 1024u;
+    manifest.ring.readIndexOffset = 256;
+    manifest.ring.writeIndexOffset = 260;
+    manifest.ring.dataOffset = 512;
+    manifest.ring.capacityBytes = manifest.mappedSizeBytes - manifest.ring.dataOffset;
+    manifest.registry.offset = 264;
+    manifest.registry.entrySize = 16;
+    manifest.registry.maxEntries = 32;
+    manifest.registry.idOffset = 0;
+    manifest.registry.nameOffset = 8;
+    manifest.registry.nameSize = 8;
+}
+
+bool parseFlatManifest(const json& root, IpcSchemaManifest& manifest, std::string& error)
+{
+    useDefaultFlatManifest(manifest);
+
+    const bool hasMappedSize = root.contains("mapped_size_bytes");
+    if (hasMappedSize && !readSizeField(root, "mapped_size_bytes", manifest.mappedSizeBytes, error))
+        return false;
+
+    if (root.contains("segment_name_template") && root["segment_name_template"].is_string())
+        manifest.segmentNameTemplate = root["segment_name_template"].get<std::string>();
+
+    if (!readOptionalSizeField(root, "frameHdrSize", manifest.frame.headerSize, error))
+        return false;
+
+    if (!validateFrameRange(manifest.frame, manifest.frame.headerSize))
+    {
+        error = "schema bounds invalid: frame header does not contain all required fields";
+        return false;
+    }
+
+    if (!readOptionalSizeField(root, "readPtrOff", manifest.ring.readIndexOffset, error)
+        || !readOptionalSizeField(root, "writePtrOff", manifest.ring.writeIndexOffset, error)
+        || !readOptionalSizeField(root, "pluginRegOff", manifest.registry.offset, error)
+        || !readOptionalSizeField(root, "ringOff", manifest.ring.dataOffset, error)
+        || !readOptionalSizeField(root, "ringSize", manifest.ring.capacityBytes, error)
+        || !readOptionalSizeField(root, "entrySize", manifest.registry.entrySize, error)
+        || !readOptionalSizeField(root, "maxEntries", manifest.registry.maxEntries, error))
+        return false;
+
+    manifest.registry.idOffset = 0;
+    manifest.registry.nameOffset = 8;
+    if (manifest.registry.entrySize <= manifest.registry.nameOffset)
+    {
+        error = "manifest registry entrySize is too small for flat layout";
+        return false;
+    }
+    manifest.registry.nameSize = manifest.registry.entrySize - manifest.registry.nameOffset;
+
+    if (root.contains("activeOffset"))
+    {
+        size_t activeOffset = 0;
+        if (!readSizeField(root, "activeOffset", activeOffset, error))
+            return false;
+        manifest.registry.activeOffset = activeOffset;
+    }
+    if (root.contains("activeValue") && !readU32Field(root, "activeValue", manifest.registry.activeValue, error))
+        return false;
+
+    if (manifest.ring.capacityBytes == 0 || manifest.registry.maxEntries == 0)
+    {
+        error = "manifest flat ring and registry sizes must be non-zero";
+        return false;
+    }
+
+    if (!hasMappedSize)
+    {
+        manifest.mappedSizeBytes = std::max({
+            manifest.ring.readIndexOffset + 4,
+            manifest.ring.writeIndexOffset + 4,
+            manifest.ring.dataOffset + manifest.ring.capacityBytes,
+            manifest.registry.offset + manifest.registry.entrySize * manifest.registry.maxEntries
+        });
+    }
+
+    if (manifest.mappedSizeBytes == 0 || manifest.mappedSizeBytes > kMaxMappedSize)
+    {
+        error = "schema bounds invalid: manifest mapped_size_bytes must be between 1 and 67108864";
+        return false;
+    }
+
+    return validateManifestRanges(manifest.mappedSizeBytes, manifest, error);
+}
+
 bool parseManifestFile(const std::string& path, IpcSchemaManifest& manifest, std::string& error)
 {
     if (path.empty())
     {
-        error = "schema_path or IZOTOPE_IPC_SCHEMA_PATH is required.";
-        return false;
+        useDefaultFlatManifest(manifest);
+        return true;
     }
 
     const juce::File file{juce::String(path)};
@@ -442,13 +561,23 @@ bool parseManifestFile(const std::string& path, IpcSchemaManifest& manifest, std
         return false;
     }
 
+    if (root.contains("readPtrOff") || root.contains("writePtrOff") || root.contains("ringOff"))
+        return parseFlatManifest(root, manifest, error);
+
+    if (!root.contains("frame") || !root.contains("registry") || !root.contains("ring")
+        || !root.contains("assistant_result") || !root.contains("messages"))
+    {
+        error = "schema bounds invalid: manifest missing required layout objects";
+        return false;
+    }
+
     if (root.contains("mapped_size_bytes")
         && !readSizeField(root, "mapped_size_bytes", manifest.mappedSizeBytes, error))
         return false;
 
     if (manifest.mappedSizeBytes == 0 || manifest.mappedSizeBytes > kMaxMappedSize)
     {
-        error = "manifest mapped_size_bytes must be between 1 and 67108864";
+        error = "schema bounds invalid: manifest mapped_size_bytes must be between 1 and 67108864";
         return false;
     }
 
@@ -462,17 +591,7 @@ bool parseManifestFile(const std::string& path, IpcSchemaManifest& manifest, std
         || !parseMessages(root, manifest.messages, error))
         return false;
 
-    if (!validateMappedRange(manifest.mappedSizeBytes, manifest.ring.readIndexOffset, 4)
-        || !validateMappedRange(manifest.mappedSizeBytes, manifest.ring.writeIndexOffset, 4)
-        || !validateMappedRange(manifest.mappedSizeBytes, manifest.ring.dataOffset, manifest.ring.capacityBytes)
-        || !validateMappedRange(manifest.mappedSizeBytes, manifest.registry.offset,
-            manifest.registry.entrySize * manifest.registry.maxEntries))
-    {
-        error = "manifest layout exceeds mapped_size_bytes";
-        return false;
-    }
-
-    return true;
+    return validateManifestRanges(manifest.mappedSizeBytes, manifest, error);
 }
 
 std::string applyPidTemplate(std::string templ, uint32_t pid)
@@ -644,17 +763,6 @@ std::optional<uint32_t> findPluginInstance(const uint8_t* bytes,
     return std::nullopt;
 }
 
-bool validateFrameRange(const FrameLayout& frame, size_t frameSize)
-{
-    return frame.magicOffset + 4 <= frameSize
-        && frame.versionOffset + 2 <= frameSize
-        && frame.messageTypeOffset + 2 <= frameSize
-        && frame.senderIdOffset + 4 <= frameSize
-        && frame.targetIdOffset + 4 <= frameSize
-        && frame.payloadSizeOffset + 4 <= frameSize
-        && frame.timestampOffset + 8 <= frameSize;
-}
-
 std::vector<uint8_t> makeFrame(const FrameLayout& layout,
                                uint16_t messageType,
                                uint32_t senderId,
@@ -676,25 +784,47 @@ std::vector<uint8_t> makeFrame(const FrameLayout& layout,
     return frame;
 }
 
-bool writeFrameToRing(uint8_t* bytes,
-                      size_t mappedSize,
-                      const RingLayout& ring,
-                      const std::vector<uint8_t>& frame)
+size_t ringDistance(size_t start, size_t end, size_t capacity)
 {
-    if (frame.empty() || frame.size() > ring.capacityBytes)
-        return false;
-    if (!validateMappedRange(mappedSize, ring.writeIndexOffset, 4)
-        || !validateMappedRange(mappedSize, ring.dataOffset, ring.capacityBytes))
-        return false;
+    return end >= start ? end - start : capacity - start + end;
+}
 
+enum class RingWriteResult
+{
+    ok,
+    invalid,
+    full
+};
+
+RingWriteResult writeFrameToRing(uint8_t* bytes,
+                                 size_t mappedSize,
+                                 const RingLayout& ring,
+                                 const std::vector<uint8_t>& frame,
+                                 uint32_t* publishedWriteIndex = nullptr)
+{
+    if (frame.empty() || frame.size() > ring.capacityBytes || ring.capacityBytes < 2)
+        return RingWriteResult::invalid;
+    if (!validateMappedRange(mappedSize, ring.writeIndexOffset, 4)
+        || !validateMappedRange(mappedSize, ring.readIndexOffset, 4)
+        || !validateMappedRange(mappedSize, ring.dataOffset, ring.capacityBytes))
+        return RingWriteResult::invalid;
+
+    const auto readIndex = readU32LE(bytes + ring.readIndexOffset) % static_cast<uint32_t>(ring.capacityBytes);
     const auto writeIndex = readU32LE(bytes + ring.writeIndexOffset) % static_cast<uint32_t>(ring.capacityBytes);
+    const auto usedBytes = ringDistance(readIndex, writeIndex, ring.capacityBytes);
+    const auto freeBytes = ring.capacityBytes - usedBytes - 1;
+    if (frame.size() > freeBytes)
+        return RingWriteResult::full;
+
     for (size_t i = 0; i < frame.size(); ++i)
         bytes[ring.dataOffset + ((writeIndex + i) % ring.capacityBytes)] = frame[i];
 
     const auto nextWriteIndex = static_cast<uint32_t>((writeIndex + frame.size()) % ring.capacityBytes);
     std::atomic_thread_fence(std::memory_order_release);
     writeU32LE(bytes + ring.writeIndexOffset, nextWriteIndex);
-    return true;
+    if (publishedWriteIndex != nullptr)
+        *publishedWriteIndex = nextWriteIndex;
+    return RingWriteResult::ok;
 }
 
 std::vector<uint8_t> copyFromRing(const uint8_t* bytes,
@@ -708,6 +838,59 @@ std::vector<uint8_t> copyFromRing(const uint8_t* bytes,
     return copied;
 }
 
+uint32_t readU32LE(const std::array<uint8_t, 4>& bytes)
+{
+    return readU32LE(bytes.data());
+}
+
+json magicSampleAtRingOffset(const uint8_t* bytes,
+                             const RingLayout& ring,
+                             const FrameLayout& frame,
+                             uint32_t ringOffset)
+{
+    std::array<uint8_t, 4> magicBytes {};
+    const auto magicRingOffset = (static_cast<size_t>(ringOffset) + frame.magicOffset) % ring.capacityBytes;
+    for (size_t i = 0; i < magicBytes.size(); ++i)
+        magicBytes[i] = bytes[ring.dataOffset + ((magicRingOffset + i) % ring.capacityBytes)];
+
+    const auto value = readU32LE(magicBytes);
+    return json{
+        {"ring_offset", ringOffset},
+        {"bytes", json::array({
+            static_cast<int>(magicBytes[0]),
+            static_cast<int>(magicBytes[1]),
+            static_cast<int>(magicBytes[2]),
+            static_cast<int>(magicBytes[3])
+        })},
+        {"value_u32", value},
+        {"value_hex", juce::String::formatted("0x%08X", value).toStdString()}
+    };
+}
+
+json makeMagicProbe(const uint8_t* bytes,
+                    const IpcSchemaManifest& manifest,
+                    uint32_t requestStartIndex,
+                    uint32_t requestWatermark)
+{
+    const auto readIndex = readU32LE(bytes + manifest.ring.readIndexOffset)
+        % static_cast<uint32_t>(manifest.ring.capacityBytes);
+    const auto writeIndex = readU32LE(bytes + manifest.ring.writeIndexOffset)
+        % static_cast<uint32_t>(manifest.ring.capacityBytes);
+
+    return json{
+        {"expected_magic_u32", manifest.frame.magic},
+        {"expected_magic_hex", juce::String::formatted("0x%08X", manifest.frame.magic).toStdString()},
+        {"read_index", readIndex},
+        {"write_index", writeIndex},
+        {"request_start_index", requestStartIndex},
+        {"request_watermark", requestWatermark},
+        {"ring_zero_magic", magicSampleAtRingOffset(bytes, manifest.ring, manifest.frame, 0)},
+        {"read_index_magic", magicSampleAtRingOffset(bytes, manifest.ring, manifest.frame, readIndex)},
+        {"request_frame_magic", magicSampleAtRingOffset(bytes, manifest.ring, manifest.frame, requestStartIndex)},
+        {"next_candidate_magic", magicSampleAtRingOffset(bytes, manifest.ring, manifest.frame, requestWatermark)}
+    };
+}
+
 struct ParsedFrame
 {
     uint16_t messageType = 0;
@@ -717,24 +900,53 @@ struct ParsedFrame
     std::vector<uint8_t> payload;
 };
 
-std::optional<ParsedFrame> parseFrameAtRingOffset(const uint8_t* bytes,
-                                                  const RingLayout& ring,
-                                                  const FrameLayout& layout,
-                                                  size_t ringOffset)
+struct ParseFrameOutcome
 {
+    std::optional<ParsedFrame> frame;
+    size_t consumedBytes = 1;
+    bool incomplete = false;
+    bool oversized = false;
+};
+
+ParseFrameOutcome parseFrameAtRingOffset(const uint8_t* bytes,
+                                         const RingLayout& ring,
+                                         const FrameLayout& layout,
+                                         size_t ringOffset,
+                                         size_t availableBytes)
+{
+    ParseFrameOutcome outcome;
+
     if (layout.headerSize > ring.capacityBytes)
-        return std::nullopt;
+    {
+        outcome.oversized = true;
+        return outcome;
+    }
+    if (availableBytes < layout.headerSize)
+    {
+        outcome.incomplete = true;
+        return outcome;
+    }
 
     const auto header = copyFromRing(bytes, ring, ringOffset, layout.headerSize);
     if (!validateFrameRange(layout, header.size()))
-        return std::nullopt;
+        return outcome;
     if (readU32LE(header.data() + layout.magicOffset) != layout.magic)
-        return std::nullopt;
+        return outcome;
+    if (readU16LE(header.data() + layout.versionOffset) != layout.version)
+        return outcome;
 
     const auto payloadSize = readU32LE(header.data() + layout.payloadSizeOffset);
     const auto totalSize = layout.headerSize + static_cast<size_t>(payloadSize);
     if (totalSize > ring.capacityBytes)
-        return std::nullopt;
+    {
+        outcome.oversized = true;
+        return outcome;
+    }
+    if (availableBytes < totalSize)
+    {
+        outcome.incomplete = true;
+        return outcome;
+    }
 
     ParsedFrame parsed;
     parsed.messageType = readU16LE(header.data() + layout.messageTypeOffset);
@@ -742,7 +954,15 @@ std::optional<ParsedFrame> parseFrameAtRingOffset(const uint8_t* bytes,
     parsed.targetId = readU32LE(header.data() + layout.targetIdOffset);
     parsed.payloadSize = payloadSize;
     parsed.payload = copyFromRing(bytes, ring, ringOffset + layout.headerSize, payloadSize);
-    return parsed;
+
+    outcome.frame = std::move(parsed);
+    outcome.consumedBytes = totalSize;
+    return outcome;
+}
+
+double roundedJsonValue(float value)
+{
+    return std::round(static_cast<double>(value) * 1000000.0) / 1000000.0;
 }
 
 json parseAssistantResultPayload(const std::vector<uint8_t>& payload,
@@ -767,11 +987,33 @@ json parseAssistantResultPayload(const std::vector<uint8_t>& payload,
         }
 
         const auto paramIndex = readU16LE(payload.data() + entryBase + layout.paramIndexOffset);
-        const auto value = readF32LE(payload.data() + entryBase + layout.valueOffset);
+        const auto value = roundedJsonValue(readF32LE(payload.data() + entryBase + layout.valueOffset));
         params.push_back({{"index", paramIndex}, {"value", value}});
     }
 
     return params;
+}
+
+bool clearRegistryObserver(uint8_t* bytes,
+                           size_t mappedSize,
+                           const RegistryLayout& registry,
+                           uint32_t observerId)
+{
+    if (!validateMappedRange(mappedSize, registry.offset, registry.entrySize * registry.maxEntries))
+        return false;
+
+    bool cleared = false;
+    for (size_t i = 0; i < registry.maxEntries; ++i)
+    {
+        auto* entry = bytes + registry.offset + i * registry.entrySize;
+        if (readU32LE(entry + registry.idOffset) != observerId)
+            continue;
+
+        std::fill(entry, entry + registry.entrySize, static_cast<uint8_t>(0));
+        cleared = true;
+    }
+
+    return cleared;
 }
 
 bool writeObserverDeregister(uint8_t* bytes,
@@ -790,36 +1032,69 @@ bool writeObserverDeregister(uint8_t* bytes,
         ozoneId,
         {});
 
-    return writeFrameToRing(bytes, mappedSize, manifest.ring, frame);
+    return writeFrameToRing(bytes, mappedSize, manifest.ring, frame) == RingWriteResult::ok;
 }
+
 std::optional<json> findAssistantResult(const uint8_t* bytes,
                                         const IpcSchemaManifest& manifest,
                                         uint32_t ozoneId,
                                         uint32_t observerId,
+                                        uint32_t requestWatermark,
                                         std::string& error)
 {
-    for (size_t offset = 0; offset + manifest.frame.headerSize <= manifest.ring.capacityBytes; ++offset)
+    if (!validateMappedRange(manifest.mappedSizeBytes, manifest.ring.readIndexOffset, 4)
+        || !validateMappedRange(manifest.mappedSizeBytes, manifest.ring.writeIndexOffset, 4))
     {
-        const auto frame = parseFrameAtRingOffset(bytes, manifest.ring, manifest.frame, offset);
-        if (!frame)
-            continue;
-        if (frame->messageType != manifest.messages.assistantResult)
-            continue;
-        if (frame->senderId != ozoneId)
-            continue;
-        if (frame->targetId != observerId && frame->targetId != kBroadcastTarget && frame->targetId != 0)
-            continue;
+        error = "schema bounds invalid: ring pointer offsets exceed mapped segment.";
+        return std::nullopt;
+    }
 
-        auto params = parseAssistantResultPayload(frame->payload, manifest.assistantResult, error);
-        if (!error.empty())
+    // Ozone owns the ring read pointer. The MCP server only observes the
+    // immutable post-request window and never writes readIndexOffset.
+    juce::ignoreUnused(readU32LE(bytes + manifest.ring.readIndexOffset));
+    const auto scanStart = requestWatermark % static_cast<uint32_t>(manifest.ring.capacityBytes);
+    const auto writeIndex = readU32LE(bytes + manifest.ring.writeIndexOffset)
+        % static_cast<uint32_t>(manifest.ring.capacityBytes);
+    const auto available = ringDistance(scanStart, writeIndex, manifest.ring.capacityBytes);
+
+    size_t scanned = 0;
+    while (scanned < available)
+    {
+        const auto offset = (static_cast<size_t>(scanStart) + scanned) % manifest.ring.capacityBytes;
+        const auto remaining = available - scanned;
+        auto parsed = parseFrameAtRingOffset(bytes, manifest.ring, manifest.frame, offset, remaining);
+
+        if (parsed.oversized)
+        {
+            error = "oversized AssistantResult frame payload claim exceeds the IPC ring capacity.";
             return std::nullopt;
+        }
+        if (parsed.incomplete)
+            return std::nullopt;
+        if (!parsed.frame)
+        {
+            scanned += 1;
+            continue;
+        }
 
-        return json{
-            {"source_instance_id", frame->senderId},
-            {"target_instance_id", frame->targetId},
-            {"parameter_count", params.size()},
-            {"parameters", params}
-        };
+        const auto consumedBytes = std::max<size_t>(1, parsed.consumedBytes);
+        if (parsed.frame->messageType == manifest.messages.assistantResult
+            && parsed.frame->senderId == ozoneId
+            && (parsed.frame->targetId == observerId || parsed.frame->targetId == kBroadcastTarget || parsed.frame->targetId == 0))
+        {
+            auto params = parseAssistantResultPayload(parsed.frame->payload, manifest.assistantResult, error);
+            if (!error.empty())
+                return std::nullopt;
+
+            return json{
+                {"source_instance_id", parsed.frame->senderId},
+                {"target_instance_id", parsed.frame->targetId},
+                {"parameter_count", params.size()},
+                {"parameters", params}
+            };
+        }
+
+        scanned += consumedBytes;
     }
 
     return std::nullopt;
@@ -835,7 +1110,7 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     {
         return makeToolError(
             "ipc_write_disabled",
-            "Active iZotope IPC writes require MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE=1 and allow_unsafe_write=true.");
+            "Active iZotope IPC write is blocked; set MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE=1 and allow_unsafe_write=true to enable it.");
     }
 
     const auto schemaPath = args.schemaPath.value_or(envString("IZOTOPE_IPC_SCHEMA_PATH"));
@@ -888,8 +1163,27 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
         *ozoneId,
         {});
 
-    if (!writeFrameToRing(attached.bytes, attached.size, manifest.ring, requestFrame))
+    const auto requestStartIndex = readU32LE(attached.bytes + manifest.ring.writeIndexOffset)
+        % static_cast<uint32_t>(manifest.ring.capacityBytes);
+    uint32_t requestWatermark = 0;
+    const auto requestWriteResult = writeFrameToRing(
+        attached.bytes,
+        attached.size,
+        manifest.ring,
+        requestFrame,
+        &requestWatermark);
+    if (requestWriteResult == RingWriteResult::full)
+        return makeToolError("ipc_ring_full", "Could not write AssistantRequest frame because the manifest-defined ring buffer is full.");
+    if (requestWriteResult != RingWriteResult::ok)
         return makeToolError("assistant_request_write_failed", "Could not write AssistantRequest frame to manifest-defined ring buffer.");
+
+    std::optional<json> magicProbe;
+    if (envEnabled("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC"))
+    {
+        magicProbe = makeMagicProbe(attached.bytes, manifest, requestStartIndex, requestWatermark);
+        juce::Logger::writeToLog("MorePhi iZotope IPC magic probe: "
+            + juce::String(magicProbe->dump()));
+    }
 
     const auto start = std::chrono::steady_clock::now();
     auto elapsedMs = [&]() -> size_t
@@ -898,36 +1192,65 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
             std::chrono::steady_clock::now() - start).count());
     };
 
-    while (elapsedMs() <= args.timeoutMs)
+    const bool singleShot = args.timeoutMs == 0;
+    const auto deadline = start + std::chrono::milliseconds(args.timeoutMs);
+
+    for (;;)
     {
         std::string parseError;
-        if (auto result = findAssistantResult(attached.bytes, manifest, *ozoneId, args.observerId, parseError))
+        if (auto result = findAssistantResult(attached.bytes, manifest, *ozoneId, args.observerId, requestWatermark, parseError))
         {
-            if (!writeObserverDeregister(attached.bytes, attached.size, manifest, args.observerId, *ozoneId))
-                return makeToolError("observer_deregister_failed", "Could not write observer deregistration frame to manifest-defined ring buffer.");
+            const bool observerDeregisterSent = writeObserverDeregister(
+                attached.bytes,
+                attached.size,
+                manifest,
+                args.observerId,
+                *ozoneId);
+            clearRegistryObserver(attached.bytes, attached.size, manifest.registry, args.observerId);
 
-            return {json{
+            auto successBody = json{
                 {"success", true},
                 {"segment_name", segmentName},
                 {"schema_path", schemaPath},
                 {"platform", attached.fake ? "test" : platformName()},
                 {"observer_id", args.observerId},
+                {"observer_deregister_sent", observerDeregisterSent},
                 {"ozone_instance_id", *ozoneId},
                 {"elapsed_ms", elapsedMs()},
-                {"assistant_result", *result}
-            }, false};
+                {"assistant_result", *result},
+                {"parameters", result->value("parameters", json::array())}
+            };
+            if (magicProbe)
+                successBody["ipc_magic_probe"] = *magicProbe;
+            return {std::move(successBody), false};
         }
 
         if (!parseError.empty())
-            return makeToolError("assistant_result_parse_failed", parseError);
+        {
+            auto error = makeToolError("assistant_result_parse_failed", parseError);
+            if (magicProbe)
+                error.body["ipc_magic_probe"] = *magicProbe;
+            return error;
+        }
 
-        if (args.timeoutMs == 0)
+        if (singleShot)
             break;
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(std::max<size_t>(1, args.pollIntervalMs)));
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline)
+            break;
+
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+        const auto sleepMs = std::min<size_t>(
+            std::max<size_t>(1, args.pollIntervalMs),
+            static_cast<size_t>(std::max<int64_t>(1, remainingMs)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
     }
 
-    return makeToolError("assistant_timeout", "Timed out waiting for AssistantResult frame.");
+    auto timeout = makeToolError("assistant_timeout", "timeout waiting for AssistantResult frame after " + std::to_string(args.timeoutMs) + " ms.");
+    if (magicProbe)
+        timeout.body["ipc_magic_probe"] = *magicProbe;
+    return timeout;
 }
 
 void IZotopeIPCAssistant::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)

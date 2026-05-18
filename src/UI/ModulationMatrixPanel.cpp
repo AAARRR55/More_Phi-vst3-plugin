@@ -187,16 +187,18 @@ void RouteRow::rebuildDestCombo()
 
 void RouteRow::resized()
 {
-    // Row is 24px tall. Layout: [20] toggle | [4 gap] | [120] src | [4] | [120] dest | [4] | [40] knob
+    // Layout adapts for compact editors with the parameter drawer open.
     auto area = getLocalBounds().reduced(0, 2);
 
     enabledToggle_.setBounds(area.removeFromLeft(20));
     area.removeFromLeft(4);
-    sourceCombo_.setBounds(area.removeFromLeft(120));
+    const int knobW = juce::jlimit(34, 42, area.getWidth() / 8);
+    const int sourceW = juce::jlimit(76, 120, area.getWidth() / 3);
+    sourceCombo_.setBounds(area.removeFromLeft(sourceW));
     area.removeFromLeft(4);
-    destCombo_.setBounds(area.removeFromLeft(120));
+    destCombo_.setBounds(area.removeFromLeft(juce::jmax(70, area.getWidth() - knobW - 4)));
     area.removeFromLeft(4);
-    depthKnob_.setBounds(area.removeFromLeft(40));
+    depthKnob_.setBounds(area.removeFromLeft(knobW));
 }
 
 void RouteRow::refresh()
@@ -284,7 +286,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 {
     // Label "LFO N"
     label_.setText("LFO " + juce::String(lfoIndex_ + 1), juce::dontSendNotification);
-    label_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
+    label_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
     label_.setColour(juce::Label::textColourId, colours::headerText);
     label_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(label_);
@@ -318,7 +320,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 
     // "Hz" unit label
     rateLabel_.setText("Hz", juce::dontSendNotification);
-    rateLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 7.5f, juce::Font::plain)));
+    rateLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
     rateLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     rateLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(rateLabel_);
@@ -333,17 +335,20 @@ void LFOPanel::paint(juce::Graphics& g)
 
 void LFOPanel::resized()
 {
-    // Each LFO panel is ~42px tall.
-    // Layout: [30] label | [4] | [70] shape | [4] | [35] knob | [2] | [remaining] Hz label
     auto area = getLocalBounds().reduced(4, 2);
 
-    label_.setBounds(area.removeFromLeft(30));
+    const int labelW = juce::jlimit(34, 46, area.getWidth() / 5);
+    const int knobW = juce::jlimit(36, 44, area.getWidth() / 5);
+    const int rateW = 24;
+    const int shapeW = juce::jlimit(62, 86, area.getWidth() - labelW - knobW - rateW - 14);
+
+    label_.setBounds(area.removeFromLeft(labelW));
     area.removeFromLeft(4);
-    shapeCombo_.setBounds(area.removeFromLeft(70));
+    shapeCombo_.setBounds(area.removeFromLeft(shapeW));
     area.removeFromLeft(4);
-    rateKnob_.setBounds(area.removeFromLeft(35));
+    rateKnob_.setBounds(area.removeFromLeft(knobW));
     area.removeFromLeft(2);
-    rateLabel_.setBounds(area.removeFromLeft(20));
+    rateLabel_.setBounds(area.removeFromLeft(rateW));
 }
 
 void LFOPanel::onShapeChanged()
@@ -366,7 +371,7 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
 {
     // ---- Section header: route list ----
     routeListHeader_.setText("Routes", juce::dontSendNotification);
-    routeListHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
+    routeListHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
     routeListHeader_.setColour(juce::Label::textColourId, colours::headerText);
     routeListHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeListHeader_);
@@ -387,14 +392,14 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
     addAndMakeVisible(clearAllBtn_);
 
     // ---- Route count label ----
-    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.0f, juce::Font::plain)));
+    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
     routeCountLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     routeCountLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeCountLabel_);
 
     // ---- Section header: LFOs ----
     lfoHeader_.setText("LFOs", juce::dontSendNotification);
-    lfoHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::bold)));
+    lfoHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
     lfoHeader_.setColour(juce::Label::textColourId, colours::headerText);
     lfoHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(lfoHeader_);
@@ -456,12 +461,12 @@ void ModulationMatrixPanel::resized()
 
     // ---- Left: route list ----
 
-    // Header label (12px)
-    routeListHeader_.setBounds(leftArea.removeFromTop(12));
+    // Header label
+    routeListHeader_.setBounds(leftArea.removeFromTop(16));
     leftArea.removeFromTop(2);
 
     // Bottom strip: [Add Route 70] [4] [Remove 60] [4] [Clear All 60] [4] [count label rest]
-    auto bottomStrip = leftArea.removeFromBottom(20);
+    auto bottomStrip = leftArea.removeFromBottom(24);
     leftArea.removeFromBottom(2);  // gap between viewport and buttons
 
     addRouteBtn_.setBounds(bottomStrip.removeFromLeft(70));
@@ -478,7 +483,7 @@ void ModulationMatrixPanel::resized()
     // Keep the routeContainer_ as wide as the viewport content area,
     // and tall enough to hold all rows (24px each).
     const int containerWidth  = leftArea.getWidth() - routeViewport_.getScrollBarThickness() - 2;
-    const int rowHeight       = 24;
+    const int rowHeight       = 28;
     const int containerHeight = juce::jmax(leftArea.getHeight(),
                                             static_cast<int>(routeRows_.size()) * rowHeight);
     routeContainer_.setBounds(0, 0, containerWidth, containerHeight);
@@ -489,7 +494,7 @@ void ModulationMatrixPanel::resized()
 
     // ---- Right: LFO panels ----
 
-    lfoHeader_.setBounds(rightArea.removeFromTop(12));
+    lfoHeader_.setBounds(rightArea.removeFromTop(16));
     rightArea.removeFromTop(2);
 
     const int lfoHeight = rightArea.getHeight() / 4;
@@ -589,7 +594,7 @@ void ModulationMatrixPanel::onAddRoute()
     resized();
 
     // Scroll to the new row
-    routeViewport_.setViewPosition(0, newId * 24);
+    routeViewport_.setViewPosition(0, newId * 28);
 }
 
 void ModulationMatrixPanel::onRemoveRoute()

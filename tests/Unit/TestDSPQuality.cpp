@@ -22,12 +22,15 @@
 #include "Core/SnapshotBank.h"
 #include "Core/MorphProcessor.h"
 #include "Core/LatencyManager.h"
+#include "Host/IPluginHostManager.h"
 
 #include <juce_dsp/juce_dsp.h>
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 #include <vector>
 #include <complex>
@@ -87,6 +90,69 @@ float rmsRatio_dB(float signal, float noise)
     if (noise < 1e-30f) return 120.0f;
     return 20.0f * std::log10(signal / noise);
 }
+
+uint64_t checksumNormalizedValues(const std::vector<float>& values)
+{
+    uint64_t hash = 1469598103934665603ull;
+    for (float value : values)
+    {
+        const auto quantized = static_cast<uint32_t>(
+            std::lround(std::clamp(value, 0.0f, 1.0f) * 1000000.0f));
+        hash ^= quantized;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+class SnapshotSuiteBridge final : public IParameterBridge
+{
+public:
+    explicit SnapshotSuiteBridge(int parameterCount)
+        : values(static_cast<size_t>(parameterCount), 0.0f)
+    {
+    }
+
+    int getParameterCount() const override { return static_cast<int>(values.size()); }
+
+    float getParameterNormalized(int index) const override
+    {
+        return values.at(static_cast<size_t>(index));
+    }
+
+    void setParameterNormalized(int index, float value) override
+    {
+        values.at(static_cast<size_t>(index)) = value;
+    }
+
+    juce::String getParameterName(int index) const override
+    {
+        return "Param " + juce::String(index);
+    }
+
+    void applyParameterState(const std::vector<float>& newValues) override
+    {
+        applyParameterState(newValues.data(), static_cast<int>(newValues.size()));
+    }
+
+    void applyParameterState(const float* newValues, int count) override
+    {
+        ++applyCount;
+        const int safeCount = juce::jmin(count, static_cast<int>(values.size()));
+        for (int i = 0; i < safeCount; ++i)
+            values[static_cast<size_t>(i)] = newValues[i];
+    }
+
+    std::vector<float> captureParameterState() const override { return values; }
+    bool isDiscrete(int) const override { return false; }
+    std::vector<bool> getDiscreteMap() const override { return std::vector<bool>(values.size(), false); }
+    juce::String getParameterLabel(int) const override { return {}; }
+    juce::String getParameterDisplayValue(int index) const override { return juce::String(values.at(static_cast<size_t>(index))); }
+    float getParameterDefault(int) const override { return 0.5f; }
+    juce::StringArray getParameterValueStrings(int) const override { return {}; }
+
+    std::vector<float> values;
+    int applyCount = 0;
+};
 
 } // namespace
 
@@ -280,6 +346,101 @@ TEST_CASE("InterpolationEngine: 1D compute returns exact snapshot values at endp
         REQUIRE(atZero[p] == Approx(vA[p]).margin(0.01f));
         REQUIRE(atOne[p]  == Approx(vB[p]).margin(0.01f));
     }
+}
+
+TEST_CASE("Snapshot Suite: captures 12 slots, recalls by checksum, morphs adjacent slots, and handles empties", "[snapshot][suite]")
+{
+    constexpr int paramCount = 16;
+
+    SnapshotBank bank;
+    bank.prepare(paramCount);
+
+    REQUIRE_FALSE(bank.hasAnyOccupied());
+
+    // Empty bank and empty slot access must be safe.
+    std::vector<float> emptyOut(paramCount, 0.25f);
+    InterpolationEngine::compute1D(0.5f, bank, emptyOut);
+    for (float value : emptyOut)
+        REQUIRE(value == Approx(0.5f).margin(0.0001f));
+
+    MorphProcessor emptyMorph(bank);
+    emptyMorph.prepare(paramCount);
+    std::vector<float> unchanged(paramCount, 0.25f);
+    emptyMorph.process(0.5f, 0.5f, 0.5f, MorphSource::Fader, MorphMode::Direct, 1.0f / 60.0f, unchanged);
+    for (float value : unchanged)
+        REQUIRE(value == Approx(0.25f).margin(0.0001f));
+
+    std::array<std::vector<float>, SnapshotBank::NUM_SLOTS> expected{};
+    std::array<uint64_t, SnapshotBank::NUM_SLOTS> expectedChecksums{};
+
+    for (int slot = 0; slot < SnapshotBank::NUM_SLOTS; ++slot)
+    {
+        auto& values = expected[static_cast<size_t>(slot)];
+        values.resize(paramCount);
+        for (int p = 0; p < paramCount; ++p)
+        {
+            const int raw = (slot * 37 + p * 19 + 11) % 101;
+            values[static_cast<size_t>(p)] = static_cast<float>(raw) / 100.0f;
+        }
+
+        bank.captureValues(slot, values);
+        expectedChecksums[static_cast<size_t>(slot)] = checksumNormalizedValues(values);
+
+        std::vector<float> copied;
+        REQUIRE(bank.getSlotValuesCopy(slot, copied));
+        REQUIRE(copied.size() == static_cast<size_t>(paramCount));
+        REQUIRE(checksumNormalizedValues(copied) == expectedChecksums[static_cast<size_t>(slot)]);
+    }
+
+    for (int slot = 0; slot < SnapshotBank::NUM_SLOTS; ++slot)
+        REQUIRE(bank.isOccupied(slot));
+
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    REQUIRE(bank.getOccupiedSlots(occupied) == SnapshotBank::NUM_SLOTS);
+    for (int slot = 0; slot < SnapshotBank::NUM_SLOTS; ++slot)
+        REQUIRE(occupied[static_cast<size_t>(slot)] == slot);
+
+    SnapshotSuiteBridge bridge(paramCount);
+    for (int slot = 0; slot < SnapshotBank::NUM_SLOTS; ++slot)
+    {
+        bridge.values.assign(static_cast<size_t>(paramCount), 0.0f);
+        bridge.applyCount = 0;
+
+        bank.recallFast(slot, bridge);
+
+        REQUIRE(bridge.applyCount == 1);
+        REQUIRE(checksumNormalizedValues(bridge.values) == expectedChecksums[static_cast<size_t>(slot)]);
+    }
+
+    MorphProcessor morph(bank);
+    morph.prepare(paramCount);
+    morph.setSmoothingRate(0.0f);
+
+    for (int slot = 0; slot < SnapshotBank::NUM_SLOTS - 1; ++slot)
+    {
+        const float faderPos = (static_cast<float>(slot) + 0.5f)
+                             / static_cast<float>(SnapshotBank::NUM_SLOTS - 1);
+        std::vector<float> out(paramCount, 0.0f);
+        morph.process(0.5f, 0.5f, faderPos, MorphSource::Fader, MorphMode::Direct, 1.0f / 60.0f, out);
+
+        for (int p = 0; p < paramCount; ++p)
+        {
+            const float expectedMidpoint =
+                0.5f * (expected[static_cast<size_t>(slot)][static_cast<size_t>(p)]
+                      + expected[static_cast<size_t>(slot + 1)][static_cast<size_t>(p)]);
+            INFO("slot pair " << slot << "-" << (slot + 1) << ", param " << p);
+            REQUIRE(out[static_cast<size_t>(p)] == Approx(expectedMidpoint).margin(0.0001f));
+        }
+    }
+
+    bridge.values.assign(static_cast<size_t>(paramCount), 0.33f);
+    bridge.applyCount = 0;
+    bank.clearSlot(5);
+    REQUIRE_FALSE(bank.isOccupied(5));
+    REQUIRE_NOTHROW(bank.recallFast(5, bridge));
+    REQUIRE(bridge.applyCount == 0);
+    for (float value : bridge.values)
+        REQUIRE(value == Approx(0.33f).margin(0.0001f));
 }
 
 

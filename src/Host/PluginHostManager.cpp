@@ -80,6 +80,19 @@ void PluginHostManager::endExclusivePluginUse() noexcept
     exclusivePluginUseRequested_.store(false, std::memory_order_release);
 }
 
+void PluginHostManager::setPlayHead(juce::AudioPlayHead* playHead) noexcept
+{
+    const auto previousPlayHead = playHead_.exchange(playHead, std::memory_order_acq_rel);
+    if (previousPlayHead == playHead)
+        return;
+
+    if (auto* plugin = acquirePluginForUse())
+    {
+        plugin->setPlayHead(playHead);
+        releasePluginFromUse();
+    }
+}
+
 void PluginHostManager::prepare(double sampleRate, int blockSize, int numChannels)
 {
     const bool configurationChanged = !hasPreparedConfiguration_
@@ -101,6 +114,7 @@ void PluginHostManager::prepare(double sampleRate, int blockSize, int numChannel
     {
         try
         {
+            hostedPlugin->setPlayHead(playHead_.load(std::memory_order_acquire));
             hostedPlugin->enableAllBuses();
             hostedPlugin->prepareToPlay(sampleRate, blockSize);
         }
@@ -187,6 +201,7 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         // then prepare. For bridged plugins (yabridge), disabling buses can cause
         // mismatches between the host-side channel expectations and the Wine-side
         // shared memory layout, leading to memcpy crashes during processBlock.
+        newPlugin->setPlayHead(playHead_.load(std::memory_order_acquire));
         newPlugin->enableAllBuses();
         newPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
     }
@@ -262,6 +277,8 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         ~ScopedPluginUse() { owner_.releasePluginFromUse(); }
         PluginHostManager& owner_;
     } scopedUse(*this);
+
+    plugin->setPlayHead(playHead_.load(std::memory_order_acquire));
 
     // If suspended, pass-through silence — do NOT unload.
     if (suspended_.load(std::memory_order_relaxed))

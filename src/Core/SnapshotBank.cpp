@@ -8,7 +8,7 @@
  * via `(*slots_)[i]` / `for (auto& s : *slots_)`.
  */
 #include "SnapshotBank.h"
-#include "Host/ParameterBridge.h"
+#include "Host/IPluginHostManager.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <algorithm>
 
@@ -21,7 +21,7 @@ void SnapshotBank::prepare(int maxParamCount)
                               std::memory_order_release);
 }
 
-void SnapshotBank::capture(int slot, const ParameterBridge& bridge)
+void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
 {
     if (slot < 0 || slot >= NUM_SLOTS) return;
 
@@ -85,7 +85,7 @@ void SnapshotBank::captureValuesWithNames(int slot,
         paramNames_[slot].add(names[i]);
 }
 
-void SnapshotBank::recall(int slot, ParameterBridge& bridge) const
+void SnapshotBank::recall(int slot, IParameterBridge& bridge) const
 {
     if (slot < 0 || slot >= NUM_SLOTS) return;
 
@@ -99,7 +99,7 @@ void SnapshotBank::recall(int slot, ParameterBridge& bridge) const
         bridge.applyParameterState(recallScratch_.data(), parameterCount);
 }
 
-void SnapshotBank::recallFast(int slot, ParameterBridge& bridge) const
+void SnapshotBank::recallFast(int slot, IParameterBridge& bridge) const
 {
     // Same as recall() — applies normalized float params only.
     // Never applies opaque state chunks, so synthesizer notes sustain.

@@ -40,6 +40,7 @@
 #endif
 
 #include "Plugin/PluginProcessor.h"
+#include "AI/AutomationControlPlane.h"
 #include "AI/TrackAssistantStore.h"
 
 using Catch::Approx;
@@ -61,6 +62,25 @@ struct ScopedTrackAssistantStore
     ~ScopedTrackAssistantStore()
     {
         TrackAssistantStore::clearStoreDirectoryOverrideForTests();
+        directory.deleteRecursively();
+    }
+
+    juce::File directory;
+};
+
+struct ScopedAutomationStore
+{
+    explicit ScopedAutomationStore(const char* suffix)
+    {
+        directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getNonexistentChildFile(juce::String("morephi_automation_store_") + suffix, "");
+        directory.createDirectory();
+        AutomationRuntime::setStoreDirectoryOverrideForTests(directory);
+    }
+
+    ~ScopedAutomationStore()
+    {
+        AutomationRuntime::clearStoreDirectoryOverrideForTests();
         directory.deleteRecursively();
     }
 
@@ -212,6 +232,10 @@ bool waitForDeferredMCPServer(MorePhiProcessor& processor, int maxWaitMs = 3000)
     {
         juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
 
+#if MORE_PHI_TEST_MODE
+        processor.startPendingMCPServerForTesting();
+#endif
+
         const int port = processor.getMCPServer().getPort();
         if (port > 0 && processor.getMCPServer().isHealthy() && waitForServer(port, 50))
             return true;
@@ -357,12 +381,16 @@ TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[
     REQUIRE(listResponse["result"]["tools"].is_array());
 
     bool foundSummary = false;
+    bool foundIpcAssistant = false;
     for (const auto& tool : listResponse["result"]["tools"])
     {
         if (tool["name"].get<std::string>() == "analysis.get_summary")
             foundSummary = true;
+        if (tool["name"].get<std::string>() == "ozone_run_assistant")
+            foundIpcAssistant = true;
     }
     REQUIRE(foundSummary);
+    REQUIRE(foundIpcAssistant);
 
     const auto callResponse = sendRpc(client, rpcRequest(
         "tools/call",
@@ -380,11 +408,50 @@ TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[
     processor.releaseResources();
 }
 
+TEST_CASE("MCP tools/call can edit More-Phi runtime parameters", "[integration][mcp]")
+{
+    if (!localTcpProviderAvailable())
+        SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    ScopedAutomationStore scopedAutomation("edit");
+
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    REQUIRE(waitForDeferredMCPServer(processor));
+    const int port = processor.getMCPServer().getPort();
+    const auto token = processor.getMCPServer().getAuthToken();
+
+    SocketClient client;
+    REQUIRE(client.connectTo(port));
+    initializeSession(client, token);
+
+    const auto callResponse = sendRpc(client, rpcRequest(
+        "tools/call",
+        {
+            {"name", "more_phi.set_parameter"},
+            {"arguments", {
+                {"parameter_id", "bypass"},
+                {"value", 1.0}
+            }}
+        },
+        4));
+
+    REQUIRE(callResponse.contains("result"));
+    REQUIRE(callResponse["result"]["structuredContent"]["success"].get<bool>());
+    REQUIRE(callResponse["result"]["structuredContent"]["parameter_id"].get<std::string>() == "bypass");
+    REQUIRE_FALSE(callResponse["result"]["isError"].get<bool>());
+    REQUIRE(processor.getAPVTS().getParameter("bypass")->getValue() == Approx(1.0f));
+
+    processor.releaseResources();
+}
+
 TEST_CASE("MCP mastering render job can be started, polled, and selected", "[integration][mcp]")
 {
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
+    ScopedAutomationStore scopedAutomation("render");
     ScopedTrackAssistantStore scopedStore("render");
 
     const auto inputFile = createMCPRenderInputFile();
@@ -405,25 +472,50 @@ TEST_CASE("MCP mastering render job can be started, polled, and selected", "[int
     REQUIRE(client.connectTo(port));
     initializeSession(client, token);
 
-    const auto startResponse = sendRpc(client, rpcRequest(
+    json renderArguments{
+        {"dry_run", false},
+        {"allow_passthrough", true},
+        {"input_path", inputFile.getFullPathName().toStdString()},
+        {"output_path", outputDirectory.getFullPathName().toStdString()},
+        {"candidate_count", 1},
+        {"duration_seconds", 0.05},
+        {"block_size", 128},
+        {"channels", 2},
+        {"parallel_workers", 1}
+    };
+
+    auto startResponse = sendRpc(client, rpcRequest(
         "tools/call",
         {
             {"name", "mastering.render_batch"},
-            {"arguments", {
-                {"dry_run", false},
-                {"allow_passthrough", true},
-                {"input_path", inputFile.getFullPathName().toStdString()},
-                {"output_path", outputDirectory.getFullPathName().toStdString()},
-                {"candidate_count", 1},
-                {"duration_seconds", 0.05},
-                {"block_size", 128},
-                {"channels", 2},
-                {"parallel_workers", 1}
-            }}
+            {"arguments", renderArguments}
         },
         4));
 
     REQUIRE(startResponse.contains("result"));
+    if (startResponse["result"]["structuredContent"].value("approval_required", false))
+    {
+        const auto approvalId = startResponse["result"]["structuredContent"]["approval_request"]["id"].get<std::string>();
+        const auto approvalResponse = sendRpc(client, rpcRequest(
+            "tools/call",
+            {
+                {"name", "permission.approve"},
+                {"arguments", {{"approval_id", approvalId}}}
+            },
+            404));
+        REQUIRE(approvalResponse["result"]["structuredContent"]["success"].get<bool>());
+
+        renderArguments["approval_id"] = approvalId;
+        startResponse = sendRpc(client, rpcRequest(
+            "tools/call",
+            {
+                {"name", "mastering.render_batch"},
+                {"arguments", renderArguments}
+            },
+            405));
+        REQUIRE(startResponse.contains("result"));
+    }
+
     const auto jobId = startResponse["result"]["structuredContent"]["job_id"].get<std::string>();
     const auto trackId = startResponse["result"]["structuredContent"]["track_id"].get<std::string>();
     REQUIRE_FALSE(jobId.empty());
@@ -534,6 +626,8 @@ TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors"
 {
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
+
+    ScopedAutomationStore scopedAutomation("morph");
 
     MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);

@@ -1,6 +1,7 @@
 /* More-Phi — UI/SnapFader.cpp */
 #include "SnapFader.h"
 #include "Plugin/PluginProcessor.h"
+#include "UI/Bindings/ParameterBinding.h"
 
 namespace more_phi {
 
@@ -41,11 +42,12 @@ void SnapFader::paint(juce::Graphics& g)
             g.setColour(juce::Colour(0xff533483));
             g.fillRoundedRectangle(trackX - 8, markerY - 1.5f, 16, 3, 1.5f);
 
-            // Slot number
+            // Slot number — with minimum font size for readability
             g.setColour(juce::Colour(0xff8b95a5));
-            g.setFont(8.0f);
+            float slotFont = juce::jmax(bounds.getWidth() * 0.16f, 10.0f);
+            g.setFont(slotFont);
             g.drawText(juce::String(i + 1), static_cast<int>(trackX + 10),
-                       static_cast<int>(markerY - 6), 16, 12,
+                       static_cast<int>(markerY - 6), 20, 14,
                        juce::Justification::centredLeft);
             ++idx;
         }
@@ -96,6 +98,7 @@ void SnapFader::updateValue(float yPos)
     if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
         p->setValueNotifyingHost(normalised);
 
+    ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
     proc_.setMorphSource(1);  // Switch to fader mode
     repaint();
 }

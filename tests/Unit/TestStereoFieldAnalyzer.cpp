@@ -107,3 +107,18 @@ TEST_CASE("StereoFieldAnalyzer preserves side polarity in correlation", "[stereo
     CHECK(snapshot.correlation[2] < -0.85f);
     CHECK(snapshot.msEnergyRatio[2] == Approx(0.0625f).margin(0.035f));
 }
+
+TEST_CASE("StereoFieldAnalyzer exposes side-heavy content through M/S ratio", "[stereo-field][analysis]")
+{
+    StereoFieldAnalyzer analyzer;
+    analyzer.prepare(kSampleRate, kBlockSize);
+
+    feedMidSideSine(analyzer, 1000.0f, 2.0f, 24000);
+
+    StereoFieldAnalyzer::StereoFieldSnapshot snapshot;
+    REQUIRE(analyzer.getSnapshot(snapshot));
+
+    CHECK(snapshot.frameIndex > 0);
+    CHECK(snapshot.msEnergyRatio[2] == Approx(4.0f).margin(1.5f));
+    CHECK(snapshot.stereoWidth == Approx(2.0f).margin(0.45f));
+}

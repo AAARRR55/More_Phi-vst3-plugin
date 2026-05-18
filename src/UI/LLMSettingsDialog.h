@@ -35,6 +35,7 @@ private:
     void refreshBaseUrlEditability();
     void refreshButtonStates();
     void setStatusMessage(const juce::String& message, LLMValidationStatus status);
+    void clearSelectedProviderValidation();
 
     void fetchModels();
     void testConnection();

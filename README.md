@@ -182,6 +182,20 @@ More-Phi includes a built-in MCP (Model Context Protocol) server for AI integrat
 | `set_morph_position` | `x`, `y`, `fader`, `source` | Set XY pad or fader position with automation notification |
 | `get_morph_state` | - | Get current morph position and mode |
 
+### Analysis, Metering, and AI Claim Boundaries
+
+More-Phi's analysis tools expose deterministic DSP measurements and method metadata for scrutiny. They are useful for comparing levels, spectrum shape, stereo-field behavior, and rolling meter history, but they are not a certified laboratory measurement suite or a learned predictive mastering system.
+
+- Loudness values are lightweight BS.1770-style rolling/available-history estimates, not formal reference-vector certification.
+- True peak is reported as a `4x_polyphase_fir_estimate`.
+- Spectrum analysis uses `hann_window_fft_mono_sum`; anti-phase stereo content can cancel in this default view.
+- Stereo-field analysis is mid/side energy analysis with banded correlation and side-to-mid ratios, not a perceptual stereo-width predictor.
+- `analysis.capture_window` reports real rolling-window statistics when enough meter history exists; it does not silently replace an empty window with a single snapshot.
+- Mastering plans are deterministic `heuristic_rule_engine` recommendations with rule IDs and measured inputs, not learned model predictions or calibrated confidence scores.
+- Genre classifier inference is `unavailable`/`default_fallback` unless a real model backend is loaded.
+- Neural compressor inference is `unavailable`/`heuristic_fallback` unless a real inference backend is loaded.
+- Dataset validation exports separate KS, MMD, Wasserstein, and coverage metrics; any `weighted_heuristic_score` is a convenience summary, not an objective scientific validity score.
+
 ### Example JSON-RPC Request
 
 ```json
@@ -331,6 +345,8 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [Dataset Generation](docs/DATASET_GENERATION.md) - V2 and V3 pipeline documentation
 - [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) - AI parameter optimization
 - [Audio Engine Specification](docs/AudioEngineSpec_v2.md) - Audio processing details
+- [Ozone IPC Assistant Capabilities](docs/OZONE_IPC_ASSISTANT_CAPABILITIES.md) - Verified assistant workflows and IPC safety gates
+- [iZotope IPC Research Methodology](docs/OZONE_IPC_RESEARCH_METHODOLOGY.md) - Authorized, read-only-first IPC transport and schema research workflow
 
 ---
 

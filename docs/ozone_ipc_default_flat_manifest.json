@@ -1,0 +1,11 @@
+{
+  "mapped_size_bytes": 4194304,
+  "readPtrOff": 256,
+  "writePtrOff": 260,
+  "pluginRegOff": 264,
+  "ringOff": 512,
+  "ringSize": 4193792,
+  "entrySize": 16,
+  "maxEntries": 32,
+  "frameHdrSize": 28
+}

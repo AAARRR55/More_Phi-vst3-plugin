@@ -216,6 +216,8 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/BrickwallLimiter.cpp
     src/Core/LUFSMeter.h
     src/Core/LUFSMeter.cpp
+    src/Core/MeterWindowAccumulator.h
+    src/Core/MeterWindowAccumulator.cpp
     src/Core/RealtimeSpectrumAnalyzer.h
     src/Core/RealtimeSpectrumAnalyzer.cpp
     src/Core/StereoFieldAnalyzer.h
@@ -302,12 +304,17 @@ set(MORE_PHI_AI_SOURCES
     src/AI/GenreClassifier.cpp
     src/AI/ChainPlanExecutor.h
     src/AI/ChainPlanExecutor.cpp
+    src/AI/MasteringCandidateScoring.h
+    src/AI/AutomationControlPlane.h
+    src/AI/AutomationControlPlane.cpp
     src/AI/StyleEncoder.h
     src/AI/StyleEncoder.cpp
     src/AI/ParameterContextBuilder.h
     src/AI/ParameterContextBuilder.cpp
     src/AI/PluginProfileDB.h
     src/AI/PluginProfileDB.cpp
+    src/AI/SemanticPluginProfile.h
+    src/AI/SemanticPluginProfile.cpp
     src/AI/PluginSemanticMapper.h
     src/AI/PluginSemanticMapper.cpp
     src/AI/TrackAssistantStore.h
@@ -562,6 +569,10 @@ target_link_libraries(MorePhi
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+if(WIN32)
+    target_link_libraries(MorePhi PRIVATE winhttp)
+endif()
 
 # ── Compile Definitions ──────────────────────────────────────────────────────
 target_compile_definitions(MorePhi

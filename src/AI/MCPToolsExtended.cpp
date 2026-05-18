@@ -547,6 +547,10 @@ juce::String MCPToolsExtended::setParametersOptimized(
     usage.operation = "set_parameters_optimized";
     usage.timestamp = std::chrono::steady_clock::now();
     optimizer.recordUsage(usage);
+
+    const auto flush = applied > 0
+        ? processor.flushPendingParameterCommandsForAssistant(juce::jmax(2048, applied), 75)
+        : MorePhiProcessor::ParameterCommandFlushResult{};
     
     const bool allQueued = requested > 0
         && applied == requested
@@ -557,9 +561,13 @@ juce::String MCPToolsExtended::setParametersOptimized(
     result->setProperty("success", allQueued);
     result->setProperty("queued_count", applied);
     result->setProperty("applied_count", applied);
+    result->setProperty("applied_now_count", flush.drained);
     result->setProperty("requested_count", requested);
     result->setProperty("rejected_count", rejected);
     result->setProperty("queue_failures", queueFailures);
+    result->setProperty("pending_after", flush.pendingAfter);
+    result->setProperty("flush_plugin_unavailable", flush.pluginUnavailable);
+    result->setProperty("flush_exclusive_access_timed_out", flush.exclusiveAccessTimedOut);
     if (queueFailures > 0)
         result->setProperty("error", "queue_full");
     else if (requested == 0)

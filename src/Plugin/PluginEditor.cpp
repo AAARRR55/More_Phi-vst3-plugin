@@ -100,7 +100,7 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.fillAll(lnf.backgroundDark);
 
     // ── Title bar ────────────────────────────────────────────────────────────
-    auto titleArea = getLocalBounds().removeFromTop(44);
+    auto titleArea = getLocalBounds().removeFromTop(48);
 
     g.setGradientFill(juce::ColourGradient(
         lnf.surfaceColour.brighter(0.03f), 0, static_cast<float>(titleArea.getY()),
@@ -109,18 +109,18 @@ void MorePhiEditor::paint(juce::Graphics& g)
 
     // Logo
     g.setColour(lnf.accentCoral);
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 20.0f, juce::Font::bold)));
+    g.setFont(lnf.makeScaledFont(20.0f, juce::Font::bold));
     g.drawText("More-Phi", titleArea.reduced(14, 0).removeFromLeft(160),
                juce::Justification::centredLeft);
 
     // Version
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    g.setFont(lnf.makeScaledFont(10.0f));
     g.drawText("v3.3.0", titleArea.reduced(14, 0).removeFromLeft(200),
                juce::Justification::centredLeft);
 
     // RMS meter
-    auto meterArea = titleArea.removeFromRight(120).reduced(10, 12);
+    auto meterArea = titleArea.removeFromRight(120).reduced(10, 14);
     float rms = processor.getRmsLevel();
     float dbLevel = juce::jlimit(0.0f, 1.0f,
         (juce::Decibels::gainToDecibels(rms) + 60.0f) / 60.0f);
@@ -139,33 +139,38 @@ void MorePhiEditor::paint(juce::Graphics& g)
     }
 
     g.setColour(lnf.textDim);
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 9.0f, juce::Font::plain)));
+    g.setFont(lnf.makeScaledFont(9.0f, MorePhiLookAndFeel::kMinValueLabel));
     g.drawText("OUT", meterArea.translated(-28, 0).withWidth(24),
                juce::Justification::centredRight);
 
     // Title bar border
     g.setColour(lnf.borderColour);
-    g.drawLine(0, 44, static_cast<float>(getWidth()), 44, 1.0f);
+    g.drawLine(0, 48, static_cast<float>(getWidth()), 48, 1.0f);
 }
 
 void MorePhiEditor::resized()
 {
     auto area = getLocalBounds();
 
-    // Title bar (painted)
-    area.removeFromTop(44);
+    // Update L&F with current width for font scaling
+    lnf.setEditorWidth(static_cast<float>(getWidth()));
+
+    // Title bar (painted) — increased from 44 to 48
+    area.removeFromTop(48);
 
     // Parameter panel (right side, togglable)
-    const int paramWidth = paramPanelVisible_ ? 320 : 0;
+    const int paramWidth = paramPanelVisible_
+        ? juce::jlimit(240, 320, getWidth() / 3)
+        : 0;
     if (paramPanelVisible_)
         paramPanel.setBounds(area.removeFromRight(paramWidth));
 
-    // Plugin browser row (FlexBox row)
+    // Plugin browser row (FlexBox row) — 42px tall
     {
-        auto browserRow = area.removeFromTop(38);
+        auto browserRow = area.removeFromTop(42);
         juce::FlexBox fb;
         fb.flexDirection = juce::FlexBox::Direction::row;
-        fb.items.add(juce::FlexItem(pluginBrowser).withFlex(1));
+        fb.items.add(juce::FlexItem(pluginBrowser).withFlex(1).withMargin({ 2, 4, 2, 4 }));
         fb.items.add(juce::FlexItem(openPluginBtn_).withWidth(110).withMargin(2));
         fb.items.add(juce::FlexItem(paramToggleBtn_).withWidth(80).withMargin(2));
         fb.performLayout(browserRow);
@@ -176,14 +181,11 @@ void MorePhiEditor::resized()
     aiPanel.setBounds(bottomBar);
 
     // ── Tab bar ────────────────────────────────────────────────────────────────
-    // Sits between the pad area and tab content
-    // We need to calculate from the bottom up first to know where the tab content goes
-
-    // Tab content area (210px — same height as original V1 bottom section)
-    constexpr int tabContentHeight = 210;
+    const bool compactWidth = area.getWidth() < 760;
+    const int tabContentHeight = compactWidth ? 300 : 260;
     auto tabContent = area.removeFromBottom(tabContentHeight);
 
-    // 3px gap between tab content and tab bar (prevents accent bleed)
+    // 3px gap between tab content and tab bar
     area.removeFromBottom(3);
 
     // Tab bar (28px, above gap)
@@ -195,24 +197,33 @@ void MorePhiEditor::resized()
         juce::FlexBox mainRow;
         mainRow.flexDirection = juce::FlexBox::Direction::row;
         mainRow.items.add(juce::FlexItem(snapFader)
-            .withWidth(52.0f)
-            .withMargin(juce::FlexItem::Margin(10, 0, 10, 6)));
+            .withWidth(64.0f)
+            .withMargin(juce::FlexItem::Margin(8, 2, 8, 4)));
         mainRow.items.add(juce::FlexItem(morphPad)
             .withFlex(1)
-            .withMargin(8));
+            .withMargin(juce::FlexItem::Margin(6, 4, 6, 6)));
         mainRow.performLayout(area);
         snapshotRing.setBounds(morphPad.getBounds());
     }
 
-    // ── Tab content layout (FlexBox) ───────────────────────────────────────────
+    // ── Tab content layout (FlexBox column with gaps) ──────────────────────────
     if (activeTab_ == V2TabBar::Classic)
     {
+        const bool compactClassic = tabContent.getWidth() < 760;
         juce::FlexBox classic;
         classic.flexDirection = juce::FlexBox::Direction::column;
-        classic.items.add(juce::FlexItem(controlStrip).withHeight(60.0f));
-        classic.items.add(juce::FlexItem(modeBar).withHeight(32.0f));
-        classic.items.add(juce::FlexItem(macroStrip).withHeight(60.0f));
-        classic.items.add(juce::FlexItem(breedingPanel).withHeight(48.0f));
+        classic.items.add(juce::FlexItem(controlStrip)
+            .withHeight(compactClassic ? 104.0f : 64.0f)
+            .withMargin(juce::FlexItem::Margin(4, 6, 2, 6)));
+        classic.items.add(juce::FlexItem(modeBar)
+            .withHeight(compactClassic ? 64.0f : 38.0f)
+            .withMargin(juce::FlexItem::Margin(2, 6, 2, 6)));
+        classic.items.add(juce::FlexItem(macroStrip)
+            .withHeight(compactClassic ? 56.0f : 64.0f)
+            .withMargin(juce::FlexItem::Margin(2, 6, 2, 6)));
+        classic.items.add(juce::FlexItem(breedingPanel)
+            .withHeight(compactClassic ? 42.0f : 48.0f)
+            .withMargin(juce::FlexItem::Margin(2, 6, 4, 6)));
         classic.items.add(juce::FlexItem().withFlex(1)); // padding
         classic.performLayout(tabContent);
     }
@@ -246,7 +257,7 @@ void MorePhiEditor::switchTab(int tabIndex)
 
     resized();
     // Only repaint the content area below title bar and browser row, not the full editor
-    repaint(0, 44, getWidth(), getHeight() - 44);
+    repaint(0, 48, getWidth(), getHeight() - 48);
 }
 
 void MorePhiEditor::setClassicTabVisible(bool visible)
@@ -290,7 +301,7 @@ void MorePhiEditor::timerCallback()
     if (std::abs(dbLevel - lastDbLevel_) > 0.02f)
     {
         lastDbLevel_ = dbLevel;
-        repaint(0, 0, getWidth(), 44);
+        repaint(0, 0, getWidth(), 48);
     }
 }
 

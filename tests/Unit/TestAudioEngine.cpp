@@ -20,6 +20,10 @@
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
 #include "Core/SnapshotBank.h"
+#include "Core/BrickwallLimiter.h"
+#include "Core/AutoMasteringEngine.h"
+#include "Core/LUFSMeter.h"
+#include "Core/TruePeakEstimator.h"
 #include "Plugin/PluginProcessor.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -221,12 +225,156 @@ TEST_CASE("OversamplingWrapper: x2 and x4 produce finite downsampled output", "[
     }
 }
 
-TEST_CASE("MorePhiProcessor: inactive audio-domain path reports no default spectral or oversampling latency", "[audio_engine][latency]")
+TEST_CASE("BrickwallLimiter reports true peak separately from gain reduction", "[audio_engine][limiter][true_peak]")
+{
+    BrickwallLimiter limiter;
+    limiter.prepare(48000.0, 256);
+    limiter.setCeiling(-1.0f);
+
+    juce::AudioBuffer<float> buffer(2, 256);
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 1000.0f, 48000.0f, 0.25f);
+
+    limiter.processBlock(buffer);
+
+    CHECK(limiter.getTruePeak_dBTP() < -6.0f);
+    CHECK(limiter.getGainReductionDB() == Approx(0.0f).margin(1.0e-4f));
+}
+
+TEST_CASE("LUFSMeter gates digital silence", "[audio_engine][LUFS][analysis]")
+{
+    LUFSMeter meter;
+    meter.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    buffer.clear();
+
+    for (int block = 0; block < 96; ++block)
+        meter.processBlock(buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
+
+    CHECK_FALSE(std::isfinite(meter.getMomentary()));
+    CHECK_FALSE(std::isfinite(meter.getIntegrated()));
+    CHECK(meter.getLRA() == Approx(0.0f));
+}
+
+TEST_CASE("TruePeakEstimator reports silence explicitly", "[audio_engine][TruePeak][analysis]")
+{
+    TruePeakEstimator estimator;
+    estimator.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    buffer.clear();
+
+    estimator.processBlock(buffer);
+
+    CHECK_FALSE(std::isfinite(estimator.getTruePeak_dBTP()));
+    CHECK_FALSE(std::isfinite(estimator.getTruePeak_L_dBTP()));
+    CHECK_FALSE(std::isfinite(estimator.getTruePeak_R_dBTP()));
+    CHECK(estimator.getTruePeakLinear() == Approx(0.0f));
+}
+
+TEST_CASE("LUFSMeter reports finite output for a known sine fixture", "[audio_engine][LUFS]")
+{
+    LUFSMeter meter;
+    meter.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 96; ++block)
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 1000.0f, 48000.0f, 0.25f);
+
+        meter.processBlock(buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
+    }
+
+    CHECK(std::isfinite(meter.getMomentary()));
+    CHECK(std::isfinite(meter.getIntegrated()));
+    CHECK(meter.getIntegrated() > -80.0f);
+    CHECK(meter.getIntegrated() < 0.0f);
+}
+
+TEST_CASE("TruePeakEstimator reports finite bounded output for a known sine fixture", "[audio_engine][TruePeak]")
+{
+    TruePeakEstimator estimator;
+    estimator.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 1000.0f, 48000.0f, 0.25f);
+
+    estimator.processBlock(buffer);
+
+    CHECK(std::isfinite(estimator.getTruePeak_dBTP()));
+    CHECK(estimator.getTruePeak_dBTP() > -20.0f);
+    CHECK(estimator.getTruePeak_dBTP() < -6.0f);
+    CHECK(estimator.getTruePeakLinear() >= 0.0f);
+    CHECK(estimator.getTruePeakLinear() < 1.0f);
+}
+
+TEST_CASE("AutoMasteringEngine publishes live analyzer snapshots", "[audio_engine][mastering][analysis]")
+{
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512);
+    engine.setActive(true);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 48; ++block)
+    {
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const auto sampleIndex = block * buffer.getNumSamples() + i;
+            const float sample = 0.2f * std::sin(2.0f * juce::MathConstants<float>::pi
+                * 1000.0f * static_cast<float>(sampleIndex) / 48000.0f);
+            buffer.setSample(0, i, sample * 1.25f);
+            buffer.setSample(1, i, sample * 0.75f);
+        }
+
+        engine.processBlock(buffer);
+    }
+
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrum;
+    StereoFieldAnalyzer::StereoFieldSnapshot stereo;
+    REQUIRE(engine.getSpectrumAnalyzer().getSnapshot(spectrum));
+    REQUIRE(engine.getStereoFieldAnalyzer().getSnapshot(stereo));
+
+    CHECK(spectrum.frameIndex > 0);
+    CHECK(stereo.frameIndex > 0);
+    CHECK(spectrum.spectralCentroid > 500.0f);
+    CHECK(stereo.stereoWidth > 0.0f);
+}
+
+TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[processor][analysis][mcp]")
 {
     MorePhiProcessor processor;
-    processor.prepareToPlay(48000.0, 256);
+    processor.prepareToPlay(48000.0, 512);
 
-    REQUIRE(processor.getLatencySamples() == 0);
+    juce::AudioBuffer<float> buffer(2, 512);
+    juce::MidiBuffer midi;
+
+    for (int block = 0; block < 48; ++block)
+    {
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const auto sampleIndex = block * buffer.getNumSamples() + i;
+            const float sample = 0.2f * std::sin(2.0f * juce::MathConstants<float>::pi
+                * 1000.0f * static_cast<float>(sampleIndex) / 48000.0f);
+            buffer.setSample(0, i, sample);
+            buffer.setSample(1, i, sample * 0.8f);
+        }
+
+        processor.processBlock(buffer, midi);
+    }
+
+    auto& engine = processor.getAutoMasteringEngine();
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrum;
+    StereoFieldAnalyzer::StereoFieldSnapshot stereo;
+
+    CHECK(engine.getLUFSIntegrated() > -80.0f);
+    CHECK(engine.getTruePeak_dBTP() > -80.0f);
+    REQUIRE(engine.getSpectrumAnalyzer().getSnapshot(spectrum));
+    REQUIRE(engine.getStereoFieldAnalyzer().getSnapshot(stereo));
+    CHECK(spectrum.frameIndex > 0);
+    CHECK(stereo.frameIndex > 0);
 
     processor.releaseResources();
 }

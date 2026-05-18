@@ -2,9 +2,9 @@
  * More-Phi — AI/ChainPlanExecutor.h
  * Extended in v3.3.1 to support OzonePlanApplicator registration.
  *
- * Chain-of-thought multi-effect chain planner.
+ * Heuristic multi-effect chain planner.
  *
- * Implements a 5-step CoT reasoning chain:
+ * Implements a 5-step deterministic rule chain:
  *   Step 1: Dynamics Assessment → compression_need, style
  *   Step 2: Spectral Assessment → EQ prescription JSON
  *   Step 3: Stereo Assessment   → width_curve[4]
@@ -92,7 +92,7 @@ public:
     }
 
     /**
-     * Execute the 5-step CoT chain on the calling thread.
+     * Execute the 5-step deterministic rule chain on the calling thread.
      * Call from a background ThreadPool job.
      *
      * @param genreIndex    Current genre index (0–11) from GenreClassifier.
@@ -113,6 +113,9 @@ public:
                                 float  dynamicRange,
                                 float  spectralTilt,
                                 float  correlationMS);
+
+    /** Apply an already-built plan through callbacks and registered hosted-plugin applicators. */
+    int applyPlan(const MultiEffectPlan& plan);
 
     /** Get the last executed plan. Thread-safe (returns a copy). */
     [[nodiscard]] MultiEffectPlan getLastPlan() const noexcept { return lastPlan_; }

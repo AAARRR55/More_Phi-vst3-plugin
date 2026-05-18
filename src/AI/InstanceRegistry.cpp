@@ -109,23 +109,12 @@ int InstanceRegistry::findAvailablePort() const
 
 bool InstanceRegistry::isPortAvailable(int port) const
 {
-    {
-        juce::StreamingSocket loopbackProbe;
-        if (loopbackProbe.createListener(port, "127.0.0.1"))
-        {
-            loopbackProbe.close();
-            return true;
-        }
-    }
+    juce::StreamingSocket loopbackProbe;
+    if (!loopbackProbe.createListener(port, "127.0.0.1"))
+        return false;
 
-    juce::StreamingSocket wildcardProbe;
-    if (wildcardProbe.createListener(port, {}))
-    {
-        wildcardProbe.close();
-        return true;
-    }
-
-    return false;
+    loopbackProbe.close();
+    return true;
 }
 
 } // namespace more_phi

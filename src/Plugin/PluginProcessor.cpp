@@ -10,11 +10,16 @@
 #include "AI/InstanceRegistry.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
+#include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
+#include "AI/StandaloneMcp/IZotopeIPCDiscovery.h"
 #include <algorithm>
+#include <atomic>
 
 namespace more_phi {
 
 namespace {
+
+std::atomic<juce::uint64> gNextProcessorGenerationToken{1};
 
 float readRawFloat(const std::atomic<float>* p, float fallback) noexcept
 {
@@ -85,8 +90,11 @@ MorePhiProcessor::MorePhiProcessor()
       apvts(*this, nullptr, "MORE_PHI_STATE", createParameterLayout()),
       paramBridge(hostManager),
       morphProcessor(snapshotBank),
-      mcpServer(*this)
+      mcpServer(*this),
+      ipcDiscovery_(standalone_mcp::createIZotopeIPCDiscovery()),
+      ipcAssistant_(standalone_mcp::createIZotopeIPCAssistant())
 {
+    processorGenerationToken_ = gNextProcessorGenerationToken.fetch_add(1, std::memory_order_relaxed);
     // Constructor is kept minimal for FL Studio validation.
     cacheRawParameterPointers();
 
@@ -129,11 +137,22 @@ MorePhiProcessor::~MorePhiProcessor()
     hostManager.unloadPlugin();
 }
 
+standalone_mcp::IZotopeIPCDiscovery& MorePhiProcessor::getIZotopeIPCDiscovery()
+{
+    return *ipcDiscovery_;
+}
+
+standalone_mcp::IZotopeIPCAssistant& MorePhiProcessor::getIZotopeIPCAssistant()
+{
+    return *ipcAssistant_;
+}
+
 void MorePhiProcessor::cacheRawParameterPointers()
 {
     rawParams_.morphX = apvts.getRawParameterValue("morphX");
     rawParams_.morphY = apvts.getRawParameterValue("morphY");
     rawParams_.faderPos = apvts.getRawParameterValue("faderPos");
+    rawParams_.morphSource = apvts.getRawParameterValue("morphSource");
     rawParams_.physicsMode = apvts.getRawParameterValue("physicsMode");
     rawParams_.smoothing = apvts.getRawParameterValue("smoothing");
     rawParams_.driftSpeed = apvts.getRawParameterValue("driftSpeed");
@@ -181,6 +200,25 @@ bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
         source,
         holdAgainstMorph
     });
+}
+
+bool MorePhiProcessor::enqueueParameterBatch(const std::vector<ParamCommand>& commands)
+{
+    if (commands.empty())
+        return true;
+
+    std::vector<ParamCommand> sanitized;
+    sanitized.reserve(commands.size());
+    for (auto command : commands)
+    {
+        if (command.paramIndex < 0 || command.paramIndex >= MAX_PARAMETERS)
+            return false;
+
+        command.value = juce::jlimit(0.0f, 1.0f, command.value);
+        sanitized.push_back(command);
+    }
+
+    return commandQueue.pushRange(sanitized);
 }
 
 int MorePhiProcessor::enqueueParameterState(const std::vector<float>& normalizedValues,
@@ -320,32 +358,24 @@ void MorePhiProcessor::setMorphPositionExternal(float x, bool hasX,
 {
     if (hasX)
     {
-        const float clamped = juce::jlimit(0.0f, 1.0f, x);
-        morphX_.store(clamped, std::memory_order_relaxed);
-        if (rawParams_.morphX != nullptr)
-            rawParams_.morphX->store(clamped, std::memory_order_relaxed);
+        setMorphX(x);
     }
 
     if (hasY)
     {
-        const float clamped = juce::jlimit(0.0f, 1.0f, y);
-        morphY_.store(clamped, std::memory_order_relaxed);
-        if (rawParams_.morphY != nullptr)
-            rawParams_.morphY->store(clamped, std::memory_order_relaxed);
+        setMorphY(y);
     }
 
     if (hasFader)
     {
-        const float clamped = juce::jlimit(0.0f, 1.0f, fader);
-        faderPos_.store(clamped, std::memory_order_relaxed);
-        if (rawParams_.faderPos != nullptr)
-            rawParams_.faderPos->store(clamped, std::memory_order_relaxed);
+        setFaderPos(fader);
     }
 
-    morphSource_.store(source, std::memory_order_relaxed);
+    setMorphSource(source);
+    const int clampedSource = juce::jlimit(0, 1, source);
 
     juce::WeakReference<MorePhiProcessor> weakThis(this);
-    juce::MessageManager::callAsync([weakThis, hasX, hasY, hasFader]() mutable
+    juce::MessageManager::callAsync([weakThis, hasX, hasY, hasFader, clampedSource]() mutable
     {
         auto* self = weakThis.get();
         if (self == nullptr)
@@ -372,6 +402,12 @@ void MorePhiProcessor::setMorphPositionExternal(float x, bool hasX,
                 p->setValueNotifyingHost(self->faderPos_.load(std::memory_order_relaxed));
                 p->endChangeGesture();
             }
+        if (auto* p = self->apvts.getParameter("morphSource"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(static_cast<float>(clampedSource));
+            p->endChangeGesture();
+        }
     });
 }
 
@@ -392,6 +428,184 @@ bool MorePhiProcessor::shouldReleaseLiveEditHold(int index, float x, float y, fl
     const float xyDelta = std::abs(x - liveEditX_[i]) + std::abs(y - liveEditY_[i]);
     const float faderDelta = std::abs(fader - liveEditFader_[i]);
     return xyDelta > MORPH_POS_THRESHOLD || faderDelta > MORPH_POS_THRESHOLD;
+}
+
+int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
+                                                 int maxCommands,
+                                                 juce::AudioPluginInstance* exclusivePlugin) noexcept
+{
+    if (maxCommands <= 0)
+        return 0;
+
+    const int commandLimit = juce::jmin(maxCommands, static_cast<int>(COMMAND_QUEUE_CAPACITY));
+    ParamCommand cmd;
+    int drainedCommands = 0;
+
+    auto readParameter = [this, exclusivePlugin](int index) noexcept -> float
+    {
+        if (exclusivePlugin != nullptr)
+        {
+            try
+            {
+                auto& params = exclusivePlugin->getParameters();
+                if (index >= 0 && index < params.size() && params[index] != nullptr)
+                    return params[index]->getValue();
+            }
+            catch (...) {}
+
+            return 0.0f;
+        }
+
+        return paramBridge.getParameterNormalized(index);
+    };
+
+    auto writeParameter = [this, exclusivePlugin](int index, float value) noexcept
+    {
+        const float clamped = juce::jlimit(0.0f, 1.0f, value);
+
+        if (exclusivePlugin != nullptr)
+        {
+            try
+            {
+                auto& params = exclusivePlugin->getParameters();
+                if (index >= 0 && index < params.size() && params[index] != nullptr)
+                    params[index]->setValue(clamped);
+            }
+            catch (...) {}
+
+            return;
+        }
+
+        paramBridge.setParameterNormalized(index, clamped);
+    };
+
+    // Serialized by commandConsumerLock_. The audio path uses a try-lock; the
+    // assistant flush path uses a blocking lock off the audio thread, so queued
+    // MCP edits can be applied while FL Studio is idle without racing
+    // processBlock().
+    bool hasTouchLock = false;
+    if (exclusivePlugin != nullptr)
+    {
+        touchStateLock_.enter();
+        hasTouchLock = true;
+    }
+    else
+    {
+        hasTouchLock = touchStateLock_.tryEnter();
+    }
+
+    while (drainedCommands < commandLimit && commandQueue.pop(cmd))
+    {
+        if (cmd.isSnapshotMarker)
+        {
+            const int slot = cmd.snapshotSlot;
+            auto positions = InterpolationEngine::getClockPositions();
+            if (slot >= 0 && slot < static_cast<int>(positions.size()))
+            {
+                const float slotX = (positions[slot].x + 1.0f) * 0.5f;
+                const float slotY = (positions[slot].y + 1.0f) * 0.5f;
+                morphX_.store(slotX, std::memory_order_relaxed);
+                morphY_.store(slotY, std::memory_order_relaxed);
+                if (rawParams_.morphX != nullptr)
+                    rawParams_.morphX->store(slotX, std::memory_order_relaxed);
+                if (rawParams_.morphY != nullptr)
+                    rawParams_.morphY->store(slotY, std::memory_order_relaxed);
+            }
+
+            clearLiveEditHoldsAudioThread();
+
+            const int paramCount = juce::jmin(cachedParamCount,
+                                              static_cast<int>(touchCooldown_.size()));
+            for (int i = 0; i < paramCount; ++i)
+            {
+                lastApplied_[static_cast<size_t>(i)] = readParameter(i);
+                touchCooldown_[static_cast<size_t>(i)] = 0;
+            }
+        }
+        else
+        {
+            writeParameter(cmd.paramIndex, cmd.value);
+
+            if (cmd.paramIndex >= 0 &&
+                static_cast<size_t>(cmd.paramIndex) < lastApplied_.size())
+            {
+                const auto paramIndex = static_cast<size_t>(cmd.paramIndex);
+                lastApplied_[paramIndex] = juce::jlimit(0.0f, 1.0f, cmd.value);
+                touchCooldown_[paramIndex] = 0;
+
+                if (cmd.holdAgainstMorph && paramIndex < liveEditHold_.size())
+                {
+                    liveEditHold_[paramIndex] = 1;
+                    liveEditX_[paramIndex] = morphX_.load(std::memory_order_relaxed);
+                    liveEditY_[paramIndex] = morphY_.load(std::memory_order_relaxed);
+                    liveEditFader_[paramIndex] = faderPos_.load(std::memory_order_relaxed);
+                }
+                else if (paramIndex < liveEditHold_.size())
+                {
+                    liveEditHold_[paramIndex] = 0;
+                }
+            }
+        }
+
+        ++drainedCommands;
+    }
+
+    if (hasTouchLock)
+        touchStateLock_.exit();
+
+    return drainedCommands;
+}
+
+MorePhiProcessor::ParameterCommandFlushResult
+MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int timeoutMs)
+{
+    ParameterCommandFlushResult result;
+    result.pendingBefore = static_cast<int>(getPendingParameterCommandCountApprox());
+
+    if (result.pendingBefore <= 0 || maxCommands <= 0)
+    {
+        result.pendingAfter = result.pendingBefore;
+        return result;
+    }
+
+    juce::SpinLock::ScopedLockType commandGuard(commandConsumerLock_);
+
+    auto* plugin = hostManager.beginExclusivePluginUse(timeoutMs);
+    if (plugin == nullptr)
+    {
+        result.pluginUnavailable = !hostManager.hasPlugin();
+        result.exclusiveAccessTimedOut = !result.pluginUnavailable;
+        result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
+        return result;
+    }
+
+    struct ScopedExclusivePluginUse
+    {
+        explicit ScopedExclusivePluginUse(PluginHostManager& h) : host(h) {}
+        ~ScopedExclusivePluginUse() { host.endExclusivePluginUse(); }
+        PluginHostManager& host;
+    } exclusiveUse(hostManager);
+
+    int hostedParamCount = 0;
+    try
+    {
+        hostedParamCount = static_cast<int>(plugin->getParameters().size());
+    }
+    catch (...) {}
+
+    const int cachedParamCount = juce::jmin(hostedParamCount,
+                                            static_cast<int>(finalOutput_.size()),
+                                            static_cast<int>(lastApplied_.size()));
+    if (cachedParamCount <= 0)
+    {
+        result.pluginUnavailable = true;
+        result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
+        return result;
+    }
+
+    result.drained = drainParameterCommandQueue(cachedParamCount, maxCommands, plugin);
+    result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
+    return result;
 }
 
 //==============================================================================
@@ -565,6 +779,11 @@ MorePhiProcessor::createParameterLayout()
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{"faderPos", 1}, "Snap Fader", 0.0f, 1.0f, 0.0f));
 
+    // Morph source: 0 = 2D Pad (XY), 1 = Fader
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{"morphSource", 1}, "Morph Source",
+        juce::StringArray{"2D Pad", "Fader"}, 0));
+
     // Physics controls
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{"physicsMode", 1}, "Physics Mode",
@@ -692,7 +911,13 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // M-6 FIX: Dynamic touch cooldown — ~200ms regardless of host config.
     touchCooldownBlocks_ = std::max(1, static_cast<int>(0.2 * sampleRate / samplesPerBlock));
 
+    auto* const currentPlayHead = getPlayHead();
+    hostManager.setPlayHead(currentPlayHead);
+    hostManagerB_.setPlayHead(currentPlayHead);
+    updateTransportContextSnapshot(currentPlayHead);
+
     hostManager.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+    autoMasteringEngine_.prepare(sampleRate, samplesPerBlock, false);
 
     // Pre-allocate morph processor buffers
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
@@ -749,8 +974,11 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 void MorePhiProcessor::releaseResources()
 {
     prepared = false;
+    hostManager.setPlayHead(nullptr);
+    hostManagerB_.setPlayHead(nullptr);
     hostManager.releaseResources();
     hostManagerB_.releaseResources();
+    autoMasteringEngine_.reset();
     spectralEngine_.reset();
     granularEngine_.reset();
     formantEngine_.reset();
@@ -765,6 +993,7 @@ void MorePhiProcessor::reset()
     // Flush internal state for clean re-initialization
     // (e.g., when host calls setActive(false) then setActive(true))
     morphProcessor.prepare(MAX_PARAMETERS);  // Re-init morph processor
+    autoMasteringEngine_.reset();
     spectralEngine_.reset();
     granularEngine_.reset();
     formantEngine_.reset();
@@ -809,6 +1038,10 @@ void MorePhiProcessor::syncStateFromAPVTS()
     faderPos_.store(juce::jlimit(0.0f, 1.0f,
                       readRawFloat(rawParams_.faderPos, faderPos_.load(std::memory_order_relaxed))),
                     std::memory_order_relaxed);
+
+    morphSource_.store(juce::jlimit(0, 1,
+                        readRawChoice(rawParams_.morphSource, morphSource_.load(std::memory_order_relaxed))),
+                      std::memory_order_relaxed);
 
     physicsMode_.store(juce::jlimit(0, 2,
                         readRawChoice(rawParams_.physicsMode, physicsMode_.load(std::memory_order_relaxed))),
@@ -900,6 +1133,36 @@ void MorePhiProcessor::syncStateFromAPVTS()
 
 // ── Process Block ────────────────────────────────────────────────────────────
 
+void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playHead) noexcept
+{
+    if (playHead == nullptr)
+    {
+        transportAvailable_.store(false, std::memory_order_relaxed);
+        transportPlaying_.store(false, std::memory_order_relaxed);
+        transportLooping_.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto position = playHead->getPosition();
+    if (!position.hasValue())
+    {
+        transportAvailable_.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto& info = *position;
+    transportAvailable_.store(true, std::memory_order_relaxed);
+    transportPlaying_.store(info.getIsPlaying(), std::memory_order_relaxed);
+    transportLooping_.store(info.getIsLooping(), std::memory_order_relaxed);
+    transportBpm_.store(info.getBpm().orFallback(0.0), std::memory_order_relaxed);
+    transportPpqPosition_.store(info.getPpqPosition().orFallback(0.0), std::memory_order_relaxed);
+    transportSecondsPosition_.store(info.getTimeInSeconds().orFallback(0.0), std::memory_order_relaxed);
+
+    const auto signature = info.getTimeSignature().orFallback(juce::AudioPlayHead::TimeSignature{});
+    transportTimeSigNumerator_.store(signature.numerator, std::memory_order_relaxed);
+    transportTimeSigDenominator_.store(signature.denominator, std::memory_order_relaxed);
+}
+
 void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                        juce::MidiBuffer& midi) noexcept
 {
@@ -909,6 +1172,11 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     if (!prepared) return;
 
+    auto* const currentPlayHead = getPlayHead();
+    hostManager.setPlayHead(currentPlayHead);
+    hostManagerB_.setPlayHead(currentPlayHead);
+    updateTransportContextSnapshot(currentPlayHead);
+
     // Keep runtime atomics coherent with APVTS automation/preset state.
     syncStateFromAPVTS();
 
@@ -916,6 +1184,9 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const int cachedParamCount = juce::jmin(paramBridge.getParameterCount(),
                                             static_cast<int>(finalOutput_.size()),
                                             static_cast<int>(lastApplied_.size()));
+
+    juce::SpinLock::ScopedTryLockType parameterCommandGuard(commandConsumerLock_);
+    const bool canTouchHostedParameters = parameterCommandGuard.isLocked();
 
     const bool isBypassed = readRawBool(rawParams_.bypass, false);
 
@@ -925,6 +1196,7 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // Still forward audio through the host if it's loaded
         if (!isBypassed)
             hostManager.processBlock(buffer, midi);
+        autoMasteringEngine_.analyzeBlock(buffer);
         return;
     }
 
@@ -934,84 +1206,8 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // 1) Drain command queue (MCP/LLM → audio thread)
     {
         MORE_PHI_PROFILE(profiler_, "command_queue_drain");
-        ParamCommand cmd;
-        constexpr int kMaxCommandDrainsPerBlock = 2048; // Increased for snapshot batching
-        int drainedCommands = 0;
-
-        // BUG-5 FIX: lastApplied_ and touchCooldown_ are written ONLY by the
-        // audio thread (here) and read by the UI thread under touchStateLock_.
-        // The previous code conditioned all writes on hasTouchLock, creating a
-        // tracking blackout whenever the UI held the lock (e.g. setSanityConfig).
-        // During a blackout every queued MCP command was silently untracked, so
-        // the morph engine would later mis-classify those parameters as "manually
-        // moved" and freeze them.
-        //
-        // Fix: write tracking arrays unconditionally (audio-thread-only writer,
-        // no race).  The lock is still tried so the UI reader gets a consistent
-        // snapshot when it does hold it, but tracking correctness no longer
-        // depends on winning the tryEnter race.
-        const bool hasTouchLock = touchStateLock_.tryEnter();
-
-        while (drainedCommands < kMaxCommandDrainsPerBlock && commandQueue.pop(cmd))
-        {
-            if (cmd.isSnapshotMarker)
-            {
-                // Finalize snapshot recall: update cursor and touch state
-                const int slot = cmd.snapshotSlot;
-                auto positions = InterpolationEngine::getClockPositions();
-                if (slot >= 0 && slot < static_cast<int>(positions.size()))
-                {
-                    const float slotX = (positions[slot].x + 1.0f) * 0.5f;
-                    const float slotY = (positions[slot].y + 1.0f) * 0.5f;
-                    morphX_.store(slotX, std::memory_order_relaxed);
-                    morphY_.store(slotY, std::memory_order_relaxed);
-                    if (rawParams_.morphX != nullptr)
-                        rawParams_.morphX->store(slotX, std::memory_order_relaxed);
-                    if (rawParams_.morphY != nullptr)
-                        rawParams_.morphY->store(slotY, std::memory_order_relaxed);
-                }
-
-                clearLiveEditHoldsAudioThread();
-
-                // Always update — sole writer is this audio thread
-                const int paramCount = juce::jmin(cachedParamCount,
-                                                  static_cast<int>(touchCooldown_.size()));
-                for (int i = 0; i < paramCount; ++i)
-                {
-                    lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
-                    touchCooldown_[static_cast<size_t>(i)] = 0;
-                }
-            }
-            else
-            {
-                paramBridge.setParameterNormalized(cmd.paramIndex, cmd.value);
-
-                // Always update — sole writer is this audio thread
-                if (cmd.paramIndex >= 0 &&
-                    static_cast<size_t>(cmd.paramIndex) < lastApplied_.size())
-                {
-                    const auto paramIndex = static_cast<size_t>(cmd.paramIndex);
-                    lastApplied_[paramIndex] = cmd.value;
-                    touchCooldown_[paramIndex] = 0;
-
-                    if (cmd.holdAgainstMorph && paramIndex < liveEditHold_.size())
-                    {
-                        liveEditHold_[paramIndex] = 1;
-                        liveEditX_[paramIndex] = morphX_.load(std::memory_order_relaxed);
-                        liveEditY_[paramIndex] = morphY_.load(std::memory_order_relaxed);
-                        liveEditFader_[paramIndex] = faderPos_.load(std::memory_order_relaxed);
-                    }
-                    else if (paramIndex < liveEditHold_.size())
-                    {
-                        liveEditHold_[paramIndex] = 0;
-                    }
-                }
-            }
-            ++drainedCommands;
-        }
-
-        if (hasTouchLock)
-            touchStateLock_.exit();
+        if (canTouchHostedParameters)
+            (void) drainParameterCommandQueue(cachedParamCount, 2048, nullptr);
     }
 
     // 2) Process MIDI: filter trigger notes, pass rest through
@@ -1109,7 +1305,7 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // When Listen Mode is active, sentinel values (-1.0f) mark discrete params to skip
         {
             MORE_PHI_PROFILE(profiler_, "parameter_application");
-            if (finalOutput_.size() >= static_cast<size_t>(paramCount))
+            if (canTouchHostedParameters && finalOutput_.size() >= static_cast<size_t>(paramCount))
             {
                 // CRITICAL (Finding 1): Use tryEnter for touch state lock on audio thread.
             // If message thread is writing (rare, during snapshot recall), skip touch
@@ -1334,6 +1530,11 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools. This
+    // measures the final audio that More-Phi emits after hosted-plugin output
+    // and output gain, without running the autonomous mastering processor.
+    autoMasteringEngine_.analyzeBlock(buffer);
+
     // 8) RMS for UI visualization — M-2 FIX: throttle to every N blocks
     if (buffer.getNumChannels() > 0)
     {
@@ -1517,13 +1718,13 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
 
     // 6) Restore morph cursor position
     if (xml->hasAttribute("morphX"))
-        morphX_.store(static_cast<float>(xml->getDoubleAttribute("morphX", 0.5)), std::memory_order_relaxed);
+        setMorphX(static_cast<float>(xml->getDoubleAttribute("morphX", 0.5)));
     if (xml->hasAttribute("morphY"))
-        morphY_.store(static_cast<float>(xml->getDoubleAttribute("morphY", 0.5)), std::memory_order_relaxed);
+        setMorphY(static_cast<float>(xml->getDoubleAttribute("morphY", 0.5)));
     if (xml->hasAttribute("faderPos"))
-        faderPos_.store(static_cast<float>(xml->getDoubleAttribute("faderPos", 0.0)), std::memory_order_relaxed);
+        setFaderPos(static_cast<float>(xml->getDoubleAttribute("faderPos", 0.0)));
     if (xml->hasAttribute("morphSource"))
-        morphSource_.store(xml->getIntAttribute("morphSource", 0), std::memory_order_relaxed);
+        setMorphSource(xml->getIntAttribute("morphSource", 0));
 
     // 7) Restore MCP identity (port reuse)
     if (auto* mcpXml = xml->getChildByName("MCP_IDENTITY"))

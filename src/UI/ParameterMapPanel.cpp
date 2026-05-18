@@ -53,8 +53,10 @@ void ParameterRow::resized()
     auto b = getLocalBounds().reduced(2, 0);
     morphToggle_.setBounds(b.removeFromLeft(24));
     b.removeFromLeft(2);
-    nameLabel_.setBounds(b.removeFromLeft(140));
-    valueLabel_.setBounds(b.removeFromRight(45));
+    const int valueW = juce::jlimit(42, 58, b.getWidth() / 5);
+    const int nameW = juce::jlimit(84, 170, b.getWidth() / 2);
+    nameLabel_.setBounds(b.removeFromLeft(nameW));
+    valueLabel_.setBounds(b.removeFromRight(valueW));
     b.removeFromRight(4);
     slider_.setBounds(b);
 }
@@ -113,10 +115,11 @@ void ParameterMapPanel::resized()
 {
     auto b = getLocalBounds();
     auto headerRow = b.removeFromTop(28);
-    headerLabel_.setBounds(headerRow.removeFromLeft(150));
-    selectNoneBtn_.setBounds(headerRow.removeFromRight(45));
+    const int headerW = juce::jlimit(118, 180, headerRow.getWidth() / 2);
+    headerLabel_.setBounds(headerRow.removeFromLeft(headerW));
+    selectNoneBtn_.setBounds(headerRow.removeFromRight(52));
     headerRow.removeFromRight(4);
-    selectAllBtn_.setBounds(headerRow.removeFromRight(35));
+    selectAllBtn_.setBounds(headerRow.removeFromRight(42));
 
     viewport_.setBounds(b);
 

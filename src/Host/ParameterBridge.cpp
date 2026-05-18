@@ -138,6 +138,13 @@ void ParameterBridge::setParameterNormalized(int index, float value)
 
 juce::String ParameterBridge::getParameterName(int index) const
 {
+    if (!testDescriptors_.empty())
+    {
+        if (index < 0 || index >= static_cast<int>(testDescriptors_.size()))
+            return {};
+        return testDescriptors_[static_cast<size_t>(index)].name;
+    }
+
     return withPlugin(host_, cachedConcreteHost_, "getParameterName", juce::String{},
         [index](juce::AudioPluginInstance& plugin) -> juce::String
     {
@@ -163,23 +170,30 @@ void ParameterBridge::applyParameterState(const float* values, int count)
         const int safeCount = juce::jmin(count, (int)params.size(), (int)throttleStates_.size());
         const auto now = juce::Time::getMillisecondCounter();
 
-        const bool hasThrottleLock = throttleMutex_.tryEnter();
+        const juce::SpinLock::ScopedTryLockType throttleLock(throttleMutex_);
+        const bool hasThrottleLock = throttleLock.isLocked();
 
         for (int i = 0; i < safeCount; ++i)
         {
             const float clamped = juce::jlimit(0.0f, 1.0f, values[i]);
 
-            if (!shouldThrottle(i, clamped, now))
+            bool throttled = false;
+            if (hasThrottleLock)
             {
-                params[i]->setValue(clamped);
-
-                if (hasThrottleLock && i < (int)throttleStates_.size())
-                    throttleStates_[i] = {clamped, now};
+                const auto& state = throttleStates_[static_cast<size_t>(i)];
+                throttled = state.lastValue >= 0.0f
+                    && (now - state.lastUpdateTime) < 2
+                    && std::abs(clamped - state.lastValue) <= 0.01f;
             }
-        }
 
-        if (hasThrottleLock)
-            throttleMutex_.exit();
+            if (throttled)
+                continue;
+
+            params[i]->setValue(clamped);
+
+            if (hasThrottleLock)
+                throttleStates_[static_cast<size_t>(i)] = {clamped, now};
+        }
 
         return 0;
     });
@@ -296,6 +310,27 @@ juce::String ParameterBridge::getParameterDisplayValue(int index) const
     });
 }
 
+juce::String ParameterBridge::getParameterDisplayValueAtNormalized(int index, float normalizedValue) const
+{
+    if (!testDescriptors_.empty())
+    {
+        if (index < 0 || index >= static_cast<int>(testDescriptors_.size()))
+            return {};
+
+        return juce::String(juce::jlimit(0.0f, 1.0f, normalizedValue), 3);
+    }
+
+    return withPlugin(host_, cachedConcreteHost_, "getParameterDisplayValueAtNormalized", juce::String{},
+        [index, normalizedValue](juce::AudioPluginInstance& plugin) -> juce::String
+    {
+        auto& params = plugin.getParameters();
+        if (index < 0 || index >= (int)params.size()) return {};
+
+        const float clamped = juce::jlimit(0.0f, 1.0f, normalizedValue);
+        return params[index]->getText(clamped, 64);
+    });
+}
+
 float ParameterBridge::getParameterDefault(int index) const
 {
     return withPlugin(host_, cachedConcreteHost_, "getParameterDefault", -1.0f,
@@ -353,6 +388,14 @@ bool ParameterBridge::isBoolean(int index) const
 
 ParameterBridge::ParameterDescriptor ParameterBridge::getParameterDescriptor(int index) const
 {
+    if (!testDescriptors_.empty())
+    {
+        if (index < 0 || index >= static_cast<int>(testDescriptors_.size()))
+            return {};
+
+        return testDescriptors_[static_cast<size_t>(index)];
+    }
+
     return withPlugin(host_, cachedConcreteHost_, "getParameterDescriptor", ParameterDescriptor{},
         [index](juce::AudioPluginInstance& plugin) -> ParameterDescriptor
     {

@@ -63,7 +63,7 @@ GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
     for (int i = 0; i < 4; ++i)
     {
         knobLabels_[i].setText(kKnobDefs[i].label, juce::dontSendNotification);
-        knobLabels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+        knobLabels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
         knobLabels_[i].setColour(juce::Label::textColourId,
                                   textDim());
         knobLabels_[i].setJustificationType(juce::Justification::centred);
@@ -175,7 +175,7 @@ void GranularControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 8.5f, juce::Font::plain)));
+    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }
