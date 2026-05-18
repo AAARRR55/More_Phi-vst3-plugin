@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "assessments": [
+    {
+      "candidateId": "sonicmaster-dataset",
+      "stereoReady": true,
+      "sampleRateReady": true,
+      "pairedReady": true,
+      "alignmentRisk": "low",
+      "labelAccuracy": "synthetic",
+      "pipelineAdapterNeeded": [
+        "manifest conversion",
+        "source identity extraction",
+        "license ledger extraction"
+      ],
+      "recommendedSegmentPolicy": "Use paired crops at 44.1 kHz or resample to 48 kHz; keep source-derived variants in one split.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "cambridge-mt",
+      "stereoReady": true,
+      "sampleRateReady": true,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "ambiguous",
+      "pipelineAdapterNeeded": [
+        "project selection",
+        "stem render normalization",
+        "synthetic mastering target generation"
+      ],
+      "recommendedSegmentPolicy": "Use project-level crops from unmastered mix WAVs or rendered stems; keep each project in one split.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "solidstatebuscomp",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": true,
+      "alignmentRisk": "low",
+      "labelAccuracy": "verified",
+      "pipelineAdapterNeeded": [
+        "parameter-family grouping",
+        "source-song split locking"
+      ],
+      "recommendedSegmentPolicy": "Use only for dynamics windows; group all compressor settings from a source song into one split.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "musdb18-hq",
+      "stereoReady": true,
+      "sampleRateReady": true,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "missing",
+      "pipelineAdapterNeeded": [
+        "stem-to-mix rendering",
+        "synthetic mastering target generation",
+        "license filtering"
+      ],
+      "recommendedSegmentPolicy": "Respect official train/test split and synthesize mastering pairs from stem renders.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "medleydb-2",
+      "stereoReady": true,
+      "sampleRateReady": true,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "ambiguous",
+      "pipelineAdapterNeeded": [
+        "stem hierarchy normalization",
+        "mastered-status relabeling or synthetic target generation"
+      ],
+      "recommendedSegmentPolicy": "Use song-level splits and avoid treating mix files as verified mastered targets.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "moisesdb",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "derived",
+      "pipelineAdapterNeeded": [
+        "stem taxonomy normalization",
+        "bleed metadata handling",
+        "synthetic target generation"
+      ],
+      "recommendedSegmentPolicy": "Resample to the training rate and group by source track.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "open-multitrack-testbed",
+      "stereoReady": false,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "unknown",
+      "labelAccuracy": "ambiguous",
+      "pipelineAdapterNeeded": [
+        "current catalog verification",
+        "license audit",
+        "metadata normalization"
+      ],
+      "recommendedSegmentPolicy": "Hold until current downloadable items and formats are verified.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "slakh2100",
+      "stereoReady": false,
+      "sampleRateReady": true,
+      "pairedReady": false,
+      "alignmentRisk": "low",
+      "labelAccuracy": "synthetic",
+      "pipelineAdapterNeeded": [
+        "synthetic-label propagation",
+        "mono-to-stereo labeling if used",
+        "duplicate MIDI exclusion"
+      ],
+      "recommendedSegmentPolicy": "Use as synthetic pretraining or loader stress tests, not direct stereo mastering supervision.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "mtg-jamendo",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "derived",
+      "pipelineAdapterNeeded": [
+        "license-filtered reference subset",
+        "genre/style metadata mapping"
+      ],
+      "recommendedSegmentPolicy": "Use reference-only clips for distribution modeling; do not train supervised pairs unless degraded inputs are generated.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "fma",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "derived",
+      "pipelineAdapterNeeded": [
+        "license filtering",
+        "codec artifact screening",
+        "artist/album split grouping"
+      ],
+      "recommendedSegmentPolicy": "Use reference/pretraining subsets only after audio quality and license filtering.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "odaq",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "low",
+      "labelAccuracy": "verified",
+      "pipelineAdapterNeeded": [
+        "metric calibration harness"
+      ],
+      "recommendedSegmentPolicy": "Held-out perceptual metric calibration only; never include in training.",
+      "qualityScreeningRequired": false
+    },
+    {
+      "candidateId": "aam",
+      "stereoReady": false,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "medium",
+      "labelAccuracy": "synthetic",
+      "pipelineAdapterNeeded": [
+        "dataset license verification",
+        "synthetic-label propagation"
+      ],
+      "recommendedSegmentPolicy": "Use for pipeline/debugging only unless license and audio formats are verified.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "commercial-stem-stores",
+      "stereoReady": true,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "unknown",
+      "labelAccuracy": "ambiguous",
+      "pipelineAdapterNeeded": [
+        "custom license negotiation"
+      ],
+      "recommendedSegmentPolicy": "Hold until written ML/data rights exist.",
+      "qualityScreeningRequired": true
+    },
+    {
+      "candidateId": "streaming-leaked-uploads",
+      "stereoReady": false,
+      "sampleRateReady": false,
+      "pairedReady": false,
+      "alignmentRisk": "high",
+      "labelAccuracy": "missing",
+      "pipelineAdapterNeeded": [
+        "none; rejected"
+      ],
+      "recommendedSegmentPolicy": "Reject; do not ingest.",
+      "qualityScreeningRequired": false
+    }
+  ]
+}

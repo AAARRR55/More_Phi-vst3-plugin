@@ -1,0 +1,20 @@
+{
+  "ledgerEntryId": "ledger-sonicmaster-placeholder",
+  "datasetId": "sonicmaster-dataset",
+  "itemId": "replace-with-source-item-id",
+  "sourceUrl": "https://huggingface.co/datasets/amaai-lab/SonicMasterDataset",
+  "declaredLicense": "cc-by-2.0",
+  "licensePattern": "attribution",
+  "commercialEligibility": "requires-review",
+  "requiresAttribution": true,
+  "requiresShareAlike": false,
+  "nonCommercialOnly": false,
+  "upstreamLicenseRequired": true,
+  "approvalStatus": "not-reviewed",
+  "checksum": {
+    "algorithm": "sha256",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "attributionText": "Replace with item-level attribution before ingestion.",
+  "approvalNotes": "Template only. Do not use in a training manifest until item-level source, attribution, checksum, split identity, and approval status are complete."
+}

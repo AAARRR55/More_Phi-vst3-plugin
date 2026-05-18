@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "decisionPosture": "research-only",
+  "recommendedMix": [
+    {
+      "stage": 1,
+      "name": "Direct paired research baseline",
+      "candidateIds": [
+        "sonicmaster-dataset"
+      ],
+      "purpose": "Establish the first supervised degraded-to-high-quality stereo mastering baseline.",
+      "requiredBeforeUse": [
+        "source identity extraction",
+        "item-level license ledger",
+        "quality screen",
+        "source-level split report"
+      ],
+      "cannotProve": [
+        "real pre-master performance",
+        "commercial release readiness"
+      ]
+    },
+    {
+      "stage": 2,
+      "name": "Multitrack synthesis and real pre-master validation",
+      "candidateIds": [
+        "cambridge-mt",
+        "musdb18-hq",
+        "medleydb-2",
+        "moisesdb"
+      ],
+      "purpose": "Generate aligned synthetic pairs and stress-test stem/mix diversity.",
+      "requiredBeforeUse": [
+        "dataset-specific rights review",
+        "deduplication against overlapping sources",
+        "processing recipe capture"
+      ],
+      "cannotProve": [
+        "commercial release readiness for non-commercial sources",
+        "mastering quality without held-out real validation"
+      ]
+    },
+    {
+      "stage": 3,
+      "name": "Reference distribution modeling",
+      "candidateIds": [
+        "mtg-jamendo",
+        "fma"
+      ],
+      "purpose": "Estimate genre, loudness, style, and reference quality distributions.",
+      "requiredBeforeUse": [
+        "per-track license filtering",
+        "audio quality screening",
+        "artist/album split grouping"
+      ],
+      "cannotProve": [
+        "supervised mastering behavior",
+        "paired reconstruction quality"
+      ]
+    },
+    {
+      "stage": 4,
+      "name": "Perceptual metric calibration",
+      "candidateIds": [
+        "odaq"
+      ],
+      "purpose": "Calibrate objective metrics against subjective audio-quality scores.",
+      "requiredBeforeUse": [
+        "held-out-only marking",
+        "metric calibration report"
+      ],
+      "cannotProve": [
+        "mastering model training quality"
+      ]
+    },
+    {
+      "stage": 5,
+      "name": "Hold and reject sources",
+      "candidateIds": [
+        "open-multitrack-testbed",
+        "aam",
+        "commercial-stem-stores",
+        "streaming-leaked-uploads"
+      ],
+      "purpose": "Track unresolved or rejected sources without letting them enter training.",
+      "requiredBeforeUse": [
+        "resolve hold blockers or keep rejected"
+      ],
+      "cannotProve": [
+        "anything until blockers are cleared"
+      ]
+    }
+  ],
+  "firstDownloadOrder": [
+    {
+      "rank": 1,
+      "candidateId": "sonicmaster-dataset",
+      "reason": "Closest direct fit for supervised paired research."
+    },
+    {
+      "rank": 2,
+      "candidateId": "cambridge-mt",
+      "reason": "Real pre-master and multitrack material for non-commercial validation and synthesis."
+    },
+    {
+      "rank": 3,
+      "candidateId": "musdb18-hq",
+      "reason": "Clean stereo multitrack stems for controlled synthetic pair generation."
+    },
+    {
+      "rank": 4,
+      "candidateId": "medleydb-2",
+      "reason": "Genre and stem diversity for multitrack synthesis."
+    },
+    {
+      "rank": 5,
+      "candidateId": "moisesdb",
+      "reason": "Additional stem taxonomy and robustness testing after license checks."
+    },
+    {
+      "rank": 6,
+      "candidateId": "odaq",
+      "reason": "Held-out perceptual metric calibration only."
+    }
+  ]
+}

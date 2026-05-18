@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "decisions": [
+    {
+      "decisionId": "eligibility-direct-paired-research",
+      "scope": {
+        "scopeType": "dataset",
+        "ids": [
+          "sonicmaster-dataset"
+        ]
+      },
+      "eligibility": "research-ready",
+      "blockingIssues": [
+        "legal-review"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "checksums",
+        "source-identity-report",
+        "split-report",
+        "quality-screen",
+        "attribution-package"
+      ],
+      "owner": "ML/data owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Research may proceed after item-level ledger and source split validation; commercial release remains blocked pending review."
+    },
+    {
+      "decisionId": "eligibility-noncommercial-multitrack-synthesis",
+      "scope": {
+        "scopeType": "dataset-mix",
+        "ids": [
+          "cambridge-mt",
+          "solidstatebuscomp",
+          "medleydb-2",
+          "moisesdb",
+          "mtg-jamendo"
+        ]
+      },
+      "eligibility": "commercial-blocked",
+      "blockingIssues": [
+        "non-commercial-only",
+        "educational-only",
+        "share-alike-obligation",
+        "legal-review"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "source-identity-report",
+        "split-report",
+        "quality-screen",
+        "legal-approval"
+      ],
+      "owner": "Release owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Research-only. Do not train a release-intent model on this mix without separate permissions."
+    },
+    {
+      "decisionId": "eligibility-conditional-open-synthesis",
+      "scope": {
+        "scopeType": "dataset-mix",
+        "ids": [
+          "musdb18-hq",
+          "open-multitrack-testbed",
+          "slakh2100",
+          "fma",
+          "aam"
+        ]
+      },
+      "eligibility": "commercial-review-required",
+      "blockingIssues": [
+        "mixed-licenses",
+        "missing-rights",
+        "missing-provenance",
+        "quality-mismatch",
+        "unknown-license"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "checksums",
+        "source-identity-report",
+        "split-report",
+        "quality-screen",
+        "legal-approval"
+      ],
+      "owner": "ML/data owner and legal reviewer",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Do not use for release-intent training until item-level rights and quality evidence are complete."
+    },
+    {
+      "decisionId": "eligibility-perceptual-validation",
+      "scope": {
+        "scopeType": "dataset",
+        "ids": [
+          "odaq"
+        ]
+      },
+      "eligibility": "prototype-ready",
+      "blockingIssues": [
+        "legal-review"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "checksums",
+        "objective-metrics",
+        "listening-evidence"
+      ],
+      "owner": "Validation owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Allowed only as held-out metric calibration material after release-specific rights are verified."
+    },
+    {
+      "decisionId": "eligibility-rejected-sources",
+      "scope": {
+        "scopeType": "dataset-mix",
+        "ids": [
+          "streaming-leaked-uploads"
+        ]
+      },
+      "eligibility": "rejected",
+      "blockingIssues": [
+        "rejected-source",
+        "missing-rights",
+        "unknown-license"
+      ],
+      "requiredEvidence": [
+        "legal-approval"
+      ],
+      "owner": "Release owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Excluded from training, validation, benchmarking, and model-derived artifacts."
+    },
+    {
+      "decisionId": "eligibility-commercial-stem-stores",
+      "scope": {
+        "scopeType": "dataset",
+        "ids": [
+          "commercial-stem-stores"
+        ]
+      },
+      "eligibility": "commercial-review-required",
+      "blockingIssues": [
+        "gated-access",
+        "legal-review"
+      ],
+      "requiredEvidence": [
+        "license-ledger",
+        "checksums",
+        "legal-approval",
+        "attribution-package"
+      ],
+      "owner": "Release owner",
+      "decisionDate": "2026-05-18",
+      "reviewNotes": "Hold until a negotiated ML/data license explicitly permits training and derived model artifacts."
+    }
+  ]
+}

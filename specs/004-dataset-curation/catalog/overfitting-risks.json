@@ -1,0 +1,259 @@
+{
+  "schemaVersion": 1,
+  "risks": [
+    {
+      "riskId": "risk-sonicmaster-dataset",
+      "candidateId": "sonicmaster-dataset",
+      "riskLevel": "high",
+      "riskFactors": [
+        "synthetic recipes",
+        "source-derived variants",
+        "upstream catalog overlap"
+      ],
+      "mitigations": [
+        "Group by original Jamendo source ID.",
+        "Ablate by degradation family.",
+        "Evaluate on real unmastered material separately."
+      ],
+      "cannotProve": [
+        "Real pre-master performance by itself.",
+        "Commercial readiness without rights audit."
+      ]
+    },
+    {
+      "riskId": "risk-cambridge-mt",
+      "candidateId": "cambridge-mt",
+      "riskLevel": "high",
+      "riskFactors": [
+        "small catalog",
+        "artist overlap",
+        "educational license",
+        "possible cross-dataset overlap"
+      ],
+      "mitigations": [
+        "Split by project and artist.",
+        "Deduplicate against MUSDB18-HQ, MedleyDB, and SolidStateBusComp.",
+        "Use as research-only validation and synthesis source."
+      ],
+      "cannotProve": [
+        "Commercial release readiness.",
+        "Broad mastering quality alone."
+      ]
+    },
+    {
+      "riskId": "risk-solidstatebuscomp",
+      "candidateId": "solidstatebuscomp",
+      "riskLevel": "critical",
+      "riskFactors": [
+        "repeated parameter sweeps",
+        "derived from 175 source songs",
+        "effect-specific labels"
+      ],
+      "mitigations": [
+        "Split by source song only.",
+        "Use for dynamics pretraining, not full mastering.",
+        "Keep all compressor settings from one source in one split."
+      ],
+      "cannotProve": [
+        "Full mastering quality.",
+        "Generalization beyond bus compression."
+      ]
+    },
+    {
+      "riskId": "risk-musdb18-hq",
+      "candidateId": "musdb18-hq",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "small catalog",
+        "known errata",
+        "possible overlap with other corpora",
+        "no mastered labels"
+      ],
+      "mitigations": [
+        "Respect official train/test split.",
+        "Deduplicate upstream origins.",
+        "Use synthetic mastering targets only."
+      ],
+      "cannotProve": [
+        "Direct mastered/unmastered supervision."
+      ]
+    },
+    {
+      "riskId": "risk-medleydb-2",
+      "candidateId": "medleydb-2",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "small catalog",
+        "mastered status ambiguity",
+        "artist overlap"
+      ],
+      "mitigations": [
+        "Split by song and artist.",
+        "Do not treat mix files as verified mastered targets.",
+        "Use synthetic targets or manual relabeling."
+      ],
+      "cannotProve": [
+        "Verified mastering target quality without relabeling."
+      ]
+    },
+    {
+      "riskId": "risk-moisesdb",
+      "candidateId": "moisesdb",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "stem taxonomy mismatch",
+        "non-commercial/share-alike restrictions",
+        "source separation labels not mastering labels"
+      ],
+      "mitigations": [
+        "Normalize taxonomy.",
+        "Split by source track.",
+        "Use for synthesis and robustness only."
+      ],
+      "cannotProve": [
+        "Commercial release readiness.",
+        "Mastering quality without synthetic or manual targets."
+      ]
+    },
+    {
+      "riskId": "risk-open-multitrack-testbed",
+      "candidateId": "open-multitrack-testbed",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "current access unknown",
+        "format inconsistency",
+        "item-level license uncertainty"
+      ],
+      "mitigations": [
+        "Verify current catalog and item-level rights.",
+        "Normalize metadata before ingestion.",
+        "Hold until access is confirmed."
+      ],
+      "cannotProve": [
+        "Anything before access and license verification."
+      ]
+    },
+    {
+      "riskId": "risk-slakh2100",
+      "candidateId": "slakh2100",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "synthetic timbres",
+        "mono-only material",
+        "known duplicate MIDI issue"
+      ],
+      "mitigations": [
+        "Exclude omitted duplicate tracks.",
+        "Label stereo conversions as synthetic.",
+        "Use only as auxiliary pretraining or pipeline testing."
+      ],
+      "cannotProve": [
+        "Professional stereo mastering quality."
+      ]
+    },
+    {
+      "riskId": "risk-mtg-jamendo",
+      "candidateId": "mtg-jamendo",
+      "riskLevel": "high",
+      "riskFactors": [
+        "not paired",
+        "per-track licenses",
+        "upstream overlap with Jamendo-derived datasets"
+      ],
+      "mitigations": [
+        "Capture item-level licenses.",
+        "Use upstream Jamendo IDs for split isolation.",
+        "Use as reference-only unless degraded pairs are generated."
+      ],
+      "cannotProve": [
+        "Supervised mastering quality."
+      ]
+    },
+    {
+      "riskId": "risk-fma",
+      "candidateId": "fma",
+      "riskLevel": "high",
+      "riskFactors": [
+        "MP3 encoding in common subsets",
+        "artist and album overlap",
+        "variable audio licenses",
+        "not paired"
+      ],
+      "mitigations": [
+        "Filter by license.",
+        "Screen codec artifacts.",
+        "Split by artist and album."
+      ],
+      "cannotProve": [
+        "High-fidelity paired reconstruction quality."
+      ]
+    },
+    {
+      "riskId": "risk-odaq",
+      "candidateId": "odaq",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "small benchmark",
+        "not mastering-specific",
+        "validation-only subjective labels"
+      ],
+      "mitigations": [
+        "Keep held-out-only.",
+        "Use for metric calibration, not training."
+      ],
+      "cannotProve": [
+        "Mastering model training quality."
+      ]
+    },
+    {
+      "riskId": "risk-aam",
+      "candidateId": "aam",
+      "riskLevel": "medium",
+      "riskFactors": [
+        "artificial composition",
+        "synthetic timbres",
+        "dataset license unverified"
+      ],
+      "mitigations": [
+        "Verify dataset rights.",
+        "Use as pipeline/debugging data only."
+      ],
+      "cannotProve": [
+        "Real music mastering quality."
+      ]
+    },
+    {
+      "riskId": "risk-commercial-stem-stores",
+      "candidateId": "commercial-stem-stores",
+      "riskLevel": "critical",
+      "riskFactors": [
+        "account-bound terms",
+        "no default ML training rights",
+        "non-reproducible benchmark"
+      ],
+      "mitigations": [
+        "Obtain custom ML/data license.",
+        "Hold until rights are explicit."
+      ],
+      "cannotProve": [
+        "Any training suitability under ordinary terms."
+      ]
+    },
+    {
+      "riskId": "risk-streaming-leaked-uploads",
+      "candidateId": "streaming-leaked-uploads",
+      "riskLevel": "critical",
+      "riskFactors": [
+        "rights violations",
+        "unknown provenance",
+        "model contamination"
+      ],
+      "mitigations": [
+        "Reject and exclude from all manifests."
+      ],
+      "cannotProve": [
+        "Any lawful or reproducible dataset use."
+      ]
+    }
+  ]
+}

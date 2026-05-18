@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "risks": [
+    {
+      "riskId": "overlap-cambridge-musdb-medleydb",
+      "candidateIds": [
+        "cambridge-mt",
+        "musdb18-hq",
+        "medleydb-2"
+      ],
+      "riskType": "same-work-or-derived-project",
+      "riskLevel": "high",
+      "description": "Some public music-production corpora may share upstream projects, artists, or derived mixes.",
+      "requiredResolution": "Create a source identity registry and keep any suspected overlap in the same split or excluded.",
+      "status": "requires-review"
+    },
+    {
+      "riskId": "overlap-solidstatebuscomp-cambridge",
+      "candidateIds": [
+        "solidstatebuscomp",
+        "cambridge-mt"
+      ],
+      "riskType": "derived-render",
+      "riskLevel": "critical",
+      "description": "SolidStateBusComp is derived from Cambridge songs processed through compressor settings.",
+      "requiredResolution": "Group all source songs and all parameter settings with their Cambridge source project.",
+      "status": "known-overlap"
+    },
+    {
+      "riskId": "overlap-sonicmaster-jamendo-mtg",
+      "candidateIds": [
+        "sonicmaster-dataset",
+        "mtg-jamendo"
+      ],
+      "riskType": "upstream-catalog",
+      "riskLevel": "high",
+      "description": "SonicMasterDataset is Jamendo-derived and MTG-Jamendo is also based on Jamendo tracks.",
+      "requiredResolution": "Use upstream Jamendo IDs when available and prevent original works from crossing splits.",
+      "status": "requires-review"
+    },
+    {
+      "riskId": "overlap-fma-artist-album",
+      "candidateIds": [
+        "fma"
+      ],
+      "riskType": "same-artist",
+      "riskLevel": "medium",
+      "description": "FMA contains multiple tracks from the same artists and albums.",
+      "requiredResolution": "Split by artist/album identity rather than file identity.",
+      "status": "requires-review"
+    },
+    {
+      "riskId": "overlap-synthetic-render-families",
+      "candidateIds": [
+        "sonicmaster-dataset",
+        "solidstatebuscomp",
+        "slakh2100",
+        "aam"
+      ],
+      "riskType": "derived-render",
+      "riskLevel": "high",
+      "description": "Synthetic degradation, compressor sweeps, MIDI renders, and generated variants can create many files from one source.",
+      "requiredResolution": "Assign a derived family ID and split all variants together.",
+      "status": "requires-review"
+    }
+  ]
+}

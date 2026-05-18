@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "patterns": [
+    {
+      "licensePattern": "permissive",
+      "commercialEligibility": "requires-review",
+      "defaultUse": "Potentially usable after attribution, source URL, checksum, and derivative obligations are recorded.",
+      "requiredControls": [
+        "license-ledger",
+        "attribution-package",
+        "legal-review-for-release"
+      ]
+    },
+    {
+      "licensePattern": "attribution",
+      "commercialEligibility": "requires-review",
+      "defaultUse": "Research use is usually viable; release use depends on full attribution and upstream terms.",
+      "requiredControls": [
+        "attribution-package",
+        "upstream-license-audit"
+      ]
+    },
+    {
+      "licensePattern": "non-commercial",
+      "commercialEligibility": "blocked",
+      "defaultUse": "Research-only unless separate commercial permission is obtained.",
+      "requiredControls": [
+        "research-only-label",
+        "artifact-isolation"
+      ]
+    },
+    {
+      "licensePattern": "share-alike",
+      "commercialEligibility": "requires-review",
+      "defaultUse": "Research-only until legal review determines whether derived dataset or model obligations apply.",
+      "requiredControls": [
+        "legal-review",
+        "artifact-isolation"
+      ]
+    },
+    {
+      "licensePattern": "educational-only",
+      "commercialEligibility": "blocked",
+      "defaultUse": "Educational and internal research demos only.",
+      "requiredControls": [
+        "copyright-holder-permission-before-release"
+      ]
+    },
+    {
+      "licensePattern": "mixed-per-track",
+      "commercialEligibility": "requires-review",
+      "defaultUse": "Only items with captured compatible licenses may be used.",
+      "requiredControls": [
+        "item-level-license-ledger",
+        "license-filtered-subset"
+      ]
+    },
+    {
+      "licensePattern": "gated",
+      "commercialEligibility": "requires-review",
+      "defaultUse": "Access and redistribution terms must be reviewed before ingestion.",
+      "requiredControls": [
+        "access-terms-record",
+        "approval-status"
+      ]
+    },
+    {
+      "licensePattern": "unknown",
+      "commercialEligibility": "unknown",
+      "defaultUse": "Hold or reject until rights are known.",
+      "requiredControls": [
+        "rights-investigation"
+      ]
+    },
+    {
+      "licensePattern": "rejected",
+      "commercialEligibility": "blocked",
+      "defaultUse": "No training, validation, benchmarking, or model artifact use.",
+      "requiredControls": [
+        "rejection-reason"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "roles": [
+    {
+      "role": "primary-paired-training",
+      "allowedUse": "Research training with aligned input and target audio pairs.",
+      "disallowedUse": "Commercial model release without item-level rights, source identity, split, and quality evidence.",
+      "requiredControls": [
+        "license-ledger",
+        "source-identity-report",
+        "split-report",
+        "quality-screen"
+      ]
+    },
+    {
+      "role": "synthetic-pair-generation",
+      "allowedUse": "Create aligned unmastered/mastered pairs from stems or clean sources using documented processing recipes.",
+      "disallowedUse": "Claim real pre-master performance from synthetic variants alone.",
+      "requiredControls": [
+        "processing-recipe",
+        "source-level-splits",
+        "license-ledger",
+        "quality-screen"
+      ]
+    },
+    {
+      "role": "auxiliary-pretraining",
+      "allowedUse": "Pretrain low-level spectral, dynamics, or reconstruction behavior before supervised mastering research.",
+      "disallowedUse": "Use as sole evidence for mastering quality.",
+      "requiredControls": [
+        "domain-label",
+        "ablation-report",
+        "held-out-real-music-validation"
+      ]
+    },
+    {
+      "role": "reference-distribution",
+      "allowedUse": "Estimate genre, loudness, spectral, or quality distributions for target selection and balancing.",
+      "disallowedUse": "Supervised input-target training unless degraded inputs are generated and rights are captured.",
+      "requiredControls": [
+        "item-level-license",
+        "quality-screen",
+        "artist-level-splits"
+      ]
+    },
+    {
+      "role": "perceptual-validation",
+      "allowedUse": "Calibrate objective metrics and artifact sensitivity against subjective scores.",
+      "disallowedUse": "Training the mastering model unless a later plan explicitly approves that use.",
+      "requiredControls": [
+        "held-out-only",
+        "metric-calibration-report"
+      ]
+    },
+    {
+      "role": "pipeline-debugging",
+      "allowedUse": "Test loaders, schemas, split logic, and rendering workflows with non-release data.",
+      "disallowedUse": "Quality claims or release-intent training.",
+      "requiredControls": [
+        "synthetic-label",
+        "excluded-from-release-training"
+      ]
+    },
+    {
+      "role": "hold",
+      "allowedUse": "Track a dataset while unresolved access, license, or metadata questions remain.",
+      "disallowedUse": "Training, validation, or release evidence.",
+      "requiredControls": [
+        "follow-up-owner",
+        "blocking-issue-list"
+      ]
+    },
+    {
+      "role": "reject",
+      "allowedUse": "Document why a source is excluded.",
+      "disallowedUse": "Any training, validation, benchmarking, or data-derived model artifact use.",
+      "requiredControls": [
+        "rejection-reason"
+      ]
+    }
+  ]
+}
