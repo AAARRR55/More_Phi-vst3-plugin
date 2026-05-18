@@ -345,9 +345,14 @@ void AIChatPanel::loadLLMSettings()
 void AIChatPanel::refreshLLMToolbar()
 {
     const auto providerName = llmSettings_.getActiveProviderDisplayName();
+    const auto status = llmSettings_.getToolbarStatus();
     providerLabel_.setText("Provider: " + (providerName.isEmpty() ? "None" : providerName),
                            juce::dontSendNotification);
-    statusChip_.setText(toDisplayString(llmSettings_.getToolbarStatus()), juce::dontSendNotification);
+    statusChip_.setText(toDisplayString(status), juce::dontSendNotification);
+    statusChip_.setColour(juce::Label::textColourId,
+        status == LLMValidationStatus::Active
+            ? juce::Colour(0xff4ade80)
+            : juce::Colour(0xffa5afbf));
 }
 
 void AIChatPanel::showLLMSettingsDialog()
@@ -952,35 +957,60 @@ void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::Strin
     transcript_.updateLastMessage(text.isEmpty() ? "(empty response)" : text);
 }
 
+void AIChatPanel::paint(juce::Graphics& g)
+{
+    g.fillAll(juce::Colour(0xff0d1b2a));
+
+    const auto transcriptBounds = transcript_.getBounds().toFloat();
+    if (! transcriptBounds.isEmpty())
+    {
+        g.setColour(juce::Colour(0xff171a1f));
+        g.fillRoundedRectangle(transcriptBounds, 4.0f);
+        g.setColour(juce::Colour(0xff1e3a5f).withAlpha(0.7f));
+        g.drawRoundedRectangle(transcriptBounds.reduced(0.5f), 4.0f, 1.0f);
+    }
+
+    const auto statusBounds = statusChip_.getBounds().toFloat().reduced(1.0f, 2.0f);
+    if (! statusBounds.isEmpty())
+    {
+        g.setColour(juce::Colour(0xff1a2742));
+        g.fillRoundedRectangle(statusBounds, 7.0f);
+        g.setColour(juce::Colour(0xff1e3a5f));
+        g.drawRoundedRectangle(statusBounds, 7.0f, 1.0f);
+    }
+}
+
 void AIChatPanel::resized()
 {
-    auto area = getLocalBounds().reduced(8);
+    auto area = getLocalBounds().reduced(10);
 
     // ── Toolbar row ──────────────────────────────────────────────────────────
-    auto toolbar = area.removeFromTop(28);
-    settingsButton_.setBounds(toolbar.removeFromRight(110).reduced(2, 1));
-    approvalsButton_.setBounds(toolbar.removeFromRight(88).reduced(2, 1));
-    statusChip_.setBounds(toolbar.removeFromRight(90).reduced(4, 3));
+    auto toolbar = area.removeFromTop(32);
+    const bool compact = toolbar.getWidth() < 640;
+    settingsButton_.setBounds(toolbar.removeFromRight(compact ? 104 : 126).reduced(3, 2));
+    approvalsButton_.setBounds(toolbar.removeFromRight(compact ? 90 : 104).reduced(3, 2));
+    statusChip_.setBounds(toolbar.removeFromRight(compact ? 78 : 92).reduced(5, 4));
     providerLabel_.setBounds(toolbar.reduced(0, 1));
 
-    area.removeFromTop(4);
+    area.removeFromTop(8);
 
     // ── Input row ────────────────────────────────────────────────────────────
-    auto inputRow = area.removeFromBottom(34);
-    inputRow.removeFromTop(4);
-    clearButton_.setBounds(inputRow.removeFromRight(60).reduced(2, 1));
-    cancelButton_.setBounds(inputRow.removeFromRight(64).reduced(2, 1));
-    sendButton_ .setBounds(inputRow.removeFromRight(60).reduced(2, 1));
-    prompt_.setBounds(inputRow.reduced(0, 1));
+    auto inputRow = area.removeFromBottom(38);
+    area.removeFromBottom(8);
+    clearButton_.setBounds(inputRow.removeFromRight(64).reduced(3, 3));
+    cancelButton_.setBounds(inputRow.removeFromRight(72).reduced(3, 3));
+    sendButton_ .setBounds(inputRow.removeFromRight(66).reduced(3, 3));
+    prompt_.setBounds(inputRow.reduced(0, 3));
 
     if (approvalPanel_.isVisible())
     {
         area.removeFromBottom(6);
-        auto approvalRow = area.removeFromBottom(72);
+        auto approvalRow = area.removeFromBottom(70);
         approvalPanel_.setBounds(approvalRow);
 
-        auto approvalContent = approvalRow.reduced(10, 16);
-        auto buttonArea = approvalContent.removeFromRight(230);
+        auto approvalContent = approvalRow.reduced(10, 15);
+        const int approvalButtonWidth = juce::jmin(230, approvalContent.getWidth());
+        auto buttonArea = approvalContent.removeFromRight(approvalButtonWidth);
         approvalRefreshButton_.setBounds(buttonArea.removeFromRight(76).reduced(3, 5));
         approvalRejectButton_.setBounds(buttonArea.removeFromRight(70).reduced(3, 5));
         approvalApproveButton_.setBounds(buttonArea.removeFromRight(78).reduced(3, 5));
@@ -1002,11 +1032,12 @@ void AIChatPanel::resized()
     if (workflowPanel_.isVisible())
     {
         area.removeFromBottom(6);
-        auto workflowRow = area.removeFromBottom(72);
+        auto workflowRow = area.removeFromBottom(70);
         workflowPanel_.setBounds(workflowRow);
 
-        auto workflowContent = workflowRow.reduced(10, 16);
-        auto buttonArea = workflowContent.removeFromRight(410);
+        auto workflowContent = workflowRow.reduced(10, 15);
+        const int workflowButtonWidth = juce::jmin(410, workflowContent.getWidth());
+        auto buttonArea = workflowContent.removeFromRight(workflowButtonWidth);
         workflowUndoButton_.setBounds(buttonArea.removeFromRight(68).reduced(3, 5));
         workflowTooMuchButton_.setBounds(buttonArea.removeFromRight(84).reduced(3, 5));
         workflowBetterButton_.setBounds(buttonArea.removeFromRight(70).reduced(3, 5));
@@ -1031,6 +1062,7 @@ void AIChatPanel::resized()
 
     // ── Transcript fills the rest ─────────────────────────────────────────────
     transcript_.setBounds(area);
+    repaint();
 }
 
 } // namespace more_phi

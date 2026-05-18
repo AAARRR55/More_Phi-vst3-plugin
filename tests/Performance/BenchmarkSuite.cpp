@@ -13,11 +13,14 @@
 #include <thread>
 #include <iomanip>
 #include <cstring>
+#include <limits>
 
 // Include the components to benchmark
 #include "Core/InterpolationEngine.h"
 #include "Core/SnapshotBank.h"
 #include "Core/PhysicsEngine.h"
+#include "AI/Dataset/NeuralMasteringFeatureExtractor.h"
+#include "AI/NeuralMasteringController.h"
 
 namespace more_phi {
 namespace benchmark {
@@ -238,6 +241,45 @@ BenchmarkResult benchmark2DInterpolation(int iterations)
     };
 }
 
+BenchmarkResult benchmarkNeuralMasteringController(int iterations)
+{
+    NeuralMasteringFeatureExtractor extractor;
+    auto extracted = extractor.extractFromSummary(48000.0, 2, 512, 1000, -14.0f, -1.0f, 0.5f);
+
+    NeuralMasteringRuntimeState runtime;
+    runtime.currentFrame = 1000;
+    runtime.sampleRate = 48000.0;
+    runtime.channelCount = 2;
+    runtime.layout = NeuralMasteringLayout::Stereo;
+
+    NeuralMasteringController controller;
+
+    Timer timer;
+    double totalTime = 0.0;
+    double minTime = std::numeric_limits<double>::max();
+    double maxTime = 0.0;
+
+    for (int i = 0; i < iterations; ++i)
+    {
+        timer.start();
+        auto status = controller.processFeatureFrame(extracted.frame, runtime, false);
+        double elapsed = timer.stopUs();
+        totalTime += elapsed;
+        minTime = std::min(minTime, elapsed);
+        maxTime = std::max(maxTime, elapsed);
+        if (!status.validationAccepted)
+            maxTime = std::numeric_limits<double>::max();
+    }
+
+    const double avgTime = totalTime / iterations;
+    return {
+        "Neural mastering controller (outside callback)",
+        avgTime, minTime, maxTime,
+        1.0 / (avgTime * 1e-6),
+        avgTime < 100.0 && maxTime < 1000.0
+    };
+}
+
 // ── Memory Footprint Test ──────────────────────────────────────────────────────
 
 bool testMemoryFootprint()
@@ -338,6 +380,7 @@ int runBenchmarks()
     results.push_back(benchmarkElasticPhysics(100000));
     results.push_back(benchmarkDriftPhysics(100000));
     results.push_back(benchmark2DInterpolation(5000));
+    results.push_back(benchmarkNeuralMasteringController(5000));
 
     for (const auto& r : results)
     {

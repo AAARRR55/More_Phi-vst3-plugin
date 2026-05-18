@@ -50,6 +50,7 @@
 #include "MeterWindowAccumulator.h"
 #include "RealtimeSpectrumAnalyzer.h"
 #include "StereoFieldAnalyzer.h"
+#include "NeuralMasteringTypes.h"
 #include "NeuralCompressor.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
@@ -123,6 +124,13 @@ public:
 
     void setTargetLUFS(float lufs) noexcept { normalizer_.setTargetLUFS(lufs); }
 
+    // ── Neural mastering validated-plan handoff (non-audio thread) ───────────
+
+    bool applyValidatedPlan(const ValidatedNeuralMasteringPlan& plan) noexcept;
+    void clearLastSafeNeuralMasteringPlan() noexcept;
+    [[nodiscard]] bool hasLastSafeNeuralMasteringPlan() const noexcept { return hasLastSafeNeuralPlan_; }
+    [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept { return lastSafeNeuralPlan_; }
+
 private:
     void timerCallback() override;
     void applyPlan(const MultiEffectPlan& plan);
@@ -165,6 +173,8 @@ private:
     int tickCount_            = 0;
     int plannerUpdateInterval_= 300;  // ~30s at 10Hz timer
     float smoothedSpectralTilt_ = 0.0f;
+    ValidatedNeuralMasteringPlan lastSafeNeuralPlan_ {};
+    bool hasLastSafeNeuralPlan_ = false;
 };
 
 } // namespace more_phi

@@ -29,6 +29,10 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     setResizable(true, true);
     setResizeLimits(720, 600, 1600, 1120);
 
+    paramToggleBtn_.setButtonText("Params >");
+    paramToggleBtn_.setTooltip("Show or hide hosted plugin parameters.");
+    openPluginBtn_.setTooltip("Open the hosted plugin editor in a separate window.");
+
     // ── Always-visible components ──────────────────────────────────────────────
     addAndMakeVisible(morphPad);
     addAndMakeVisible(snapFader);
@@ -52,8 +56,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         paramPanel.setVisible(paramPanelVisible_);
         paramToggleBtn_.setButtonText(
         paramPanelVisible_
-            ? juce::String::charToString(0x25C2) + juce::String(" Params")
-            : juce::String("Params ") + juce::String::charToString(0x25B8));
+            ? juce::String("< Params")
+            : juce::String("Params >"));
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
@@ -107,17 +111,19 @@ void MorePhiEditor::paint(juce::Graphics& g)
         lnf.surfaceColour.darker(0.02f),   0, static_cast<float>(titleArea.getBottom()), false));
     g.fillRect(titleArea);
 
+    auto titleTextArea = titleArea.reduced(14, 0);
+
     // Logo
     g.setColour(lnf.accentCoral);
     g.setFont(lnf.makeScaledFont(20.0f, juce::Font::bold));
-    g.drawText("More-Phi", titleArea.reduced(14, 0).removeFromLeft(160),
-               juce::Justification::centredLeft);
+    g.drawText("More-Phi", titleTextArea.removeFromLeft(96),
+               juce::Justification::centredLeft, false);
 
     // Version
     g.setColour(lnf.textDim);
     g.setFont(lnf.makeScaledFont(10.0f));
-    g.drawText("v3.3.0", titleArea.reduced(14, 0).removeFromLeft(200),
-               juce::Justification::centredLeft);
+    g.drawText("v3.3.0", titleTextArea.removeFromLeft(72).translated(0, 1),
+               juce::Justification::centredLeft, false);
 
     // RMS meter
     auto meterArea = titleArea.removeFromRight(120).reduced(10, 14);
@@ -182,7 +188,13 @@ void MorePhiEditor::resized()
 
     // ── Tab bar ────────────────────────────────────────────────────────────────
     const bool compactWidth = area.getWidth() < 760;
-    const int tabContentHeight = compactWidth ? 300 : 260;
+    const int baseTabContentHeight = compactWidth ? 300 : 260;
+    const int aiTabContentHeight = compactWidth
+        ? juce::jmax(baseTabContentHeight, area.getHeight() - 220)
+        : juce::jmax(baseTabContentHeight, area.getHeight() - 180);
+    const int tabContentHeight = activeTab_ == V2TabBar::AI
+        ? juce::jlimit(baseTabContentHeight, area.getHeight() - 120, aiTabContentHeight)
+        : baseTabContentHeight;
     auto tabContent = area.removeFromBottom(tabContentHeight);
 
     // 3px gap between tab content and tab bar
@@ -192,18 +204,21 @@ void MorePhiEditor::resized()
     auto tabBarArea = area.removeFromBottom(28);
     tabBar_.setBounds(tabBarArea);
 
-    // ── Main area: Snap fader + MorphPad (FlexBox row) ──────────────────────────
+    // ── Main area: Snap fader + square MorphPad ────────────────────────────────
     {
-        juce::FlexBox mainRow;
-        mainRow.flexDirection = juce::FlexBox::Direction::row;
-        mainRow.items.add(juce::FlexItem(snapFader)
-            .withWidth(64.0f)
-            .withMargin(juce::FlexItem::Margin(8, 2, 8, 4)));
-        mainRow.items.add(juce::FlexItem(morphPad)
-            .withFlex(1)
-            .withMargin(juce::FlexItem::Margin(6, 4, 6, 6)));
-        mainRow.performLayout(area);
-        snapshotRing.setBounds(morphPad.getBounds());
+        auto mainArea = area.reduced(compactWidth ? 6 : 8, 6);
+
+        const int faderWidth = compactWidth ? 48 : 56;
+        snapFader.setBounds(mainArea.removeFromLeft(faderWidth).reduced(4, 0));
+        mainArea.removeFromLeft(compactWidth ? 6 : 10);
+
+        const int availableSide = juce::jmin(mainArea.getWidth(), mainArea.getHeight());
+        const int padSide = juce::jlimit(96, 320, availableSide);
+        const auto padBounds = juce::Rectangle<int>(0, 0, padSide, padSide)
+            .withCentre(mainArea.getCentre());
+
+        morphPad.setBounds(padBounds);
+        snapshotRing.setBounds(padBounds);
     }
 
     // ── Tab content layout (FlexBox column with gaps) ──────────────────────────
@@ -248,6 +263,7 @@ void MorePhiEditor::resized()
 void MorePhiEditor::switchTab(int tabIndex)
 {
     activeTab_ = tabIndex;
+    tabBar_.setSelectedTab(tabIndex);
 
     setClassicTabVisible(tabIndex == V2TabBar::Classic);
     setEngineTabVisible(tabIndex == V2TabBar::Engine);

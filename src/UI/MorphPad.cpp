@@ -362,7 +362,7 @@ void MorphPad::paint(juce::Graphics& g)
     const char* physNames[] = {"Direct", "Elastic", "Drift"};
     int srcIdx = juce::jlimit(0, 1, proc_.getMorphSource());
     int physIdx = juce::jlimit(0, 2, proc_.getPhysicsMode());
-    float modeFontSize = juce::jmax(bounds.getHeight() * 0.14f, 10.0f);
+    float modeFontSize = juce::jlimit(10.0f, 13.0f, bounds.getHeight() * 0.08f);
     g.setColour(textDim().withAlpha(0.8f));
     g.setFont(modeFontSize);
     g.drawText(juce::String(sourceNames[srcIdx]) + " \u00B7 " + juce::String(physNames[physIdx]),

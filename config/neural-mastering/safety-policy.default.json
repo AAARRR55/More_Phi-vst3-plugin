@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "featureSchemaVersion": 1,
+  "planSchemaVersion": 1,
+  "minConfidence": 0.75,
+  "maxPlanAgeFrames": 96000,
+  "allowedRuntimeModes": [
+    "offline",
+    "preview",
+    "background",
+    "message-thread",
+    "queued-low-rate-control"
+  ],
+  "prohibitedRuntimeModes": [
+    "audio-callback-prohibited"
+  ],
+  "targetRanges": {
+    "minimum": -1.0,
+    "maximum": 1.0
+  },
+  "maxDeltaPerPlan": {
+    "eq": 0.15,
+    "dynamics": 0.12,
+    "stereo": 0.10,
+    "harmonic": 0.08,
+    "limiter": 0.05,
+    "loudness": 0.10
+  },
+  "highRiskControls": {
+    "eq": false,
+    "dynamics": false,
+    "stereo": false,
+    "harmonic": true,
+    "limiter": true,
+    "loudness": false
+  },
+  "fallbackPriority": [
+    "last-safe-hold",
+    "deterministic-baseline",
+    "review-only",
+    "transparent-bypass",
+    "reject"
+  ],
+  "requiredRuntimeGates": [
+    "G04",
+    "G06",
+    "G07",
+    "G08",
+    "G09"
+  ]
+}

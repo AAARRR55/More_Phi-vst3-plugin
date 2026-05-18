@@ -41,6 +41,12 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
+#if MORE_PHI_TEST_MODE
+    void selectTabForTests(int tabIndex) { switchTab(tabIndex); }
+    juce::Rectangle<int> getAIChatBoundsForTests() const { return aiChatPage_ != nullptr ? aiChatPage_->getBounds() : juce::Rectangle<int>(); }
+    juce::Rectangle<int> getControlStripBoundsForTests() const { return controlStrip.getBounds(); }
+#endif
+
 private:
     void timerCallback() override;
     void switchTab(int tabIndex);

@@ -1,8 +1,10 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "Core/NeuralMasteringSafetyPolicy.h"
 #include "Plugin/PluginProcessor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -189,6 +191,101 @@ TEST_CASE("VST3 audio signal accuracy preserves stereo consistency for identical
 
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         REQUIRE(buffer.getSample(0, sample) == Catch::Approx(buffer.getSample(1, sample)).margin(0.0f));
+
+    processor.releaseResources();
+}
+
+TEST_CASE("VST3 audio signal accuracy preserves invalid neural plan state", "[integration][vst3][audio][NeuralMasteringController]")
+{
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    ValidatedNeuralMasteringPlan validPlan;
+    validPlan.valid = true;
+    validPlan.sourcePlanId = 90;
+    validPlan.appliedMask.eq = true;
+    validPlan.projectedTargets.eq[0] = 0.1f;
+    REQUIRE(processor.getAutoMasteringEngine().applyValidatedPlan(validPlan));
+
+    ValidatedNeuralMasteringPlan invalidPlan;
+    invalidPlan.valid = false;
+    invalidPlan.sourcePlanId = 91;
+    invalidPlan.fallbackMode = NeuralMasteringFallbackMode::Reject;
+    CHECK_FALSE(processor.getAutoMasteringEngine().applyValidatedPlan(invalidPlan));
+
+    CHECK(processor.hasLastSafeNeuralMasteringPlan());
+    CHECK(processor.getLastSafeNeuralMasteringPlan().sourcePlanId == 90);
+
+    auto buffer = makeStereoSineBuffer();
+    processOneBlock(processor, buffer);
+    requireFiniteSamples(buffer);
+
+    processor.releaseResources();
+}
+
+TEST_CASE("VST3 neural mastering plan transitions keep signal bounded and mono-compatible", "[integration][vst3][audio][NeuralMasteringController]")
+{
+    MorePhiProcessor processor;
+    processor.prepareToPlay(48000.0, 256);
+
+    auto& engine = processor.getAutoMasteringEngine();
+    engine.setActive(true);
+
+    ValidatedNeuralMasteringPlan initialPlan;
+    initialPlan.valid = true;
+    initialPlan.sourcePlanId = 100;
+    initialPlan.appliedMask.eq = true;
+    initialPlan.appliedMask.dynamics = true;
+    initialPlan.appliedMask.stereo = true;
+    initialPlan.appliedMask.limiter = true;
+    initialPlan.appliedMask.loudness = true;
+    initialPlan.projectedTargets.eq[0] = 0.05f;
+    initialPlan.projectedTargets.dynamics[0] = -0.05f;
+    initialPlan.projectedTargets.stereo[0] = 0.02f;
+    initialPlan.projectedTargets.limiter[0] = -0.10f;
+    initialPlan.projectedTargets.loudness[0] = 0.0f;
+    REQUIRE(engine.applyValidatedPlan(initialPlan));
+
+    auto before = makeStereoConstantBuffer(0.08f, 0.08f);
+    processOneBlock(processor, before);
+    requireFiniteSamples(before);
+
+    ValidatedNeuralMasteringPlan transitionedPlan = initialPlan;
+    transitionedPlan.sourcePlanId = 101;
+    transitionedPlan.projectedTargets.eq[0] = 0.10f;
+    transitionedPlan.projectedTargets.dynamics[0] = 0.02f;
+    transitionedPlan.projectedTargets.stereo[0] = 0.04f;
+    transitionedPlan.projectedTargets.limiter[0] = -0.20f;
+    transitionedPlan.projectedTargets.loudness[0] = -0.05f;
+    REQUIRE(engine.applyValidatedPlan(transitionedPlan));
+
+    auto after = makeStereoConstantBuffer(0.08f, 0.08f);
+    processOneBlock(processor, after);
+    requireFiniteSamples(after);
+
+    float maxAbs = 0.0f;
+    float maxDiscontinuity = 0.0f;
+    for (int sample = 0; sample < after.getNumSamples(); ++sample)
+    {
+        const float left = after.getSample(0, sample);
+        const float right = after.getSample(1, sample);
+        maxAbs = std::max(maxAbs, std::max(std::abs(left), std::abs(right)));
+        maxDiscontinuity = std::max(maxDiscontinuity, std::abs(left - before.getSample(0, sample)));
+        CHECK(left == Catch::Approx(right).margin(0.0001f));
+    }
+
+    CHECK(maxAbs <= 1.0f);
+    CHECK(maxDiscontinuity < 0.25f);
+    CHECK(engine.getTruePeak_dBTP() <= 0.0f);
+
+    setNormalizedWithGesture(requireParameter(processor, "bypass"), 1.0f);
+    auto bypassed = makeStereoSineBuffer();
+    const auto bypassBefore = copySamples(bypassed);
+    processOneBlock(processor, bypassed);
+    const auto bypassAfter = copySamples(bypassed);
+    REQUIRE(bypassAfter.size() == bypassBefore.size());
+    for (size_t i = 0; i < bypassBefore.size(); ++i)
+        CHECK(bypassAfter[i] == Catch::Approx(bypassBefore[i]).margin(0.0f));
 
     processor.releaseResources();
 }

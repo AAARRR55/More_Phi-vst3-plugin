@@ -1,0 +1,47 @@
+{
+  "modelId": "disabled-poc-neural-mastering",
+  "schemaVersion": 1,
+  "featureSchemaVersion": 1,
+  "outputSchemaVersion": 1,
+  "evidenceLevel": "planning",
+  "runtimeModes": [
+    "offline",
+    "preview"
+  ],
+  "audioCallbackInference": false,
+  "supportedSampleRates": [
+    44100.0,
+    48000.0,
+    88200.0,
+    96000.0
+  ],
+  "supportedLayouts": [
+    "mono",
+    "stereo"
+  ],
+  "backend": "disabled-metadata-only",
+  "licenseStatus": "unresolved",
+  "trainingDataSummary": {
+    "provenanceComplete": false,
+    "splitLeakageChecked": false,
+    "referenceQualityReviewed": false
+  },
+  "gateSummary": [
+    { "gateId": "G01", "status": "not-measured", "evidenceLevel": "planning", "summary": "Identity transparency not measured." },
+    { "gateId": "G02", "status": "not-measured", "evidenceLevel": "planning", "summary": "Composite objective quality not measured." },
+    { "gateId": "G03", "status": "not-measured", "evidenceLevel": "planning", "summary": "Blind listening evidence not collected." },
+    { "gateId": "G04", "status": "not-measured", "evidenceLevel": "planning", "summary": "No audio-callback inference is permitted." },
+    { "gateId": "G05", "status": "not-measured", "evidenceLevel": "planning", "summary": "CPU headroom not benchmarked." },
+    { "gateId": "G06", "status": "not-measured", "evidenceLevel": "planning", "summary": "Invalid output rejection requires safety tests." },
+    { "gateId": "G07", "status": "not-measured", "evidenceLevel": "planning", "summary": "Transition safety not measured." },
+    { "gateId": "G08", "status": "not-measured", "evidenceLevel": "planning", "summary": "Artifact rate not measured." },
+    { "gateId": "G09", "status": "not-measured", "evidenceLevel": "planning", "summary": "Fallback behavior requires automated validation." },
+    { "gateId": "G10", "status": "not-measured", "evidenceLevel": "planning", "summary": "Dataset governance review not complete." }
+  ],
+  "fallbackBehavior": {
+    "missingModel": "deterministic-baseline",
+    "invalidOutput": "reject",
+    "lowConfidence": "review-only",
+    "overload": "last-safe-hold"
+  }
+}

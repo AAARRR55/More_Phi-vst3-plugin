@@ -3,9 +3,14 @@
 #include "Plugin/PluginProcessor.h"
 #include "UI/Bindings/ParameterBinding.h"
 
+#include <cmath>
+
 namespace more_phi {
 
-SnapFader::SnapFader(MorePhiProcessor& p) : proc_(p) {}
+SnapFader::SnapFader(MorePhiProcessor& p) : proc_(p)
+{
+    startTimerHz(15);
+}
 
 void SnapFader::paint(juce::Graphics& g)
 {
@@ -24,17 +29,17 @@ void SnapFader::paint(juce::Graphics& g)
     g.fillRoundedRectangle(trackX - 2.5f, trackTop, 5, trackH, 2.5f);
 
     // Slot markers along the track
-    auto& bank = proc_.getSnapshotBank();
+    const uint16_t snapshotMask = getOccupiedSnapshotMask();
     int occupied = 0;
     for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
-        if (bank.isOccupied(i)) occupied++;
+        if ((snapshotMask & (uint16_t{1} << i)) != 0) occupied++;
 
     if (occupied > 1)
     {
         int idx = 0;
         for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
         {
-            if (!bank.isOccupied(i)) continue;
+            if ((snapshotMask & (uint16_t{1} << i)) == 0) continue;
             float frac = static_cast<float>(idx) / static_cast<float>(occupied - 1);
             float markerY = trackTop + (1.0f - frac) * trackH;
 
@@ -55,6 +60,9 @@ void SnapFader::paint(juce::Graphics& g)
 
     // Filled portion (from bottom to thumb)
     float faderPos = proc_.getFaderPos();
+    lastPaintedFaderPos_ = faderPos;
+    lastPaintedMorphSource_ = proc_.getMorphSource();
+    lastSnapshotMask_ = snapshotMask;
     float thumbY = trackTop + (1.0f - faderPos) * trackH;
 
     g.setColour(juce::Colour(0xffec415d).withAlpha(0.6f));
@@ -101,6 +109,29 @@ void SnapFader::updateValue(float yPos)
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
     proc_.setMorphSource(1);  // Switch to fader mode
     repaint();
+}
+
+uint16_t SnapFader::getOccupiedSnapshotMask() const
+{
+    uint16_t mask = 0;
+    auto& bank = proc_.getSnapshotBank();
+    for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+        if (bank.isOccupied(i))
+            mask = static_cast<uint16_t>(mask | (uint16_t{1} << i));
+    return mask;
+}
+
+void SnapFader::timerCallback()
+{
+    if (hasExternalStateChanged())
+        repaint();
+}
+
+bool SnapFader::hasExternalStateChanged() const
+{
+    return std::abs(proc_.getFaderPos() - lastPaintedFaderPos_) > 0.001f
+        || proc_.getMorphSource() != lastPaintedMorphSource_
+        || getOccupiedSnapshotMask() != lastSnapshotMask_;
 }
 
 } // namespace more_phi

@@ -21,6 +21,7 @@ class AIChatPanel final : public juce::Component
 public:
     explicit AIChatPanel(MorePhiProcessor& processor);
 
+    void paint(juce::Graphics& g) override;
     void resized() override;
 
     static bool detectsLocalMcpToolInventoryPromptForTest(const juce::String& text);

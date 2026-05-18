@@ -3,6 +3,8 @@
  */
 #include "ChatDisplay.h"
 
+#include <cmath>
+
 namespace more_phi {
 
 // ── Layout constants ────────────────────────────────────────────────────────
@@ -74,7 +76,7 @@ ChatDisplay::Canvas::Canvas()
     setInterceptsMouseClicks(false, false);
 }
 
-void ChatDisplay::Canvas::layout(int viewportWidth)
+void ChatDisplay::Canvas::layout(int viewportWidth, int viewportHeight)
 {
     const int textW = juce::jmax(1, viewportWidth - 2 * kPadX - kLabelW - kLabelGap);
 
@@ -83,7 +85,7 @@ void ChatDisplay::Canvas::layout(int viewportWidth)
         totalH += measureTextHeight(msg.text, textW, kFontSize) + kGap;
     totalH += kPadY;
 
-    setSize(viewportWidth, juce::jmax(1, totalH));
+    setSize(viewportWidth, juce::jmax(1, juce::jmax(viewportHeight, totalH)));
 }
 
 void ChatDisplay::Canvas::paint(juce::Graphics& g)
@@ -141,6 +143,9 @@ void ChatDisplay::Canvas::paint(juce::Graphics& g)
 // ── ChatDisplay ──────────────────────────────────────────────────────────────
 ChatDisplay::ChatDisplay()
 {
+    setWantsKeyboardFocus(true);
+    viewport_.setWantsKeyboardFocus(false);
+    canvas_.setWantsKeyboardFocus(false);
     viewport_.setViewedComponent(&canvas_, false);
     viewport_.setScrollBarsShown(true, false);
     viewport_.setScrollBarThickness(7);
@@ -187,13 +192,82 @@ void ChatDisplay::resized()
     pushAndScroll();
 }
 
+bool ChatDisplay::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::upKey)
+    {
+        scrollBy(-36);
+        return true;
+    }
+
+    if (key == juce::KeyPress::downKey)
+    {
+        scrollBy(36);
+        return true;
+    }
+
+    if (key == juce::KeyPress::pageUpKey)
+    {
+        scrollBy(-juce::jmax(36, viewport_.getHeight() - 36));
+        return true;
+    }
+
+    if (key == juce::KeyPress::pageDownKey)
+    {
+        scrollBy(juce::jmax(36, viewport_.getHeight() - 36));
+        return true;
+    }
+
+    if (key == juce::KeyPress::homeKey)
+    {
+        scrollTo(0);
+        return true;
+    }
+
+    if (key == juce::KeyPress::endKey)
+    {
+        scrollTo(getMaxScrollY());
+        return true;
+    }
+
+    return false;
+}
+
+void ChatDisplay::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
+{
+    juce::Component::mouseWheelMove(event, wheel);
+
+    const float wheelDelta = std::abs(wheel.deltaY) > std::abs(wheel.deltaX)
+        ? wheel.deltaY
+        : wheel.deltaX;
+    if (std::abs(wheelDelta) < 0.0001f)
+        return;
+
+    scrollBy(static_cast<int>(std::round(-wheelDelta * 480.0f)));
+}
+
 void ChatDisplay::pushAndScroll()
 {
     const int vw = viewport_.getMaximumVisibleWidth();
     if (vw <= 0) return;
-    canvas_.layout(vw);
+    canvas_.layout(vw, viewport_.getHeight());
     canvas_.repaint();
-    viewport_.setViewPosition(0, juce::jmax(0, canvas_.getHeight() - viewport_.getHeight()));
+    scrollTo(getMaxScrollY());
+}
+
+void ChatDisplay::scrollBy(int deltaY)
+{
+    scrollTo(viewport_.getViewPositionY() + deltaY);
+}
+
+void ChatDisplay::scrollTo(int y)
+{
+    viewport_.setViewPosition(0, juce::jlimit(0, getMaxScrollY(), y));
+}
+
+int ChatDisplay::getMaxScrollY() const
+{
+    return juce::jmax(0, canvas_.getHeight() - viewport_.getHeight());
 }
 
 } // namespace more_phi

@@ -96,6 +96,7 @@ void AutoMasteringEngine::reset() noexcept
     smoothedSpectralTilt_ = 0.0f;
     analysisElapsedSeconds_ = 0.0;
     analysisSamplesSinceWindowSample_ = 0;
+    clearLastSafeNeuralMasteringPlan();
     for (auto& b : bandBuffers_)
         b.clear();
 }
@@ -299,6 +300,76 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
 
     // Enable/disable exciter
     exciter_.setEnabled(plan.exciterEnabled);
+}
+
+bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan& plan) noexcept
+{
+    if (!plan.valid || plan.fallbackMode != NeuralMasteringFallbackMode::None)
+        return false;
+
+    if (plan.appliedMask.eq)
+    {
+        for (int band = 0; band < AdaptiveEQ::kNumBands; ++band)
+            eq_.setBandGain(band, std::clamp(plan.projectedTargets.eq[static_cast<std::size_t>(band)]
+                                             * AdaptiveEQ::kMaxGainDB,
+                                             -AdaptiveEQ::kMaxGainDB,
+                                             AdaptiveEQ::kMaxGainDB));
+    }
+
+    if (plan.appliedMask.dynamics)
+    {
+        for (int band = 0; band < MultibandDynamicsProcessor::kNumBands; ++band)
+        {
+            auto params = dynamics_.getBandParams(band);
+            const auto value = plan.projectedTargets.dynamics[static_cast<std::size_t>(band)];
+            params.thresholdDB = std::clamp(-20.0f + value * 8.0f, -40.0f, -6.0f);
+            params.ratio = std::clamp(2.5f + value * 1.5f, 1.0f, 6.0f);
+            dynamics_.setBandParams(band, params);
+        }
+    }
+
+    if (plan.appliedMask.stereo)
+    {
+        for (int region = 0; region < StereoImager::kNumRegions; ++region)
+        {
+            const auto value = plan.projectedTargets.stereo[static_cast<std::size_t>(region)];
+            stereo_.setWidth(region, std::clamp(1.0f + value, 0.0f, 2.0f));
+        }
+    }
+
+    if (plan.appliedMask.harmonic)
+    {
+        const auto amount = std::clamp(plan.projectedTargets.harmonic[0], 0.0f, 1.0f);
+        exciter_.setEnabled(amount > 0.01f);
+        exciter_.setDrive(std::clamp(6.0f + amount * 12.0f, 0.0f, 18.0f));
+        exciter_.setDryWet(std::clamp(amount, 0.0f, 0.6f));
+    }
+
+    if (plan.appliedMask.limiter)
+    {
+        const auto ceiling = std::clamp(-1.0f + plan.projectedTargets.limiter[0] * 0.5f,
+                                        -3.0f,
+                                        -0.1f);
+        limiter_.setCeiling(ceiling);
+    }
+
+    if (plan.appliedMask.loudness)
+    {
+        const auto target = std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f,
+                                       -23.0f,
+                                       -8.0f);
+        normalizer_.setTargetLUFS(target);
+    }
+
+    lastSafeNeuralPlan_ = plan;
+    hasLastSafeNeuralPlan_ = true;
+    return true;
+}
+
+void AutoMasteringEngine::clearLastSafeNeuralMasteringPlan() noexcept
+{
+    lastSafeNeuralPlan_ = {};
+    hasLastSafeNeuralPlan_ = false;
 }
 
 } // namespace more_phi

@@ -7,7 +7,6 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <array>
 #include <functional>
 
 namespace more_phi {
@@ -21,6 +20,9 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseExit(const juce::MouseEvent& event) override;
 
     /** Returns the index of the currently selected tab (0-3). */
     int getSelectedTab() const noexcept;
@@ -34,9 +36,11 @@ public:
 private:
     /** Internal helper — updates state and fires onTabChanged. */
     void selectTab(int index);
+    juce::Rectangle<int> getTabBounds(int index) const;
+    int getTabIndexAt(juce::Point<int> point) const;
 
-    std::array<juce::TextButton, NumTabs> tabs_;
     int selected_ = 0;
+    int hovered_ = -1;
 
     static constexpr const char* tabNames[] = { "Classic", "Engine", "Modulation", "Presets", "AI" };
 

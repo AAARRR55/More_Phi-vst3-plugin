@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "requiredProvenanceComplete": true,
+  "allowedLicenseStatuses": [
+    "approved"
+  ],
+  "blockedLicenseStatuses": [
+    "restricted",
+    "unresolved",
+    "rejected"
+  ],
+  "splitIsolation": {
+    "requireUniqueSourceAcrossSplits": true,
+    "requireArtistIsolationAcrossEvaluation": true,
+    "requireProjectIsolationAcrossEvaluation": true
+  },
+  "referenceQuality": {
+    "requireReviewedReference": true,
+    "minimumReferenceQualityScore": 0.8,
+    "rejectKnownArtifacts": true
+  },
+  "unsupportedMaterial": [
+    "unknown-provenance",
+    "unresolved-license",
+    "restricted-license",
+    "generated-reference-without-review",
+    "split-leakage-risk",
+    "known-high-severity-artifact"
+  ],
+  "gateId": "G10"
+}

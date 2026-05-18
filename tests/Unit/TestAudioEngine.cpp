@@ -22,6 +22,7 @@
 #include "Core/SnapshotBank.h"
 #include "Core/BrickwallLimiter.h"
 #include "Core/AutoMasteringEngine.h"
+#include "Core/NeuralMasteringSafetyPolicy.h"
 #include "Core/LUFSMeter.h"
 #include "Core/TruePeakEstimator.h"
 #include "Plugin/PluginProcessor.h"
@@ -341,6 +342,37 @@ TEST_CASE("AutoMasteringEngine publishes live analyzer snapshots", "[audio_engin
     CHECK(stereo.frameIndex > 0);
     CHECK(spectrum.spectralCentroid > 500.0f);
     CHECK(stereo.stereoWidth > 0.0f);
+}
+
+TEST_CASE("AutoMasteringEngine applies only validated neural mastering plans", "[audio_engine][mastering][NeuralMasteringController]")
+{
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    ValidatedNeuralMasteringPlan plan;
+    plan.valid = true;
+    plan.sourcePlanId = 500;
+    plan.appliedMask.eq = true;
+    plan.appliedMask.dynamics = true;
+    plan.appliedMask.stereo = true;
+    plan.appliedMask.loudness = true;
+    plan.projectedTargets.eq[0] = 0.2f;
+    plan.projectedTargets.dynamics[0] = -0.1f;
+    plan.projectedTargets.stereo[0] = 0.05f;
+    plan.projectedTargets.loudness[0] = 0.1f;
+
+    CHECK(engine.applyValidatedPlan(plan));
+    REQUIRE(engine.hasLastSafeNeuralMasteringPlan());
+    CHECK(engine.getLastSafeNeuralMasteringPlan().sourcePlanId == 500);
+
+    ValidatedNeuralMasteringPlan invalid;
+    invalid.valid = false;
+    invalid.sourcePlanId = 501;
+    invalid.fallbackMode = NeuralMasteringFallbackMode::Reject;
+
+    CHECK_FALSE(engine.applyValidatedPlan(invalid));
+    REQUIRE(engine.hasLastSafeNeuralMasteringPlan());
+    CHECK(engine.getLastSafeNeuralMasteringPlan().sourcePlanId == 500);
 }
 
 TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[processor][analysis][mcp]")

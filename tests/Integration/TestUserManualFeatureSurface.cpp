@@ -4,6 +4,8 @@
 #include "Plugin/PluginProcessor.h"
 #include "Plugin/PluginEditor.h"
 #include "UI/V2TabBar.h"
+#include "UI/ChatDisplay.h"
+#include "UI/SnapFader.h"
 #include "Core/SnapshotBank.h"
 
 #include <memory>
@@ -330,6 +332,93 @@ TEST_CASE("User manual feature surface mode selector syncs from automation", "[i
     REQUIRE(drift->getToggleState());
 
     processor.releaseResources();
+}
+
+TEST_CASE("AI chat tab uses expanded screen real estate", "[integration][user-manual][feature-surface][gui][assistant]")
+{
+    MorePhiProcessor processor;
+    std::unique_ptr<juce::AudioProcessorEditor> baseEditor(processor.createEditor());
+    auto* editor = dynamic_cast<MorePhiEditor*>(baseEditor.get());
+    REQUIRE(editor != nullptr);
+
+    editor->setBounds(0, 0, 920, 760);
+    editor->selectTabForTests(V2TabBar::Classic);
+    const auto classicContentHeight = editor->getControlStripBoundsForTests().getY()
+        + editor->getControlStripBoundsForTests().getHeight();
+
+    editor->selectTabForTests(V2TabBar::AI);
+    const auto aiBounds = editor->getAIChatBoundsForTests();
+
+    REQUIRE(!aiBounds.isEmpty());
+    REQUIRE(aiBounds.getHeight() > 400);
+    REQUIRE(aiBounds.getBottom() > classicContentHeight);
+}
+
+TEST_CASE("Chat display scrolls with keyboard and wheel input", "[integration][user-manual][feature-surface][gui][assistant]")
+{
+    ChatDisplay display;
+    display.setBounds(0, 0, 420, 120);
+    display.resized();
+
+    for (int i = 0; i < 32; ++i)
+        display.addMessage(ChatDisplay::Role::Assistant,
+            "Assistant message " + juce::String(i) + " with enough text to keep the transcript scrollable.");
+
+    REQUIRE(display.getCanvasHeightForTests() > display.getViewportHeightForTests());
+
+    const int bottom = display.getScrollYForTests();
+    REQUIRE(bottom > 0);
+
+    const bool handledUp = display.keyPressed(juce::KeyPress(juce::KeyPress::upKey));
+    REQUIRE(handledUp);
+    const int afterUp = display.getScrollYForTests();
+    REQUIRE(afterUp < bottom);
+
+    const bool handledDown = display.keyPressed(juce::KeyPress(juce::KeyPress::downKey));
+    REQUIRE(handledDown);
+    REQUIRE(display.getScrollYForTests() > afterUp);
+
+    const bool handledHome = display.keyPressed(juce::KeyPress(juce::KeyPress::homeKey));
+    REQUIRE(handledHome);
+    REQUIRE(display.getScrollYForTests() == 0);
+
+    const auto eventTime = juce::Time::getCurrentTime();
+    juce::MouseEvent event(juce::Desktop::getInstance().getMainMouseSource(),
+                           juce::Point<float>{10.0f, 10.0f},
+                           juce::ModifierKeys{},
+                           0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                           &display, &display,
+                           eventTime,
+                           juce::Point<float>{10.0f, 10.0f},
+                           eventTime,
+                           1,
+                           false);
+    juce::MouseWheelDetails wheel;
+    wheel.deltaY = -0.25f;
+    display.mouseWheelMove(event, wheel);
+    REQUIRE(display.getScrollYForTests() > 0);
+}
+
+TEST_CASE("Snap fader auto-refresh detects assistant-driven morph changes", "[integration][user-manual][feature-surface][gui][assistant]")
+{
+    MorePhiProcessor processor;
+    SnapFader fader(processor);
+    fader.setBounds(0, 0, 80, 240);
+
+    juce::Image initialImage(juce::Image::ARGB, 80, 240, true);
+    juce::Graphics initialGraphics(initialImage);
+    fader.paint(initialGraphics);
+
+    REQUIRE(fader.isAutoRefreshTimerRunningForTests());
+    REQUIRE_FALSE(fader.hasExternalStateChangedForTests());
+
+    processor.setFaderPos(0.8f);
+    REQUIRE(fader.hasExternalStateChangedForTests());
+
+    juce::Image updatedImage(juce::Image::ARGB, 80, 240, true);
+    juce::Graphics updatedGraphics(updatedImage);
+    fader.paint(updatedGraphics);
+    REQUIRE_FALSE(fader.hasExternalStateChangedForTests());
 }
 
 } // namespace more_phi::test

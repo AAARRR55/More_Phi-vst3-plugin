@@ -124,6 +124,8 @@ MorePhiProcessor::MorePhiProcessor()
 
     // Attach to shared memory for Link Mode
     linkBroadcaster_.attach(0);  // Default link group
+
+    neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
 }
 
 MorePhiProcessor::~MorePhiProcessor()
@@ -918,6 +920,8 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     hostManager.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
     autoMasteringEngine_.prepare(sampleRate, samplesPerBlock, false);
+    neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
+    neuralMasteringController_.resetStatus();
 
     // Pre-allocate morph processor buffers
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
@@ -979,6 +983,7 @@ void MorePhiProcessor::releaseResources()
     hostManager.releaseResources();
     hostManagerB_.releaseResources();
     autoMasteringEngine_.reset();
+    neuralMasteringController_.resetStatus();
     spectralEngine_.reset();
     granularEngine_.reset();
     formantEngine_.reset();

@@ -28,6 +28,14 @@ public:
     void clearMessages();
 
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
+    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+
+#if MORE_PHI_TEST_MODE
+    int getScrollYForTests() const { return viewport_.getViewPositionY(); }
+    int getCanvasHeightForTests() const { return canvas_.getHeight(); }
+    int getViewportHeightForTests() const { return viewport_.getHeight(); }
+#endif
 
 private:
     // ── Scrollable canvas ────────────────────────────────────────────────────
@@ -38,7 +46,7 @@ private:
         std::vector<Message> messages;
         void paint(juce::Graphics& g) override;
         /** Resize canvas height to fit all messages at the given viewport width. */
-        void layout(int viewportWidth);
+        void layout(int viewportWidth, int viewportHeight);
     };
 
     juce::Viewport viewport_;
@@ -46,6 +54,9 @@ private:
 
     /** Relayout canvas and scroll to the newest message. */
     void pushAndScroll();
+    void scrollBy(int deltaY);
+    void scrollTo(int y);
+    int getMaxScrollY() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChatDisplay)
 };

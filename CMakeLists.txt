@@ -198,6 +198,14 @@ set(MORE_PHI_CORE_SOURCES
 )
 
 # ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
+set(MORE_PHI_NEURAL_MASTERING_SOURCES
+    src/Core/NeuralMasteringTypes.h
+    src/Core/NeuralMasteringSafetyPolicy.h
+    src/Core/NeuralMasteringSafetyPolicy.cpp
+    src/Core/NeuralMasteringPlanSmoother.h
+    src/Core/NeuralMasteringPlanSmoother.cpp
+)
+
 set(MORE_PHI_MASTERING_SOURCES
     src/Core/MSMatrix.h
     src/Core/MultibandSplitter.h
@@ -229,6 +237,7 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/NeuralCompressor.cpp
     src/Core/AutoMasteringEngine.h
     src/Core/AutoMasteringEngine.cpp
+    ${MORE_PHI_NEURAL_MASTERING_SOURCES}
 )
 
 set(MORE_PHI_HOST_SOURCES
@@ -268,6 +277,10 @@ set(MORE_PHI_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/OfflineBatchRenderer.cpp
     src/AI/Dataset/ParameterSafetyConfig.h
     src/AI/Dataset/ParameterSafetyConfig.cpp
+    src/AI/Dataset/NeuralMasteringDatasetSchema.h
+    src/AI/Dataset/NeuralMasteringDatasetSchema.cpp
+    src/AI/Dataset/NeuralMasteringFeatureExtractor.h
+    src/AI/Dataset/NeuralMasteringFeatureExtractor.cpp
 )
 
 set(MORE_PHI_AI_DATASET_V3_SOURCES
@@ -305,6 +318,11 @@ set(MORE_PHI_AI_SOURCES
     src/AI/ChainPlanExecutor.h
     src/AI/ChainPlanExecutor.cpp
     src/AI/MasteringCandidateScoring.h
+    src/AI/NeuralMasteringModelMetadata.h
+    src/AI/NeuralMasteringModelRunner.h
+    src/AI/NeuralMasteringModelRunner.cpp
+    src/AI/NeuralMasteringController.h
+    src/AI/NeuralMasteringController.cpp
     src/AI/AutomationControlPlane.h
     src/AI/AutomationControlPlane.cpp
     src/AI/StyleEncoder.h

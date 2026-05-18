@@ -36,6 +36,7 @@
 #include "Core/LatencyManager.h"
 #include "Core/PerformanceProfiler.h"
 #include "Core/AutoMasteringEngine.h"
+#include "AI/NeuralMasteringController.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include <array>
@@ -328,6 +329,22 @@ public:
 
     // ── Automated mastering engine ────────────────────────────────────────────
     AutoMasteringEngine& getAutoMasteringEngine() noexcept { return autoMasteringEngine_; }
+    const AutoMasteringEngine& getAutoMasteringEngine() const noexcept { return autoMasteringEngine_; }
+    NeuralMasteringController& getNeuralMasteringController() noexcept { return neuralMasteringController_; }
+    const NeuralMasteringController& getNeuralMasteringController() const noexcept { return neuralMasteringController_; }
+    bool hasLastSafeNeuralMasteringPlan() const noexcept { return autoMasteringEngine_.hasLastSafeNeuralMasteringPlan(); }
+    const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept
+    {
+        return autoMasteringEngine_.getLastSafeNeuralMasteringPlan();
+    }
+    NeuralMasteringFallbackMode getNeuralMasteringFallbackMode() const noexcept
+    {
+        return neuralMasteringController_.getLastStatus().fallbackMode;
+    }
+    NeuralMasteringEvidenceLevel getNeuralMasteringEvidenceLevel() const noexcept
+    {
+        return neuralMasteringController_.getLastStatus().evidenceLevel;
+    }
 
     struct TransportContextSnapshot
     {
@@ -434,6 +451,7 @@ private:
 
     // ── Ozone 11 mastering integration ───────────────────────────────────────
     AutoMasteringEngine                  autoMasteringEngine_;
+    NeuralMasteringController            neuralMasteringController_;
     std::unique_ptr<OzoneParameterMap>   ozoneParamMap_;
     std::unique_ptr<OzonePlanApplicator> ozonePlanApplicator_;
 

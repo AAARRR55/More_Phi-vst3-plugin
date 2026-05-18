@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://more-phi.local/contracts/model-card.schema.json",
+  "title": "Neural Mastering Model Card",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "modelId",
+    "schemaVersion",
+    "featureSchemaVersion",
+    "outputSchemaVersion",
+    "evidenceLevel",
+    "runtimeModes",
+    "supportedSampleRates",
+    "supportedLayouts",
+    "licenseStatus",
+    "trainingDataSummary",
+    "gateSummary",
+    "fallbackBehavior"
+  ],
+  "properties": {
+    "modelId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "featureSchemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "outputSchemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evidenceLevel": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "research-estimate",
+        "prototype-measured",
+        "production-measured"
+      ]
+    },
+    "runtimeModes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "offline",
+          "preview",
+          "background",
+          "message-thread",
+          "queued-low-rate-control"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "audioCallbackInference": {
+      "type": "boolean",
+      "const": false
+    },
+    "supportedSampleRates": {
+      "type": "array",
+      "items": { "type": "number", "exclusiveMinimum": 0 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "supportedLayouts": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["mono", "stereo", "wider"] },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "backend": {
+      "type": "string"
+    },
+    "checksum": {
+      "type": "string"
+    },
+    "licenseStatus": {
+      "type": "string",
+      "enum": ["approved", "restricted", "unresolved", "rejected"]
+    },
+    "trainingDataSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provenanceComplete", "splitLeakageChecked", "referenceQualityReviewed"],
+      "properties": {
+        "provenanceComplete": { "type": "boolean" },
+        "splitLeakageChecked": { "type": "boolean" },
+        "referenceQualityReviewed": { "type": "boolean" },
+        "datasetManifest": { "type": "string" }
+      }
+    },
+    "gateSummary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gateId", "status", "evidenceLevel"],
+        "properties": {
+          "gateId": { "type": "string", "pattern": "^G[0-9]{2}$" },
+          "status": { "type": "string", "enum": ["pass", "fail", "not-measured", "not-applicable"] },
+          "evidenceLevel": { "type": "string", "enum": ["planning", "research-estimate", "prototype-measured", "production-measured"] },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "fallbackBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["missingModel", "invalidOutput", "lowConfidence", "overload"],
+      "properties": {
+        "missingModel": { "type": "string" },
+        "invalidOutput": { "type": "string" },
+        "lowConfidence": { "type": "string" },
+        "overload": { "type": "string" }
+      }
+    }
+  }
+}

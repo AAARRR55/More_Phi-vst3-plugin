@@ -1,0 +1,47 @@
+# Git and local metadata
+.git/
+.claude/
+.gemini/
+.agent/
+
+# Build outputs
+build/
+build-*/
+build_*/
+out/
+cmake-build-*/
+*.vst3
+*.component
+*.dll
+*.dylib
+*.exe
+
+# CMake and compiler artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+
+# Logs, temporary files, and local config
+*.log
+*.tmp
+.env
+.env.*
+.vscode/
+.idea/
+
+# Test and dataset outputs
+Testing/
+coverage/
+artifacts/
+
+# Terraform local state
+**/.terraform/
+**/.terraform.lock.hcl
+**/*.tfstate
+**/*.tfstate.*

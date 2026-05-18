@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://more-phi.local/contracts/neural-mastering-plan.schema.json",
+  "title": "Neural Mastering Plan Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "planId",
+    "runtimeMode",
+    "producedAtFrame",
+    "expiresAfterFrame",
+    "confidence",
+    "abstain",
+    "reviewOnly",
+    "evidenceLevel",
+    "targets",
+    "deltas",
+    "editableMask",
+    "gateResults"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "planId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtimeMode": {
+      "type": "string",
+      "enum": [
+        "offline",
+        "preview",
+        "background",
+        "message-thread",
+        "queued-low-rate-control",
+        "audio-callback-prohibited"
+      ]
+    },
+    "producedAtFrame": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "expiresAfterFrame": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "abstain": {
+      "type": "boolean"
+    },
+    "reviewOnly": {
+      "type": "boolean"
+    },
+    "evidenceLevel": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "research-estimate",
+        "prototype-measured",
+        "production-measured"
+      ]
+    },
+    "targets": {
+      "$ref": "#/$defs/masteringTargetVector"
+    },
+    "deltas": {
+      "$ref": "#/$defs/masteringTargetVector"
+    },
+    "editableMask": {
+      "$ref": "#/$defs/masteringControlMask"
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modelId": { "type": "string" },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "featureSchemaVersion": { "type": "integer", "minimum": 1 },
+        "checksum": { "type": "string" },
+        "supportedSampleRates": {
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "uniqueItems": true
+        },
+        "supportedLayouts": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["mono", "stereo", "wider"] },
+          "uniqueItems": true
+        }
+      }
+    },
+    "gateResults": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gateResult" }
+    },
+    "fallbackMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "last-safe-hold",
+        "deterministic-baseline",
+        "review-only",
+        "transparent-bypass",
+        "reject"
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "boundedNumber": {
+      "type": "number",
+      "minimum": -1.0,
+      "maximum": 1.0
+    },
+    "masteringTargetVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eq", "dynamics", "stereo", "harmonic", "limiter", "loudness"],
+      "properties": {
+        "eq": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        },
+        "dynamics": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        },
+        "stereo": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        },
+        "harmonic": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        },
+        "limiter": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        },
+        "loudness": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/boundedNumber" }
+        }
+      }
+    },
+    "masteringControlMask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eq", "dynamics", "stereo", "harmonic", "limiter", "loudness"],
+      "properties": {
+        "eq": { "type": "boolean" },
+        "dynamics": { "type": "boolean" },
+        "stereo": { "type": "boolean" },
+        "harmonic": { "type": "boolean" },
+        "limiter": { "type": "boolean" },
+        "loudness": { "type": "boolean" }
+      }
+    },
+    "gateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateId", "status", "evidenceLevel", "reason"],
+      "properties": {
+        "gateId": {
+          "type": "string",
+          "pattern": "^G[0-9]{2}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "not-measured", "not-applicable"]
+        },
+        "evidenceLevel": {
+          "type": "string",
+          "enum": ["planning", "research-estimate", "prototype-measured", "production-measured"]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

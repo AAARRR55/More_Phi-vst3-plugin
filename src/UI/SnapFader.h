@@ -5,12 +5,14 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <cstdint>
 
 namespace more_phi {
 
 class MorePhiProcessor;
 
-class SnapFader : public juce::Component
+class SnapFader : public juce::Component,
+                  private juce::Timer
 {
 public:
     explicit SnapFader(MorePhiProcessor& p);
@@ -19,10 +21,22 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
 
+#if MORE_PHI_TEST_MODE
+    bool isAutoRefreshTimerRunningForTests() const { return isTimerRunning(); }
+    bool hasExternalStateChangedForTests() const { return hasExternalStateChanged(); }
+#endif
+
 private:
     void updateValue(float yPos);
+    void timerCallback() override;
+    uint16_t getOccupiedSnapshotMask() const;
+    bool hasExternalStateChanged() const;
+
     MorePhiProcessor& proc_;
     bool dragging_ = false;
+    float lastPaintedFaderPos_ = -1.0f;
+    int lastPaintedMorphSource_ = -1;
+    uint16_t lastSnapshotMask_ = 0xffff;
 };
 
 } // namespace more_phi
