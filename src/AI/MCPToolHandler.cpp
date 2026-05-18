@@ -216,11 +216,84 @@ static json buildTransactionMeasurements(const json& beforeState, const json& af
         maxDelta = std::max(maxDelta, delta);
     }
 
+    const auto beforeMorePhi = beforeState.value("more_phi", json::object());
+    const auto afterMorePhi = afterState.value("more_phi", json::object());
+    const auto morphXDelta = std::abs(afterMorePhi.value("morph_x", 0.0) - beforeMorePhi.value("morph_x", 0.0));
+    const auto morphYDelta = std::abs(afterMorePhi.value("morph_y", 0.0) - beforeMorePhi.value("morph_y", 0.0));
+    const auto faderDelta = std::abs(afterMorePhi.value("fader", 0.0) - beforeMorePhi.value("fader", 0.0));
+    const auto morphDelta = std::max({morphXDelta, morphYDelta, faderDelta});
+
     return json{
         {"hosted_parameter_changed_count", changed},
         {"hosted_parameter_max_delta", maxDelta},
+        {"more_phi_morph_delta", morphDelta},
+        {"more_phi_morph_x_delta", morphXDelta},
+        {"more_phi_morph_y_delta", morphYDelta},
+        {"more_phi_fader_delta", faderDelta},
         {"queue_pending_after", afterState.value("queue", json::object()).value("pending", 0)}
     };
+}
+
+static bool shouldAutoRecordOutcome(const AutomationTransaction& transaction)
+{
+    if (!transaction.success || transaction.workflowRunId.isEmpty() || transaction.workflowStepId.isEmpty())
+        return false;
+
+    const auto tool = transaction.toolName.toLowerCase();
+    return !tool.startsWith("memory.")
+        && !tool.startsWith("permission.")
+        && !tool.startsWith("workflow.");
+}
+
+static ActionOutcome buildAutomaticOutcome(const AutomationTransaction& transaction)
+{
+    ActionOutcome outcome;
+    outcome.actionId = transaction.id;
+    outcome.workflowRunId = transaction.workflowRunId;
+    outcome.beforeState = transaction.beforeState;
+    outcome.afterState = transaction.afterState;
+    outcome.measurements = transaction.measurements;
+    outcome.userAccepted = false;
+    outcome.outcomeScore = transaction.success ? 0.55f : 0.0f;
+    outcome.source = "automatic_transaction";
+    outcome.feedbackStatus = "unreviewed";
+    return outcome;
+}
+
+static juce::String normalizeOutcomeFeedbackStatusForMcp(const juce::String& status)
+{
+    auto text = status.trim().toLowerCase();
+    text = text.replaceCharacter(' ', '_').replaceCharacter('-', '_');
+
+    if (text == "approved" || text == "approve" || text == "accepted" || text == "accept")
+        return "accepted";
+    if (text == "rejected" || text == "reject")
+        return "rejected";
+    if (text == "too_much" || text == "overdid" || text == "overdone")
+        return "too_much";
+    if (text == "sounds_better" || text == "sound_better" || text == "better")
+        return "sounds_better";
+    if (text == "undo" || text == "undone" || text == "reversed")
+        return "undo";
+
+    return {};
+}
+
+static bool outcomeFeedbackStatusIsPositive(const juce::String& status)
+{
+    const auto normalized = normalizeOutcomeFeedbackStatusForMcp(status);
+    return normalized == "accepted" || normalized == "sounds_better";
+}
+
+static float outcomeScoreForFeedbackStatusForMcp(const juce::String& status)
+{
+    const auto normalized = normalizeOutcomeFeedbackStatusForMcp(status);
+    if (normalized == "accepted") return 0.92f;
+    if (normalized == "sounds_better") return 0.84f;
+    if (normalized == "too_much") return 0.22f;
+    if (normalized == "undo") return 0.05f;
+    if (normalized == "rejected") return 0.10f;
+    return 0.45f;
 }
 
 static json buildDiffPreview(const juce::var& params, MorePhiProcessor& p);
@@ -334,6 +407,7 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
     transaction.errorCode = extractErrorCode(transaction.result);
     transaction.measurements = buildTransactionMeasurements(transaction.beforeState, transaction.afterState);
     transaction = runtime.ledger().record(transaction);
+    std::optional<MemoryRecord> automaticOutcomeRecord;
 
     runtime.events().publish(IntegrationEvent{
         {},
@@ -345,6 +419,21 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
         transaction.completedAt
     });
 
+    if (shouldAutoRecordOutcome(transaction))
+    {
+        const auto outcome = buildAutomaticOutcome(transaction);
+        automaticOutcomeRecord = runtime.memory().recordOutcome(outcome);
+        runtime.events().publish(IntegrationEvent{
+            {},
+            "memory",
+            "outcome.auto_recorded",
+            transaction.workflowRunId,
+            transaction.id,
+            json{{"memory_id", automaticOutcomeRecord->id.toStdString()}, {"outcome", toJson(outcome)}},
+            juce::Time::getCurrentTime()
+        });
+    }
+
     if (transaction.result.is_object())
     {
         transaction.result["transaction_id"] = transaction.id.toStdString();
@@ -353,6 +442,11 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
             {"risk", toString(transaction.risk).toStdString()},
             {"rollback_available", transaction.rollbackPlan.value("available", false)}
         };
+        if (automaticOutcomeRecord.has_value())
+        {
+            transaction.result["automation"]["outcome_recorded"] = true;
+            transaction.result["automation"]["outcome_memory_id"] = automaticOutcomeRecord->id.toStdString();
+        }
         return toJString(transaction.result);
     }
 
@@ -481,6 +575,161 @@ static json buildPluginAdapterPlan(const juce::var& params, MorePhiProcessor& p)
     response["predictedDiff"] = commands;
     response["risk"] = "low_write";
     return response;
+}
+
+static bool predictionWouldRequireApproval(RiskLevel risk, AutonomyLevel autonomy)
+{
+    if (risk == RiskLevel::ReadOnly)
+        return false;
+
+    switch (autonomy)
+    {
+        case AutonomyLevel::Manual:
+            return true;
+        case AutonomyLevel::Assist:
+            return risk != RiskLevel::LowWrite;
+        case AutonomyLevel::CoPilot:
+        case AutonomyLevel::Autopilot:
+            return risk != RiskLevel::LowWrite && risk != RiskLevel::MediumWrite;
+    }
+
+    return true;
+}
+
+static json predictionCandidate(const char* toolName,
+                                const char* title,
+                                const char* why,
+                                const char* suggestedCopy,
+                                const json& params,
+                                const json& requiredScopes,
+                                const json& predictedDiff,
+                                PermissionKernel& permissions)
+{
+    const auto risk = permissions.classifyTool(juce::String(toolName), params);
+    const auto autonomy = permissions.getAutonomyLevel();
+    return json{
+        {"tool", toolName},
+        {"title", title},
+        {"why", why},
+        {"params_template", params},
+        {"predicted_diff", predictedDiff},
+        {"descriptor", json{
+            {"risk", toString(risk).toStdString()},
+            {"required_scopes", requiredScopes},
+            {"requires_approval", predictionWouldRequireApproval(risk, autonomy)},
+            {"autonomy_level", toString(autonomy).toStdString()},
+            {"permission_model", "prediction_only_no_approval_created"}
+        }},
+        {"suggested_user_copy", suggestedCopy}
+    };
+}
+
+static json buildWorkflowPrediction(const juce::var& params,
+                                    MorePhiProcessor& p,
+                                    const InstanceIdentity& identity)
+{
+    auto& runtime = automationRuntime();
+    const auto session = buildSessionContextJson(p, identity);
+    const auto requestedWorkflowId = params.getProperty("workflow_run_id",
+                                    params.getProperty("workflowRunId", "")).toString();
+    const int evidenceLimit = juce::jlimit(1, 20, static_cast<int>(params.getProperty("memory_limit",
+                                              params.getProperty("memoryLimit", 5))));
+    const auto outcomes = runtime.memory().listOutcomes(requestedWorkflowId, evidenceLimit);
+
+    json evidence = json::array();
+    int positiveEvidence = 0;
+    int cautionEvidence = 0;
+    for (const auto& record : outcomes)
+    {
+        const auto content = record.value("content", json::object());
+        const auto status = content.value("feedbackStatus", "");
+        if (status == "accepted" || status == "sounds_better")
+            ++positiveEvidence;
+        if (status == "rejected" || status == "too_much" || status == "undo")
+            ++cautionEvidence;
+
+        evidence.push_back(json{
+            {"memory_id", record.value("id", "")},
+            {"action_id", content.value("actionId", "")},
+            {"workflow_run_id", content.value("workflowRunId", "")},
+            {"feedback_status", status},
+            {"outcome_score", content.value("outcomeScore", 0.0)},
+            {"source", content.value("source", "")},
+            {"advisory", true}
+        });
+    }
+
+    const auto morphParams = json{{"x", p.getMorphX()}, {"y", p.getMorphY()}, {"fader", p.getFaderPos()}};
+    const auto morphPreview = buildDiffPreview(jsonToJuceVar(json{{"tool_name", "set_morph_position"}, {"params", morphParams}}), p)
+        .value("diffs", json::array());
+
+    json candidates = json::array();
+    candidates.push_back(predictionCandidate(
+        "analysis.get_summary",
+        "Refresh the session analysis snapshot",
+        "Start with a read-only analysis pass before proposing a write.",
+        "I can first check the current level, spectrum, and stereo summary before changing anything.",
+        json::object(),
+        json::array({"session.analysis.read"}),
+        json::array(),
+        runtime.permissions()));
+
+    candidates.push_back(predictionCandidate(
+        "set_morph_position",
+        cautionEvidence > 0 ? "Use a conservative morph move" : "Adjust the morph position",
+        cautionEvidence > 0
+            ? "Prior outcome feedback includes rejected, too_much, or undo signals, so any write should be small and approval-aware."
+            : "The morph controls are low-write and reversible through the automation ledger.",
+        cautionEvidence > 0
+            ? "I found prior caution feedback, so I would only make a small morph adjustment after you approve it."
+            : "I can make a controlled morph move and record the result for feedback.",
+        morphParams,
+        json::array({"morph.position.write"}),
+        morphPreview,
+        runtime.permissions()));
+
+    if (session.value("hostedParameterCount", 0) > 0)
+    {
+        candidates.push_back(predictionCandidate(
+            "plugin_adapter.plan_action",
+            "Preview a semantic hosted-plugin action",
+            "A semantic adapter plan is read-only and can show safe parameter diffs before dispatch.",
+            "I can draft a hosted-plugin move as a preview first, without applying it.",
+            json{{"dry_run", true}, {"action", json::object()}},
+            json::array({"hosted_plugin.semantic_plan.read"}),
+            json::array(),
+            runtime.permissions()));
+    }
+
+    const auto userIntent = params.getProperty("user_intent",
+                            params.getProperty("userIntent", "suggest the next safe action")).toString();
+    return json{
+        {"success", true},
+        {"read_only", true},
+        {"prediction_model", "workflow_next_action_static_v1"},
+        {"current_goal", json{
+            {"user_intent", userIntent.toStdString()},
+            {"workflow_run_id", requestedWorkflowId.toStdString()},
+            {"session_summary", json{
+                {"instance_id", session.value("instanceId", "")},
+                {"hosted_plugin_name", session.value("hostedPluginName", "")},
+                {"hosted_parameter_count", session.value("hostedParameterCount", 0)},
+                {"transport_available", session.value("transport", json::object()).value("available", false)}
+            }}
+        }},
+        {"candidate_next_actions", candidates},
+        {"memory_evidence", evidence},
+        {"memory_policy", json{
+            {"advisory_only", true},
+            {"can_grant_permission", false},
+            {"sqlite_backend_loaded", false},
+            {"vector_index_loaded", false}
+        }},
+        {"why_execution_is_not_automatic", "workflow.predict_next is read-only: it does not submit workflows, execute tools, create approvals, or persist memory."},
+        {"suggested_user_facing_copy", positiveEvidence > 0
+            ? "I found prior positive feedback and can suggest a similar safe next step, but I need your approval before any write."
+            : "I can suggest the safest next step from the current session and memory, but I will not execute it automatically."}
+    };
 }
 
 static json buildDiffPreview(const juce::var& params, MorePhiProcessor& p)
@@ -817,14 +1066,40 @@ static juce::String handleControlPlaneTool(const juce::String& method,
     {
         const auto id = params.getProperty("approval_id",
                         params.getProperty("approvalId", "")).toString();
-        return toJString(json{{"success", runtime.permissions().approve(id)}, {"approval_id", id.toStdString()}});
+        const bool ok = runtime.permissions().approve(id);
+        if (ok)
+        {
+            runtime.events().publish(IntegrationEvent{
+                {},
+                "permission",
+                "approval.approved",
+                {},
+                {},
+                json{{"approval_id", id.toStdString()}},
+                juce::Time::getCurrentTime()
+            });
+        }
+        return toJString(json{{"success", ok}, {"approval_id", id.toStdString()}});
     }
 
     if (method == "permission.reject")
     {
         const auto id = params.getProperty("approval_id",
                         params.getProperty("approvalId", "")).toString();
-        return toJString(json{{"success", runtime.permissions().reject(id)}, {"approval_id", id.toStdString()}});
+        const bool ok = runtime.permissions().reject(id);
+        if (ok)
+        {
+            runtime.events().publish(IntegrationEvent{
+                {},
+                "permission",
+                "approval.rejected",
+                {},
+                {},
+                json{{"approval_id", id.toStdString()}},
+                juce::Time::getCurrentTime()
+            });
+        }
+        return toJString(json{{"success", ok}, {"approval_id", id.toStdString()}});
     }
 
     if (method == "workflow.create")
@@ -887,6 +1162,9 @@ static juce::String handleControlPlaneTool(const juce::String& method,
         });
     }
 
+    if (method == "workflow.predict_next")
+        return toJString(buildWorkflowPrediction(params, p, identity));
+
     if (method == "workflow.cancel")
     {
         const auto id = params.getProperty("workflow_run_id",
@@ -941,6 +1219,127 @@ static juce::String handleControlPlaneTool(const juce::String& method,
                                params.getProperty("subjectId", "")).toString();
         const auto query = params.getProperty("query", "").toString();
         return toJString(json{{"success", true}, {"records", runtime.memory().search(scope, subjectId, query, params.getProperty("limit", 10))}});
+    }
+
+    if (method == "memory.record_outcome")
+    {
+        const auto transactionId = params.getProperty("transaction_id",
+                                   params.getProperty("transactionId", "")).toString();
+        if (transactionId.isEmpty())
+            return toJString(json{{"success", false}, {"error", "missing_transaction_id"}});
+
+        const auto transaction = runtime.ledger().find(transactionId);
+        if (!transaction.has_value())
+            return toJString(json{{"success", false}, {"error", "transaction_not_found"}, {"transaction_id", transactionId.toStdString()}});
+
+        ActionOutcome outcome;
+        outcome.actionId = transaction->id;
+        outcome.workflowRunId = transaction->workflowRunId;
+        outcome.beforeState = transaction->beforeState;
+        outcome.afterState = transaction->afterState;
+        outcome.measurements = transaction->measurements;
+        outcome.userAccepted = static_cast<bool>(params.getProperty("user_accepted",
+            params.getProperty("userAccepted", transaction->success)));
+        outcome.userFeedback = params.getProperty("user_feedback",
+            params.getProperty("userFeedback", "")).toString();
+        const auto feedbackStatus = normalizeOutcomeFeedbackStatusForMcp(
+            params.getProperty("feedback_status",
+                params.getProperty("feedbackStatus", "")).toString());
+        if (feedbackStatus.isNotEmpty())
+        {
+            outcome.feedbackStatus = feedbackStatus;
+            outcome.userAccepted = outcomeFeedbackStatusIsPositive(feedbackStatus);
+            outcome.outcomeScore = outcomeScoreForFeedbackStatusForMcp(feedbackStatus);
+        }
+        else
+        {
+            outcome.outcomeScore = juce::jlimit(0.0f, 1.0f,
+                static_cast<float>(params.getProperty("outcome_score",
+                    params.getProperty("outcomeScore", transaction->success ? 1.0 : 0.0))));
+            outcome.feedbackStatus = outcome.userAccepted ? "accepted" : "rejected";
+        }
+        outcome.source = "user_feedback";
+
+        const auto stored = runtime.memory().recordOutcome(outcome);
+        runtime.events().publish(IntegrationEvent{
+            {},
+            "memory",
+            "outcome.recorded",
+            outcome.workflowRunId,
+            transaction->id,
+            json{{"memory_id", stored.id.toStdString()}, {"outcome", toJson(outcome)}},
+            juce::Time::getCurrentTime()
+        });
+
+        return toJString(json{
+            {"success", true},
+            {"outcome", toJson(outcome)},
+            {"memory", toJson(stored)},
+            {"memory_state", runtime.memory().describeState()}
+        });
+    }
+
+    if (method == "memory.update_outcome_feedback")
+    {
+        auto actionId = params.getProperty("transaction_id", "").toString();
+        if (actionId.isEmpty())
+            actionId = params.getProperty("transactionId", "").toString();
+        if (actionId.isEmpty())
+            actionId = params.getProperty("action_id", "").toString();
+        if (actionId.isEmpty())
+            actionId = params.getProperty("actionId", "").toString();
+
+        if (actionId.isEmpty())
+            return toJString(json{{"success", false}, {"error", "missing_transaction_id"}});
+
+        const auto normalizedStatus = normalizeOutcomeFeedbackStatusForMcp(
+            params.getProperty("feedback_status",
+                params.getProperty("feedbackStatus",
+                    params.getProperty("status", ""))).toString());
+        if (normalizedStatus.isEmpty())
+            return toJString(json{{"success", false}, {"error", "invalid_feedback_status"}, {"transaction_id", actionId.toStdString()}});
+
+        OutcomeFeedbackUpdate update;
+        update.actionId = actionId;
+        update.feedbackStatus = normalizedStatus;
+        update.userFeedback = params.getProperty("user_feedback",
+                              params.getProperty("userFeedback", "")).toString();
+
+        const auto updated = runtime.memory().updateOutcomeFeedback(update);
+        if (!updated.has_value())
+            return toJString(json{{"success", false}, {"error", "outcome_not_found"}, {"transaction_id", actionId.toStdString()}});
+
+        const auto outcome = updated->content.is_object() ? updated->content : json::object();
+        const auto workflowRunId = juce::String(outcome.value("workflowRunId", ""));
+        runtime.events().publish(IntegrationEvent{
+            {},
+            "memory",
+            "outcome.feedback_updated",
+            workflowRunId,
+            actionId,
+            json{{"memory_id", updated->id.toStdString()}, {"outcome", outcome}},
+            juce::Time::getCurrentTime()
+        });
+
+        return toJString(json{
+            {"success", true},
+            {"transaction_id", actionId.toStdString()},
+            {"feedback_status", normalizedStatus.toStdString()},
+            {"outcome", outcome},
+            {"memory", toJson(*updated)},
+            {"memory_state", runtime.memory().describeState()}
+        });
+    }
+
+    if (method == "memory.list_outcomes")
+    {
+        const auto workflowRunId = params.getProperty("workflow_run_id",
+                                   params.getProperty("workflowRunId", "")).toString();
+        return toJString(json{
+            {"success", true},
+            {"workflow_run_id", workflowRunId.toStdString()},
+            {"outcomes", runtime.memory().listOutcomes(workflowRunId, params.getProperty("limit", 50))}
+        });
     }
 
     if (method == "memory.forget")
@@ -1349,6 +1748,7 @@ static const ToolDefinition kCoreTools[] = {
     {"workflow.get", "Return a WorkflowRun by ID.", R"({"type":"object","properties":{"workflow_run_id":{"type":"string"},"workflowRunId":{"type":"string"}}})"},
     {"workflow.list", "List in-memory WorkflowRun objects.", R"({"type":"object","properties":{}})"},
     {"workflow.execute", "Execute the non-audio-thread WorkflowRun state machine scaffold.", R"({"type":"object","properties":{"workflow_run_id":{"type":"string"},"workflowRunId":{"type":"string"}}})"},
+    {"workflow.predict_next", "Suggest safe read-only next workflow actions using current session context and advisory ActionOutcome memory evidence.", R"({"type":"object","properties":{"workflow_run_id":{"type":"string"},"workflowRunId":{"type":"string"},"user_intent":{"type":"string"},"userIntent":{"type":"string"},"memory_limit":{"type":"integer","default":5,"minimum":1,"maximum":20},"memoryLimit":{"type":"integer","default":5,"minimum":1,"maximum":20}}})"},
     {"workflow.cancel", "Cancel a WorkflowRun.", R"({"type":"object","properties":{"workflow_run_id":{"type":"string"},"workflowRunId":{"type":"string"}}})"},
     {"permission.get_state", "Return the dispatch-layer PermissionPolicy state and autonomy level.", R"({"type":"object","properties":{}})"},
     {"permission.set_autonomy", "Set autonomy level: manual, assist, co_pilot, or autopilot.", R"({"type":"object","properties":{"level":{"type":"string","enum":["manual","assist","co_pilot","autopilot"]},"autonomy_level":{"type":"string"}}})"},
@@ -1363,6 +1763,9 @@ static const ToolDefinition kCoreTools[] = {
     {"sync.apply_envelope", "Apply a SyncEnvelope to the integration event stream.", R"({"type":"object","properties":{"instance_id":{"type":"string"},"instanceId":{"type":"string"},"session_id":{"type":"string"},"sessionId":{"type":"string"},"revision":{"type":"integer"},"state_patch":{"type":"object"},"statePatch":{"type":"object"},"conflict_policy":{"type":"string"},"conflictPolicy":{"type":"string"}}})"},
     {"memory.remember", "Store a MemoryRecord in the local preference/outcome memory backend.", R"({"type":"object","properties":{"scope":{"type":"string","enum":["global","project","track","plugin"]},"subject_id":{"type":"string"},"subjectId":{"type":"string"},"kind":{"type":"string"},"content":{"type":"object"},"text":{"type":"string"},"confidence":{"type":"number"}}})"},
     {"memory.search", "Search local MemoryRecord entries by scope, subject, and lexical query.", R"({"type":"object","properties":{"scope":{"type":"string","enum":["global","project","track","plugin"]},"subject_id":{"type":"string"},"subjectId":{"type":"string"},"query":{"type":"string"},"limit":{"type":"integer","default":10}}})"},
+    {"memory.record_outcome", "Store ActionOutcome evidence for an AutomationTransaction, including before/after state, measurements, user acceptance, and feedback.", R"({"type":"object","properties":{"transaction_id":{"type":"string"},"transactionId":{"type":"string"},"user_accepted":{"type":"boolean"},"userAccepted":{"type":"boolean"},"user_feedback":{"type":"string"},"userFeedback":{"type":"string"},"outcome_score":{"type":"number","minimum":0,"maximum":1},"outcomeScore":{"type":"number","minimum":0,"maximum":1}},"required":["transaction_id"]})"},
+    {"memory.update_outcome_feedback", "Update an existing ActionOutcome with structured user feedback such as accepted, sounds_better, too_much, rejected, or undo.", R"({"type":"object","properties":{"transaction_id":{"type":"string"},"transactionId":{"type":"string"},"action_id":{"type":"string"},"actionId":{"type":"string"},"feedback_status":{"type":"string","enum":["accepted","sounds_better","too_much","rejected","undo"]},"feedbackStatus":{"type":"string"},"status":{"type":"string"},"user_feedback":{"type":"string"},"userFeedback":{"type":"string"}},"allOf":[{"anyOf":[{"required":["transaction_id"]},{"required":["transactionId"]},{"required":["action_id"]},{"required":["actionId"]}]},{"anyOf":[{"required":["feedback_status"]},{"required":["feedbackStatus"]},{"required":["status"]}]}]})"},
+    {"memory.list_outcomes", "List recorded ActionOutcome memory records, optionally filtered by WorkflowRun.", R"({"type":"object","properties":{"workflow_run_id":{"type":"string"},"workflowRunId":{"type":"string"},"limit":{"type":"integer","default":50,"minimum":1}}})"},
     {"memory.forget", "Delete one MemoryRecord by ID.", R"({"type":"object","properties":{"id":{"type":"string"}},"required":["id"]})"},
     {"memory.get_intent_context", "Return compact memory hints ordered by Track, Plugin, Project, then Global.", R"({"type":"object","properties":{"limit":{"type":"integer","default":5}}})"},
     {"plugin_adapter.describe_capabilities", "Describe semantic plugin capabilities and the adapter precedence chain.", R"({"type":"object","properties":{}})"},
@@ -2190,8 +2593,10 @@ juce::String MCPToolHandler::handle(const juce::String& method,
         return dispatchWithAutomationTransaction(method, params, p, [&]() { return handleControlPlaneTool(method, params, p, identity); });
 
     if (method == "workflow.submit" || method == "workflow.execute" || method == "workflow.cancel"
-        || method == "memory.remember" || method == "memory.forget"
-        || method == "permission.set_autonomy")
+        || method == "memory.remember" || method == "memory.record_outcome"
+        || method == "memory.update_outcome_feedback" || method == "memory.forget"
+        || method == "permission.set_autonomy" || method == "permission.approve"
+        || method == "permission.reject")
     {
         return dispatchWithAutomationTransaction(method, params, p,
             [&]() { return handleControlPlaneTool(method, params, p, identity); });

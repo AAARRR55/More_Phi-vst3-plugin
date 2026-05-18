@@ -120,9 +120,11 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
     bool foundAutomationHistory = false;
     bool foundWorkflowCreate = false;
     bool foundWorkflowSubmit = false;
+    bool foundWorkflowPredict = false;
     bool foundPermissionState = false;
     bool foundContextSession = false;
     bool foundMemoryRemember = false;
+    bool foundMemoryUpdateOutcome = false;
     bool foundEventsRecent = false;
     bool foundPluginAdapterCapabilities = false;
 
@@ -189,12 +191,16 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
             foundWorkflowCreate = true;
         if (name == "workflow.submit")
             foundWorkflowSubmit = true;
+        if (name == "workflow.predict_next")
+            foundWorkflowPredict = true;
         if (name == "permission.get_state")
             foundPermissionState = true;
         if (name == "context.get_session")
             foundContextSession = true;
         if (name == "memory.remember")
             foundMemoryRemember = true;
+        if (name == "memory.update_outcome_feedback")
+            foundMemoryUpdateOutcome = true;
         if (name == "events.list_recent")
             foundEventsRecent = true;
         if (name == "plugin_adapter.describe_capabilities")
@@ -230,9 +236,11 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
     REQUIRE(foundAutomationHistory);
     REQUIRE(foundWorkflowCreate);
     REQUIRE(foundWorkflowSubmit);
+    REQUIRE(foundWorkflowPredict);
     REQUIRE(foundPermissionState);
     REQUIRE(foundContextSession);
     REQUIRE(foundMemoryRemember);
+    REQUIRE(foundMemoryUpdateOutcome);
     REQUIRE(foundEventsRecent);
     REQUIRE(foundPluginAdapterCapabilities);
 }
@@ -394,14 +402,60 @@ TEST_CASE("MCP workflow.submit executes steps through permissioned transactions"
     REQUIRE(history["workflow_run_id"].get<std::string>() == workflowId);
 
     bool foundStepTransaction = false;
+    std::string stepTransactionId;
     for (const auto& transaction : history["transactions"])
     {
-        foundStepTransaction = foundStepTransaction
-            || (transaction["workflowRunId"].get<std::string>() == workflowId
-                && transaction["workflowStepId"].get<std::string>() == "move"
-                && transaction["toolName"].get<std::string>() == "set_morph_position");
+        const bool isStepTransaction = transaction["workflowRunId"].get<std::string>() == workflowId
+            && transaction["workflowStepId"].get<std::string>() == "move"
+            && transaction["toolName"].get<std::string>() == "set_morph_position";
+        foundStepTransaction = foundStepTransaction || isStepTransaction;
+        if (isStepTransaction)
+            stepTransactionId = transaction["id"].get<std::string>();
     }
     REQUIRE(foundStepTransaction);
+    REQUIRE_FALSE(stepTransactionId.empty());
+
+    const auto outcomes = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("memory.list_outcomes",
+            toVar(nlohmann::json{{"workflow_run_id", workflowId}, {"limit", 10}}), processor, identity).toStdString());
+    REQUIRE(outcomes["success"].get<bool>());
+    REQUIRE(outcomes["outcomes"].size() == 1);
+    REQUIRE(outcomes["outcomes"][0]["content"]["actionId"].get<std::string>() == stepTransactionId);
+    REQUIRE(outcomes["outcomes"][0]["content"]["feedbackStatus"].get<std::string>() == "unreviewed");
+
+    const auto updated = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("memory.update_outcome_feedback",
+            toVar(nlohmann::json{
+                {"action_id", stepTransactionId},
+                {"feedback_status", "too_much"},
+                {"user_feedback", "the morph move was too aggressive"}
+            }), processor, identity).toStdString());
+    REQUIRE(updated["success"].get<bool>());
+    REQUIRE(updated["outcome"]["actionId"].get<std::string>() == stepTransactionId);
+    REQUIRE(updated["outcome"]["feedbackStatus"].get<std::string>() == "too_much");
+    REQUIRE(updated["outcome"]["userFeedback"].get<std::string>() == "the morph move was too aggressive");
+    REQUIRE_FALSE(updated["outcome"]["userAccepted"].get<bool>());
+
+    const auto updatedOutcomes = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("memory.list_outcomes",
+            toVar(nlohmann::json{{"workflow_run_id", workflowId}, {"limit", 10}}), processor, identity).toStdString());
+    REQUIRE(updatedOutcomes["success"].get<bool>());
+    REQUIRE(updatedOutcomes["outcomes"].size() == 1);
+    REQUIRE(updatedOutcomes["outcomes"][0]["id"].get<std::string>() == outcomes["outcomes"][0]["id"].get<std::string>());
+    REQUIRE(updatedOutcomes["outcomes"][0]["content"]["feedbackStatus"].get<std::string>() == "too_much");
+
+    const auto prediction = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("workflow.predict_next",
+            toVar(nlohmann::json{{"workflow_run_id", workflowId}, {"user_intent", "continue safely"}}), processor, identity).toStdString());
+    REQUIRE(prediction["success"].get<bool>());
+    REQUIRE(prediction["read_only"].get<bool>());
+    REQUIRE(prediction["candidate_next_actions"].is_array());
+    REQUIRE_FALSE(prediction["candidate_next_actions"].empty());
+    REQUIRE(prediction["memory_evidence"].is_array());
+    REQUIRE(prediction["memory_evidence"].size() == 1);
+    REQUIRE(prediction["memory_evidence"][0]["action_id"].get<std::string>() == stepTransactionId);
+    REQUIRE(prediction["memory_evidence"][0]["advisory"].get<bool>());
+    REQUIRE_FALSE(prediction["memory_policy"]["can_grant_permission"].get<bool>());
 }
 
 TEST_CASE("MCP PermissionPolicy blocks high-impact hosted plugin load with approval request", "[mcp][automation][permission]")
@@ -425,6 +479,78 @@ TEST_CASE("MCP PermissionPolicy blocks high-impact hosted plugin load with appro
     REQUIRE(blocked["approval_required"].get<bool>());
     REQUIRE(blocked["risk"].get<std::string>() == "high_impact");
     REQUIRE(blocked["approval_request"]["toolName"].get<std::string>() == "hosted_plugin.load");
+}
+
+TEST_CASE("MCP permission approval decisions are auditable", "[mcp][automation][permission]")
+{
+    more_phi::MorePhiProcessor processor;
+    more_phi::InstanceIdentity identity;
+
+    const auto setPolicy = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("permission.set_autonomy",
+            toVar(nlohmann::json{{"level", "assist"}}), processor, identity).toStdString());
+    REQUIRE(setPolicy["success"].get<bool>());
+
+    const auto blocked = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("hosted_plugin.load",
+            toVar(nlohmann::json{{"path", "C:/definitely-missing-plugin.vst3"}}),
+            processor,
+            identity).toStdString());
+
+    REQUIRE_FALSE(blocked["success"].get<bool>());
+    REQUIRE(blocked["approval_required"].get<bool>());
+    const auto approvalId = blocked["approval_request"]["id"].get<std::string>();
+    REQUIRE_FALSE(approvalId.empty());
+
+    const auto approvalsBefore = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("permission.list_approvals", {}, processor, identity).toStdString());
+    REQUIRE(approvalsBefore["success"].get<bool>());
+
+    bool foundPending = false;
+    for (const auto& approval : approvalsBefore["approvals"])
+    {
+        foundPending = foundPending
+            || (approval.value("id", std::string{}) == approvalId
+                && approval.value("status", std::string{}) == "pending");
+    }
+    REQUIRE(foundPending);
+
+    const auto approved = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("permission.approve",
+            toVar(nlohmann::json{{"approval_id", approvalId}}),
+            processor,
+            identity).toStdString());
+
+    REQUIRE(approved["success"].get<bool>());
+    REQUIRE(approved.contains("transaction_id"));
+    REQUIRE(approved["automation"]["risk"].get<std::string>() == "low_write");
+
+    const auto history = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("automation.history",
+            toVar(nlohmann::json{{"limit", 50}}), processor, identity).toStdString());
+    REQUIRE(history["success"].get<bool>());
+
+    bool foundApproveTransaction = false;
+    for (const auto& transaction : history["transactions"])
+    {
+        foundApproveTransaction = foundApproveTransaction
+            || (transaction.value("id", std::string{}) == approved["transaction_id"].get<std::string>()
+                && transaction.value("toolName", std::string{}) == "permission.approve");
+    }
+    REQUIRE(foundApproveTransaction);
+
+    const auto approvalsAfter = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("permission.list_approvals", {}, processor, identity).toStdString());
+    REQUIRE(approvalsAfter["success"].get<bool>());
+
+    bool foundApproved = false;
+    for (const auto& approval : approvalsAfter["approvals"])
+    {
+        foundApproved = foundApproved
+            || (approval.value("id", std::string{}) == approvalId
+                && approval.value("status", std::string{}) == "approved");
+    }
+    REQUIRE(foundApproved);
 }
 
 TEST_CASE("MCP approval requests include predicted diffs for reversible controls", "[mcp][automation][permission]")

@@ -86,6 +86,74 @@ bool nameStartsWith(const juce::String& value, const char* prefix)
     return value.startsWithIgnoreCase(prefix);
 }
 
+juce::String normalizeOutcomeFeedbackToken(const juce::String& status)
+{
+    auto text = status.trim().toLowerCase();
+    text = text.replaceCharacter(' ', '_').replaceCharacter('-', '_');
+
+    if (text == "approved" || text == "approve" || text == "accepted" || text == "accept")
+        return "accepted";
+    if (text == "rejected" || text == "reject")
+        return "rejected";
+    if (text == "too_much" || text == "overdid" || text == "overdone")
+        return "too_much";
+    if (text == "sounds_better" || text == "sound_better" || text == "better")
+        return "sounds_better";
+    if (text == "undo" || text == "undone" || text == "reversed")
+        return "undo";
+
+    return {};
+}
+
+bool outcomeStatusIsPositive(const juce::String& status)
+{
+    const auto normalized = normalizeOutcomeFeedbackToken(status);
+    return normalized == "accepted" || normalized == "sounds_better";
+}
+
+float outcomeScoreForFeedbackStatus(const juce::String& status)
+{
+    const auto normalized = normalizeOutcomeFeedbackToken(status);
+    if (normalized == "accepted") return 0.92f;
+    if (normalized == "sounds_better") return 0.84f;
+    if (normalized == "too_much") return 0.22f;
+    if (normalized == "undo") return 0.05f;
+    if (normalized == "rejected") return 0.10f;
+    return 0.45f;
+}
+
+float confidenceForOutcome(const ActionOutcome& outcome)
+{
+    const auto normalizedScore = juce::jlimit(0.0f, 1.0f, outcome.outcomeScore);
+    const auto status = normalizeOutcomeFeedbackToken(outcome.feedbackStatus);
+    const auto baseConfidence = status == "accepted" ? 0.65f
+        : (status == "sounds_better" ? 0.60f
+        : (status == "too_much" ? 0.35f
+        : (status == "undo" ? 0.30f
+        : (status == "rejected" ? 0.25f : 0.40f))));
+    const auto scoreWeight = status == "accepted" ? 0.30f
+        : (status == "sounds_better" ? 0.25f
+        : (status == "rejected" ? 0.10f : 0.20f));
+    const auto feedbackBonus = outcome.userFeedback.isNotEmpty() ? 0.05f : 0.0f;
+    return juce::jlimit(0.05f, 1.0f, baseConfidence + normalizedScore * scoreWeight + feedbackBonus);
+}
+
+ActionOutcome actionOutcomeFromJson(const json& value)
+{
+    ActionOutcome outcome;
+    outcome.actionId = juce::String(value.value("actionId", ""));
+    outcome.workflowRunId = juce::String(value.value("workflowRunId", ""));
+    outcome.beforeState = value.value("beforeState", json::object());
+    outcome.afterState = value.value("afterState", json::object());
+    outcome.measurements = value.value("measurements", json::object());
+    outcome.userAccepted = value.value("userAccepted", false);
+    outcome.userFeedback = juce::String(value.value("userFeedback", ""));
+    outcome.outcomeScore = value.value("outcomeScore", 0.0f);
+    outcome.source = juce::String(value.value("source", ""));
+    outcome.feedbackStatus = juce::String(value.value("feedbackStatus", ""));
+    return outcome;
+}
+
 } // namespace
 
 juce::String toString(RiskLevel value)
@@ -340,7 +408,9 @@ json toJson(const ActionOutcome& value)
         {"measurements", value.measurements},
         {"userAccepted", value.userAccepted},
         {"userFeedback", value.userFeedback.toStdString()},
-        {"outcomeScore", value.outcomeScore}
+        {"outcomeScore", value.outcomeScore},
+        {"source", value.source.toStdString()},
+        {"feedbackStatus", value.feedbackStatus.toStdString()}
     };
 }
 
@@ -742,7 +812,8 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
         return dryRun ? RiskLevel::ReadOnly : RiskLevel::LowWrite;
     }
 
-    if (method == "memory.remember" || method == "memory.forget"
+    if (method == "memory.remember" || method == "memory.record_outcome"
+        || method == "memory.update_outcome_feedback" || method == "memory.forget"
         || method == "automation.rollback"
         || method == "permission.set_autonomy" || method == "permission.approve"
         || method == "permission.reject" || method == "workflow.submit" || method == "workflow.execute"
@@ -885,9 +956,12 @@ json PermissionKernel::describeState() const
     };
 }
 
-bool PermissionKernel::isAllowedWithoutApproval(RiskLevel risk, const juce::String&) const
+bool PermissionKernel::isAllowedWithoutApproval(RiskLevel risk, const juce::String& toolName) const
 {
     if (risk == RiskLevel::ReadOnly)
+        return true;
+
+    if (toolName == "permission.approve" || toolName == "permission.reject")
         return true;
 
     switch (autonomyLevel_)
@@ -1462,6 +1536,85 @@ MemoryRecord MemoryStore::remember(MemoryRecord record)
     return record;
 }
 
+MemoryRecord MemoryStore::recordOutcome(ActionOutcome outcome)
+{
+    if (outcome.source.isEmpty())
+        outcome.source = outcome.userFeedback.isNotEmpty() ? "user_feedback" : "automatic_transaction";
+    if (outcome.feedbackStatus.isEmpty())
+        outcome.feedbackStatus = outcome.userFeedback.isNotEmpty()
+            ? (outcome.userAccepted ? "accepted" : "rejected")
+            : "unreviewed";
+
+    MemoryRecord record;
+    record.scope = MemoryScope::Project;
+    record.subjectId = outcome.workflowRunId;
+    record.kind = "action_outcome";
+    record.content = toJson(outcome);
+    record.confidence = confidenceForOutcome(outcome);
+    record.createdAt = juce::Time::getCurrentTime();
+    record.lastUsedAt = record.createdAt;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (outcome.actionId.isNotEmpty())
+    {
+        const auto actionId = outcome.actionId.toStdString();
+        auto existing = std::find_if(records_.begin(), records_.end(),
+            [&actionId](const MemoryRecord& item)
+            {
+                return item.kind == "action_outcome"
+                    && item.content.is_object()
+                    && item.content.value("actionId", "") == actionId;
+            });
+
+        if (existing != records_.end())
+        {
+            record.id = existing->id;
+            record.createdAt = existing->createdAt == juce::Time{} ? record.createdAt : existing->createdAt;
+            *existing = record;
+            persist();
+            return *existing;
+        }
+    }
+
+    record.id = makeAutomationId("mem");
+    records_.push_back(record);
+    persist();
+    return record;
+}
+
+std::optional<MemoryRecord> MemoryStore::updateOutcomeFeedback(OutcomeFeedbackUpdate update)
+{
+    const auto normalizedStatus = normalizeOutcomeFeedbackToken(update.feedbackStatus);
+    if (update.actionId.isEmpty() || normalizedStatus.isEmpty())
+        return std::nullopt;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto actionId = update.actionId.toStdString();
+    auto existing = std::find_if(records_.begin(), records_.end(),
+        [&actionId](const MemoryRecord& item)
+        {
+            return item.kind == "action_outcome"
+                && item.content.is_object()
+                && item.content.value("actionId", "") == actionId;
+        });
+
+    if (existing == records_.end())
+        return std::nullopt;
+
+    auto outcome = actionOutcomeFromJson(existing->content);
+    outcome.feedbackStatus = normalizedStatus;
+    outcome.userAccepted = outcomeStatusIsPositive(normalizedStatus);
+    outcome.userFeedback = update.userFeedback;
+    outcome.outcomeScore = outcomeScoreForFeedbackStatus(normalizedStatus);
+    outcome.source = normalizedStatus == "undo" ? "undo_feedback" : "user_feedback";
+
+    existing->content = toJson(outcome);
+    existing->confidence = confidenceForOutcome(outcome);
+    existing->lastUsedAt = juce::Time::getCurrentTime();
+    persist();
+    return *existing;
+}
+
 json MemoryStore::search(MemoryScope scope,
                          const juce::String& subjectId,
                          const juce::String& query,
@@ -1503,6 +1656,35 @@ json MemoryStore::search(MemoryScope scope,
     }
 
     persist();
+    return out;
+}
+
+json MemoryStore::listOutcomes(const juce::String& workflowRunId, int limit) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const int safeLimit = juce::jlimit(1, 256, limit <= 0 ? 50 : limit);
+
+    std::vector<MemoryRecord> matches;
+    for (const auto& record : records_)
+    {
+        if (record.kind != "action_outcome")
+            continue;
+
+        const auto contentWorkflowRunId = juce::String(record.content.value("workflowRunId", ""));
+        if (workflowRunId.isNotEmpty() && record.subjectId != workflowRunId && contentWorkflowRunId != workflowRunId)
+            continue;
+
+        matches.push_back(record);
+    }
+
+    std::sort(matches.begin(), matches.end(), [] (const MemoryRecord& a, const MemoryRecord& b)
+    {
+        return a.createdAt.toMilliseconds() > b.createdAt.toMilliseconds();
+    });
+
+    json out = json::array();
+    for (int i = 0; i < static_cast<int>(matches.size()) && i < safeLimit; ++i)
+        out.push_back(toJson(matches[static_cast<size_t>(i)]));
     return out;
 }
 
@@ -1642,6 +1824,25 @@ AutomationRuntime::AutomationRuntime()
 
 juce::File AutomationRuntime::defaultStoreDirectory()
 {
+    const auto executableName = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+        .getFileNameWithoutExtension()
+        .toLowerCase();
+    const bool runningTestHost = executableName == "morephitests" || executableName == "morephimcpservertests";
+    if (runningTestHost)
+    {
+        static const auto testDirectory = []
+        {
+            auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                .getChildFile("More-Phi")
+                .getChildFile("automation-test-runtime")
+                .getChildFile(juce::String::toHexString(juce::Time::getHighResolutionTicks())
+                    + "_" + juce::String(juce::Time::currentTimeMillis()));
+            directory.deleteRecursively();
+            return directory;
+        }();
+        return testDirectory;
+    }
+
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile("More-Phi")
         .getChildFile("automation");

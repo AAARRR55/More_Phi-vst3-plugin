@@ -279,3 +279,99 @@ TEST_CASE("MemoryStore supports CRUD and scoped lexical retrieval", "[automation
     const auto empty = memory.search(more_phi::MemoryScope::Plugin, "Ozone", "limiter", 5);
     REQUIRE(empty.empty());
 }
+
+TEST_CASE("MemoryStore updates ActionOutcome feedback without duplicating records", "[automation][memory]")
+{
+    ScopedAutomationStore scoped;
+    more_phi::MemoryStore memory(scoped.directory);
+
+    more_phi::ActionOutcome outcome;
+    outcome.actionId = "txn-feedback-dedup-test";
+    outcome.workflowRunId = "workflow-feedback-dedup-test";
+    outcome.beforeState = nlohmann::json{{"morph_x", 0.2}};
+    outcome.afterState = nlohmann::json{{"morph_x", 0.4}};
+    outcome.measurements = nlohmann::json{{"more_phi_morph_x_delta", 0.2}};
+    outcome.outcomeScore = 0.55f;
+    outcome.source = "automatic_transaction";
+    outcome.feedbackStatus = "unreviewed";
+
+    const auto stored = memory.recordOutcome(outcome);
+    REQUIRE(stored.id.isNotEmpty());
+    REQUIRE(stored.content["feedbackStatus"].get<std::string>() == "unreviewed");
+
+    outcome.afterState = nlohmann::json{{"morph_x", 0.45}};
+    const auto duplicate = memory.recordOutcome(outcome);
+    REQUIRE(duplicate.id == stored.id);
+    REQUIRE(memory.listOutcomes("workflow-feedback-dedup-test", 10).size() == 1);
+
+    more_phi::OutcomeFeedbackUpdate feedback;
+    feedback.actionId = outcome.actionId;
+    feedback.feedbackStatus = "sounds better";
+    feedback.userFeedback = "keep this gentler morph range";
+
+    const auto updated = memory.updateOutcomeFeedback(feedback);
+    REQUIRE(updated.has_value());
+    REQUIRE(updated->id == stored.id);
+    REQUIRE(updated->content["actionId"].get<std::string>() == outcome.actionId.toStdString());
+    REQUIRE(updated->content["feedbackStatus"].get<std::string>() == "sounds_better");
+    REQUIRE(updated->content["userAccepted"].get<bool>());
+    REQUIRE(updated->content["userFeedback"].get<std::string>() == "keep this gentler morph range");
+    REQUIRE(updated->content["outcomeScore"].get<float>() > stored.content["outcomeScore"].get<float>());
+    REQUIRE(updated->confidence > stored.confidence);
+    REQUIRE(memory.listOutcomes("workflow-feedback-dedup-test", 10).size() == 1);
+
+    feedback.feedbackStatus = "undo";
+    feedback.userFeedback = "undo the morph move";
+    const auto undone = memory.updateOutcomeFeedback(feedback);
+    REQUIRE(undone.has_value());
+    REQUIRE(undone->id == stored.id);
+    REQUIRE(undone->content["feedbackStatus"].get<std::string>() == "undo");
+    REQUIRE_FALSE(undone->content["userAccepted"].get<bool>());
+    REQUIRE(undone->content["source"].get<std::string>() == "undo_feedback");
+    REQUIRE(undone->content["actionId"].get<std::string>() == outcome.actionId.toStdString());
+    REQUIRE(memory.listOutcomes("workflow-feedback-dedup-test", 10).size() == 1);
+}
+
+TEST_CASE("MemoryStore returns ActionOutcome evidence as advisory intent context", "[automation][memory]")
+{
+    ScopedAutomationStore scoped;
+    more_phi::MemoryStore memory(scoped.directory);
+
+    more_phi::ActionOutcome outcome;
+    outcome.actionId = "txn-intent-context-test";
+    outcome.workflowRunId = "workflow-intent-context-test";
+    outcome.beforeState = nlohmann::json{{"morph_x", 0.5}};
+    outcome.afterState = nlohmann::json{{"morph_x", 0.9}};
+    outcome.measurements = nlohmann::json{{"more_phi_morph_x_delta", 0.4}};
+    outcome.outcomeScore = 0.22f;
+    outcome.source = "user_feedback";
+    outcome.feedbackStatus = "too_much";
+    outcome.userFeedback = "avoid aggressive morph jumps";
+
+    const auto stored = memory.recordOutcome(outcome);
+    REQUIRE(stored.id.isNotEmpty());
+
+    const auto context = memory.intentContext(nlohmann::json{{"hostedPluginName", ""}, {"trackId", ""}}, 5);
+    REQUIRE(context["backend"].get<std::string>() == "json_local_store_v1");
+    REQUIRE_FALSE(context["vector_index_loaded"].get<bool>());
+    REQUIRE(context["records"].is_array());
+
+    bool foundOutcome = false;
+    for (const auto& record : context["records"])
+    {
+        if (record["id"].get<std::string>() == stored.id.toStdString())
+        {
+            foundOutcome = true;
+            REQUIRE(record["kind"].get<std::string>() == "action_outcome");
+            REQUIRE(record["content"]["actionId"].get<std::string>() == outcome.actionId.toStdString());
+            REQUIRE(record["content"]["feedbackStatus"].get<std::string>() == "too_much");
+        }
+    }
+    REQUIRE(foundOutcome);
+
+    more_phi::PermissionKernel permissions(scoped.directory);
+    permissions.setAutonomyLevel(more_phi::AutonomyLevel::Manual);
+    const auto blocked = permissions.evaluate("set_morph_position", nlohmann::json{{"x", 0.5}}, "workflow-intent-context-test");
+    REQUIRE_FALSE(blocked.allowed);
+    REQUIRE(blocked.risk == more_phi::RiskLevel::LowWrite);
+}

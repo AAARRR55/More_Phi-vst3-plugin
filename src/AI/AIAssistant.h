@@ -5,6 +5,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <nlohmann/json.hpp>
 #include <vector>
 
 namespace more_phi {
@@ -19,6 +20,30 @@ struct ParamChange
     juce::String name;
     float currentValue = 0.0f;
     float newValue = 0.0f;
+};
+
+struct AssistantWorkflowPlan
+{
+    bool handled = false;
+    bool valid = false;
+    juce::String summary;
+    juce::String error;
+    nlohmann::json preview = nlohmann::json::object();
+    nlohmann::json workflowSubmitParams = nlohmann::json::object();
+};
+
+struct AssistantWorkflowResult
+{
+    bool handled = false;
+    bool success = false;
+    bool awaitingApproval = false;
+    juce::String message;
+    juce::String workflowRunId;
+    juce::String approvalId;
+    juce::String transactionId;
+    juce::String rawResponse;
+    nlohmann::json preview = nlohmann::json::object();
+    nlohmann::json response = nlohmann::json::object();
 };
 
 class AIAssistant
@@ -36,12 +61,23 @@ public:
     void commitPreview();
     bool isPreviewActive() const noexcept { return previewActive_; }
 
+    AssistantWorkflowPlan planLocalWorkflowPrompt(const juce::String& text) const;
+    AssistantWorkflowResult executeLocalWorkflowPrompt(const juce::String& text);
+    AssistantWorkflowResult undoLastAssistantWorkflow();
+    AssistantWorkflowResult recordFeedbackForLastWorkflow(const juce::String& text);
+
+    static bool detectsLocalWorkflowPrompt(const juce::String& text);
+    static bool detectsLocalFeedbackPrompt(const juce::String& text);
+    static bool detectsLocalUndoPrompt(const juce::String& text);
+
 private:
     static int canonicalIndex(const ParamChange& change) noexcept;
 
     MorePhiProcessor& processor_;
     std::vector<ParamChange> pendingChanges_;
     bool previewActive_ = false;
+    juce::String lastWorkflowRunId_;
+    juce::String lastRollbackTransactionId_;
 };
 
 } // namespace more_phi

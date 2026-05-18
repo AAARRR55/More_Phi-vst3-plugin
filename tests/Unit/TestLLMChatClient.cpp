@@ -1,11 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "AI/AIAssistant.h"
 #include "AI/LLMChatClient.h"
+#include "AI/MCPToolHandler.h"
+#include "Plugin/PluginProcessor.h"
 #include "UI/AIChatPanel.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <regex>
 #include <set>
 #include <string>
@@ -54,6 +58,11 @@ const std::vector<std::string> kPreviouslyBlockedToolNames = {
 // Loose minimum to catch silent filtering. The real tool count is well above
 // this; bump only if the tool surface intentionally shrinks.
 constexpr std::size_t kMinExpectedToolCount = 30;
+
+juce::var toVar(const nlohmann::json& value)
+{
+    return juce::JSON::parse(juce::String(value.dump()));
+}
 
 } // namespace
 
@@ -218,6 +227,287 @@ TEST_CASE("AI chat panel handles MCP tool inventory questions locally", "[unit][
     CHECK(reply.contains("more_phi.parameters"));
     CHECK(reply.contains("hosted_plugin.set_parameter"));
     CHECK(reply.contains("remote LLM provider"));
+}
+
+TEST_CASE("AI assistant plans local morph language as a WorkflowRun DAG", "[unit][ai][assistant][workflow]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+
+    const auto plan = assistant.planLocalWorkflowPrompt("Move the morph fader to 42%");
+
+    REQUIRE(plan.handled);
+    REQUIRE(plan.valid);
+    REQUIRE(plan.workflowSubmitParams.is_object());
+    CHECK(plan.summary.contains("morph fader"));
+    CHECK(plan.workflowSubmitParams["context"]["source"].get<std::string>() == "in_plugin_assistant");
+
+    const auto& steps = plan.workflowSubmitParams["steps"];
+    REQUIRE(steps.is_array());
+    REQUIRE(steps.size() == 1);
+    CHECK(steps[0]["id"].get<std::string>() == "set_morph_position");
+    CHECK(steps[0]["toolName"].get<std::string>() == "set_morph_position");
+    CHECK(std::abs(steps[0]["params"]["fader"].get<double>() - 0.42) < 0.0001);
+    CHECK(steps[0]["params"]["source"].get<std::string>() == "fader");
+}
+
+TEST_CASE("AI assistant executes local natural language through workflow transactions", "[unit][ai][assistant][workflow]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+    InstanceIdentity identity;
+
+    const auto result = assistant.executeLocalWorkflowPrompt("Move the morph fader to 42%");
+
+    REQUIRE(result.handled);
+    REQUIRE(result.success);
+    REQUIRE(result.workflowRunId.isNotEmpty());
+    REQUIRE(result.transactionId.isNotEmpty());
+    CHECK(result.message.contains("WorkflowRun"));
+    CHECK(std::abs(processor.getFaderPos() - 0.42f) < 0.0001f);
+    CHECK(processor.getMorphSource() == 1);
+
+    const auto history = nlohmann::json::parse(
+        MCPToolHandler::handle("automation.history",
+            toVar(nlohmann::json{{"limit", 50}, {"workflow_run_id", result.workflowRunId.toStdString()}}),
+            processor,
+            identity).toStdString());
+
+    REQUIRE(history["success"].get<bool>());
+    bool foundAssistantTransaction = false;
+    for (const auto& transaction : history["transactions"])
+    {
+        foundAssistantTransaction = foundAssistantTransaction
+            || (transaction["workflowRunId"].get<std::string>() == result.workflowRunId.toStdString()
+                && transaction["workflowStepId"].get<std::string>() == "set_morph_position"
+                && transaction["toolName"].get<std::string>() == "set_morph_position");
+    }
+    REQUIRE(foundAssistantTransaction);
+}
+
+TEST_CASE("MCP memory.update_outcome_feedback updates automatic workflow outcome", "[unit][ai][assistant][workflow][memory]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+    InstanceIdentity identity;
+
+    const auto applied = assistant.executeLocalWorkflowPrompt("Move the morph fader to 42%");
+    REQUIRE(applied.success);
+    REQUIRE(applied.transactionId.isNotEmpty());
+
+    const auto updated = nlohmann::json::parse(
+        MCPToolHandler::handle("memory.update_outcome_feedback",
+            toVar(nlohmann::json{
+                {"transaction_id", applied.transactionId.toStdString()},
+                {"feedback_status", "too much"},
+                {"user_feedback", "that was too much"}
+            }),
+            processor,
+            identity).toStdString());
+
+    REQUIRE(updated["success"].get<bool>());
+    REQUIRE(updated["outcome"]["actionId"].get<std::string>() == applied.transactionId.toStdString());
+    CHECK(updated["outcome"]["feedbackStatus"].get<std::string>() == "too_much");
+    CHECK_FALSE(updated["outcome"]["userAccepted"].get<bool>());
+    CHECK(updated["memory"]["content"]["feedbackStatus"].get<std::string>() == "too_much");
+
+    const auto events = nlohmann::json::parse(
+        MCPToolHandler::handle("events.list_recent",
+            toVar(nlohmann::json{{"limit", 20}}),
+            processor,
+            identity).toStdString());
+    REQUIRE(events["success"].get<bool>());
+
+    bool foundEvent = false;
+    for (const auto& event : events["events"])
+    {
+        foundEvent = foundEvent
+            || (event.value("type", std::string{}) == "outcome.feedback_updated"
+                && event.value("transactionId", std::string{}) == applied.transactionId.toStdString());
+    }
+    REQUIRE(foundEvent);
+}
+
+TEST_CASE("AI assistant records feedback for the last local workflow outcome", "[unit][ai][assistant][workflow][memory]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+    InstanceIdentity identity;
+
+    const auto applied = assistant.executeLocalWorkflowPrompt("Move the morph fader to 42%");
+    REQUIRE(applied.success);
+    REQUIRE(applied.transactionId.isNotEmpty());
+
+    const auto feedback = assistant.recordFeedbackForLastWorkflow("that sounded better");
+
+    REQUIRE(feedback.handled);
+    REQUIRE(feedback.success);
+    REQUIRE(feedback.workflowRunId == applied.workflowRunId);
+    REQUIRE(feedback.transactionId == applied.transactionId);
+    CHECK(feedback.message.contains("Recorded feedback"));
+
+    const auto outcomes = nlohmann::json::parse(
+        MCPToolHandler::handle("memory.list_outcomes",
+            toVar(nlohmann::json{{"workflow_run_id", applied.workflowRunId.toStdString()}, {"limit", 20}}),
+            processor,
+            identity).toStdString());
+    REQUIRE(outcomes["success"].get<bool>());
+
+    bool foundFeedback = false;
+    int matchingOutcomes = 0;
+    for (const auto& outcome : outcomes["outcomes"])
+    {
+        const auto& content = outcome["content"];
+        if (content.value("actionId", std::string{}) == applied.transactionId.toStdString())
+        {
+            ++matchingOutcomes;
+            foundFeedback = true;
+            CHECK(content["userAccepted"].get<bool>());
+            CHECK(content["source"].get<std::string>() == "user_feedback");
+            CHECK(content["feedbackStatus"].get<std::string>() == "sounds_better");
+            CHECK(content["userFeedback"].get<std::string>().find("sounded better") != std::string::npos);
+            CHECK(content["outcomeScore"].get<double>() > 0.8);
+        }
+    }
+    REQUIRE(foundFeedback);
+    CHECK(matchingOutcomes == 1);
+}
+
+TEST_CASE("AI assistant records corrective feedback for an overdone local workflow", "[unit][ai][assistant][workflow][memory]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+    InstanceIdentity identity;
+
+    const auto applied = assistant.executeLocalWorkflowPrompt("Move the morph fader to 90%");
+    REQUIRE(applied.success);
+    REQUIRE(applied.transactionId.isNotEmpty());
+
+    const auto feedback = assistant.recordFeedbackForLastWorkflow("that was too much");
+
+    REQUIRE(feedback.handled);
+    REQUIRE(feedback.success);
+    REQUIRE(feedback.workflowRunId == applied.workflowRunId);
+    REQUIRE(feedback.transactionId == applied.transactionId);
+
+    const auto outcomes = nlohmann::json::parse(
+        MCPToolHandler::handle("memory.list_outcomes",
+            toVar(nlohmann::json{{"workflow_run_id", applied.workflowRunId.toStdString()}, {"limit", 20}}),
+            processor,
+            identity).toStdString());
+    REQUIRE(outcomes["success"].get<bool>());
+
+    bool foundFeedback = false;
+    for (const auto& outcome : outcomes["outcomes"])
+    {
+        const auto& content = outcome["content"];
+        if (content.value("actionId", std::string{}) == applied.transactionId.toStdString())
+        {
+            foundFeedback = true;
+            CHECK_FALSE(content["userAccepted"].get<bool>());
+            CHECK(content["source"].get<std::string>() == "user_feedback");
+            CHECK(content["feedbackStatus"].get<std::string>() == "too_much");
+            CHECK(content["userFeedback"].get<std::string>().find("too much") != std::string::npos);
+            CHECK(content["outcomeScore"].get<double>() < 0.3);
+        }
+    }
+    REQUIRE(foundFeedback);
+}
+
+TEST_CASE("AI chat panel formats workflow timeline previews and feedback", "[unit][ai][assistant][workflow][ux]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+
+    const auto applied = assistant.executeLocalWorkflowPrompt("Move the morph fader to 42%");
+    REQUIRE(applied.success);
+    REQUIRE(applied.workflowRunId.isNotEmpty());
+    REQUIRE(applied.transactionId.isNotEmpty());
+
+    const auto timeline = AIChatPanel::buildWorkflowTimelineTextForTest(applied);
+    CHECK(timeline.contains("WorkflowRun"));
+    CHECK(timeline.contains("completed"));
+    CHECK(timeline.contains("Transaction"));
+    CHECK(timeline.contains("Plan Preview"));
+    CHECK(timeline.contains("fader"));
+    CHECK(timeline.contains("-> 42%"));
+    CHECK(timeline.contains("Verify"));
+
+    const auto feedback = assistant.recordFeedbackForLastWorkflow("that sounded better");
+    REQUIRE(feedback.success);
+
+    const auto feedbackTimeline = AIChatPanel::buildWorkflowTimelineTextForTest(feedback);
+    CHECK(feedbackTimeline.contains("Feedback"));
+    CHECK(feedbackTimeline.contains("sounds_better"));
+    CHECK(feedbackTimeline.contains("that sounded better"));
+}
+
+TEST_CASE("AI chat panel formats pending approval queue entries", "[unit][ai][assistant][permission][ux]")
+{
+    const nlohmann::json approvals{
+        {"success", true},
+        {"approvals", nlohmann::json::array({
+            {
+                {"id", "approval-test"},
+                {"workflowRunId", "workflow-test"},
+                {"toolName", "hosted_plugin.load"},
+                {"risk", "high_impact"},
+                {"status", "approved"},
+                {"explanation", "old approved request"}
+            },
+            {
+                {"id", "approval-pending"},
+                {"workflowRunId", "workflow-pending"},
+                {"toolName", "hosted_plugin.load"},
+                {"risk", "high_impact"},
+                {"status", "pending"},
+                {"explanation", "Dispatch-layer PermissionPolicy requires approval."},
+                {"predictedDiff", {
+                    {"approval_preview", true},
+                    {"diffs", nlohmann::json::array({
+                        {{"name", "Limiter Ceiling"}, {"before", 0.5}, {"after", 0.25}, {"risk", "high_impact"}}
+                    })}
+                }}
+            }
+        })}
+    };
+
+    const auto text = AIChatPanel::buildApprovalQueueTextForTest(approvals);
+    CHECK(text.contains("Approval Required"));
+    CHECK(text.contains("approval-pending"));
+    CHECK(text.contains("workflow-pending"));
+    CHECK(text.contains("hosted_plugin.load"));
+    CHECK(text.contains("high_impact"));
+    CHECK(text.contains("Plan Preview"));
+    CHECK(text.contains("Limiter Ceiling"));
+    CHECK_FALSE(text.contains("approval-test"));
+
+    const auto empty = AIChatPanel::buildApprovalQueueTextForTest(
+        nlohmann::json{{"success", true}, {"approvals", nlohmann::json::array()}});
+    CHECK(empty.contains("No pending approval"));
+}
+
+TEST_CASE("AI assistant reports when there is no local workflow to receive feedback", "[unit][ai][assistant][workflow][memory]")
+{
+    MorePhiProcessor processor;
+    AIAssistant assistant(processor);
+
+    const auto feedback = assistant.recordFeedbackForLastWorkflow("that sounded better");
+
+    REQUIRE(feedback.handled);
+    REQUIRE_FALSE(feedback.success);
+    CHECK(feedback.message.contains("No assistant workflow"));
+}
+
+TEST_CASE("AI chat panel detects local workflow prompts before cloud chat", "[unit][ai][assistant][workflow]")
+{
+    CHECK(AIChatPanel::detectsLocalWorkflowPromptForTest("Move the morph fader to 42%"));
+    CHECK(AIChatPanel::detectsLocalWorkflowPromptForTest("set morph position to center"));
+    CHECK(AIChatPanel::detectsLocalUndoPromptForTest("rollback the previous assistant workflow"));
+    CHECK(AIChatPanel::detectsLocalWorkflowFeedbackPromptForTest("that sounded better"));
+    CHECK(AIChatPanel::detectsLocalWorkflowFeedbackPromptForTest("that was too much, reject that result"));
+    CHECK_FALSE(AIChatPanel::detectsLocalWorkflowPromptForTest("What MCP tools do you have access to?"));
+    CHECK_FALSE(AIChatPanel::detectsLocalWorkflowPromptForTest("Make this snare brighter"));
 }
 
 TEST_CASE("AI chat panel formats raw WinHTTP timeout errors", "[unit][ai][llm][chat]")

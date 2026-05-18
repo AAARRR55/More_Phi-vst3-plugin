@@ -195,6 +195,15 @@ struct ActionOutcome
     bool userAccepted = false;
     juce::String userFeedback;
     float outcomeScore = 0.0f;
+    juce::String source;
+    juce::String feedbackStatus;
+};
+
+struct OutcomeFeedbackUpdate
+{
+    juce::String actionId;
+    juce::String feedbackStatus;
+    juce::String userFeedback;
 };
 
 struct PermissionPolicy
@@ -382,10 +391,13 @@ public:
     explicit MemoryStore(juce::File storeDirectory = {});
 
     MemoryRecord remember(MemoryRecord record);
+    MemoryRecord recordOutcome(ActionOutcome outcome);
+    std::optional<MemoryRecord> updateOutcomeFeedback(OutcomeFeedbackUpdate update);
     nlohmann::json search(MemoryScope scope,
                           const juce::String& subjectId,
                           const juce::String& query,
                           int limit);
+    nlohmann::json listOutcomes(const juce::String& workflowRunId = {}, int limit = 50) const;
     bool forget(const juce::String& id);
     nlohmann::json intentContext(const nlohmann::json& sessionContext, int limit);
     nlohmann::json describeState() const;
