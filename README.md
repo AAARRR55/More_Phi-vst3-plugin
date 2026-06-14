@@ -342,6 +342,7 @@ For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [API Reference](docs/API_REFERENCE.md) - MCP tools and protocols
 - [Developer Guide](docs/DEVELOPER_GUIDE.md) - Building and contributing
 - [Architecture](docs/ARCHITECTURE.md) - Technical design details
+- [VST3 License Key Management](docs/VST3_LICENSE_KEY_MANAGEMENT.md) - Licensing architecture, activation flows, offline validation, and C++ implementation patterns
 - [Dataset Generation](docs/DATASET_GENERATION.md) - V2 and V3 pipeline documentation
 - [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) - AI parameter optimization
 - [Audio Engine Specification](docs/AudioEngineSpec_v2.md) - Audio processing details
