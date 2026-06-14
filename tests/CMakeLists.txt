@@ -79,6 +79,7 @@ add_executable(MorePhiTests
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
+    Unit/TestLicensing.cpp
 )
 
 if(MORE_PHI_BUILD_COMPREHENSIVE_E2E)

@@ -250,6 +250,23 @@ set(MORE_PHI_HOST_SOURCES
     src/Host/ParameterBridge.cpp
 )
 
+set(MORE_PHI_LICENSING_SOURCES
+    src/Licensing/LicenseTypes.h
+    src/Licensing/LicenseTypes.cpp
+    src/Licensing/LicenseKey.h
+    src/Licensing/LicenseKey.cpp
+    src/Licensing/LicenseVerifier.h
+    src/Licensing/LicenseVerifier.cpp
+    src/Licensing/SecureLicenseStore.h
+    src/Licensing/SecureLicenseStore.cpp
+    src/Licensing/MachineFingerprint.h
+    src/Licensing/MachineFingerprint.cpp
+    src/Licensing/ActivationClient.h
+    src/Licensing/ActivationClient.cpp
+    src/Licensing/LicenseManager.h
+    src/Licensing/LicenseManager.cpp
+)
+
 set(MORE_PHI_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetGenerator.h
     src/AI/Dataset/DatasetGenerator.cpp
@@ -437,6 +454,7 @@ target_sources(MorePhi PRIVATE
     ${MORE_PHI_CORE_SOURCES}
     ${MORE_PHI_MASTERING_SOURCES}
     ${MORE_PHI_HOST_SOURCES}
+    ${MORE_PHI_LICENSING_SOURCES}
     ${MORE_PHI_AI_SOURCES}
     ${MORE_PHI_MIDI_SOURCES}
     ${MORE_PHI_PRESET_SOURCES}
@@ -465,6 +483,7 @@ set(MORE_PHI_CLI_SOURCES
     src/CLI/main.cpp
     ${MORE_PHI_CORE_SOURCES}
     ${MORE_PHI_HOST_SOURCES}
+    ${MORE_PHI_LICENSING_SOURCES}
     ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
     ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )

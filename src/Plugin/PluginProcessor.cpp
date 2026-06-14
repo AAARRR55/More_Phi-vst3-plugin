@@ -97,6 +97,7 @@ MorePhiProcessor::MorePhiProcessor()
     processorGenerationToken_ = gNextProcessorGenerationToken.fetch_add(1, std::memory_order_relaxed);
     // Constructor is kept minimal for FL Studio validation.
     cacheRawParameterPointers();
+    licenseManager_ = std::make_unique<licensing::LicenseManager>(licenseRuntimeState_);
 
     // Wire MIDI router callbacks (plain C function pointers + void* context)
     midiRouter.setSnapshotCallback([](int slot, void* ctx)

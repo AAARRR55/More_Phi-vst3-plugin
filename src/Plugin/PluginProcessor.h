@@ -39,6 +39,7 @@
 #include "AI/NeuralMasteringController.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
+#include "Licensing/LicenseManager.h"
 #include <array>
 #include <memory>
 #include <vector>
@@ -101,8 +102,12 @@ public:
     standalone_mcp::IZotopeIPCDiscovery& getIZotopeIPCDiscovery();
     standalone_mcp::IZotopeIPCAssistant& getIZotopeIPCAssistant();
     const InstanceIdentity& getInstanceIdentity() const   { return instanceIdentity_; }
+    licensing::LicenseRuntimeState& getLicenseRuntimeState() noexcept { return licenseRuntimeState_; }
+    const licensing::LicenseRuntimeState& getLicenseRuntimeState() const noexcept { return licenseRuntimeState_; }
+    licensing::LicenseManager& getLicenseManager() noexcept { return *licenseManager_; }
+    const licensing::LicenseManager& getLicenseManager() const noexcept { return *licenseManager_; }
 
-#if MORE_PHI_TEST_MODE
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
     void startPendingMCPServerForTesting() { startMCPServerIfNeeded(); }
 #endif
     
@@ -372,7 +377,7 @@ public:
         };
     }
 
-#if MORE_PHI_TEST_MODE
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
     void testResizeExternalEditHolds(int count)
     {
         const int safeCount = juce::jlimit(0, MAX_PARAMETERS, count);
@@ -442,6 +447,8 @@ private:
     LinkBroadcaster    linkBroadcaster_;
     InstanceIdentity   instanceIdentity_;
     juce::uint64       processorGenerationToken_ = 0;
+    licensing::LicenseRuntimeState licenseRuntimeState_;
+    std::unique_ptr<licensing::LicenseManager> licenseManager_;
 
     // ── New v3.3.0 components ────────────────────────────────────────────────
     ParameterClassifier      parameterClassifier_;

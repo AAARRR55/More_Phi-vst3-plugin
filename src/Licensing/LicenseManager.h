@@ -1,0 +1,53 @@
+/*
+ * More-Phi — Licensing/LicenseManager.h
+ * Non-audio-thread license orchestration and runtime state publication.
+ */
+#pragma once
+
+#include <memory>
+
+#include "ActivationClient.h"
+#include "LicenseKey.h"
+#include "LicenseVerifier.h"
+#include "MachineFingerprint.h"
+#include "SecureLicenseStore.h"
+
+namespace more_phi::licensing {
+
+class LicenseManager
+{
+public:
+    explicit LicenseManager(LicenseRuntimeState& runtimeState);
+    LicenseManager(LicenseRuntimeState& runtimeState,
+                   SecureLicenseStore store,
+                   std::unique_ptr<IActivationClient> activationClient);
+
+    ValidationResult loadCachedCertificate();
+    ValidationResult activateWithKey(const juce::String& licenseKey,
+                                     const juce::String& pluginVersion,
+                                     const juce::String& dawHint = {});
+    ValidationResult importOfflineCertificate(const juce::String& signedCertificateJson);
+    bool clearActivation(juce::String* error = nullptr);
+
+    LicenseRuntimeState& getRuntimeState() noexcept { return runtimeState_; }
+    const LicenseRuntimeState& getRuntimeState() const noexcept { return runtimeState_; }
+    LicenseVerifier& getVerifier() noexcept { return verifier_; }
+    const LicenseVerifier& getVerifier() const noexcept { return verifier_; }
+    juce::String getMachineHash() const { return machineHash_; }
+    juce::String getLastMessage() const { return lastMessage_; }
+
+    static int64_t nowUnixSeconds();
+    static juce::String createRequestNonce();
+
+private:
+    void publish_(const ValidationResult& result);
+
+    LicenseRuntimeState& runtimeState_;
+    SecureLicenseStore store_;
+    LicenseVerifier verifier_;
+    std::unique_ptr<IActivationClient> activationClient_;
+    juce::String machineHash_;
+    juce::String lastMessage_;
+};
+
+} // namespace more_phi::licensing
