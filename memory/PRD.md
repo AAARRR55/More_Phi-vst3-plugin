@@ -13,6 +13,9 @@ Create and implement a complete license key management system for a VST3 plugin,
 
 ## Implemented
 - Added license model, key parser/checksum, runtime state, verifier, secure store, machine fingerprint, activation client interface/stub, and license manager.
+- Added configurable real HTTP activation client using `LICENSE_API_BASE_URL`, `MOREPHI_PUBLIC_CLIENT_TOKEN`, and optional `MOREPHI_CLIENT_HEADER`.
+- Wired plugin endpoints: `/plugin/licenses/activate`, `/plugin/licenses/refresh`, and `/plugin/licenses/deactivate`.
+- Added activate/refresh certificate response parsing for both compact and backend-friendly response shapes; deactivation accepts 2xx empty-body success.
 - Wired licensing sources into CMake for plugin and CLI targets.
 - Exposed `getLicenseRuntimeState()` and `getLicenseManager()` from `MorePhiProcessor`.
 - Added one-shot cached certificate load via `loadCachedLicenseIfNeeded()` on the message-thread timer.
@@ -26,7 +29,6 @@ Create and implement a complete license key management system for a VST3 plugin,
 - Wire activation UI to `LicenseManager::activateWithKey`, `importOfflineCertificate`, and `clearActivation`.
 
 ### P1
-- Implement real HTTP activation/refresh/deactivation client.
 - Add tests for `LicenseManager` cached-store load and runtime-state publication.
 - Encrypt/wrap local certificate using platform keychain/DPAPI where available.
 

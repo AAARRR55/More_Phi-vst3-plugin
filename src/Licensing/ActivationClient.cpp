@@ -96,7 +96,16 @@ ActivationResponse parseActivationResponse(int statusCode, const juce::String& b
 
     if (body.trim().isEmpty())
     {
-        response.message = response.success ? "Activation server returned an empty response." : "Activation server request failed.";
+        if (response.success && !requireCertificate)
+        {
+            response.status = "ok";
+            response.message = "License server request succeeded.";
+            return response;
+        }
+
+        response.message = response.success
+            ? "Activation server returned an empty response."
+            : "Activation server request failed.";
         response.success = false;
         return response;
     }
