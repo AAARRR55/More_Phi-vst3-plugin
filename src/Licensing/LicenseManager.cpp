@@ -2,10 +2,12 @@
 
 #include "Version.h"
 
+#include <utility>
+
 namespace more_phi::licensing {
 
 LicenseManager::LicenseManager(LicenseRuntimeState& runtimeState)
-    : LicenseManager(runtimeState, SecureLicenseStore(), std::make_unique<StubActivationClient>())
+    : LicenseManager(runtimeState, SecureLicenseStore(), HttpActivationClient::createFromEnvironment())
 {
 }
 
@@ -94,20 +96,60 @@ ValidationResult LicenseManager::activateWithKey(const juce::String& licenseKey,
     }
 
     auto result = verifier_.validateCertificate(*response.certificate, machineHash_, nowUnixSeconds());
-    if (result.enablesPremiumFeatures)
-    {
-        juce::String saveError;
-        if (!store_.saveCertificate(*response.certificate, &saveError))
-        {
-            result.state = LicenseState::Invalid;
-            result.enablesPremiumFeatures = false;
-            result.featureMask = 0u;
-            result.message = saveError;
-        }
-    }
+    (void) storeVerifiedCertificate(*response.certificate, result);
 
     publish_(result);
     return result;
+}
+
+ValidationResult LicenseManager::refreshActivation(const juce::String& activationId)
+{
+    if (activationId.trim().isEmpty())
+    {
+        ValidationResult result { LicenseState::ActivationRequired, false, 0u, 0, 0, "Missing activation id for license refresh." };
+        publish_(result);
+        return result;
+    }
+
+    auto response = activationClient_->refresh(activationId, machineHash_);
+    if (!response.success || !response.certificate)
+    {
+        ValidationResult result {
+            LicenseState::ActivationRequired,
+            false,
+            0u,
+            0,
+            0,
+            response.message.isNotEmpty() ? response.message : "License refresh failed."
+        };
+        publish_(result);
+        return result;
+    }
+
+    auto result = verifier_.validateCertificate(*response.certificate, machineHash_, nowUnixSeconds());
+    (void) storeVerifiedCertificate(*response.certificate, result);
+    publish_(result);
+    return result;
+}
+
+bool LicenseManager::deactivateActivation(const juce::String& activationId, juce::String* error)
+{
+    if (activationId.trim().isEmpty())
+    {
+        if (error != nullptr)
+            *error = "Missing activation id for deactivation.";
+        return false;
+    }
+
+    const auto response = activationClient_->deactivate(activationId, machineHash_);
+    if (!response.success)
+    {
+        if (error != nullptr)
+            *error = response.message.isNotEmpty() ? response.message : "License deactivation failed.";
+        return false;
+    }
+
+    return clearActivation(error);
 }
 
 ValidationResult LicenseManager::importOfflineCertificate(const juce::String& signedCertificateJson)
@@ -122,20 +164,26 @@ ValidationResult LicenseManager::importOfflineCertificate(const juce::String& si
     }
 
     auto result = verifier_.validateCertificate(*cert, machineHash_, nowUnixSeconds());
-    if (result.enablesPremiumFeatures)
-    {
-        juce::String saveError;
-        if (!store_.saveCertificate(*cert, &saveError))
-        {
-            result.state = LicenseState::Invalid;
-            result.enablesPremiumFeatures = false;
-            result.featureMask = 0u;
-            result.message = saveError;
-        }
-    }
+    (void) storeVerifiedCertificate(*cert, result);
 
     publish_(result);
     return result;
+}
+
+bool LicenseManager::storeVerifiedCertificate(const SignedCertificate& certificate, ValidationResult& result)
+{
+    if (!result.enablesPremiumFeatures)
+        return false;
+
+    juce::String saveError;
+    if (store_.saveCertificate(certificate, &saveError))
+        return true;
+
+    result.state = LicenseState::Invalid;
+    result.enablesPremiumFeatures = false;
+    result.featureMask = 0u;
+    result.message = saveError;
+    return false;
 }
 
 bool LicenseManager::clearActivation(juce::String* error)

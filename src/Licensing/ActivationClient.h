@@ -1,8 +1,10 @@
 /*
  * More-Phi — Licensing/ActivationClient.h
- * Mockable activation client interface. Network implementation can be added later.
+ * Mockable activation client interface and configurable HTTP implementation.
  */
 #pragma once
+
+#include <memory>
 
 #include "LicenseTypes.h"
 
@@ -17,6 +19,19 @@ struct ActivationRequest
     juce::String os;
     juce::String dawHint;
     juce::String requestNonce;
+};
+
+struct LicenseApiConfig
+{
+    juce::String baseUrl;
+    juce::String publicClientToken;
+    juce::String clientHeaderName = "X-MorePhi-Client";
+    int timeoutMs = 8000;
+
+    bool isUsable() const noexcept
+    {
+        return baseUrl.trim().isNotEmpty() && publicClientToken.trim().isNotEmpty();
+    }
 };
 
 struct ActivationResponse
@@ -37,6 +52,27 @@ public:
                                        const juce::String& machineHash) = 0;
     virtual ActivationResponse deactivate(const juce::String& activationId,
                                           const juce::String& machineHash) = 0;
+};
+
+class HttpActivationClient final : public IActivationClient
+{
+public:
+    explicit HttpActivationClient(LicenseApiConfig config);
+
+    ActivationResponse activate(const ActivationRequest& request) override;
+    ActivationResponse refresh(const juce::String& activationId,
+                               const juce::String& machineHash) override;
+    ActivationResponse deactivate(const juce::String& activationId,
+                                  const juce::String& machineHash) override;
+
+    static std::unique_ptr<IActivationClient> createFromEnvironment();
+    static LicenseApiConfig configFromEnvironment();
+
+private:
+    ActivationResponse post_(const juce::String& path, const juce::String& body, bool requireCertificate) const;
+    juce::String endpoint_(const juce::String& path) const;
+
+    LicenseApiConfig config_;
 };
 
 class StubActivationClient final : public IActivationClient

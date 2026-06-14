@@ -2,6 +2,7 @@
 
 #include "Licensing/LicenseKey.h"
 #include "Licensing/LicenseManager.h"
+#include "Licensing/ActivationClient.h"
 
 #include <nlohmann/json.hpp>
 
@@ -104,4 +105,18 @@ TEST_CASE("License verifier rejects machine mismatch", "[licensing]")
     const auto result = verifier.validateCertificate(cert, "machine-b", now);
     REQUIRE(result.state == LicenseState::ActivationRequired);
     REQUIRE_FALSE(result.enablesPremiumFeatures);
+}
+
+TEST_CASE("HTTP activation client reports missing configuration without network", "[licensing]")
+{
+    HttpActivationClient client(LicenseApiConfig{});
+
+    ActivationRequest request;
+    request.licenseKey = makeValidLicenseKey();
+    request.machineHash = "machine-test";
+    request.pluginVersion = "test";
+
+    const auto response = client.activate(request);
+    REQUIRE_FALSE(response.success);
+    REQUIRE(response.errorCode == "LICENSE_API_CONFIG_MISSING");
 }

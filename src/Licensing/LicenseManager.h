@@ -26,8 +26,12 @@ public:
     ValidationResult activateWithKey(const juce::String& licenseKey,
                                      const juce::String& pluginVersion,
                                      const juce::String& dawHint = {});
+    ValidationResult refreshActivation(const juce::String& activationId);
+    bool deactivateActivation(const juce::String& activationId, juce::String* error = nullptr);
     ValidationResult importOfflineCertificate(const juce::String& signedCertificateJson);
     bool clearActivation(juce::String* error = nullptr);
+
+    bool storeVerifiedCertificate(const SignedCertificate& certificate, ValidationResult& result);
 
     LicenseRuntimeState& getRuntimeState() noexcept { return runtimeState_; }
     const LicenseRuntimeState& getRuntimeState() const noexcept { return runtimeState_; }

@@ -1068,7 +1068,7 @@ Keep server URLs and public key sets separate for staging vs production:
 ```json
 {
   "environment": "production",
-  "activationBaseUrl": "https://licensing.example.com",
+  "activationBaseUrl": "https://licensing.example.com/api",
   "publicKeys": [
     {
       "keyId": "prod-ed25519-2026-01",
@@ -1080,6 +1080,66 @@ Keep server URLs and public key sets separate for staging vs production:
 ```
 
 Do not ship staging public keys in production unless intentionally supported.
+
+### 20.3 Plugin Runtime HTTP Configuration
+
+The implemented C++ activation client reads these process environment variables when constructing `LicenseManager`:
+
+```text
+LICENSE_API_BASE_URL=https://your-domain.com/api
+MOREPHI_PUBLIC_CLIENT_TOKEN=public_plugin_client_token
+MOREPHI_CLIENT_HEADER=X-MorePhi-Client
+```
+
+If either `LICENSE_API_BASE_URL` or `MOREPHI_PUBLIC_CLIENT_TOKEN` is missing, the plugin fails closed to `StubActivationClient` and online activation returns `not_configured`.
+
+Configured endpoints:
+
+```text
+POST {LICENSE_API_BASE_URL}/plugin/licenses/activate
+POST {LICENSE_API_BASE_URL}/plugin/licenses/refresh
+POST {LICENSE_API_BASE_URL}/plugin/licenses/deactivate
+```
+
+Activation request body:
+
+```json
+{
+  "license_key": "MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C",
+  "machine_id": "hashed-machine-id",
+  "plugin_version": "3.3.0",
+  "platform": "windows-vst3 or macos-au/vst3 hint",
+  "daw": "Ableton Live",
+  "product_id": "more-phi-vst3",
+  "request_nonce": "uuid"
+}
+```
+
+Expected successful response may use either compact certificate shape:
+
+```json
+{
+  "status": "active",
+  "certificate": {
+    "payload": "base64url(canonical-json)",
+    "signature": "base64url(signature)",
+    "keyId": "morephi-prod-2026-01"
+  }
+}
+```
+
+Or backend-friendly shape:
+
+```json
+{
+  "status": "active",
+  "certificate_payload": "base64url(canonical-json) or raw canonical JSON string",
+  "signature": "base64url(signature)",
+  "public_key_id": "morephi-prod-2026-01"
+}
+```
+
+The C++ client accepts either base64url-encoded payloads or raw canonical JSON strings in `certificate_payload`; it normalizes raw JSON before verifier validation.
 
 ---
 
