@@ -1,33 +1,41 @@
-# PRD — VST3 License Key Management Specification
+# PRD — VST3 License Key Management Implementation
 
 ## Original Problem Statement
-Create a complete technical specification and implementation guide for a VST3 plugin license key management system covering key generation/validation, multiple license types, secure storage, offline activation, anti-tamper protection, VST3 integration, activation UX, compliance, pseudocode, C++ examples, configuration guidance, and third-party licensing recommendations.
+Create and implement a complete license key management system for a VST3 plugin, covering key generation/validation, multiple license types, secure storage, offline activation, periodic validation, anti-tamper guidance, VST3/JUCE integration, user activation flows, compliance, C++ patterns, and third-party options.
 
 ## Architecture Decisions
-- Deliverable is a Markdown technical guide integrated into the existing More-Phi documentation workspace.
-- Target implementation assumes JUCE 8 / C++20 VST3/AU plugin architecture already used by More-Phi.
-- Recommended licensing model uses signed activation certificates with Ed25519 public-key verification, server-held private keys, local secure storage, background validation, and audio-thread-safe atomic license state.
-- License support covers trial, perpetual, subscription, node-locked, and floating/team lease workflows.
+- Target stack: More-Phi JUCE 8 / C++20 VST3/AU plugin.
+- Implemented a local C++ licensing module under `src/Licensing`.
+- Runtime state is audio-thread safe via atomics (`LicenseRuntimeState`).
+- License certificates are signed-token oriented, parsed from base64url JSON envelopes, and validated off the audio path.
+- Online activation is represented by a mockable `IActivationClient`; current implementation uses `StubActivationClient` until a real backend/provider is chosen.
+- Cached license loading is scheduled through the existing message-thread maintenance timer to avoid audio-thread I/O.
 
 ## Implemented
-- Added `/app/docs/VST3_LICENSE_KEY_MANAGEMENT.md` with complete architecture, workflows, key formats, cryptographic approach, secure storage guidance, validation pseudocode, C++ implementation patterns, UI/UX, compliance, testing, and roadmap.
-- Linked the guide from `/app/README.md` under Documentation.
-- Validated the guide contains all requested topic areas and README link.
+- Added license model, key parser/checksum, runtime state, verifier, secure store, machine fingerprint, activation client interface/stub, and license manager.
+- Wired licensing sources into CMake for plugin and CLI targets.
+- Exposed `getLicenseRuntimeState()` and `getLicenseManager()` from `MorePhiProcessor`.
+- Added one-shot cached certificate load via `loadCachedLicenseIfNeeded()` on the message-thread timer.
+- Added Catch2 tests for key normalization/checksum and certificate validation/machine mismatch.
+- Testing agent completed static review; full CMake/Catch2 execution could not run because `cmake` is missing in this container.
 
 ## Prioritized Backlog
 ### P0
-- Implement `src/Licensing` module skeleton in C++ when source code is ready for modification.
-- Add unit tests for key normalization, checksum, certificate verification, expiry, machine mismatch, and grace-period transitions.
+- Run full CMake configure/build/tests in an environment with CMake + JUCE FetchContent available.
+- Replace development signature verifier with production Ed25519/libsodium or selected licensing-provider verifier before release.
+- Wire activation UI to `LicenseManager::activateWithKey`, `importOfflineCertificate`, and `clearActivation`.
 
 ### P1
-- Build activation UI panel in JUCE with online/offline activation, status messaging, and deactivation flow.
-- Implement mocked activation server contract tests.
+- Implement real HTTP activation/refresh/deactivation client.
+- Add tests for `LicenseManager` cached-store load and runtime-state publication.
+- Encrypt/wrap local certificate using platform keychain/DPAPI where available.
 
 ### P2
-- Add production licensing backend or integrate selected third-party licensing provider.
-- Add audit dashboard, privacy policy language, and floating/team management workflows.
+- Add floating lease renewal/release workflow.
+- Add server audit event contracts and privacy retention configuration.
+- Add support diagnostics panel for license state/error details.
 
 ## Next Tasks
-- Choose custom backend vs third-party provider.
-- Select production cryptography library for Ed25519 verification.
-- Convert the specification into implementation tickets for C++ plugin work.
+- Choose real licensing backend/provider.
+- Add production signature verification dependency.
+- Build activation UI and connect to the new manager APIs.

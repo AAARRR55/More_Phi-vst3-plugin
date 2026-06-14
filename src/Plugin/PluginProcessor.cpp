@@ -98,6 +98,7 @@ MorePhiProcessor::MorePhiProcessor()
     // Constructor is kept minimal for FL Studio validation.
     cacheRawParameterPointers();
     licenseManager_ = std::make_unique<licensing::LicenseManager>(licenseRuntimeState_);
+    requestMessageThreadMaintenance();
 
     // Wire MIDI router callbacks (plain C function pointers + void* context)
     midiRouter.setSnapshotCallback([](int slot, void* ctx)
@@ -1945,7 +1946,8 @@ void MorePhiProcessor::requestMessageThreadMaintenance() noexcept
             self->startTimer(50);
     };
 
-    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+    if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+        messageManager != nullptr && messageManager->isThisTheMessageThread())
         startMaintenanceTimer();
     else if (!juce::MessageManager::callAsync(startMaintenanceTimer))
         maintenanceTimerRequested_.store(false, std::memory_order_release);
@@ -1954,10 +1956,20 @@ void MorePhiProcessor::requestMessageThreadMaintenance() noexcept
 bool MorePhiProcessor::hasPendingMessageThreadWork() const noexcept
 {
     return mcpStartPending_.load(std::memory_order_acquire)
+        || licenseLoadPending_.load(std::memory_order_acquire)
         || hasPendingPluginLoad_.load(std::memory_order_acquire)
         || audioDomainConfigDirty_.load(std::memory_order_acquire)
         || latencyConfigDirty_.load(std::memory_order_acquire)
         || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_;
+}
+
+void MorePhiProcessor::loadCachedLicenseIfNeeded()
+{
+    if (!licenseLoadPending_.exchange(false, std::memory_order_acq_rel))
+        return;
+
+    if (licenseManager_ != nullptr)
+        licenseManager_->loadCachedCertificate();
 }
 
 void MorePhiProcessor::startMCPServerIfNeeded()
@@ -2094,6 +2106,7 @@ void MorePhiProcessor::applyPendingFullStateRecall()
 
 void MorePhiProcessor::timerCallback()
 {
+    loadCachedLicenseIfNeeded();
     startMCPServerIfNeeded();
 
     if (audioDomainConfigDirty_.load(std::memory_order_acquire))
