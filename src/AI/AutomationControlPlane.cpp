@@ -614,7 +614,7 @@ json juceVarToJson(const juce::var& value)
     if (value.isInt())
         return static_cast<int>(value);
     if (value.isInt64())
-        return static_cast<int64_t>(value);
+        return static_cast<int64_t>(static_cast<juce::int64>(value));
     if (value.isDouble())
         return static_cast<double>(value);
     if (value.isString())

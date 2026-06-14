@@ -494,7 +494,7 @@ void TrackAssistantStore::setStoreDirectoryOverrideForTests(const juce::File& di
 void TrackAssistantStore::clearStoreDirectoryOverrideForTests()
 {
     const std::lock_guard<std::mutex> guard(storeMutex());
-    overrideDirectory() = {};
+    overrideDirectory() = juce::File{};
     hasOverrideDirectory() = false;
 }
 

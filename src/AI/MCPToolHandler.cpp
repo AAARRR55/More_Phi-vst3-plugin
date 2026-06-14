@@ -83,9 +83,9 @@ static juce::var jsonToJuceVar(const json& value)
     if (value.is_boolean())
         return value.get<bool>();
     if (value.is_number_integer())
-        return static_cast<int64_t>(value.get<int64_t>());
+        return juce::var(static_cast<juce::int64>(value.get<int64_t>()));
     if (value.is_number_unsigned())
-        return static_cast<int64_t>(value.get<uint64_t>());
+        return juce::var(static_cast<juce::int64>(value.get<uint64_t>()));
     if (value.is_number_float())
         return value.get<double>();
     if (value.is_string())
@@ -954,7 +954,7 @@ static SyncEnvelope syncEnvelopeFromParams(const juce::var& params)
                           params.getProperty("instanceId", "")).toString();
     envelope.sessionId = params.getProperty("session_id",
                          params.getProperty("sessionId", "")).toString();
-    envelope.revision = static_cast<uint64_t>(static_cast<int64_t>(params.getProperty("revision", 0)));
+    envelope.revision = static_cast<uint64_t>(static_cast<juce::int64>(params.getProperty("revision", 0)));
     envelope.conflictPolicy = params.getProperty("conflict_policy",
                               params.getProperty("conflictPolicy", "merge")).toString();
     envelope.statePatch = juceVarToJson(params.getProperty("state_patch",
