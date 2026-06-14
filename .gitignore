@@ -124,3 +124,9 @@ obj/
 *.exe
 .idea/
 .env*
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
