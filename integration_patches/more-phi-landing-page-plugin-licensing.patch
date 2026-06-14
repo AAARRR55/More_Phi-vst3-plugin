@@ -1,5 +1,5 @@
 diff --git a/backend/server.py b/backend/server.py
-index f7da5ce..48d7740 100644
+index f7da5ce..f96a4e9 100644
 --- a/backend/server.py
 +++ b/backend/server.py
 @@ -1,5 +1,6 @@
@@ -89,12 +89,12 @@ index f7da5ce..48d7740 100644
 +
 +
 +def signing_key() -> Ed25519PrivateKey:
-+    if LICENSE_SIGNING_PRIVATE_KEY_PEM:
-+        key = load_pem_private_key(LICENSE_SIGNING_PRIVATE_KEY_PEM.encode(), password=None)
-+        if not isinstance(key, Ed25519PrivateKey):
-+            raise RuntimeError("LICENSE_SIGNING_PRIVATE_KEY_PEM must be an Ed25519 private key")
-+        return key
-+    return Ed25519PrivateKey.from_private_bytes(hashlib.sha256(JWT_SECRET.encode()).digest())
++    if not LICENSE_SIGNING_PRIVATE_KEY_PEM:
++        raise HTTPException(status_code=503, detail="License signing key is not configured")
++    key = load_pem_private_key(LICENSE_SIGNING_PRIVATE_KEY_PEM.encode(), password=None)
++    if not isinstance(key, Ed25519PrivateKey):
++        raise HTTPException(status_code=500, detail="LICENSE_SIGNING_PRIVATE_KEY_PEM must be an Ed25519 private key")
++    return key
 +
 +
 +def sign_activation_certificate(license_doc: Dict[str, Any], activation: Dict[str, Any]) -> Dict[str, str]:
@@ -146,7 +146,7 @@ index f7da5ce..48d7740 100644
  def generate_license_key(customer_id: str, order_id: str) -> str:
      raw = f"{customer_id}:{order_id}:{secrets.token_hex(16)}".encode()
      digest = hmac.new(JWT_SECRET.encode(), raw, hashlib.sha256).hexdigest().upper()
-@@ -369,6 +468,69 @@ async def activate_license(payload: ActivationCreate, customer: Dict[str, Any] =
+@@ -369,6 +468,70 @@ async def activate_license(payload: ActivationCreate, customer: Dict[str, Any] =
      return ActivationResponse(**{k: v for k, v in activation.items() if k != "_id"})
  
  
@@ -209,6 +209,7 @@ index f7da5ce..48d7740 100644
 +    activation = await db.license_activations.find_one({"id": payload.activation_id, "machine_id": payload.machine_id}, {"_id": 0})
 +    if not activation or activation.get("status") != "active":
 +        raise HTTPException(status_code=404, detail="Active activation not found")
++    await find_plugin_license(activation["license_key"], payload.product_id)
 +    await db.license_activations.update_one({"id": activation["id"]}, {"$set": {"status": "deactivated", "deactivated_at": now_iso()}})
 +    return {"status": "deactivated", "activation_id": activation["id"]}
 +
