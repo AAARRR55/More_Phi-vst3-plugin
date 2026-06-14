@@ -63,3 +63,9 @@ Create and implement a complete license key management system for a VST3 plugin,
 - Added positive-path plugin API pytest skeleton guarded by `MOREPHI_TEST_LICENSE_KEY`.
 - Exported latest landing-page repo patch to `/app/integration_patches/more-phi-landing-page-plugin-licensing.patch`.
 - Runtime live endpoint tests require `NEXT_PUBLIC_API_URL` or `REACT_APP_BACKEND_URL`, `MOREPHI_PUBLIC_CLIENT_TOKEN`, backend `LICENSE_SIGNING_PRIVATE_KEY_PEM`, and `MOREPHI_TEST_LICENSE_KEY`.
+
+## Live Plugin API Test Attempt
+- Checked runtime environment for `NEXT_PUBLIC_API_URL`, `REACT_APP_BACKEND_URL`, `MOREPHI_PUBLIC_CLIENT_TOKEN`, `MOREPHI_TEST_LICENSE_KEY`, and `LICENSE_SIGNING_PRIVATE_KEY_PEM`; none were present.
+- Ran `/tmp/more-phi-landing-page/backend/tests/test_plugin_license_api.py`; result: 3 tests skipped because live API URL/token/test license were not configured.
+- JUnit report saved at `/app/test_reports/plugin_live_api.xml`.
+- Live plugin activation flow is not validated yet because required runtime values are missing.
