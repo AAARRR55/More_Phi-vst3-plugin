@@ -48,3 +48,11 @@ Create and implement a complete license key management system for a VST3 plugin,
 - Built `MorePhiTests` successfully.
 - Ran full Catch2 suite: 415 test cases, 71,027 assertions, all passed.
 - Fixed three existing JUCE/GCC compile blockers discovered during full build: ambiguous `juce::var` int64 conversion in `AutomationControlPlane.cpp`, ambiguous `juce::File` reset in `TrackAssistantStore.cpp`, and ambiguous int64 conversions in `MCPToolHandler.cpp`.
+
+## Landing Page Backend Wiring Update
+- Cloned and inspected `https://github.com/AAARRR55/more-phi-landing-page.git`.
+- Added plugin-public FastAPI routes in the cloned repo: `/api/plugin/licenses/activate`, `/api/plugin/licenses/refresh`, `/api/plugin/licenses/deactivate`.
+- Backend routes use `X-MorePhi-Client` with `MOREPHI_PUBLIC_CLIENT_TOKEN`, license key + machine ID validation, activation limits, and signed activation certificates.
+- C++ client now calls `/api/plugin/licenses/*` and accepts current backend `MPHI-XXXXX-XXXXX-XXXXX-XXXXX` license keys as well as newer `MPH1` keys.
+- Validation: Python syntax/lint passed for backend changes; C++ full suite passed with 416 test cases and 71,029 assertions.
+- Note: cloned GitHub repo changes are staged in `/tmp/more-phi-landing-page`; push/apply them to that repository using the platform’s GitHub save flow.

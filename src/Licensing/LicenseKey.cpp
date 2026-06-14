@@ -5,7 +5,8 @@ namespace more_phi::licensing {
 namespace {
 
 constexpr const char* CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-constexpr int EXPECTED_GROUP_COUNT = 7; // MPH1 + five body groups + checksum group
+constexpr int EXPECTED_MPH1_GROUP_COUNT = 7; // MPH1 + five body groups + checksum group
+constexpr int EXPECTED_MPHI_GROUP_COUNT = 5; // MPHI + four legacy purchasing groups
 
 bool isSeparator(juce::juce_wchar c) noexcept
 {
@@ -29,6 +30,19 @@ juce::String LicenseKey::normalize(juce::String input)
     compact = compact.replaceCharacter('O', '0')
                      .replaceCharacter('I', '1')
                      .replaceCharacter('L', '1');
+
+    if (compact.startsWith("MPHI") && compact.length() == 24) // 4 prefix + four 5-char purchasing groups
+    {
+        juce::String formatted;
+        formatted << compact.substring(0, 4);
+        int index = 4;
+        for (int group = 0; group < 4; ++group)
+        {
+            formatted << "-" << compact.substring(index, index + 5);
+            index += 5;
+        }
+        return formatted;
+    }
 
     if (compact.length() != 25) // 4 prefix + 20 body + 1 checksum, compact form
         return input;
@@ -85,9 +99,34 @@ ParsedLicenseKey LicenseKey::parse(juce::String input)
     auto groups = juce::StringArray::fromTokens(result.normalized, "-", "");
     groups.removeEmptyStrings();
 
-    if (groups.size() != EXPECTED_GROUP_COUNT)
+    if (groups.size() == EXPECTED_MPHI_GROUP_COUNT && groups[0] == "MPHI")
     {
-        result.error = "License key should look like MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C.";
+        for (int group = 1; group <= 4; ++group)
+        {
+            if (groups[group].length() != 5)
+            {
+                result.error = "Legacy license key groups must contain five characters.";
+                return result;
+            }
+
+            for (int i = 0; i < groups[group].length(); ++i)
+            {
+                const auto c = groups[group][i];
+                if (!juce::CharacterFunctions::isLetterOrDigit(c))
+                {
+                    result.error = "Legacy license key contains an unsupported character.";
+                    return result;
+                }
+            }
+        }
+
+        result.valid = true;
+        return result;
+    }
+
+    if (groups.size() != EXPECTED_MPH1_GROUP_COUNT)
+    {
+        result.error = "License key should look like MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C or MPHI-XXXXX-XXXXX-XXXXX-XXXXX.";
         return result;
     }
 

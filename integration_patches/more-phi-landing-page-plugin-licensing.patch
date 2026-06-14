@@ -1,0 +1,218 @@
+diff --git a/backend/server.py b/backend/server.py
+index f7da5ce..48d7740 100644
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -1,5 +1,6 @@
+ import hashlib
+ import hmac
++import base64
+ import logging
+ import os
+ import secrets
+@@ -10,6 +11,8 @@ from typing import Any, Dict, List, Optional
+ from uuid import uuid4
+ 
+ import jwt
++from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
++from cryptography.hazmat.primitives.serialization import load_pem_private_key
+ from dotenv import load_dotenv
+ from emergentintegrations.payments.stripe.checkout import (
+     CheckoutSessionRequest,
+@@ -37,6 +40,9 @@ SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
+ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+ SMTP_FROM = os.environ.get("SMTP_FROM")
+ SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"
++MOREPHI_PUBLIC_CLIENT_TOKEN = os.environ.get("MOREPHI_PUBLIC_CLIENT_TOKEN")
++LICENSE_SIGNING_PRIVATE_KEY_PEM = os.environ.get("LICENSE_SIGNING_PRIVATE_KEY_PEM")
++LICENSE_SIGNING_KEY_ID = os.environ.get("LICENSE_SIGNING_KEY_ID", "morephi-dev-2026-01")
+ 
+ if not MONGO_URL or not DB_NAME or not JWT_SECRET or not STRIPE_API_KEY or not CORS_ALLOWED_ORIGINS_ENV:
+     raise RuntimeError("Missing required backend environment variables")
+@@ -116,6 +122,28 @@ class ActivationCreate(BaseModel):
+     daw: Optional[str] = Field(default=None, max_length=80)
+ 
+ 
++class PluginActivationCreate(BaseModel):
++    license_key: str = Field(min_length=12, max_length=80)
++    machine_id: str = Field(min_length=8, max_length=160)
++    plugin_version: Optional[str] = Field(default=None, max_length=40)
++    platform: Optional[str] = Field(default=None, max_length=80)
++    daw: Optional[str] = Field(default=None, max_length=80)
++    product_id: str = Field(default=PRODUCT["id"], max_length=80)
++    request_nonce: Optional[str] = Field(default=None, max_length=120)
++
++
++class PluginRefreshCreate(BaseModel):
++    activation_id: str = Field(min_length=8, max_length=80)
++    machine_id: str = Field(min_length=8, max_length=160)
++    product_id: str = Field(default=PRODUCT["id"], max_length=80)
++
++
++class PluginDeactivateCreate(BaseModel):
++    activation_id: str = Field(min_length=8, max_length=80)
++    machine_id: str = Field(min_length=8, max_length=160)
++    product_id: str = Field(default=PRODUCT["id"], max_length=80)
++
++
+ class ActivationResponse(BaseModel):
+     id: str
+     license_key: str
+@@ -124,10 +152,73 @@ class ActivationResponse(BaseModel):
+     activated_at: str
+ 
+ 
++class PluginLicenseResponse(BaseModel):
++    status: str
++    activation_id: str
++    license_key: str
++    machine_id: str
++    certificate_payload: str
++    signature: str
++    public_key_id: str
++
++
+ def now_iso() -> str:
+     return datetime.now(timezone.utc).isoformat()
+ 
+ 
++def unix_seconds(dt: datetime) -> int:
++    return int(dt.timestamp())
++
++
++def b64url(data: bytes) -> str:
++    return base64.urlsafe_b64encode(data).decode().rstrip("=")
++
++
++def canonical_json(payload: Dict[str, Any]) -> bytes:
++    import json
++    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
++
++
++def signing_key() -> Ed25519PrivateKey:
++    if LICENSE_SIGNING_PRIVATE_KEY_PEM:
++        key = load_pem_private_key(LICENSE_SIGNING_PRIVATE_KEY_PEM.encode(), password=None)
++        if not isinstance(key, Ed25519PrivateKey):
++            raise RuntimeError("LICENSE_SIGNING_PRIVATE_KEY_PEM must be an Ed25519 private key")
++        return key
++    return Ed25519PrivateKey.from_private_bytes(hashlib.sha256(JWT_SECRET.encode()).digest())
++
++
++def sign_activation_certificate(license_doc: Dict[str, Any], activation: Dict[str, Any]) -> Dict[str, str]:
++    now = datetime.now(timezone.utc)
++    next_check = now + timedelta(days=30)
++    grace_until = next_check + timedelta(days=14)
++    payload = {
++        "schema": "morephi-license-cert-v1",
++        "licenseId": license_doc["id"],
++        "activationId": activation["id"],
++        "productId": PRODUCT["id"],
++        "licenseType": "perpetual",
++        "features": ["morph_pad", "plugin_hosting", "mcp", "premium_presets", "audio_domain_morphing"],
++        "issuedAtUnix": unix_seconds(now),
++        "validFromUnix": unix_seconds(now),
++        "validUntilUnix": None,
++        "trialEndsAtUnix": None,
++        "subscriptionEndsAtUnix": None,
++        "leaseEndsAtUnix": None,
++        "nextOnlineCheckAtUnix": unix_seconds(next_check),
++        "offlineGraceEndsAtUnix": unix_seconds(grace_until),
++        "machineHash": activation["machine_id"],
++        "nonce": secrets.token_urlsafe(16),
++    }
++    payload_bytes = canonical_json(payload)
++    signature = signing_key().sign(payload_bytes)
++    return {
++        "certificate_payload": b64url(payload_bytes),
++        "signature": b64url(signature),
++        "public_key_id": LICENSE_SIGNING_KEY_ID,
++    }
++
++
+ def public_customer(doc: Dict[str, Any]) -> Dict[str, Any]:
+     return {
+         "id": doc["id"],
+@@ -170,6 +261,14 @@ async def current_customer(authorization: Optional[str] = Header(default=None))
+     return customer
+ 
+ 
++async def verify_plugin_client(request: Request) -> None:
++    if not MOREPHI_PUBLIC_CLIENT_TOKEN:
++        raise HTTPException(status_code=503, detail="Plugin activation token is not configured")
++    provided = request.headers.get("X-MorePhi-Client")
++    if not provided or not hmac.compare_digest(provided, MOREPHI_PUBLIC_CLIENT_TOKEN):
++        raise HTTPException(status_code=401, detail="Invalid plugin client token")
++
++
+ def generate_license_key(customer_id: str, order_id: str) -> str:
+     raw = f"{customer_id}:{order_id}:{secrets.token_hex(16)}".encode()
+     digest = hmac.new(JWT_SECRET.encode(), raw, hashlib.sha256).hexdigest().upper()
+@@ -369,6 +468,69 @@ async def activate_license(payload: ActivationCreate, customer: Dict[str, Any] =
+     return ActivationResponse(**{k: v for k, v in activation.items() if k != "_id"})
+ 
+ 
++async def find_plugin_license(license_key: str, product_id: str) -> Dict[str, Any]:
++    license_doc = await db.licenses.find_one({"license_key": license_key, "product_id": product_id}, {"_id": 0})
++    if not license_doc or license_doc.get("status") != "active":
++        raise HTTPException(status_code=404, detail="Active license not found")
++    return license_doc
++
++
++@app.post("/api/plugin/licenses/activate", response_model=PluginLicenseResponse)
++async def plugin_activate_license(payload: PluginActivationCreate, request: Request) -> PluginLicenseResponse:
++    await verify_plugin_client(request)
++    await rate_limit(request, "plugin_activate", 30, 900)
++    license_doc = await find_plugin_license(payload.license_key, payload.product_id)
++    existing = await db.license_activations.find_one({"license_key": payload.license_key, "machine_id": payload.machine_id}, {"_id": 0})
++    if existing and existing.get("status") == "active":
++        certificate = sign_activation_certificate(license_doc, existing)
++        return PluginLicenseResponse(status="active", activation_id=existing["id"], license_key=payload.license_key, machine_id=payload.machine_id, **certificate)
++
++    count = await db.license_activations.count_documents({"license_key": payload.license_key, "status": "active"})
++    if count >= license_doc["activation_limit"]:
++        raise HTTPException(status_code=403, detail="Activation limit reached")
++
++    activation = {
++        "id": str(uuid4()),
++        "license_key": payload.license_key,
++        "customer_id": license_doc["customer_id"],
++        "machine_id": payload.machine_id,
++        "host_name": payload.platform,
++        "daw": payload.daw,
++        "plugin_version": payload.plugin_version,
++        "status": "active",
++        "activated_at": now_iso(),
++        "last_seen_at": now_iso(),
++    }
++    await db.license_activations.insert_one(activation)
++    certificate = sign_activation_certificate(license_doc, activation)
++    return PluginLicenseResponse(status="active", activation_id=activation["id"], license_key=payload.license_key, machine_id=payload.machine_id, **certificate)
++
++
++@app.post("/api/plugin/licenses/refresh", response_model=PluginLicenseResponse)
++async def plugin_refresh_license(payload: PluginRefreshCreate, request: Request) -> PluginLicenseResponse:
++    await verify_plugin_client(request)
++    await rate_limit(request, "plugin_refresh", 120, 900)
++    activation = await db.license_activations.find_one({"id": payload.activation_id, "machine_id": payload.machine_id}, {"_id": 0})
++    if not activation or activation.get("status") != "active":
++        raise HTTPException(status_code=404, detail="Active activation not found")
++    license_doc = await find_plugin_license(activation["license_key"], payload.product_id)
++    await db.license_activations.update_one({"id": activation["id"]}, {"$set": {"last_seen_at": now_iso()}})
++    activation["last_seen_at"] = now_iso()
++    certificate = sign_activation_certificate(license_doc, activation)
++    return PluginLicenseResponse(status="active", activation_id=activation["id"], license_key=activation["license_key"], machine_id=payload.machine_id, **certificate)
++
++
++@app.post("/api/plugin/licenses/deactivate")
++async def plugin_deactivate_license(payload: PluginDeactivateCreate, request: Request) -> Dict[str, str]:
++    await verify_plugin_client(request)
++    await rate_limit(request, "plugin_deactivate", 30, 900)
++    activation = await db.license_activations.find_one({"id": payload.activation_id, "machine_id": payload.machine_id}, {"_id": 0})
++    if not activation or activation.get("status") != "active":
++        raise HTTPException(status_code=404, detail="Active activation not found")
++    await db.license_activations.update_one({"id": activation["id"]}, {"$set": {"status": "deactivated", "deactivated_at": now_iso()}})
++    return {"status": "deactivated", "activation_id": activation["id"]}
++
++
+ @app.post("/api/payments/checkout")
+ async def create_checkout(payload: CheckoutCreate, request: Request, customer: Dict[str, Any] = Depends(current_customer)) -> Dict[str, str]:
+     await rate_limit(request, "checkout", 6, 900)

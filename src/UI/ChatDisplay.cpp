@@ -235,7 +235,7 @@ bool ChatDisplay::keyPressed(const juce::KeyPress& key)
 
 void ChatDisplay::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    juce::Component::mouseWheelMove(event, wheel);
+    juce::ignoreUnused(event);
 
     const float wheelDelta = std::abs(wheel.deltaY) > std::abs(wheel.deltaX)
         ? wheel.deltaY
@@ -243,7 +243,11 @@ void ChatDisplay::mouseWheelMove(const juce::MouseEvent& event, const juce::Mous
     if (std::abs(wheelDelta) < 0.0001f)
         return;
 
-    scrollBy(static_cast<int>(std::round(-wheelDelta * 480.0f)));
+    const int delta = static_cast<int>(std::round(-wheelDelta * 480.0f));
+    if (delta == 0)
+        return;
+
+    scrollTo(viewport_.getViewPositionY() + delta);
 }
 
 void ChatDisplay::pushAndScroll()

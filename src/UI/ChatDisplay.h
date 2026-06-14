@@ -35,6 +35,7 @@ public:
     int getScrollYForTests() const { return viewport_.getViewPositionY(); }
     int getCanvasHeightForTests() const { return canvas_.getHeight(); }
     int getViewportHeightForTests() const { return viewport_.getHeight(); }
+    int getMaxScrollYForTests() const { return getMaxScrollY(); }
 #endif
 
 private:

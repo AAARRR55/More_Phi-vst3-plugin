@@ -228,7 +228,7 @@ ActivationResponse HttpActivationClient::activate(const ActivationRequest& reque
     body["daw"] = request.dawHint.toStdString();
     body["product_id"] = request.productId.toStdString();
     body["request_nonce"] = request.requestNonce.toStdString();
-    return post_("/plugin/licenses/activate", juce::String(body.dump()), true);
+    return post_("/api/plugin/licenses/activate", juce::String(body.dump()), true);
 }
 
 ActivationResponse HttpActivationClient::refresh(const juce::String& activationId,
@@ -238,7 +238,7 @@ ActivationResponse HttpActivationClient::refresh(const juce::String& activationI
     body["activation_id"] = activationId.toStdString();
     body["machine_id"] = machineHash.toStdString();
     body["product_id"] = PRODUCT_ID;
-    return post_("/plugin/licenses/refresh", juce::String(body.dump()), true);
+    return post_("/api/plugin/licenses/refresh", juce::String(body.dump()), true);
 }
 
 ActivationResponse HttpActivationClient::deactivate(const juce::String& activationId,
@@ -248,7 +248,7 @@ ActivationResponse HttpActivationClient::deactivate(const juce::String& activati
     body["activation_id"] = activationId.toStdString();
     body["machine_id"] = machineHash.toStdString();
     body["product_id"] = PRODUCT_ID;
-    return post_("/plugin/licenses/deactivate", juce::String(body.dump()), false);
+    return post_("/api/plugin/licenses/deactivate", juce::String(body.dump()), false);
 }
 
 ActivationResponse StubActivationClient::activate(const ActivationRequest&)

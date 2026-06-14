@@ -79,6 +79,13 @@ TEST_CASE("License key parser rejects checksum mismatch", "[licensing]")
     REQUIRE_FALSE(parsed.valid);
 }
 
+TEST_CASE("License key parser accepts purchasing backend MPHI keys", "[licensing]")
+{
+    const auto parsed = LicenseKey::parse("mphi-abc12-def34-56789-0fabc");
+    REQUIRE(parsed.valid);
+    REQUIRE(parsed.normalized == "MPHI-ABC12-DEF34-56789-0FABC");
+}
+
 TEST_CASE("License verifier validates trusted development certificate", "[licensing]")
 {
     const juce::String machineHash = "machine-test";

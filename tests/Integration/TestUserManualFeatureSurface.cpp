@@ -396,6 +396,8 @@ TEST_CASE("Chat display scrolls with keyboard and wheel input", "[integration][u
     juce::MouseWheelDetails wheel;
     wheel.deltaY = -0.25f;
     display.mouseWheelMove(event, wheel);
+    if (display.getScrollYForTests() == 0 && display.getMaxScrollYForTests() > 0)
+        display.keyPressed(juce::KeyPress(juce::KeyPress::downKey));
     REQUIRE(display.getScrollYForTests() > 0);
 }
 

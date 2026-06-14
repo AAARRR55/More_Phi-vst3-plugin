@@ -1096,16 +1096,16 @@ If either `LICENSE_API_BASE_URL` or `MOREPHI_PUBLIC_CLIENT_TOKEN` is missing, th
 Configured endpoints:
 
 ```text
-POST {LICENSE_API_BASE_URL}/plugin/licenses/activate
-POST {LICENSE_API_BASE_URL}/plugin/licenses/refresh
-POST {LICENSE_API_BASE_URL}/plugin/licenses/deactivate
+POST {LICENSE_API_BASE_URL}/api/plugin/licenses/activate
+POST {LICENSE_API_BASE_URL}/api/plugin/licenses/refresh
+POST {LICENSE_API_BASE_URL}/api/plugin/licenses/deactivate
 ```
 
 Activation request body:
 
 ```json
 {
-  "license_key": "MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C",
+  "license_key": "MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C or MPHI-XXXXX-XXXXX-XXXXX-XXXXX",
   "machine_id": "hashed-machine-id",
   "plugin_version": "3.3.0",
   "platform": "windows-vst3 or macos-au/vst3 hint",
