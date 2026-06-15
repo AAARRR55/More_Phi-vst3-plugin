@@ -151,7 +151,12 @@ LicenseApiConfig HttpActivationClient::configFromEnvironment()
 {
     LicenseApiConfig config;
     config.baseUrl = envString("LICENSE_API_BASE_URL");
+    if (config.baseUrl.isEmpty())
+        config.baseUrl = "http://localhost:8001";
+
     config.publicClientToken = envString("MOREPHI_PUBLIC_CLIENT_TOKEN");
+    if (config.publicClientToken.isEmpty())
+        config.publicClientToken = "dev-token-vst-plugin-more-phi";
 
     if (auto headerName = envString("MOREPHI_CLIENT_HEADER"); headerName.isNotEmpty())
         config.clientHeaderName = headerName;

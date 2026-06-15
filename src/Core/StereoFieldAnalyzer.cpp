@@ -38,7 +38,9 @@ void StereoFieldAnalyzer::reset() noexcept
             state = {};
     }
 
-    sumMS_.fill(0.0f);
+    sumLR_.fill(0.0f);
+    sumL2_.fill(0.0f);
+    sumR2_.fill(0.0f);
     sumM2_.fill(0.0f);
     sumS2_.fill(0.0f);
     samplesInWindow_ = 0;
@@ -74,7 +76,13 @@ void StereoFieldAnalyzer::processBlock(const juce::AudioBuffer<float>& buffer) n
         {
             const float m = midBands[static_cast<size_t>(band)];
             const float s = sideBands[static_cast<size_t>(band)];
-            sumMS_[static_cast<size_t>(band)] += m * s;
+            
+            const float l = m + s;
+            const float r = m - s;
+            
+            sumLR_[static_cast<size_t>(band)] += l * r;
+            sumL2_[static_cast<size_t>(band)] += l * l;
+            sumR2_[static_cast<size_t>(band)] += r * r;
             sumM2_[static_cast<size_t>(band)] += m * m;
             sumS2_[static_cast<size_t>(band)] += s * s;
         }
@@ -163,21 +171,23 @@ void StereoFieldAnalyzer::publishCurrentWindow() noexcept
     for (int band = 0; band < kNumBands; ++band)
     {
         const auto idx = static_cast<size_t>(band);
-        const float m2 = sumM2_[idx];
-        const float s2 = sumS2_[idx];
-        const float denom = std::sqrt(std::max(m2 * s2, 0.0f));
+        const float l2 = sumL2_[idx];
+        const float r2 = sumR2_[idx];
+        const float denom = std::sqrt(std::max(l2 * r2, 0.0f));
 
-        snapshot.correlation[idx] = denom > kEps ? std::clamp(sumMS_[idx] / denom, -1.0f, 1.0f) : 0.0f;
-        snapshot.msEnergyRatio[idx] = safeRatio(s2, m2);
+        snapshot.correlation[idx] = denom > kEps ? std::clamp(sumLR_[idx] / denom, -1.0f, 1.0f) : 1.0f;
+        snapshot.msEnergyRatio[idx] = safeRatio(sumS2_[idx], sumM2_[idx]);
 
-        totalM2 += m2;
-        totalS2 += s2;
+        totalM2 += sumM2_[idx];
+        totalS2 += sumS2_[idx];
     }
 
     snapshot.stereoWidth = std::sqrt(safeRatio(totalS2, totalM2));
     publishSnapshot(snapshot);
 
-    sumMS_.fill(0.0f);
+    sumLR_.fill(0.0f);
+    sumL2_.fill(0.0f);
+    sumR2_.fill(0.0f);
     sumM2_.fill(0.0f);
     sumS2_.fill(0.0f);
     samplesInWindow_ = 0;

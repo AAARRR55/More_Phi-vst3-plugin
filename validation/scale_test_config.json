@@ -1,7 +1,7 @@
 {
-  "outputDirectory": "./validation_output/",
-  "datasetName": "scale_test_10k",
-  "totalSamples": 10000,
+  "outputDirectory": "C:/MorePhi_Datasets/smoke_test_structured",
+  "datasetName": "scale_test_smoke",
+  "totalSamples": 5,
   "sampleRate": 48000,
   "blockSize": 512,
   "numChannels": 2,

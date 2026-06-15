@@ -42,7 +42,7 @@ class OutputValidator:
     def __init__(self, expected_sample_rate: int = 48000,
                  expected_channels: int = 2,
                  expected_duration: float = 5.0,
-                 expected_feature_dims: int = 31):
+                 expected_feature_dims: int = 42):
         self.expected_sample_rate = expected_sample_rate
         self.expected_channels = expected_channels
         self.expected_duration = expected_duration
@@ -86,45 +86,47 @@ class OutputValidator:
         checks = []
 
         try:
-            with wave.open(str(audio_path), 'rb') as wf:
-                channels = wf.getnchannels()
-                sample_rate = wf.getframerate()
-                num_frames = wf.getnframes()
-                duration = num_frames / sample_rate
+            import soundfile as sf
+            import numpy as np
 
-                # Check sample rate
-                checks.append(ValidationResult(
-                    "audio_sample_rate",
-                    sample_rate == self.expected_sample_rate,
-                    f"Expected {self.expected_sample_rate}, got {sample_rate}"
-                ))
+            info = sf.info(str(audio_path))
+            channels = info.channels
+            sample_rate = info.samplerate
+            num_frames = info.frames
+            duration = info.duration
 
-                # Check channels
-                checks.append(ValidationResult(
-                    "audio_channels",
-                    channels == self.expected_channels,
-                    f"Expected {self.expected_channels}, got {channels}"
-                ))
+            # Check sample rate
+            checks.append(ValidationResult(
+                "audio_sample_rate",
+                sample_rate == self.expected_sample_rate,
+                f"Expected {self.expected_sample_rate}, got {sample_rate}"
+            ))
 
-                # Check duration (allow 10% tolerance)
-                duration_ok = abs(duration - self.expected_duration) < self.expected_duration * 0.1
-                checks.append(ValidationResult(
-                    "audio_duration",
-                    duration_ok,
-                    f"Expected ~{self.expected_duration}s, got {duration:.2f}s"
-                ))
+            # Check channels
+            checks.append(ValidationResult(
+                "audio_channels",
+                channels == self.expected_channels,
+                f"Expected {self.expected_channels}, got {channels}"
+            ))
 
-                # Check for silence
-                frames = wf.readframes(min(num_frames, 48000))  # Read first second
-                samples = struct.unpack(f'{len(frames)//2}h', frames)
-                rms = (sum(s*s for s in samples) / len(samples)) ** 0.5
-                normalized_rms = rms / 32768.0
+            # Check duration (allow 10% tolerance)
+            duration_ok = abs(duration - self.expected_duration) < self.expected_duration * 0.1
+            checks.append(ValidationResult(
+                "audio_duration",
+                duration_ok,
+                f"Expected ~{self.expected_duration}s, got {duration:.2f}s"
+            ))
 
-                checks.append(ValidationResult(
-                    "audio_not_silent",
-                    normalized_rms > 1e-6,
-                    f"RMS: {normalized_rms:.6f}"
-                ))
+            # Check for silence
+            # Read first second
+            data, _ = sf.read(str(audio_path), frames=min(num_frames, sample_rate))
+            rms = float(np.sqrt(np.mean(data ** 2))) if data.size > 0 else 0.0
+
+            checks.append(ValidationResult(
+                "audio_not_silent",
+                rms > 1e-6,
+                f"RMS: {rms:.6f}"
+            ))
 
         except Exception as e:
             checks.append(ValidationResult(
@@ -157,21 +159,42 @@ class OutputValidator:
                 f"Expected 12 chroma values, got {len(chroma)}"
             ))
 
-            # Check total feature count (flattened)
-            def count_features(obj, count=0):
-                if isinstance(obj, (int, float)):
-                    return 1
-                elif isinstance(obj, list):
-                    return sum(count_features(item) for item in obj)
-                elif isinstance(obj, dict):
-                    return sum(count_features(v) for v in obj.values())
-                return 0
+            # Explicitly verify the existence of all flattened core features
+            spectral = features.get('spectral', {})
+            temporal = features.get('temporal', {})
+            perceptual = features.get('perceptual', {})
 
-            total_features = count_features(features)
+            expected_spectral_keys = ['spectralCentroid', 'spectralRolloff', 'spectralFlux', 'spectralSpread', 'spectralFlatness']
+            expected_temporal_keys = ['rmsEnergy', 'peakAmplitude', 'crestFactor', 'attackTime', 'transientDensity', 'zeroCrossingRate']
+            expected_perceptual_keys = ['lufs', 'truePeakDb', 'roughness', 'sharpness', 'brightness', 'dynamicRange']
+
+            missing_keys = []
+            for k in expected_spectral_keys:
+                if k not in spectral: missing_keys.append(f"spectral.{k}")
+            for k in expected_temporal_keys:
+                if k not in temporal: missing_keys.append(f"temporal.{k}")
+            for k in expected_perceptual_keys:
+                if k not in perceptual: missing_keys.append(f"perceptual.{k}")
+
+            checks.append(ValidationResult(
+                "feature_keys_present",
+                len(missing_keys) == 0,
+                f"Missing keys: {', '.join(missing_keys)}" if missing_keys else "All expected keys present"
+            ))
+
+            # Check total feature count (flattened vector dimension = 42)
+            # 13 MFCC + 12 chroma + 5 spectral + 6 temporal + 6 perceptual = 42 distinct dimensions
+            actual_feature_dims = (
+                len(mfcc)
+                + len(chroma)
+                + len(expected_spectral_keys)
+                + len(expected_temporal_keys)
+                + len(expected_perceptual_keys)
+            )
             checks.append(ValidationResult(
                 "feature_dimensions",
-                total_features >= self.expected_feature_dims,
-                f"Expected >={self.expected_feature_dims} features, got {total_features}"
+                actual_feature_dims >= self.expected_feature_dims,
+                f"Expected >={self.expected_feature_dims} features, got {actual_feature_dims}"
             ))
 
         except json.JSONDecodeError as e:
@@ -200,19 +223,33 @@ class OutputValidator:
                 param_values = params
 
             if isinstance(param_values, list):
+                numeric_values = []
+                malformed_entries = 0
+                for p in param_values:
+                    if isinstance(p, (int, float)):
+                        numeric_values.append(float(p))
+                    elif isinstance(p, dict) and isinstance(p.get('value'), (int, float)):
+                        numeric_values.append(float(p['value']))
+                    else:
+                        malformed_entries += 1
+
                 # Check all parameters are in [0, 1]
-                all_in_range = all(0 <= p <= 1 for p in param_values if isinstance(p, (int, float)))
+                all_in_range = (
+                    malformed_entries == 0
+                    and len(numeric_values) > 0
+                    and all(0 <= p <= 1 for p in numeric_values)
+                )
                 checks.append(ValidationResult(
                     "params_in_range",
                     all_in_range,
-                    "Parameters should be in [0, 1]"
+                    f"Checked {len(numeric_values)} numeric values; malformed entries: {malformed_entries}"
                 ))
 
                 # Check we have some parameters
                 checks.append(ValidationResult(
                     "params_count",
-                    len(param_values) > 0,
-                    f"Got {len(param_values)} parameters"
+                    len(numeric_values) > 0,
+                    f"Got {len(numeric_values)} numeric parameter values from {len(param_values)} entries"
                 ))
             else:
                 checks.append(ValidationResult(

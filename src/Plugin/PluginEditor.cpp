@@ -22,7 +22,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
       breedingPanel(p),
       modeBar(p),
       paramPanel(p),
-      controlStrip(p)
+      controlStrip(p),
+      licenseOverlay(p)
 {
     setLookAndFeel(&lnf);
     setSize(920, 760);
@@ -68,6 +69,33 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     openPluginBtn_.onClick = [this]() { openPluginWindow(); };
     addAndMakeVisible(openPluginBtn_);
 
+    // Deactivate License button
+    deactivateBtn_.setTooltip("Deactivate and delete the current license key from this computer.");
+    deactivateBtn_.onClick = [this]()
+    {
+        auto options = juce::MessageBoxOptions::makeOptionsOkCancel(
+            juce::MessageBoxIconType::QuestionIcon,
+            "Deactivate License",
+            "Are you sure you want to delete the current license key and deactivate this computer?\n\n"
+            "This will lock the plugin until a valid license key is entered.",
+            "Deactivate",
+            "Cancel"
+        );
+
+        juce::AlertWindow::showAsync(options, [this](int result)
+        {
+            if (result == 1)
+            {
+                juce::String error;
+                processor.getLicenseManager().clearActivation(&error);
+                deactivateBtn_.setVisible(false);
+                licenseOverlay.setVisible(true);
+                licenseOverlay.toFront(false);
+            }
+        });
+    };
+    addAndMakeVisible(deactivateBtn_);
+
     // ── V2 Tab Bar ─────────────────────────────────────────────────────────────
     addAndMakeVisible(tabBar_);
     tabBar_.onTabChanged = [this](int tab) { switchTab(tab); };
@@ -87,6 +115,14 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
 
     // Default to Classic tab
     switchTab(V2TabBar::Classic);
+
+    // Licensing overlay
+    addChildComponent(licenseOverlay);
+    const bool isLicensed = processor.getLicenseRuntimeState().premiumFeaturesEnabled.load(std::memory_order_relaxed);
+    licenseOverlay.setVisible(!isLicensed);
+    deactivateBtn_.setVisible(isLicensed);
+    if (!isLicensed)
+        licenseOverlay.toFront(false);
 
     // M-16 FIX: Reduced from 30Hz to 15Hz — sufficient for UI updates,
     // reduces CPU overhead and message-thread contention.
@@ -163,6 +199,9 @@ void MorePhiEditor::resized()
 
     // Title bar (painted) — increased from 44 to 48
     area.removeFromTop(48);
+
+    // Position Deactivate License button in the title bar next to the level meter
+    deactivateBtn_.setBounds(getWidth() - 250, 10, 120, 28);
 
     // Parameter panel (right side, togglable)
     const int paramWidth = paramPanelVisible_
@@ -258,6 +297,9 @@ void MorePhiEditor::resized()
     // AI chat tab
     if (aiChatPage_)
         aiChatPage_->setBounds(tabContent);
+
+    // Cover the entire editor with licensing overlay if visible
+    licenseOverlay.setBounds(getLocalBounds());
 }
 
 void MorePhiEditor::switchTab(int tabIndex)
@@ -310,6 +352,18 @@ void MorePhiEditor::setAITabVisible(bool visible)
 
 void MorePhiEditor::timerCallback()
 {
+    // Check license state changes
+    const bool isLicensed = processor.getLicenseRuntimeState().premiumFeaturesEnabled.load(std::memory_order_relaxed);
+    if (licenseOverlay.isVisible() == isLicensed)
+    {
+        licenseOverlay.setVisible(!isLicensed);
+        if (!isLicensed)
+            licenseOverlay.toFront(false);
+    }
+
+    if (deactivateBtn_.isVisible() != isLicensed)
+        deactivateBtn_.setVisible(isLicensed);
+
     // M-3 FIX: Only repaint title bar when RMS level visually changes
     float currentRms = processor.getRmsLevel();
     float dbLevel = juce::jlimit(0.0f, 1.0f,

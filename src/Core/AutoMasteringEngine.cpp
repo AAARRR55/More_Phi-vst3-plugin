@@ -37,6 +37,8 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     meterWindow_.reset();
     analysisElapsedSeconds_ = 0.0;
     analysisSamplesSinceWindowSample_ = 0;
+    analysisSumSquares_ = 0.0;
+    analysisSampleCount_ = 0;
 
     // Pre-allocate band buffers
     for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
@@ -96,6 +98,8 @@ void AutoMasteringEngine::reset() noexcept
     smoothedSpectralTilt_ = 0.0f;
     analysisElapsedSeconds_ = 0.0;
     analysisSamplesSinceWindowSample_ = 0;
+    analysisSumSquares_ = 0.0;
+    analysisSampleCount_ = 0;
     clearLastSafeNeuralMasteringPlan();
     for (auto& b : bandBuffers_)
         b.clear();
@@ -195,16 +199,14 @@ void AutoMasteringEngine::updateAnalysisWindow(const juce::AudioBuffer<float>& b
     if (ns <= 0 || nch <= 0 || sampleRate_ <= 0.0)
         return;
 
-    double sumSquares = 0.0;
-    int sampleCount = 0;
     for (int ch = 0; ch < nch; ++ch)
     {
         const float* data = buf.getReadPointer(ch);
         for (int i = 0; i < ns; ++i)
         {
             const double v = static_cast<double>(data[i]);
-            sumSquares += v * v;
-            ++sampleCount;
+            analysisSumSquares_ += v * v;
+            ++analysisSampleCount_;
         }
     }
 
@@ -226,8 +228,8 @@ void AutoMasteringEngine::updateAnalysisWindow(const juce::AudioBuffer<float>& b
 
     MeterWindowAccumulator::MeterSample sample;
     sample.timestampSeconds = analysisElapsedSeconds_;
-    sample.rms = sampleCount > 0
-        ? static_cast<float>(std::sqrt(sumSquares / static_cast<double>(sampleCount)))
+    sample.rms = analysisSampleCount_ > 0
+        ? static_cast<float>(std::sqrt(analysisSumSquares_ / static_cast<double>(analysisSampleCount_)))
         : 0.0f;
     sample.lufsMomentary = getLUFSMomentary();
     sample.lufsShortTerm = getLUFSShortTerm();
@@ -239,6 +241,10 @@ void AutoMasteringEngine::updateAnalysisWindow(const juce::AudioBuffer<float>& b
     sample.spectralTiltDBPerOctave = hasSpectrum ? spectrum.spectralTilt : 0.0f;
     sample.stereoWidth = hasStereo ? stereo.stereoWidth : 0.0f;
     sample.midBandCorrelation = hasStereo ? stereo.correlation[2] : 0.0f;
+
+    // Reset accumulators for next interval
+    analysisSumSquares_ = 0.0;
+    analysisSampleCount_ = 0;
 
     for (int emitted = 0; emitted < samplesToEmit; ++emitted)
     {

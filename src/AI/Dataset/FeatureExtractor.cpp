@@ -931,7 +931,7 @@ std::vector<float> FeatureExtractor::toVector(const AudioFeatures& features) con
     std::vector<float> vec;
     vec.reserve(getFeatureDimension());
 
-    // Spectral (19 values)
+    // Spectral (30 values)
     for (const auto& mfcc : features.spectral.mfcc)
         vec.push_back(mfcc);
     vec.push_back(features.spectral.spectralCentroid);
@@ -939,6 +939,8 @@ std::vector<float> FeatureExtractor::toVector(const AudioFeatures& features) con
     vec.push_back(features.spectral.spectralFlux);
     vec.push_back(features.spectral.spectralSpread);
     vec.push_back(features.spectral.spectralFlatness);
+    for (const auto& chroma : features.spectral.chroma)
+        vec.push_back(chroma);
 
     // Temporal (6 values)
     vec.push_back(features.temporal.rmsEnergy);

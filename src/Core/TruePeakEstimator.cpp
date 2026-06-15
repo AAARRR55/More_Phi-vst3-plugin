@@ -24,29 +24,29 @@ namespace more_phi {
 // Polyphase decomposition of a 48-tap LP FIR (fc=0.25*fs_up, Kaiser β=5):
 const float TruePeakEstimator::kPolyCoeffs[kUpsampleFactor][kFIRTaps] =
 {
-    // Phase 0 (delay = 0)
+    // Phase 0 (delay = 0/4 sample)
     {
-        -0.000498f,  0.003234f, -0.013008f,  0.039950f,
-        -0.103100f,  0.320740f,  0.830200f, -0.204690f,
-         0.073730f, -0.025130f,  0.006310f, -0.000830f
+         0.000069f, -0.002366f,  0.007622f,  0.009083f,
+        -0.101287f,  0.306438f,  0.709163f,  0.137965f,
+        -0.088756f,  0.022356f,  0.000818f, -0.001135f
     },
     // Phase 1 (delay = 1/4 sample)
     {
-        -0.002044f,  0.010840f, -0.034920f,  0.086240f,
-        -0.183480f,  0.546830f,  0.639180f, -0.263890f,
-         0.100700f, -0.035410f,  0.009100f, -0.001220f
+         0.000051f, -0.003292f,  0.016311f, -0.018340f,
+        -0.073916f,  0.481539f,  0.626776f,  0.005875f,
+        -0.055081f,  0.023063f, -0.002669f, -0.000287f
     },
-    // Phase 2 (delay = 1/2 sample)
+    // Phase 2 (delay = 2/4 sample)
     {
-        -0.001220f,  0.009100f, -0.035410f,  0.100700f,
-        -0.263890f,  0.639180f,  0.546830f, -0.183480f,
-         0.086240f, -0.034920f,  0.010840f, -0.002044f
+        -0.000287f, -0.002669f,  0.023063f, -0.055081f,
+         0.005875f,  0.626776f,  0.481539f, -0.073916f,
+        -0.018340f,  0.016311f, -0.003292f,  0.000051f
     },
     // Phase 3 (delay = 3/4 sample)
     {
-        -0.000830f,  0.006310f, -0.025130f,  0.073730f,
-        -0.204690f,  0.830200f,  0.320740f, -0.103100f,
-         0.039950f, -0.013008f,  0.003234f, -0.000498f
+        -0.001135f,  0.000818f,  0.022356f, -0.088756f,
+         0.137965f,  0.709163f,  0.306438f, -0.101287f,
+         0.009083f,  0.007622f, -0.002366f,  0.000069f
     }
 };
 
@@ -86,6 +86,27 @@ float TruePeakEstimator::applyPhase(const float* delay, int pos,
         acc += coeff[k] * delay[readIdx];
     }
     return acc;
+}
+
+float TruePeakEstimator::truePeakAt(const float* delay, int delayLen, int pos) noexcept
+{
+    // Max over all 4 polyphase phases of the kFIRTaps samples ending at @p pos.
+    // Generalized ring indexing (delayLen may differ from kFIRTaps) so this
+    // works against BrickwallLimiter's wide lookahead ring as well as the
+    // estimator's own kFIRTaps-length delay line.
+    float peak = 0.0f;
+    for (int ph = 0; ph < kUpsampleFactor; ++ph)
+    {
+        float acc = 0.0f;
+        for (int k = 0; k < kFIRTaps; ++k)
+        {
+            const int readIdx = (pos - k + delayLen) % delayLen;
+            acc += kPolyCoeffs[ph][k] * delay[readIdx];
+        }
+        const float a = acc < 0.0f ? -acc : acc;
+        if (a > peak) peak = a;
+    }
+    return peak;
 }
 
 // ── Audio thread ──────────────────────────────────────────────────────────────

@@ -130,22 +130,30 @@ def main():
     print("=" * 60)
     print("\nMonitoring memory usage... (Ctrl+C to stop)\n")
 
-    # Check if we should monitor a specific PID
+    # Check if we should monitor a specific PID and duration
+    pid = None
+    duration = 5.0
     if len(sys.argv) > 1:
         try:
             pid = int(sys.argv[1])
-            monitor = MemoryMonitor(pid=pid)
+            if len(sys.argv) > 2:
+                duration = float(sys.argv[2])
         except ValueError:
             print(f"Invalid PID: {sys.argv[1]}")
             sys.exit(1)
+        monitor = MemoryMonitor(pid=pid)
     else:
         monitor = MemoryMonitor()
 
-    results = monitor.monitor_loop()
+    results = monitor.monitor_loop(duration_seconds=duration)
 
     # Generate report
     report = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "scope": "external_pid" if pid is not None else "monitor_process_only",
+        "monitored_pid": monitor.process.pid,
+        "duration_configured_seconds": duration,
+        "dataset_generator_pid_supplied": pid is not None,
         "results": results,
         "criteria": {
             "max_memory_gb": 4.0,

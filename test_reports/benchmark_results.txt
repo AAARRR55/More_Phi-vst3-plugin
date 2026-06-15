@@ -1,0 +1,40 @@
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                        MORE-PHI PERFORMANCE BENCHMARKS                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+SIMD Support:
+  SSE2: Yes
+  AVX:  Yes
+
+Benchmark                                   Avg Time    Min Time    Max Time      Throughput  Status
+----------------------------------------------------------------------------------------------------
+Scalar Interpolation (256 params)              0.058 us       0.000 us       1.900 us        4.42e+09/s    PASS
+SIMD Interpolation (256 params)                0.075 us       0.000 us       0.400 us        3.42e+09/s    PASS
+Elastic Physics (per update)                   0.059 us       0.000 us      41.700 us        1.70e+07/s    PASS
+Drift Physics (per update)                     0.123 us       0.000 us      88.400 us        8.14e+06/s    PASS
+2D Interpolation (256 params)                  0.254 us       0.200 us       2.400 us        1.01e+09/s    PASS
+Neural mastering controller (outside callback)       1.521 us       1.100 us      37.500 us        6.57e+05/s    PASS
+----------------------------------------------------------------------------------------------------
+
+Memory Footprint Test:
+Estimated core memory footprint: 3.04e+01 KB
+  Status: PASS
+
+Realtime Load Simulation (48kHz, 256 samples):
+Simulated 188 buffers at 48000 Hz, 256 samples
+Buffer time: 5.33e+03 us
+Avg process time: 3.73e-01 us
+Estimated CPU: 6.99e-03%
+  Status: PASS
+
+Realtime Load Simulation (44.1kHz, 64 samples — acceptance criteria):
+Simulated 690 buffers at 44100 Hz, 64 samples
+Buffer time: 1.45e+03 us
+Avg process time: 3.00e-01 us
+Estimated CPU: 2.07e-02%
+  Status: PASS
+
+════════════════════════════════════════════════════════════════════════════════
+SUMMARY: 9 passed, 0 failed
+════════════════════════════════════════════════════════════════════════════════

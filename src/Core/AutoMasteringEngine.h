@@ -168,6 +168,8 @@ private:
     int    blockSize_   = 512;
     double analysisElapsedSeconds_ = 0.0;
     int    analysisSamplesSinceWindowSample_ = 0;
+    double analysisSumSquares_ = 0.0;
+    int    analysisSampleCount_ = 0;
 
     // Timer tick counters (message thread only)
     int tickCount_            = 0;

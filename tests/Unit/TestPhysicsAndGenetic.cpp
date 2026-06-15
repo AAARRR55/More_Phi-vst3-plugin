@@ -19,6 +19,8 @@
 #include "Core/PhysicsEngine.h"
 #include "Core/GeneticEngine.h"
 #include "Core/ParameterState.h"
+#include "Core/BrickwallLimiter.h"
+#include "Core/TruePeakEstimator.h"
 
 #include <array>
 #include <cmath>
@@ -42,8 +44,9 @@ TEST_CASE("PhysicsEngine::updateElastic: position converges toward target", "[ph
         PhysicsEngine::updateElastic(s, targetX, targetY, ElasticPreset::Medium, dt);
 
     // Should be significantly closer than initial (0,0) to target.
-    // dtScale compensation (kRefDt/dt) makes the spring converge more slowly
-    // at 60fps than at the reference 44100/512 rate, so use generous tolerance.
+    // (H-2: the dtScale double-compensation was removed; the spring now uses
+    // true physical stiffness with adaptive sub-stepping, converging promptly
+    // at any frame rate. Tolerance kept generous for stability.)
     REQUIRE(std::abs(s.x - targetX) < 0.3f);
     REQUIRE(std::abs(s.y - targetY) < 0.3f);
 }
@@ -76,6 +79,36 @@ TEST_CASE("PhysicsEngine::updateElastic: is noexcept", "[physics]")
 {
     ElasticState s{};
     STATIC_REQUIRE(noexcept(PhysicsEngine::updateElastic(s, 0.f, 0.f, ElasticPreset::Medium, 0.016f)));
+}
+
+TEST_CASE("PhysicsEngine::updateElastic: sample-rate independent (H-2)", "[physics]")
+{
+    // The spring must simulate the same physical system regardless of the host's
+    // sample rate / block size, so a project authored at 44.1 kHz feels identical
+    // at 96 kHz. Two real DAW configs must track a fine-step reference at matched
+    // wall-clock time. Before the H-2 fix, dtScale made the 96 kHz path diverge
+    // sharply from 44.1 kHz (stiffness scaled by kRefDt/dt).
+    const float targetX = 0.8f, targetY = 0.4f;
+    constexpr double kSeconds = 0.5;
+
+    const auto runForWallClock = [](double sampleRate, int blockSize)
+    {
+        ElasticState s{};
+        const float dt = static_cast<float>(blockSize / sampleRate);
+        const int blocks = static_cast<int>(kSeconds * sampleRate / blockSize);
+        for (int i = 0; i < blocks; ++i)
+            PhysicsEngine::updateElastic(s, targetX, targetY, ElasticPreset::Medium, dt);
+        return s;
+    };
+
+    const auto ref = runForWallClock(44100.0 * 100.0, 512);  // ~1.16 us step — quasi-continuous
+    const auto a   = runForWallClock(44100.0, 512);          // dt ~ 0.0116
+    const auto b   = runForWallClock(96000.0, 512);          // dt ~ 0.00533
+
+    REQUIRE(std::abs(a.x - ref.x) < 0.03f);
+    REQUIRE(std::abs(b.x - ref.x) < 0.03f);
+    REQUIRE(std::abs(a.y - ref.y) < 0.03f);
+    REQUIRE(std::abs(b.y - ref.y) < 0.03f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -361,5 +394,89 @@ TEST_CASE("GeneticEngine::breed: SanityMode disabled has no effect", "[genetic][
     // With disabled sanity and crossoverRatio=0.5, values should be ~0.5 (midpoint)
     for (int i = 0; i < child.parameterCount; ++i)
         REQUIRE(child.data()[i] == Approx(0.5f).margin(0.01f));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BrickwallLimiter — true-peak (dBTP) ceiling enforcement (B-1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("BrickwallLimiter: honors dBTP ceiling against inter-sample peaks (B-1)", "[mastering][limiter]")
+{
+    // A hard-clipped sine is the canonical inter-sample-peak generator: samples
+    // are pinned at +/-clipLevel, but reconstruction overshoots at the clip
+    // corners, so the true peak strictly exceeds the sample peak.
+    constexpr double sr = 48000.0;
+    constexpr int    block = 1024;
+    constexpr float  clipLevel = 0.60f;
+
+    auto fillClippedSine = [&](juce::AudioBuffer<float>& b, float freq, float amp)
+    {
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            float s = amp * std::sin(juce::MathConstants<float>::twoPi * freq
+                                     * static_cast<float>(i) / static_cast<float>(sr));
+            s = juce::jlimit(-clipLevel, clipLevel, s);
+            b.setSample(0, i, s);
+            b.setSample(1, i, s);
+        }
+    };
+
+    juce::AudioBuffer<float> buf(2, block);
+    fillClippedSine(buf, 2200.0f, 0.95f);
+
+    // Measure input sample-peak vs true-peak.
+    float inputSamplePeak = 0.0f;
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < block; ++i)
+            inputSamplePeak = std::max(inputSamplePeak, std::abs(buf.getSample(ch, i)));
+
+    TruePeakEstimator inputMeter;
+    inputMeter.prepare(sr, block);
+    inputMeter.processBlock(buf);
+    const float inputTruePeak = inputMeter.getTruePeakLinear();
+
+    // Precondition: the test signal genuinely has inter-sample peaks above its
+    // sample peak. (Guards against a silent change in the FIR coefficients that
+    // would make this test stop discriminating the B-1 fix.)
+    REQUIRE(inputTruePeak > inputSamplePeak + 1e-4f);
+
+    // Set the ceiling strictly between the sample peak and the true peak.
+    // A limiter that only bounds SAMPLE peaks (the pre-B-1 behavior) would not
+    // reduce gain here — the sample peak is already below the ceiling — so the
+    // output true peak would remain above it. The fixed limiter must engage.
+    const float ceiling = (inputSamplePeak + inputTruePeak) * 0.5f;
+
+    BrickwallLimiter limiter;
+    limiter.prepare(sr, block);
+    limiter.setCeiling(20.0f * std::log10(ceiling));  // linear → dBTP
+    limiter.setEnabled(true);
+
+    // Run enough blocks for the 4 ms lookahead and gain smoother to settle,
+    // feeding a fresh clipped sine each block so the input is steady.
+    for (int b = 0; b < 12; ++b)
+    {
+        fillClippedSine(buf, 2200.0f, 0.95f);
+        limiter.processBlock(buf);
+    }
+
+    TruePeakEstimator outMeter;
+    outMeter.prepare(sr, block);
+    outMeter.processBlock(buf);
+    const float outTruePeak = outMeter.getTruePeakLinear();
+
+    // PRIMARY DISCRIMINATOR: the ceiling sits strictly between the sample peak
+    // and the true peak. A limiter that only bounds SAMPLE peaks (the pre-B-1
+    // behavior) sees the sample peak already below the ceiling and applies NO
+    // gain reduction (GR == 0). The fixed limiter sees the true peak above the
+    // ceiling and MUST engage (GR < 0). This is the behavior the B-1 fix adds.
+    REQUIRE(limiter.getGainReductionDB() < -0.02f);
+
+    // Sanity bound on the output true peak. Applying gain in the sample domain
+    // (rather than oversampled) means the gain envelope's edges can introduce a
+    // small residual inter-sample peak, so the tolerance is generous. A true
+    // zero-overshoot brickwall would require applying gain in the oversampled
+    // domain — a documented follow-up, not a blocker for this fix.
+    REQUIRE(outTruePeak <= ceiling * 1.1f);
+    juce::ignoreUnused(outTruePeak);
 }
 

@@ -62,7 +62,7 @@ TEST_CASE("StereoFieldAnalyzer publishes an empty snapshot after reset", "[stere
     }
 }
 
-TEST_CASE("StereoFieldAnalyzer reports positive mid-side correlation", "[stereo-field][correlation]")
+TEST_CASE("StereoFieldAnalyzer reports positive left-right correlation", "[stereo-field][correlation]")
 {
     StereoFieldAnalyzer analyzer;
     analyzer.prepare(kSampleRate, kBlockSize);
@@ -98,14 +98,14 @@ TEST_CASE("StereoFieldAnalyzer preserves side polarity in correlation", "[stereo
     StereoFieldAnalyzer analyzer;
     analyzer.prepare(kSampleRate, kBlockSize);
 
-    feedMidSideSine(analyzer, 1000.0f, -0.25f, 24000);
+    feedMidSideSine(analyzer, 1000.0f, -2.0f, 24000);
 
     StereoFieldAnalyzer::StereoFieldSnapshot snapshot;
     REQUIRE(analyzer.getSnapshot(snapshot));
 
     CHECK(snapshot.frameIndex > 0);
     CHECK(snapshot.correlation[2] < -0.85f);
-    CHECK(snapshot.msEnergyRatio[2] == Approx(0.0625f).margin(0.035f));
+    CHECK(snapshot.msEnergyRatio[2] == Approx(4.0f).margin(1.5f));
 }
 
 TEST_CASE("StereoFieldAnalyzer exposes side-heavy content through M/S ratio", "[stereo-field][analysis]")

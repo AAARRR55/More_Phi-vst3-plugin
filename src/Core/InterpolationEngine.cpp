@@ -215,10 +215,13 @@ static void computeWithRetry(const SnapshotBank& bank,
 
     if (!lockAcquired)
     {
-        // Very rare: heavy write contention on the snapshot bank.
-        // Fill with neutral 0.5 to avoid undefined output on the audio thread.
-        // (DBG removed — heap allocation on audio thread; replaced with atomic counter)
-        std::fill(output.begin(), output.end(), 0.5f);
+        // Very rare: heavy write contention on the snapshot bank. Hold the
+        // previous frame: output still contains the last successful block's
+        // morph result, which is glitch-free. Snapping every parameter to 0.5
+        // (the old behavior) produced a loud mid-point jump under contention.
+        // On the first-ever block the buffer holds prepareToPlay's zeros; that
+        // only matters if contention occurs before any successful read, which
+        // is effectively impossible.
     }
 }
 

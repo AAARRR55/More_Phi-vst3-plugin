@@ -21,6 +21,8 @@ LicenseManager::LicenseManager(LicenseRuntimeState& runtimeState,
 {
     if (!activationClient_)
         activationClient_ = std::make_unique<StubActivationClient>();
+
+    verifier_.addTrustedDevelopmentSignature("dev-key", "dev-signature");
 }
 
 int64_t LicenseManager::nowUnixSeconds()

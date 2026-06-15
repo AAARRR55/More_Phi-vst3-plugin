@@ -125,6 +125,9 @@ public:
                     }
                 }
 
+                // Acquire fence before seq2 — pairs with writer's release fence
+                // (seqlock correctness on weakly-ordered CPUs; see tryReadLocked).
+                std::atomic_thread_fence(std::memory_order_acquire);
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
                 if (seq1 != seq2) continue;
 
@@ -277,7 +280,13 @@ public:
             // Prevent the compiler from moving non-atomic slot reads below the
             // second sequence check. The seqlock only works if validation
             // happens after the copy in the generated code.
-            std::atomic_signal_fence(std::memory_order_seq_cst);
+            // Acquire fence pairs with the writer's release fence in endWrite().
+            // Unlike atomic_signal_fence (which emits NO hardware barrier and only
+            // constrains the compiler within a thread), atomic_thread_fence
+            // prevents the non-atomic slot reads above from being reordered past
+            // the seq2 validation load below on weakly-ordered CPUs (ARM/Apple
+            // Silicon). Without this, a torn read can validate as consistent.
+            std::atomic_thread_fence(std::memory_order_acquire);
 
             // Load sequence again - acquire to ensure we see consistent state
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
@@ -396,7 +405,13 @@ private:
                         outValues);
             outCount = count;
 
-            std::atomic_signal_fence(std::memory_order_seq_cst);
+            // Acquire fence pairs with the writer's release fence in endWrite().
+            // Unlike atomic_signal_fence (which emits NO hardware barrier and only
+            // constrains the compiler within a thread), atomic_thread_fence
+            // prevents the non-atomic slot reads above from being reordered past
+            // the seq2 validation load below on weakly-ordered CPUs (ARM/Apple
+            // Silicon). Without this, a torn read can validate as consistent.
+            std::atomic_thread_fence(std::memory_order_acquire);
 
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
             if (seq1 == seq2)

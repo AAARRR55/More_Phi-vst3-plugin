@@ -65,7 +65,9 @@ private:
     std::array<Crossover, 3> crossovers_ {};
     std::array<float, 3> crossoverFrequencies_ { 120.0f, 800.0f, 8000.0f };
 
-    std::array<float, kNumBands> sumMS_ {};
+    std::array<float, kNumBands> sumLR_ {};
+    std::array<float, kNumBands> sumL2_ {};
+    std::array<float, kNumBands> sumR2_ {};
     std::array<float, kNumBands> sumM2_ {};
     std::array<float, kNumBands> sumS2_ {};
 

@@ -225,7 +225,7 @@ TEST_CASE("V2→V3 pipeline integration", "[dataset][integration]")
 | Samples generated | ≥ 10,000 | File count in output directory |
 | Peak memory | < 4 GB | Memory monitor report |
 | Audio valid | 0 silent files | Output validator |
-| Features valid | 31+ dimensions per sample | Output validator |
+| Features valid | 42 dimensions per sample | Output validator |
 | Documentation updated | Gaps documented | File review |
 
 ## Files to Create/Modify

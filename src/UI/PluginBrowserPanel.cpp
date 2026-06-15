@@ -203,14 +203,14 @@ void PluginBrowserPanel::captureToNextSlot()
         if (!bank.isOccupied(i))
         {
             proc_.captureSnapshotToSlot(i, true);
-            pluginNameLabel_.setText("Captured → Slot " + juce::String(i + 1),
+            pluginNameLabel_.setText("Captured -> Slot " + juce::String(i + 1),
                                      juce::dontSendNotification);
             return;
         }
     }
     // All slots full — overwrite slot 0
     proc_.captureSnapshotToSlot(0, true);
-    pluginNameLabel_.setText("Captured → Slot 1 (overwrite)", juce::dontSendNotification);
+    pluginNameLabel_.setText("Captured -> Slot 1 (overwrite)", juce::dontSendNotification);
 }
 
 } // namespace more_phi

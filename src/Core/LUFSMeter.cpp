@@ -20,48 +20,43 @@ float LUFSMeter::processBiquad(float x, BiquadState& st, const BiquadCoeffs& c) 
     return y;
 }
 
-// RBJ high-shelf: gain dBgain at shelf frequency fc, Q = 1/sqrt(2)
-LUFSMeter::BiquadCoeffs
-LUFSMeter::makeHighShelf(float fc, float dBgain, double sr) noexcept
-{
-    const float A   = std::pow(10.0f, dBgain / 40.0f);  // sqrt(linear_gain)
-    const float w0  = 2.0f * 3.14159265f * fc / static_cast<float>(sr);
-    const float cos_w0 = std::cos(w0);
-    const float sin_w0 = std::sin(w0);
-    const float alpha  = sin_w0 / 2.0f * std::sqrt((A + 1.0f / A)
-                         * (1.0f / 0.7071f - 1.0f) + 2.0f);  // S=1 form
-
-    const float a0 =       (A + 1.0f) - (A - 1.0f) * cos_w0 + 2.0f * std::sqrt(A) * alpha;
-    const float b0 = A * ( (A + 1.0f) + (A - 1.0f) * cos_w0 + 2.0f * std::sqrt(A) * alpha);
-    const float b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cos_w0);
-    const float b2 = A * ( (A + 1.0f) + (A - 1.0f) * cos_w0 - 2.0f * std::sqrt(A) * alpha);
-    const float a1 = 2.0f * ((A - 1.0f) - (A + 1.0f) * cos_w0);
-    const float a2 = (A + 1.0f) - (A - 1.0f) * cos_w0 - 2.0f * std::sqrt(A) * alpha;
-
-    return { b0/a0, b1/a0, b2/a0, a1/a0, a2/a0 };
-}
-
-// 2nd-order Butterworth high-pass at fc with quality factor Q
-LUFSMeter::BiquadCoeffs
-LUFSMeter::makeHighPass2(float fc, float Q, double sr) noexcept
-{
-    const float K    = std::tan(3.14159265f * fc / static_cast<float>(sr));
-    const float norm = 1.0f / (1.0f + K / Q + K * K);
-
-    return {  norm,           // b0
-             -2.0f * norm,    // b1
-              norm,           // b2
-              2.0f * (K * K - 1.0f) * norm,          // a1
-             (1.0f - K / Q + K * K) * norm };         // a2
-}
-
 void LUFSMeter::computeKWeightingCoeffs() noexcept
 {
-    // ITU-R BS.1770-4 K-weighting chain:
-    //   Stage 1: high-shelf  +4 dB at 1681.974 Hz (pre-filter)
-    //   Stage 2: high-pass   38.135 Hz, Q = 0.5003 (removes sub content)
-    pre_ = makeHighShelf(1681.974f, +4.0f,  sampleRate_);
-    hp_  = makeHighPass2(38.135f,   0.5003f, sampleRate_);
+    const double fs = sampleRate_;
+    const double K = 2.0 * fs;
+    const double K2 = K * K;
+
+    // Continuous-time coefficients for Stage 1 (pre-filter, high shelving):
+    // Solved to match ITU-R BS.1770-4 coefficients exactly at 48 kHz
+    const double B2 = 1.58486548742880;
+    const double B1 = 18886.9143780365;
+    const double B0 = 112594507.269791;
+    const double A2 = 1.0;
+    const double A1 = 15004.8465267433;
+    const double A0 = 112594507.269790;
+
+    const double a0_pre = A2 * K2 + A1 * K + A0;
+    pre_.b0 = static_cast<float>((B2 * K2 + B1 * K + B0) / a0_pre);
+    pre_.b1 = static_cast<float>(2.0 * (B0 - B2 * K2) / a0_pre);
+    pre_.b2 = static_cast<float>((B2 * K2 - B1 * K + B0) / a0_pre);
+    pre_.a1 = static_cast<float>(2.0 * (A0 - A2 * K2) / a0_pre);
+    pre_.a2 = static_cast<float>((A2 * K2 - A1 * K + A0) / a0_pre);
+
+    // Continuous-time coefficients for Stage 2 (RLB high pass):
+    // Solved to match ITU-R BS.1770-4 coefficients exactly at 48 kHz
+    const double B2_hp = 1.00499491883582;
+    const double B1_hp = 0.0;
+    const double B0_hp = 0.0;
+    const double A2_hp = 1.0;
+    const double A1_hp = 478.91221124467;
+    const double A0_hp = 57414.259359048;
+
+    const double a0_hp = A2_hp * K2 + A1_hp * K + A0_hp;
+    hp_.b0 = static_cast<float>((B2_hp * K2 + B1_hp * K + B0_hp) / a0_hp);
+    hp_.b1 = static_cast<float>(2.0 * (B0_hp - B2_hp * K2) / a0_hp);
+    hp_.b2 = static_cast<float>((B2_hp * K2 - B1_hp * K + B0_hp) / a0_hp);
+    hp_.a1 = static_cast<float>(2.0 * (A0_hp - A2_hp * K2) / a0_hp);
+    hp_.a2 = static_cast<float>((A2_hp * K2 - A1_hp * K + A0_hp) / a0_hp);
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -71,6 +66,8 @@ void LUFSMeter::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
     sampleRate_       = sampleRate;
     blockSizeSamples_ = static_cast<int>(sampleRate * 0.1);  // 100 ms
     computeKWeightingCoeffs();
+    gated_.reserve(kHistoryBlocks);
+    lraGated_.reserve(kHistoryBlocks);
     reset();
 }
 
@@ -85,7 +82,7 @@ void LUFSMeter::reset() noexcept
     blockAccum_  = 0;
     historyHead_ = 0;
     historyCount_ = 0;
-    blockLUFS_.fill(-std::numeric_limits<float>::infinity());
+    blockMS_.fill(0.0f);
 
     momentary_.store(-std::numeric_limits<float>::infinity(), std::memory_order_relaxed);
     shortTerm_.store(-std::numeric_limits<float>::infinity(), std::memory_order_relaxed);
@@ -136,9 +133,8 @@ void LUFSMeter::commitBlock(int numChannels) noexcept
         blockSumSq_[ch] = 0.0f;
     blockAccum_ = 0;
 
-    // Store block loudness in circular history
-    const float blockL = meanSquareToLUFS(ms);
-    blockLUFS_[static_cast<size_t>(historyHead_)] = blockL;
+    // Store block mean-square in circular history
+    blockMS_[static_cast<size_t>(historyHead_)] = ms;
     historyHead_ = (historyHead_ + 1) % kHistoryBlocks;
     if (historyCount_ < kHistoryBlocks)
         ++historyCount_;
@@ -153,20 +149,12 @@ float LUFSMeter::windowedMeanLUFS(int numBlocks) const noexcept
     if (count <= 0) return -std::numeric_limits<float>::infinity();
 
     float sumMs = 0.0f;
-    int validBlocks = 0;
     for (int i = 0; i < count; ++i)
     {
         const int idx = (historyHead_ - 1 - i + kHistoryBlocks) % kHistoryBlocks;
-        const float lufs = blockLUFS_[static_cast<size_t>(idx)];
-        if (lufs > kAbsoluteGateLUFS)
-        {
-            // Convert LUFS back to mean-square for proper averaging
-            sumMs += std::pow(10.0f, (lufs + 0.691f) / 10.0f);
-            ++validBlocks;
-        }
+        sumMs += blockMS_[static_cast<size_t>(idx)];
     }
-    if (validBlocks == 0) return -std::numeric_limits<float>::infinity();
-    return meanSquareToLUFS(sumMs / static_cast<float>(validBlocks));
+    return meanSquareToLUFS(sumMs / static_cast<float>(count));
 }
 
 void LUFSMeter::updateLongTermMetrics() noexcept
@@ -178,85 +166,139 @@ void LUFSMeter::updateLongTermMetrics() noexcept
     shortTerm_.store(windowedMeanLUFS(30), std::memory_order_relaxed);
 
     // Integrated: BS.1770-4 gated mean
-    // Pass 1: absolute gate -70 LUFS — get ungated mean
-    if (historyCount_ < 2)
+    if (historyCount_ < 4) // Need at least 400ms (4 blocks) to form a Momentary block
     {
         integrated_.store(-std::numeric_limits<float>::infinity(), std::memory_order_relaxed);
         lra_.store(0.0f, std::memory_order_relaxed);
         return;
     }
 
-    // Collect gated blocks into a small local array (on stack, no heap)
-    // At most kHistoryBlocks = 600 entries — safe on stack (600 * 4 = 2.4 KB)
-    float gated[kHistoryBlocks]{};
-    int   gatedCount = 0;
+    gated_.clear();
 
-    float sumMs = 0.0f;
-    for (int i = 0; i < historyCount_; ++i)
+    // 1. Generate 400ms blocks (Momentary blocks) and apply absolute gate
+    float sumMsAbs = 0.0f;
+    int absCount = 0;
+
+    const int numMomBlocks = historyCount_ - 3;
+    for (int j = 0; j < numMomBlocks; ++j)
     {
-        const float l = blockLUFS_[static_cast<size_t>(i)];
-        if (l > kAbsoluteGateLUFS)
+        // Compute mean-square of the 400ms block ending at index j+3
+        float momMs = 0.0f;
+        for (int i = 0; i < 4; ++i)
         {
-            sumMs += std::pow(10.0f, (l + 0.691f) / 10.0f);
-            gated[gatedCount++] = l;
+            const int idx = (historyHead_ - historyCount_ + j + i + kHistoryBlocks) % kHistoryBlocks;
+            momMs += blockMS_[static_cast<size_t>(idx)];
+        }
+        momMs /= 4.0f;
+
+        const float momLUFS = meanSquareToLUFS(momMs);
+        if (momLUFS > kAbsoluteGateLUFS)
+        {
+            sumMsAbs += momMs;
+            gated_.push_back(momMs);
+            absCount++;
         }
     }
 
-    if (gatedCount == 0)
+    if (absCount == 0)
     {
         integrated_.store(-std::numeric_limits<float>::infinity(), std::memory_order_relaxed);
         lra_.store(0.0f, std::memory_order_relaxed);
         return;
     }
 
-    // Pass 1 ungated mean
-    const float ungatedLUFS = meanSquareToLUFS(sumMs / static_cast<float>(gatedCount));
-    // Pass 2: relative gate = ungatedLUFS + relativeGateOffset
-    const float relGate = ungatedLUFS + kRelativeGateOffset;
+    // 2. Calculate relative gate threshold
+    const float absGatedLUFS = meanSquareToLUFS(sumMsAbs / static_cast<float>(absCount));
+    const float relGateThreshold = absGatedLUFS + kRelativeGateOffset; // kRelativeGateOffset is -10.0f
 
-    float sumMs2  = 0.0f;
-    int   count2  = 0;
-    float lraGated[kHistoryBlocks]{};
-    int   lraCount = 0;
+    // 3. Apply relative gate and calculate Integrated Loudness
+    float sumMsRel = 0.0f;
+    int relCount = 0;
 
-    for (int i = 0; i < gatedCount; ++i)
+    for (float momMs : gated_)
     {
-        if (gated[i] > relGate)
+        if (meanSquareToLUFS(momMs) > relGateThreshold)
         {
-            sumMs2 += std::pow(10.0f, (gated[i] + 0.691f) / 10.0f);
-            ++count2;
-            lraGated[lraCount++] = gated[i];
+            sumMsRel += momMs;
+            relCount++;
         }
     }
 
-    if (count2 == 0)
+    if (relCount == 0)
     {
-        integrated_.store(ungatedLUFS, std::memory_order_relaxed);
+        integrated_.store(absGatedLUFS, std::memory_order_relaxed);
+    }
+    else
+    {
+        integrated_.store(meanSquareToLUFS(sumMsRel / static_cast<float>(relCount)), std::memory_order_relaxed);
+    }
+
+    // ── Loudness Range (LRA) ──────────────────────────────────────────────────
+    // LRA is based on Short-Term (3-second) loudness blocks (30 overlapping 100ms blocks)
+    if (historyCount_ < 30)
+    {
         lra_.store(0.0f, std::memory_order_relaxed);
         return;
     }
 
-    integrated_.store(meanSquareToLUFS(sumMs2 / static_cast<float>(count2)),
-                      std::memory_order_relaxed);
+    lraGated_.clear();
 
-    // LRA: sort lraGated, take 95th - 10th percentile (EBU TECH 3342)
-    if (lraCount >= 2)
+    // 1. Generate 3-second blocks and apply absolute gate
+    float sumMsLraAbs = 0.0f;
+    int lraAbsCount = 0;
+
+    const int numStBlocks = historyCount_ - 29;
+    for (int j = 0; j < numStBlocks; ++j)
     {
-        // Simple insertion sort (lraCount ≤ 600, acceptable)
-        for (int i = 1; i < lraCount; ++i)
+        float stMs = 0.0f;
+        for (int i = 0; i < 30; ++i)
         {
-            const float key = lraGated[i];
-            int j = i - 1;
-            while (j >= 0 && lraGated[j] > key)
-            {
-                lraGated[j + 1] = lraGated[j];
-                --j;
-            }
-            lraGated[j + 1] = key;
+            const int idx = (historyHead_ - historyCount_ + j + i + kHistoryBlocks) % kHistoryBlocks;
+            stMs += blockMS_[static_cast<size_t>(idx)];
         }
-        const int idx10 = std::max(0, static_cast<int>(lraCount * 0.10f));
-        const int idx95 = std::min(lraCount - 1, static_cast<int>(lraCount * 0.95f));
-        lra_.store(lraGated[idx95] - lraGated[idx10], std::memory_order_relaxed);
+        stMs /= 30.0f;
+
+        const float stLUFS = meanSquareToLUFS(stMs);
+        if (stLUFS > kAbsoluteGateLUFS)
+        {
+            sumMsLraAbs += stMs;
+            lraGated_.push_back(stLUFS); // store LUFS for percentile sorting
+            lraAbsCount++;
+        }
+    }
+
+    if (lraAbsCount < 2)
+    {
+        lra_.store(0.0f, std::memory_order_relaxed);
+        return;
+    }
+
+    // 2. Calculate relative gate threshold for LRA (EBU Tech 3342: -20 LU relative gate)
+    const float lraAbsGatedLUFS = meanSquareToLUFS(sumMsLraAbs / static_cast<float>(lraAbsCount));
+    const float lraRelGateThreshold = lraAbsGatedLUFS - 20.0f;
+
+    // 3. Apply relative gate to Short-Term blocks
+    int lraRelCount = 0;
+    for (int i = 0; i < lraAbsCount; ++i)
+    {
+        if (lraGated_[static_cast<size_t>(i)] > lraRelGateThreshold)
+        {
+            lraGated_[static_cast<size_t>(lraRelCount++)] = lraGated_[static_cast<size_t>(i)];
+        }
+    }
+
+    if (lraRelCount >= 2)
+    {
+        const int idx10 = std::max(0, static_cast<int>(lraRelCount * 0.10f));
+        const int idx95 = std::min(lraRelCount - 1, static_cast<int>(lraRelCount * 0.95f));
+
+        std::nth_element(lraGated_.begin(), lraGated_.begin() + idx10, lraGated_.begin() + lraRelCount);
+        const float val10 = lraGated_[static_cast<size_t>(idx10)];
+
+        std::nth_element(lraGated_.begin(), lraGated_.begin() + idx95, lraGated_.begin() + lraRelCount);
+        const float val95 = lraGated_[static_cast<size_t>(idx95)];
+
+        lra_.store(val95 - val10, std::memory_order_relaxed);
     }
     else
     {

@@ -66,6 +66,20 @@ public:
     /** Linear maximum true peak (0.0–∞). */
     [[nodiscard]] float getTruePeakLinear()  const noexcept { return peakLin_.load(std::memory_order_relaxed); }
 
+    /**
+     * Compute the true-peak (maximum over all kUpsampleFactor polyphase phases)
+     * of the sample at position @p pos in a delay line of length @p delayLen.
+     * Reads the kFIRTaps most-recent samples ending at @p pos.
+     *
+     * Used by BrickwallLimiter to drive gain reduction from inter-sample peaks,
+     * so the dBTP ceiling is honored against ISPs — not just sample peaks.
+     * noexcept, allocation-free, callable from the audio thread.
+     *
+     * @p delayLen must be ≥ kFIRTaps and the ring must hold at least kFIRTaps
+     * valid samples behind @p pos (the caller's delay line satisfies this).
+     */
+    static float truePeakAt(const float* delay, int delayLen, int pos) noexcept;
+
 private:
     // 4-phase × 12-tap polyphase FIR coefficients (pre-computed, symmetric Kaiser window)
     // Phase interleaving: phases 0,1,2,3 correspond to fractional delays 0, 1/4, 2/4, 3/4

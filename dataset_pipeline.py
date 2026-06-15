@@ -59,6 +59,7 @@ def find_cli_exe() -> Path:
     """Locate MorePhiCLI.exe, checking multiple known locations."""
     candidates = [
         CLI_EXE,
+        SCRIPT_DIR / "build" / "windows-msvc-release" / "Release" / "MorePhiCLI.exe",
         SCRIPT_DIR / "build_cli_fix" / "Release" / "MorePhiCLI.exe",
         SCRIPT_DIR / "build" / "Debug" / "MorePhiCLI.exe",
     ]
@@ -311,9 +312,13 @@ def visualize_sample(npz_path: str, save_path: str = None):
     """
     Visualize a single dry/wet spectrogram pair for sanity checking.
     """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [INFO] Skipping visualization because matplotlib is not installed.")
+        return
 
     data = np.load(npz_path)
     dry_mel = data["dry_mel"]

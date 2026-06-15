@@ -51,7 +51,15 @@
   ],
   "success_rate": {
     "backend": "35% (static/code-path validation only)",
-    "frontend": "N/A (not requested)"
+    "frontend": "N/A (not requested)",
+    "methodology": "Computed as a weighted sum of verification stages: 35% static code review, 15% local syntax checks, 25% unit tests, 25% end-to-end integration tests.",
+    "computed_metrics": {
+      "static_code_review": 1.0,
+      "local_syntax_checks": 0.0,
+      "unit_tests": 0.0,
+      "integration_tests": 0.0,
+      "overall_weighted_percentage": 35.0
+    }
   },
   "seed_data_creation": "",
   "retest_needed": true,
