@@ -167,11 +167,15 @@ float LUFSMeter::windowedMeanLUFS(int numBlocks) const noexcept
 
 void LUFSMeter::updateLongTermMetrics() noexcept
 {
-    // Momentary: last 4 blocks (400 ms)
-    momentary_.store(windowedMeanLUFS(4), std::memory_order_relaxed);
-
-    // Short-term: last 30 blocks (3 s)
-    shortTerm_.store(windowedMeanLUFS(30), std::memory_order_relaxed);
+    // LUFS-8 FIX: only publish momentary/short-term once their BS.1770 window is
+    // actually filled. Previously the first commit published a 1-block value as a
+    // "400 ms momentary" (and a <3 s value as "short-term"), which consumers
+    // (UI, normalizer gating, AI plans) treated as valid windowed loudness.
+    constexpr float kNegInf = -std::numeric_limits<float>::infinity();
+    momentary_.store(historyCount_ >= 4  ? windowedMeanLUFS(4)  : kNegInf,
+                     std::memory_order_relaxed);
+    shortTerm_.store(historyCount_ >= 30 ? windowedMeanLUFS(30) : kNegInf,
+                     std::memory_order_relaxed);
 
     // Integrated: BS.1770-4 gated mean
     if (historyCount_ < 4) // Need at least 400ms (4 blocks) to form a Momentary block
