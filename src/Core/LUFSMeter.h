@@ -19,6 +19,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <vector>
 
 namespace more_phi {
 
@@ -28,7 +29,8 @@ public:
     static constexpr int   kMaxChannels        = 2;
     static constexpr float kAbsoluteGateLUFS   = -70.0f;   // ITU-R BS.1770-4 absolute gate
     static constexpr float kRelativeGateOffset = -10.0f;   // relative gate: ungated_LUFS - 10
-    static constexpr int   kHistoryBlocks      = 600;       // 60 s at 10 blocks/s
+    static constexpr int   kHistoryBlocks      = 18000;     // 30 min at 10 blocks/s
+
 
     LUFSMeter() = default;
 
@@ -97,9 +99,12 @@ private:
     float  blockSumSq_[kMaxChannels]{};    // mean-square accumulator per ch
 
     // ── Block history (circular) ──────────────────────────────────────────────
-    std::array<float, kHistoryBlocks> blockLUFS_{};   // per-block loudness (LUFS)
+    std::array<float, kHistoryBlocks> blockMS_{};      // per-block K-weighted mean-square
     int historyHead_  { 0 };
     int historyCount_ { 0 };
+
+    std::vector<float> gated_;
+    std::vector<float> lraGated_;
 
     // ── Atomic outputs (written on audio thread, read anywhere) ──────────────
     std::atomic<float> momentary_  { -std::numeric_limits<float>::infinity() };
@@ -114,8 +119,6 @@ private:
     void  updateLongTermMetrics() noexcept;
     float windowedMeanLUFS(int numBlocks) const noexcept;
 
-    static BiquadCoeffs makeHighShelf(float fc, float dBgain, double sr) noexcept;
-    static BiquadCoeffs makeHighPass2 (float fc, float Q,      double sr) noexcept;
 };
 
 } // namespace more_phi

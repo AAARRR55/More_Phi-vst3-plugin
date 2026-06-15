@@ -7,6 +7,7 @@
 #include "UI/ChatDisplay.h"
 #include "UI/SnapFader.h"
 #include "Core/SnapshotBank.h"
+#include "UI/LicenseActivationOverlay.h"
 
 #include <memory>
 
@@ -66,6 +67,10 @@ bool isAllowedEditorOverlap(juce::Component* a, juce::Component* b)
 {
     if (dynamic_cast<juce::ResizableCornerComponent*>(a) != nullptr
         || dynamic_cast<juce::ResizableCornerComponent*>(b) != nullptr)
+        return true;
+
+    if (dynamic_cast<LicenseActivationOverlay*>(a) != nullptr
+        || dynamic_cast<LicenseActivationOverlay*>(b) != nullptr)
         return true;
 
     const bool aIsPad = dynamic_cast<MorphPad*>(a) != nullptr;

@@ -1605,15 +1605,15 @@ Add at the end of the document:
 
 ## Validation Status
 
-This framework has been validated against the following criteria:
+Current validation evidence is bounded to local tests, benchmarks, and a 5-sample smoke dataset:
 
 | Criterion | Target | Status |
 |-----------|--------|--------|
-| Unit test coverage | 100% pass | ✓ Validated |
-| Scale test | 10,000+ samples | ✓ Validated |
-| Memory usage | < 4 GB | ✓ Validated |
-| Audio output | Non-silent, correct format | ✓ Validated |
-| Feature dimensions | 31+ per sample | ✓ Validated |
+| Unit test coverage | 100% pass | PASS - local CTest passed 458/458 tests; Catch2 XML reports 0 failures/errors/skips |
+| Scale test | 10,000+ samples | PENDING - no 10K scale artifact is committed |
+| Memory usage | < 4 GB | PARTIAL - benchmark core estimate is 30.4 KB, but no production RSS trace is committed |
+| Audio output | Non-silent, correct format, non-passthrough | PARTIAL - structural validation passed 5/5, but DSP verification reports 1 passthrough file |
+| Feature dimensions | 42 per sample | PARTIAL - C++ export and Python validator are aligned at 42 dimensions; no post-fix generated `sample_*` output report is committed |
 
 See `validation/FINAL_VALIDATION_REPORT.md` for detailed results.
 ```

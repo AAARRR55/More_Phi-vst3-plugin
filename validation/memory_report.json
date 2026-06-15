@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-06-15 09:25:53",
+  "scope": "monitor_process_only",
+  "monitored_pid": 76768,
+  "duration_configured_seconds": 5.0,
+  "dataset_generator_pid_supplied": false,
+  "results": {
+    "peak_gb": 0.017498016357421875,
+    "samples": 6,
+    "duration_seconds": 5.027914524078369,
+    "average_gb": 0.01726086934407552,
+    "min_gb": 0.01714324951171875,
+    "max_gb": 0.017498016357421875
+  },
+  "criteria": {
+    "max_memory_gb": 4.0,
+    "passed": true
+  }
+}

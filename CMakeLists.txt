@@ -403,6 +403,8 @@ set(MORE_PHI_PRESET_SOURCES
 set(MORE_PHI_UI_SOURCES
     src/UI/MorePhiLookAndFeel.h
     src/UI/MorePhiLookAndFeel.cpp
+    src/UI/LicenseActivationOverlay.h
+    src/UI/LicenseActivationOverlay.cpp
     src/UI/ChatDisplay.h
     src/UI/ChatDisplay.cpp
     src/UI/AIChatPanel.h

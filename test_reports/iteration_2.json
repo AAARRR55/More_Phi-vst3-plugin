@@ -52,7 +52,15 @@
   ],
   "success_rate": {
     "backend": "50% (static validation complete; runtime tests blocked by missing cmake)",
-    "frontend": "N/A (not requested)"
+    "frontend": "N/A (not requested)",
+    "methodology": "Computed as a weighted sum of verification stages: 35% static code review, 15% local syntax checks, 25% unit tests, 25% end-to-end integration tests.",
+    "computed_metrics": {
+      "static_code_review": 1.0,
+      "local_syntax_checks": 1.0,
+      "unit_tests": 0.0,
+      "integration_tests": 0.0,
+      "overall_weighted_percentage": 50.0
+    }
   },
   "seed_data_creation": "",
   "retest_needed": true,

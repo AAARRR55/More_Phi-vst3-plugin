@@ -355,7 +355,7 @@ bool AIAssistant::detectsLocalFeedbackPrompt(const juce::String& text)
     if (!hasFeedbackPolarity)
         return false;
 
-    return containsAny(lower, {"that", "result", "change", "move", "workflow", "sound", "sounded", "mix", "assistant", "edit"});
+    return containsAny(lower, {"that", "result", "workflow", "sound", "sounded", "mix", "assistant"});
 }
 
 bool AIAssistant::detectsLocalUndoPrompt(const juce::String& text)

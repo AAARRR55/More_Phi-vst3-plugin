@@ -3,6 +3,12 @@ import json, glob, os, sys
 import numpy as np
 from pathlib import Path
 
+PARAM_VECTOR_LENGTH = 737
+BAND_COUNT = 24
+BAND_STRIDE = 24
+BAND_PARAM_COUNT = BAND_COUNT * BAND_STRIDE
+GLOBAL_PARAM_START = BAND_PARAM_COUNT
+
 def audit(dataset_dir, spectro_dir):
     print("=" * 70)
     print("  ML DATASET QUALITY AUDIT")
@@ -35,7 +41,7 @@ def audit(dataset_dir, spectro_dir):
             clipping += 1
 
         pdict = {p["index"]: p["value"] for p in m["parameters"]}
-        param_vec = [pdict.get(i, 0.0) for i in range(737)]
+        param_vec = [pdict.get(i, 0.0) for i in range(PARAM_VECTOR_LENGTH)]
         all_params.append(param_vec)
 
     peaks = np.array(peaks)
@@ -66,15 +72,19 @@ def audit(dataset_dir, spectro_dir):
     param_std = all_params.std(axis=0)
     varying = np.sum(param_std > 0.01)
     constant = np.sum(param_std <= 0.01)
-    print(f"  Varying params:  {varying} / 737")
-    print(f"  Constant params: {constant} / 737")
+    print(f"  Varying params:  {varying} / {PARAM_VECTOR_LENGTH}")
+    print(f"  Constant params: {constant} / {PARAM_VECTOR_LENGTH}")
 
     # Band activation analysis
+    # Pro-Q 4 layout used by this dataset: 24 bands * 24 parameters = 576 band
+    # parameters (indices 0-575). Indices 576-736 are global/UI parameters.
+    print(f"  Band/global layout: {BAND_PARAM_COUNT} band params + {PARAM_VECTOR_LENGTH - GLOBAL_PARAM_START} global/UI params")
     bands_active = []
     for row in all_params:
         count = 0
-        for b in range(24):
-            if row[b * 24] > 0.5:  # "Used" param
+        for b in range(BAND_COUNT):
+            base = b * BAND_STRIDE
+            if row[base] > 0.5:  # "Used" param (offset +0 in band layout)
                 count += 1
         bands_active.append(count)
     bands_active = np.array(bands_active)
@@ -86,9 +96,10 @@ def audit(dataset_dir, spectro_dir):
     # Gain distribution (offset +3 per band)
     gains = []
     for row in all_params:
-        for b in range(24):
-            if row[b * 24] > 0.5:  # only active bands
-                gains.append(row[b * 24 + 3])
+        for b in range(BAND_COUNT):
+            base = b * BAND_STRIDE
+            if row[base] > 0.5:  # only active bands
+                gains.append(row[base + 3])
     gains = np.array(gains)
     if len(gains) > 0:
         print(f"  Active band gains: n={len(gains)} mean={gains.mean():.3f} std={gains.std():.3f}")
@@ -97,9 +108,10 @@ def audit(dataset_dir, spectro_dir):
     # Frequency distribution (offset +2 per band)
     freqs = []
     for row in all_params:
-        for b in range(24):
-            if row[b * 24] > 0.5:
-                freqs.append(row[b * 24 + 2])
+        for b in range(BAND_COUNT):
+            base = b * BAND_STRIDE
+            if row[base] > 0.5:
+                freqs.append(row[base + 2])
     freqs = np.array(freqs)
     if len(freqs) > 0:
         print(f"  Active band freqs: n={len(freqs)} mean={freqs.mean():.3f} std={freqs.std():.3f}")
@@ -132,11 +144,11 @@ def audit(dataset_dir, spectro_dir):
             dry = d["dry_mel"]
             wet = d["wet_mel"]
             params = d["parameters"]
-            if dry.shape == wet.shape and dry.shape[0] == 128 and params.shape[0] == 737:
+            if dry.shape == wet.shape and dry.shape[0] == 128 and params.shape[0] == PARAM_VECTOR_LENGTH:
                 shapes_ok += 1
             else:
                 print(f"    BAD shape at {idx}: dry={dry.shape} wet={wet.shape} params={params.shape}")
-        print(f"  Shape check: {shapes_ok}/{len(sample_indices)} OK (128 x T, 737 params)")
+        print(f"  Shape check: {shapes_ok}/{len(sample_indices)} OK (128 x T, {PARAM_VECTOR_LENGTH} params)")
 
         # Check for NaN/Inf
         nan_count = 0

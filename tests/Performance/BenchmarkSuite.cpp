@@ -154,23 +154,32 @@ BenchmarkResult benchmarkElasticPhysics(int iterations)
 {
     ElasticState state{0.0f, 0.0f, 0.0f, 0.0f};
     float targetX = 0.5f, targetY = 0.5f;
-    float dt = 1.0f / 48000.0f;  // One sample at 48kHz
+    // F-001 FIX: Use per-block dt matching typical audio callback (256 samples @ 48kHz),
+    // not per-sample dt which causes pathological stiffness scaling via H-5 compensation.
+    float dt = 256.0f / 48000.0f;  // Per-block at 256 samples, 48kHz
 
     Timer timer;
     double totalTime = 0.0;
+    // F-002 FIX: Track per-iteration timing for true min/max instead of
+    // wrapping a single timer around the entire loop.
+    double minTime = std::numeric_limits<double>::max();
+    double maxTime = 0.0;
 
-    timer.start();
     for (int i = 0; i < iterations; ++i)
     {
+        timer.start();
         PhysicsEngine::updateElastic(state, targetX, targetY,
                                       ElasticPreset::Medium, dt);
+        double elapsed = timer.stopUs();
+        totalTime += elapsed;
+        minTime = std::min(minTime, elapsed);
+        maxTime = std::max(maxTime, elapsed);
     }
-    totalTime = timer.stopUs();
 
     double avgTime = totalTime / iterations;
     return {
         "Elastic Physics (per update)",
-        avgTime, avgTime, avgTime,
+        avgTime, minTime, maxTime,
         1.0 / (avgTime * 1e-6),
         avgTime < 1.0  // Should be < 1us
     };
@@ -180,24 +189,32 @@ BenchmarkResult benchmarkDriftPhysics(int iterations)
 {
     float x = 0.0f, y = 0.0f;
     float time = 0.0f;
-    float dt = 1.0f / 48000.0f;
+    // F-001 FIX: Use per-block dt matching typical audio callback,
+    // not per-sample dt. Perlin time should advance at block rate.
+    float dt = 256.0f / 48000.0f;  // Per-block at 256 samples, 48kHz
 
     Timer timer;
     double totalTime = 0.0;
+    // F-002 FIX: Per-iteration timing for true min/max.
+    double minTime = std::numeric_limits<double>::max();
+    double maxTime = 0.0;
 
-    timer.start();
     for (int i = 0; i < iterations; ++i)
     {
+        timer.start();
         PhysicsEngine::updateDrift(x, y, time, 0.3f, 0.4f, 0.5f,
                                    DriftMode::Free, 0.0f, 0.0f, 0.5f);
         time += dt;
+        double elapsed = timer.stopUs();
+        totalTime += elapsed;
+        minTime = std::min(minTime, elapsed);
+        maxTime = std::max(maxTime, elapsed);
     }
-    totalTime = timer.stopUs();
 
     double avgTime = totalTime / iterations;
     return {
         "Drift Physics (per update)",
-        avgTime, avgTime, avgTime,
+        avgTime, minTime, maxTime,
         1.0 / (avgTime * 1e-6),
         avgTime < 5.0  // Should be < 5us
     };
@@ -220,22 +237,35 @@ BenchmarkResult benchmark2DInterpolation(int iterations)
         bank.captureValues(i, testValues);
     }
 
-    Timer timer;
-    double totalTime = 0.0;
-
-    timer.start();
+    // Pre-generate random cursor positions outside the timed loop
+    // to avoid measuring rand() cost in the benchmark.
+    std::vector<float> randX(iterations), randY(iterations);
     for (int i = 0; i < iterations; ++i)
     {
-        float x = static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f;
-        float y = static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f;
-        InterpolationEngine::compute2D(x, y, bank, output);
+        randX[i] = static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f;
+        randY[i] = static_cast<float>(rand()) / RAND_MAX * 2.0f - 1.0f;
     }
-    totalTime = timer.stopUs();
+
+    Timer timer;
+    double totalTime = 0.0;
+    // F-002 FIX: Per-iteration timing for true min/max.
+    double minTime = std::numeric_limits<double>::max();
+    double maxTime = 0.0;
+
+    for (int i = 0; i < iterations; ++i)
+    {
+        timer.start();
+        InterpolationEngine::compute2D(randX[i], randY[i], bank, output);
+        double elapsed = timer.stopUs();
+        totalTime += elapsed;
+        minTime = std::min(minTime, elapsed);
+        maxTime = std::max(maxTime, elapsed);
+    }
 
     double avgTime = totalTime / iterations;
     return {
         "2D Interpolation (256 params)",
-        avgTime, avgTime, avgTime,
+        avgTime, minTime, maxTime,
         256.0 / (avgTime * 1e-6),
         avgTime < 50.0  // Should be < 50us
     };
@@ -304,7 +334,7 @@ bool testMemoryFootprint()
 
 bool simulateRealtimeLoad(int sampleRate, int blockSize, int durationMs)
 {
-    const int numBuffers = (sampleRate * durationMs / 1000) / blockSize;
+    const int numBuffers = static_cast<int>(std::ceil((static_cast<double>(sampleRate) * durationMs / 1000.0) / blockSize));
     const float dt = static_cast<float>(blockSize) / static_cast<float>(sampleRate);
 
     SnapshotBank bank;
@@ -398,11 +428,21 @@ int runBenchmarks()
     std::cout << "  Status: " << (memPass ? "PASS" : "FAIL") << "\n\n";
     if (memPass) passCount++; else failCount++;
 
-    // Realtime simulation
+    // Realtime simulation — standard configuration
     std::cout << "Realtime Load Simulation (48kHz, 256 samples):\n";
-    bool rtPass = simulateRealtimeLoad(48000, 256, 1000);
-    std::cout << "  Status: " << (rtPass ? "PASS" : "FAIL") << "\n\n";
-    if (rtPass) passCount++; else failCount++;
+    bool rtPass1 = simulateRealtimeLoad(48000, 256, 1000);
+    std::cout << "  Status: " << (rtPass1 ? "PASS" : "FAIL") << "\n\n";
+    if (rtPass1) passCount++; else failCount++;
+
+    // F-004 FIX: Add acceptance-criteria-matching configuration.
+    // testing-strategy.md defines acceptance thresholds at 44.1kHz / 64 samples
+    // (1451us buffer time), which is the most demanding realistic configuration.
+    // Without this test, the 48kHz/256 results (5333us budget) cannot validate
+    // the documented acceptance criteria.
+    std::cout << "Realtime Load Simulation (44.1kHz, 64 samples — acceptance criteria):\n";
+    bool rtPass2 = simulateRealtimeLoad(44100, 64, 1000);
+    std::cout << "  Status: " << (rtPass2 ? "PASS" : "FAIL") << "\n\n";
+    if (rtPass2) passCount++; else failCount++;
 
     // Summary
     std::cout << "════════════════════════════════════════════════════════════════════════════════\n";

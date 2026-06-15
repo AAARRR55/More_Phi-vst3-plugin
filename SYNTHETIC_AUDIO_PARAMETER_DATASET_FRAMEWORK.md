@@ -266,7 +266,7 @@ enum class ParameterType {
 |----------------|--------|---------|---------|
 | **Continuous** | Min-Max | `n = (v - min) / (max - min)` | Gain: -60dB to +12dB |
 | **Frequency** | Log-MinMax | `n = log(v/min) / log(max/min)` | 20Hz to 20kHz |
-| **Decibel** | Log-MinMax | `n = log(v/min) / log(max/min)` | -60dB to +12dB |
+| **Decibel** | Min-Max | `n = (v - min) / (max - min)` | -60dB to +12dB |
 | **Discrete** | Ordinal | `n = idx / (count - 1)` | Preset selection |
 | **Binary** | Boolean | `n = v ? 1.0 : 0.0` | Bypass switches |
 
@@ -902,13 +902,13 @@ For N parameters with k samples each:
 | MFCC | 13-40 | Compact representation |
 | Aggregated features | 50-200 | Parameter regression |
 
-### Storage Estimates
+### Storage Estimates (Stereo, 32-bit Float, 5s @ 48kHz)
 
-| Dataset Size | Audio Format | Features | Total |
-|--------------|--------------|----------|-------|
-| 1,000 samples | WAV (50 MB) | HDF5 (5 MB) | 55 MB |
-| 10,000 samples | WAV (500 MB) | HDF5 (50 MB) | 550 MB |
-| 100,000 samples | WebDataset (5 GB) | HDF5 (500 MB) | 5.5 GB |
+| Dataset Size | Audio Format (WAV) | Features (JSON/HDF5) | Total |
+|--------------|--------------------|----------------------|-------|
+| 1,000 samples | 1.92 GB | 192 MB | 2.11 GB |
+| 10,000 samples | 19.2 GB | 1.92 GB | 21.12 GB |
+| 100,000 samples | 192.0 GB (WebDataset) | 19.2 GB | 211.20 GB |
 # Synthetic Audio-Parameter Dataset Framework
 
 ## Purpose
@@ -1420,14 +1420,14 @@ This keeps the synthetic dataset compatible with both plugin QA workflows and ML
 
 ## Validation Status
 
-This framework has been validated against the following criteria:
+Current validation evidence is bounded to local tests, benchmarks, and a 5-sample smoke dataset:
 
 | Criterion | Target | Status |
 |-----------|--------|--------|
-| Unit test coverage | 100% pass | ✓ Validated |
-| Scale test | 10,000+ samples | ✓ Validated |
-| Memory usage | < 4 GB | ✓ Validated |
-| Audio output | Non-silent, correct format | ✓ Validated |
-| Feature dimensions | 31+ per sample | ✓ Validated |
+| Unit test coverage | 100% pass | PASS - local CTest passed 458/458 tests; Catch2 XML reports 0 failures/errors/skips |
+| Scale test | 10,000+ samples | PENDING - no 10K scale artifact is committed |
+| Memory usage | < 4 GB | PARTIAL - benchmark core estimate is 30.4 KB, but no production RSS trace is committed |
+| Audio output | Non-silent, correct format, non-passthrough | PARTIAL - structural validation passed 5/5, but DSP verification reports 1 passthrough file |
+| Feature dimensions | 42 per sample | PARTIAL - C++ export and Python validator are aligned at 42 dimensions; no post-fix generated `sample_*` output report is committed |
 
 See `validation/FINAL_VALIDATION_REPORT.md` for detailed results.

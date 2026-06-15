@@ -21,6 +21,7 @@
 #include "UI/HostedPluginWindow.h"
 #include "UI/V2TabBar.h"
 #include "UI/AIChatPanel.h"
+#include "UI/LicenseActivationOverlay.h"
 
 namespace more_phi {
 
@@ -73,6 +74,7 @@ private:
     // Hosted plugin window (detached)
     std::unique_ptr<HostedPluginWindow> hostedWindow_;
     juce::TextButton openPluginBtn_{"Open Plugin UI"};
+    juce::TextButton deactivateBtn_{"Deactivate License"};
     void openPluginWindow();
     void closePluginWindow();
 
@@ -96,6 +98,8 @@ private:
     void setAITabVisible(bool visible);
 
     float lastDbLevel_ = -1.0f;  // RMS meter throttle state (per-instance)
+
+    LicenseActivationOverlay licenseOverlay;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiEditor)
 };

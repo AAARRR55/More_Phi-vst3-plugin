@@ -84,37 +84,38 @@ void processSidechain(const juce::AudioBuffer<float>& sidechain);
 
 ## Performance Benchmarks
 
-All gates pass (Release build, AVX+SSE enabled):
+Local microbenchmark gates pass in the Release benchmark executable (`build/windows-msvc-release/tests/Release/MorePhiBenchmarks.exe`, AVX+SSE available). Values below are the observed range across three local runs; they are not a DAW-host CPU or memory profile.
 
-| Metric | Measured | Target |
-|--------|----------|--------|
-| Scalar Interp (256 params) | 0.11 µs | < 100 µs |
-| SIMD Interp (256 params) | 0.125 µs | < 30 µs |
-| Elastic Physics | 0.01 µs | < 1 µs |
-| Drift Physics | 0.21 µs | < 5 µs |
-| 2D IDW (256 params) | 0.525 µs | < 50 µs |
-| Memory Footprint | 14.2 KB | < 10 MB |
-| **RT CPU (48kHz/256)** | **0.012%** | **< 2%** |
+| Metric | Measured Range | Target |
+|--------|----------------|--------|
+| Scalar Interp (256 params) | 0.060-0.066 µs avg | < 100 µs |
+| SIMD Interp (256 params) | 0.060-0.088 µs avg | < 30 µs |
+| Elastic Physics | 0.057-0.061 µs avg | < 1 µs |
+| Drift Physics | 0.101-0.121 µs avg | < 5 µs |
+| 2D IDW (256 params) | 0.347-0.385 µs avg | < 50 µs |
+| Neural mastering controller | 1.166-1.987 µs avg | < 100 µs avg / < 1000 µs max |
+| Memory Footprint | 30.4 KB estimated core structures | < 10 MB |
+| **RT CPU (48kHz/256)** | **0.00571-0.00855% simulated** | **< 2%** |
+| **RT CPU (44.1kHz/64)** | **0.0226-0.0280% simulated** | **< 2%** |
+
+External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separate release gates.
 
 ---
 
 ## Test Coverage
 
-59 test cases, 962 assertions — all passing.
+Current `build/windows-msvc-release` CTest discovery lists 458 tests. The most recent local validation verified:
 
-| Module | Tests | Tags |
-|--------|-------|------|
-| LockFreeQueue | 5 | `[lockfree]` |
-| ParameterState | 5 | `[param]` |
-| InterpolationEngine (1D) | 4 | `[interp]` |
-| InterpolationEngine (2D) | 3 | `[interp][2d]` |
-| SnapshotBank (basic) | 6 | `[bank]` |
-| SnapshotBank (FastMode) | 4 | `[bank][fastmode]` |
-| PhysicsEngine | 10 | `[physics]` |
-| GeneticEngine | 8 | `[genetic]` |
-| SanityMode | 3 | `[genetic][sanity]` |
-| MIDIRouter Sidechain | 7 | `[midi][sidechain]` |
-| SIMD Operations | 4 | `[simd]` |
+| Scope | Result |
+|-------|--------|
+| Full current Release CTest suite | 458/458 passed in 60.83s |
+| Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
+| Dataset-filtered integration/schema tests | 8/8 passed |
+| Release benchmark executable gates | 9/9 passed |
+
+Full-suite evidence: `validation/ctest_full_windows-msvc-release_20260615.md`.
+
+External VST3-validator and DAW-host results should be attached as separate release artifacts when available.
 
 ---
 

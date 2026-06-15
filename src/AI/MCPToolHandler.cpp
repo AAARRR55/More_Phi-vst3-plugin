@@ -4125,7 +4125,7 @@ juce::String MCPToolHandler::getStereoFieldAnalysis(MorePhiProcessor& p)
             "stereo_field_is_mid_side_energy_analysis_not_perceptual_width_prediction"
         })},
         {"limitations", json::array({
-            "correlation is computed between mid and side band signals",
+            "correlation is computed between left and right band signals",
             "width is sqrt(total_side_energy / total_mid_energy) over the analyzer window"
         })}
     });
