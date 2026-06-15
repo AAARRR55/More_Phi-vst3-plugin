@@ -82,6 +82,9 @@ private:
     std::atomic<float> dryWet_      { 0.3f };
     std::atomic<float> cutoffHz_    { 1000.f };
     std::atomic<bool>  enabled_     { false };   // disabled by default
+    // ENHANCERS-2: coeffs are recomputed on the audio thread when this is set,
+    // so setCutoff (any thread) never races processBlock's coefficient reads.
+    std::atomic<bool>  coeffsDirty_ { true };
 
     double sampleRate_  = 48000.0;
     double processRate_ = 48000.0;   // ENHANCERS-1: rate the HP biquad runs at (native * osFactor)

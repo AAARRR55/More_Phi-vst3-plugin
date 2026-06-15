@@ -17,10 +17,10 @@ HarmonicExciter::HarmonicExciter()
 void HarmonicExciter::setCutoff(float hz) noexcept
 {
     cutoffHz_.store(hz, std::memory_order_relaxed);
-    // Coefficients are recomputed in prepare(); if called at runtime,
-    // they'll update on the next prepare() call. For live changes call
-    // recomputeCoefficients() explicitly from the message thread.
-    recomputeCoefficients();
+    // ENHANCERS-2 FIX: don't recompute coefficients here (any thread) — that
+    // would race processBlock's reads of b0_..a2_. Set a dirty flag and let the
+    // audio thread recompute them single-threaded at the top of the next block.
+    coeffsDirty_.store(true, std::memory_order_release);
 }
 
 void HarmonicExciter::prepare(double sampleRate, int maxBlockSize)
@@ -35,6 +35,7 @@ void HarmonicExciter::prepare(double sampleRate, int maxBlockSize)
     processRate_ = sampleRate * static_cast<double>(os_.getActiveFactor());
 
     recomputeCoefficients();
+    coeffsDirty_.store(false, std::memory_order_release);  // ENHANCERS-2: fresh
     reset();
 }
 
@@ -64,6 +65,11 @@ void HarmonicExciter::recomputeCoefficients() noexcept
 void HarmonicExciter::processBlock(juce::AudioBuffer<float>& buf) noexcept
 {
     if (!enabled_.load(std::memory_order_relaxed)) return;
+
+    // ENHANCERS-2 FIX: recompute HP coefficients here (single-threaded, audio)
+    // if setCutoff marked them dirty — avoids racing the b0_..a2_ reads below.
+    if (coeffsDirty_.exchange(false, std::memory_order_acquire))
+        recomputeCoefficients();
 
     const float drive  = driveLinear_.load(std::memory_order_relaxed);
     const float wet    = dryWet_.load(std::memory_order_relaxed);
