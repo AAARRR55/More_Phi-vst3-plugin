@@ -83,6 +83,7 @@ void LUFSMeter::reset() noexcept
     blockAccum_  = 0;
     historyHead_ = 0;
     historyCount_ = 0;
+    commitsSinceRecompute_ = 0;  // LUFS-7
     blockMS_.fill(0.0f);
 
     momentary_.store(-std::numeric_limits<float>::infinity(), std::memory_order_relaxed);
@@ -179,6 +180,20 @@ void LUFSMeter::updateLongTermMetrics() noexcept
         lra_.store(0.0f, std::memory_order_relaxed);
         return;
     }
+
+    // LUFS-7 FIX: the gated integrated+LRA rebuild below is O(historyCount) — it
+    // rebuilds gated_/lraGated_ over the whole history and runs nth_element over
+    // up to kHistoryBlocks entries. During warmup (historyCount_ < kRecomputeWarmup)
+    // recompute every commit so short sessions and tests stay exact; once the
+    // history is long enough for the per-commit cost to grow, throttle to ~once
+    // per second and keep the last integrated_/lra_ between recomputes (both are
+    // slow-moving cumulative statistics, so sub-second staleness is invisible).
+    if (historyCount_ >= kRecomputeWarmup && commitsSinceRecompute_ < kRecomputeInterval)
+    {
+        ++commitsSinceRecompute_;
+        return;
+    }
+    commitsSinceRecompute_ = 0;
 
     gated_.clear();
 

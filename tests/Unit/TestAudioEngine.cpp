@@ -294,6 +294,28 @@ TEST_CASE("LUFSMeter reports finite output for a known sine fixture", "[audio_en
     CHECK(meter.getIntegrated() < 0.0f);
 }
 
+TEST_CASE("LUFSMeter throttled recompute still yields valid integrated/LRA on long sessions (LUFS-7)", "[audio_engine][LUFS]")
+{
+    // Run well past the recompute warmup (kRecomputeWarmup=60 blocks ≈ 6s) so the
+    // LUFS-7 throttle path is exercised; the gated integrated/LRA must still be
+    // valid (finite, in range) even though it is only recomputed ~once/sec.
+    LUFSMeter meter;
+    meter.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 1000; ++block)  // ≈106 commits -> historyCount well past warmup
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 1000.0f, 48000.0f, 0.25f);
+        meter.processBlock(buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
+    }
+
+    CHECK(std::isfinite(meter.getIntegrated()));
+    CHECK(meter.getIntegrated() > -80.0f);
+    CHECK(meter.getIntegrated() < 0.0f);
+    CHECK(meter.getLRA() >= 0.0f);
+}
+
 TEST_CASE("TruePeakEstimator reports finite bounded output for a known sine fixture", "[audio_engine][TruePeak]")
 {
     TruePeakEstimator estimator;
