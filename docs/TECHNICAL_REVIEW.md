@@ -300,3 +300,80 @@ The four recommended critical/high fixes were applied on branch **`fix/core-revi
 **Tests:** full `MorePhiTests.exe` suite → **417 / 417 test cases pass, 71,040 assertions, 0 failures.** (The "[WARNING] No plugin host available — dry passthrough" line is expected output from a dataset integration test, not a failure.)
 
 **Remaining (not applied in this pass):** H-1 (`MCPToolHandler.cpp` decomposition — schedule as its own milestone), H-4 (per-block touch-detection read batching), H-5 (notification response suppression), and the M-/L-tier items. These are documented above and await triage.
+
+---
+
+## 10. Extended Review — Mastering Path & MCP Tool Surface (2026-06-15)
+
+Single-reviewer continuation into the areas §0 marked "surveyed only": the mastering/limiting processors and `MCPToolHandler.cpp` (5,446 lines, read via grep-driven targeted inspection rather than line-by-line — so this section is directional, not exhaustive).
+
+### Critical
+
+#### B-1 — Brickwall limiter enforces sample-peak, not true-peak; dBTP ceiling is not honored
+- **Location:** `src/Core/BrickwallLimiter.cpp:88-100`; the `truePeak_` member is used only at `:123` for post-limit metering.
+- **Category:** correctness (mastering-critical).
+- **Severity:** Critical for the mastering use-case.
+
+The limiter's gain-reduction loop computes its peak by scanning `std::abs(delayL_[idx])` — **sample-domain peaks**:
+
+```cpp
+// BrickwallLimiter.cpp:88-100  — the gain-control scan
+float peakL = 0.f, peakR = 0.f;
+for (int k = 0; k < lookaheadSamples_; ++k) {
+    const int idx = (writePos_ - k + kLookaheadBufSize) % kLookaheadBufSize;
+    if (nch >= 1) { const float a = std::abs(delayL_[idx]); if (a > peakL) peakL = a; }
+    ...
+}
+const float peak = std::max(peakL, peakR);
+float targetGain = 1.0f;
+if (peak > ceiling && peak > 1e-12f) targetGain = ceiling / peak;
+```
+
+But the ceiling is set in **dBTP** (`setCeiling(plan.ceilingDBTP)`, `AutoMasteringEngine.cpp:305`), and the architecture docs explicitly claim ISP detection — `AutoMasteringEngine.h:14` ("`[8] BrickwallLimiter 4ms lookahead, ISP detection`") and `BrickwallLimiter.h:4-11`. A `TruePeakEstimator` (4× polyphase FIR, ITU-R BS.1770-4) is instantiated as `truePeak_` and `prepare()`d, but it is wired **only** to the post-limiting metering call (`truePeak_.processBlock(buf)` at `:123`) — never to the gain-control path.
+
+**Consequence:** inter-sample peaks pass through ungated. On hot program material (sawtooth/square content, transients reconstructed by DAC reconstruction), the true peak of the output can exceed the ceiling by ~+0.3 to +1.0 dBTP. For a mastering plugin targeting streaming delivery (−1 dBTP), masters can fail loudness/peak QC and clip downstream encoders. The limiter meets its *sample-peak* ceiling but not the *true-peak* ceiling it advertises and is configured against.
+
+**Fix (two viable options):**
+1. **Drive gain from the true-peak estimator over the lookahead window.** In the scan loop, for each position run the 4 polyphase phases and take the max across phases as that sample's effective peak (then max over the window). This reuses the existing, correct `TruePeakEstimator` coefficients — just point them at the control path instead of only metering.
+2. **Oversample the control path 4×** (the limiter already owns a `TruePeakEstimator` and the project has `OversamplingWrapper`), compute sample peaks in the upsampled domain, apply gain, downsample. More expensive; option 1 is cheaper and sufficient.
+
+The estimator itself is sound (verified: 4-phase × 12-tap linear-phase symmetric FIR, correct ring-buffer indexing in `applyPhase`, BS.1770-4-conformant structure) — the defect is purely the **wiring**, which makes this a contained, high-leverage fix.
+
+> This finding **raises the production-readiness bar for the mastering feature specifically**: until B-1 is fixed, "mastering" output should not be trusted to meet a stated dBTP ceiling. It does not affect the morphing/hosting core covered in §1–§9.
+
+### Medium
+
+#### B-2 — True-peak meter reports per-block peak, not a held session peak
+- **Location:** `src/Core/TruePeakEstimator.cpp:98, 134-139`.
+- **Severity:** Medium (metering semantics).
+
+`processBlock()` resets `maxL`/`maxR` to 0 each call and stores the **last block's** peak. `getTruePeak_dBTP()` therefore returns a transient, not the running maximum since `reset()`. Meters, UI, and MCP `get_mastering_state` consumers see a flickering per-block value rather than the peak-so-far that mastering engineers expect. Fix: keep `peakL_`/`peakR_` as held-running maxima across blocks, reset only on explicit `reset()`.
+
+#### M-13 — `runSelfTest` mutates hosted-plugin params directly on the MCP thread
+- **Location:** `src/AI/MCPToolHandler.cpp:3380-3396, 3486, 3504` (the `preset_persistence` diagnostic suite).
+- **Severity:** Medium (diagnostic-scoped race).
+
+The self-test calls `bridge.applyParameterState()` / `setParameterNormalized()` / `getParameterNormalized()` directly — bypassing the `enqueueParameter*` lock-free handoff that every *normal* tool correctly uses (and that the code itself documents at `:2912-2913`). Both the self-test (MCP thread) and the morph engine (audio thread) then call `params[i]->setValue()` on the hosted plugin without coordination → data race on non-atomic parameter state, and audible glitches if invoked during playback. Nothing guards against running it while audio is active. Fix: gate the self-test behind an "audio suspended / idle" precondition, or route its writes through the queue.
+
+### Low
+
+- **L-10 (MCP):** File-handling tools accept arbitrary filesystem paths from the request — `mastering.render_batch` (`:4310-4316`: input/output/plugin), `hosted_plugin.scan`/`load` (`:3794`, `:824`). Acceptable under the localhost + bearer-auth + `isLocal()` threat model, but the trust boundary is implicit. Consider validating output paths against an allow-list directory and documenting that an authenticated local client can read/write arbitrary paths (and load arbitrary native-code VST3s).
+- **L-11 (MCP):** Unknown method names likely surface to the client as `-32603` (the server's "tool handler returned invalid JSON" fallback on an empty toolResult) rather than the spec-correct `-32601` ("method not found"). The exact `handle()` fallthrough return was not read line-by-line — verify it emits a `-32601` envelope.
+- **L-12 (MCP):** `workflow.execute` (`:1140-1156`) recursively dispatches each step via `MCPToolHandler::handle` (`:1156`). Bounded by the workflow's step list, but a large workflow means deep recursion on the connection thread; an iterative dispatch with a step cap would be safer.
+
+### Strengths observed (balancing the above)
+
+- **Parameter-write discipline is correct in every normal tool.** All `set_parameter` / `set_parameters_batch` / morph / mastering tools route through `enqueueParameterSet` / `enqueueParameterBatch` (`:922, :2316, :2767, :2830, :4626, :4711`) — the single rule that matters most for real-time safety is obeyed. M-13 is the lone exception, and it's a diagnostic.
+- **No manual JSON string concatenation** in tool responses — proper `juce::var`/`nlohmann::json` objects throughout (grep for hand-built `"{\"…\"` returned nothing), eliminating the injection / double-escape class of bugs that plagues ad-hoc MCP servers.
+- **Dispatch table is clean and mature** (`handle()`, `:2536-2628+`): readable `if/return` chain, and every mutating tool is wrapped in `dispatchWithAutomationTransaction` for rollback/diff/audit support. This is the seam the H-1 decomposition should preserve.
+- **True-peak estimator is technically correct** — the FIR design, coefficient symmetry, and polyphase indexing are sound. B-1 is a wiring defect, not a DSP defect.
+
+### Recommended ship sequence (additions)
+
+6. **B-1** — wire the true-peak estimator into the limiter gain-control path. Highest-value mastering fix; contained blast radius (the estimator already exists and works).
+7. **B-2** — held-running peak in `TruePeakEstimator`.
+8. **M-13** — gate `runSelfTest` against active audio.
+
+### Coverage gap (still open)
+
+`MCPToolHandler.cpp` was inspected via targeted grep + dispatch-table + representative-tool reads, **not** line-by-line. The per-tool argument validation, the `automation.*` / `memory.*` / `workflow.*` control-plane tools (`handleControlPlaneTool`), and the Ozone IPC assistant tools were not individually audited. A dedicated pass (or the adversarial multi-agent workflow, once the rate limit clears) over the tool bodies — especially argument bounds-checking and the control-plane state machine — remains warranted.
