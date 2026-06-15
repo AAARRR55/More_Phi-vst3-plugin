@@ -157,15 +157,23 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     // ── Stage 7: Harmonic exciter (optional) ──────────────────────────────
     exciter_.processBlock(buf);
 
-    // ── Stage 8: Brickwall limiter ────────────────────────────────────────
-    limiter_.processBlock(buf);
-    analysisTruePeak_.processBlock(buf);
-
-    // ── Stage 9: LUFS metering ────────────────────────────────────────────
-    lufs_.processBlock(buf.getArrayOfReadPointers(), buf.getNumChannels(), buf.getNumSamples());
-
-    // ── Stage 10: Loudness normalization ──────────────────────────────────
+    // ── Stage 8: Loudness normalization ──────────────────────────────────
+    // LUFS-1 FIX: normalize BEFORE the limiter. The normalizer applies up to
+    // +6 dB correction gain; running it AFTER the limiter (the old order) pushed
+    // the already-limited signal back above the dBTP ceiling, defeating the
+    // limiter and the B-1 true-peak fix. Now the brickwall limiter is the
+    // terminal gain stage and catches any overshoot the normalizer introduces.
     normalizer_.processBlock(buf);
+
+    // ── Stage 9: Brickwall limiter (terminal gain stage) ─────────────────
+    limiter_.processBlock(buf);
+
+    // ── Stage 10: Meter the FINAL delivered output ───────────────────────
+    // Both meters now read the post-normalization + post-limit signal, so the
+    // reported dBTP/LUFS match what is actually delivered, and the normalizer's
+    // feedback loop (it reads meter_->getIntegrated()) converges on the target.
+    analysisTruePeak_.processBlock(buf);
+    lufs_.processBlock(buf.getArrayOfReadPointers(), buf.getNumChannels(), buf.getNumSamples());
 
     // ── Stage 11: M/S decode ──────────────────────────────────────────────
     MSMatrix::decodeBuffer(buf);
