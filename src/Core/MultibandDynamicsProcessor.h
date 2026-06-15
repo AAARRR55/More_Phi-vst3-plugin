@@ -99,6 +99,9 @@ private:
 
         // Smoothed gain (audio thread only)
         float gainSmoothed[kMaxChannels] = { 1.0f, 1.0f };
+
+        // MULTIBAND-2/3: single stereo-linked, per-sample detector envelope.
+        float envLinked = 0.0f;
     };
 
     std::array<BandState, kNumBands> bands_{};
