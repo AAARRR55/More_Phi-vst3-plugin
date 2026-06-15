@@ -1297,6 +1297,12 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         // V2: Modulation engine — applies LFO/envelope/velocity modulation
         // to the finalOutput_ vector before parameter apply. Pass-through in MVP.
+        // MODULATION-2 FIX: forward the host BPM each block so tempo-synced
+        // LFOs/step-sequencers track the project tempo (previously bpm_ stayed
+        // at its 120.0 default for the whole session). Fall back to 120 when the
+        // host reports no tempo (transport stopped / no playhead).
+        const double hostBpm = transportBpm_.load(std::memory_order_relaxed);
+        modulationEngine_.setBPM(hostBpm > 0.0 ? static_cast<float>(hostBpm) : 120.0f);
         modulationEngine_.setMorphPosition(linkX, linkY, fp);
         modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
         modulationEngine_.processBlock(finalOutput_, dt);

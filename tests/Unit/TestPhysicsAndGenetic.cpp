@@ -25,6 +25,12 @@
 #include <array>
 #include <cmath>
 #include <set>
+#include <algorithm>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include "Core/ModulationMatrix.h"
+#include "Core/ModulationTypes.h"
 
 using Catch::Approx;
 using namespace more_phi;
@@ -478,5 +484,53 @@ TEST_CASE("BrickwallLimiter: honors dBTP ceiling against inter-sample peaks (B-1
     // domain — a documented follow-up, not a blocker for this fix.
     REQUIRE(outTruePeak <= ceiling * 1.1f);
     juce::ignoreUnused(outTruePeak);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ModulationMatrix — concurrent mutation + apply (MODULATION-1 seqlock guard)
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("ModulationMatrix: concurrent mutation + apply stays consistent (MODULATION-1)", "[modulation][concurrency]")
+{
+    // Regression guard for the MODULATION-1 seqlock. A writer thread rapidly
+    // adds/removes/edits routes while the "audio" thread calls apply() in a
+    // tight loop. Asserts: no crash/deadlock/infinite-retry, and every apply
+    // output stays within the [0,1] clamp contract. On ThreadSanitizer this
+    // test flags the publishAndMirror race if the seqlock is removed.
+    ModulationMatrix matrix;
+    constexpr int kParams = 16;
+    matrix.prepare(kParams);
+
+    std::atomic<bool> stop{ false };
+    auto writer = [&]()
+    {
+        int slot = 0;
+        while (!stop.load(std::memory_order_relaxed))
+        {
+            const int id = matrix.addRoute(ModSourceId::LFO_1, slot % kParams, 0.5f);
+            const int target = std::max(0, id);
+            matrix.setRouteDepth(target, 0.25f);
+            matrix.setRouteEnabled(target, true);
+            if (id >= 0) matrix.removeRoute(id);
+            ++slot;
+        }
+    };
+
+    std::array<float, static_cast<int>(ModSourceId::NUM_SOURCES)> sources{};
+    sources.fill(0.5f);
+
+    std::thread w(writer);
+    constexpr int kIters = 5000;
+    for (int iter = 0; iter < kIters; ++iter)
+    {
+        std::vector<float> out(kParams, 0.5f);
+        matrix.apply(sources, out);  // must not hang and must stay in [0,1]
+        float mn = 1.0f, mx = 0.0f;
+        for (float v : out) { mn = std::min(mn, v); mx = std::max(mx, v); }
+        REQUIRE(mn >= 0.0f);
+        REQUIRE(mx <= 1.0f);
+    }
+    stop.store(true, std::memory_order_relaxed);
+    w.join();
 }
 

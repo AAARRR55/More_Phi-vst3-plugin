@@ -377,3 +377,68 @@ The self-test calls `bridge.applyParameterState()` / `setParameterNormalized()` 
 ### Coverage gap (still open)
 
 `MCPToolHandler.cpp` was inspected via targeted grep + dispatch-table + representative-tool reads, **not** line-by-line. The per-tool argument validation, the `automation.*` / `memory.*` / `workflow.*` control-plane tools (`handleControlPlaneTool`), and the Ozone IPC assistant tools were not individually audited. A dedicated pass (or the adversarial multi-agent workflow, once the rate limit clears) over the tool bodies — especially argument bounds-checking and the control-plane state machine — remains warranted.
+
+---
+
+## 11. Mastering-Chain & Modulation Deep-Audit (2026-06-15)
+
+A 4-agent parallel audit (LUFS, multiband, modulation, enhancers) with per-critical adversarial verification. **34 findings: 4 critical, 7 high, 13 medium, 10 low.** Verification confirmed 2 criticals, **refuted 1** (false positive caught), and downgraded 1 (critical→high). The full machine-readable result is in the workflow transcript; the verified essentials follow.
+
+### ⚑ The load-bearing finding: the mastering chain is DORMANT in the shipped plugin
+
+Independent confirmation (grep of `autoMasteringEngine_.` in `PluginProcessor.cpp`): the plugin calls only `prepare(..., false)` (which disables the chain + its 10 Hz timer), `reset()`, `analyzeBlock()` (a **metering-only** tap that runs the LUFS/true-peak/spectrum/stereo *analyzers* but **not** the limiter/normalizer/exciter/multiband), and `getChainPlanner()`. `AutoMasteringEngine::processBlock` — the entire shaping+limiting+normalizing chain — is reached **only from a unit test** (`TestMCPServerUnit.cpp:783`), never from the audio thread.
+
+**Consequence for this report:** every finding inside `AutoMasteringEngine::processBlock` and its stages (limiter, normalizer, exciter, multiband dynamics) is **LATENT** — a real defect that does not affect shipped audio today but is a hard blocker the moment the mastering chain is wired into the audio path. Findings in the modulation engine and the LUFS/analysis meters (which `analyzeBlock` *does* run) are **LIVE**.
+
+> This also reframes the B-1 fix shipped in commit `288d58b`: it is a correct fix to a real bug, but the `BrickwallLimiter` currently only runs in the dormant chain, so B-1 is latent too — it does not affect shipped audio until mastering is enabled. The fix remains correct and necessary; the PR's "masters exceed ceiling" framing describes latent behavior, not current shipped behavior.
+
+### Confirmed CRITICAL (both latent — mastering-chain blockers)
+
+- **LUFS-1 (confirmed, high confidence):** `LoudnessNormalizer` (Stage 10) applies up to **+6 dB** gain **after** the `BrickwallLimiter` (Stage 8), defeating the dBTP ceiling. A −1.0 dBTP-limited signal can ship at up to +5.0 dBTP. This is the same chain-order defect I flagged independently in §10's Lead-Architect note; the verifier corroborated it. *Latent* (chain dormant). Fix: normalize **before** limiting, or add a final true-peak safety limiter after normalization.
+- **ENHANCERS-1 (confirmed, high confidence):** `HarmonicExciter` runs a memoryless `fastTanh` saturation at the native sample rate with **no oversampling** → generated harmonics alias back into the audible band. The codebase ships an RT-safe `OversamplingWrapper` (used by `TruePeakEstimator`) but the exciter doesn't use it. Also violates the project's own spec (`specs/002-neural-mastering-framework/audit-report.md`: "oversampled deterministic non-linear processors"). *Latent* (chain dormant). Fix: wrap the tanh stage in `OversamplingWrapper` (≥4×), report its latency to `LatencyManager`.
+
+### Refuted / downgraded (verification working as intended)
+
+- **MULTIBAND-1 (critical → REFUTED, low):** flagged `setSize` in `AutoMasteringEngine::processBlock` as an audio-thread allocation. The verifier proved the function is **dead code on the audio path** (see the dormancy finding above), so it's a latent code-hygiene defect, not a live RT violation. *This is exactly the false-positive the adversarial step exists to catch.*
+- **MODULATION-1 (critical → CONFIRMED, downgraded to high):** the `ModulationMatrix::publishAndMirror()` double-buffer mirror copies into a buffer an in-flight audio reader may still hold → torn `ModRoute` reads (UB). Downgraded because `apply()` bounds-checks `destParamIndex`/`srcIdx` every read, so the worst case is an intermittent mis-targeted modulation delta (audible glitch), not a crash/OOB. **This one is LIVE** (the modulation engine runs on the audio path at `PluginProcessor.cpp:1302`). Fix: add a seqlock (writer increments an odd seq; reader retries on parity change) so the mirror can't race the reader.
+
+### LIVE issues (on the shipped audio path — ship-blocking)
+
+| ID | Sev | Issue | Fix |
+|---|---|---|---|
+| **MODULATION-1** | high | Matrix mirror race → torn route reads / glitches under live modulation | seqlock on the route buffer |
+| **MODULATION-2** | high | Host BPM never forwarded — tempo-synced LFOs/step-sequencers stuck at **120 BPM** | call `modulationEngine_.setBPM(transportBpm_)` each block |
+| **LUFS-3** | high | K-weighting DF2T biquads have **no denormal mitigation** on the audio path → ~50–100× slowdown on silence-after-transient | `juce::ScopedNoDenormals` at the top of `LUFSMeter::processBlock` |
+| **LUFS-4** | high | Channel weighting hardcoded stereo; can't apply BS.1770 surround (1.41) weights or exclude LFE | raise `kMaxChannels`, add per-channel weight table |
+| MODULATION-3 | med | EnvelopeFollower applies a per-sample coeff once per block → attack/release ~blockSize× too fast | `coeff = pow(coeff, numSamples)` |
+| MODULATION-4 | med | LFO/envelope/macro params mutated non-atomically from UI while audio reads them | atomics or route via the `LockFreeQueue` |
+| MODULATION-5 | med | LFO Random-shape smoothing mis-normalized (inverted rate term) | decouple tau from rate, `exp(-dt/tau)` |
+| LUFS-7 | med | `updateLongTermMetrics` does a full O(N) gated-list rebuild + `nth_element` **every 100 ms block** (O(N²) over a long master) | incremental accumulators / throttle LRA |
+| LUFS-8 | med | momentary/short-term published before the 400 ms / 3 s window is filled | min-block-count guard |
+| LUFS-5/6 | med | relative-gate fallback semantics; LRA percentile uses floor (no interpolation per EBU Tech 3342) | guard/flag; linear interpolation |
+| MULTIBAND-2/3/4 | high/med | unlinked per-channel detection (image wander); block-quantized detector; GR meter includes makeup | stereo-link; per-sample detector; split makeup from comp gain *(latent — chain dormant)* |
+
+### Strengths the audit confirmed (balancing the above)
+
+- **BS.1770-4 loudness math is correct:** K-weighting coefficients match the canonical 48 kHz biquad tables to float32 precision (both stages, correct order), the −0.691 calibration and `−0.691 + 10·log10(ms)` formula are exact, 400 ms / 75 %-overlap block construction and the two-stage (−70 LUFS absolute, −10 LU relative) gating are right, and `processBiquad` uses Direct Form II Transposed (the numerically preferable form).
+- **The LR4 crossover is genuine:** cascaded 2nd-order Butterworth (Q=1/√2) ×2 per leg = true Linkwitz-Riley 4th-order; by the recursive H_LP+H_HP=1 identity the four bands **sum back flat** (no comb-filtering, no band-latency mismatch). The header's reconstruction claim holds.
+- **StereoImager M/S math is internally exact** (unity round-trip at width=1, width applied to Side only, sub band forced mono by default).
+- **Modulation engine is RT-clean at the loop level** (noexcept, fixed-size arrays, no allocs/locks; xorshift32 PRNGs; matrix apply clamps output to [0,1]; the modulation→`finalOutput_` handoff is correctly ordered after morph).
+- **`StereoFieldAnalyzer` correlation** (normalized cross-correlation with epsilon floor, clamped [−1,1]) is correct, with a proper seqlock-retry snapshot read path.
+
+### Systemic pattern (from synthesis)
+
+> DSP-stage ordering and anti-aliasing discipline are **not enforced as invariant properties of the mastering chain**. LUFS-1 and ENHANCERS-1 share one root: a stage is wired in *without the surrounding infrastructure that makes it correct in a delivery context* — no safety limiter after post-limit gain; no oversample/decimate around a nonlinearity. Component-level invariants (the limiter's "−1.0 dBTP streaming safe" header claim) are honored in isolation while the surrounding pipeline silently invalidates them. The MODULATION-1 race is the concurrency analogue: the double-buffer "swap-then-copy" pattern doesn't actually guarantee a non-aliased read buffer without a generation/seqlock check on the reader side.
+
+### Updated production-readiness verdict
+
+- **Shipped audio path (morphing + hosting + modulation + metering):** no live **critical**; two live **high** issues — MODULATION-1 (matrix race, intermittent glitch) and MODULATION-2 (BPM stuck at 120, wrong tempo-sync rate) — plus live RT/perf risks in the LUFS meter (LUFS-3 denormals, LUFS-7 O(N²) rebuild). MODULATION-1 is bounded (no crash/OOB) but real.
+- **Mastering feature:** **dormant.** The chain is correct infrastructure for a feature that is not yet enabled. Its two confirmed criticals (LUFS-1, ENHANCERS-1) are **pre-enablement blockers** — do not wire `AutoMasteringEngine::processBlock` into the audio path until both are fixed (and B-1's oversampled-gain follow-up is done).
+
+### Recommended fix order
+
+1. **MODULATION-1** — seqlock on `ModulationMatrix` (live, the highest-severity live issue; contained, with a concurrent stress test).
+2. **MODULATION-2** — one-line `setBPM` wiring in `processBlock` (live, trivial, unambiguous).
+3. **LUFS-3** — `ScopedNoDenormals` in `LUFSMeter::processBlock` (live RT risk, one line).
+4. **LUFS-7** — incremental LUFS/LRA accumulators (live perf, larger).
+5. **Pre-enablement (before mastering is wired in):** LUFS-1 (chain reorder), ENHANCERS-1 (oversampled exciter), B-1 follow-up (oversampled gain), MULTIBAND-2/3 (stereo-link + per-sample detector).

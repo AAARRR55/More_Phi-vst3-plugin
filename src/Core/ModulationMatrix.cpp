@@ -29,6 +29,13 @@ void ModulationMatrix::prepare(int maxParamCount) noexcept
 
 void ModulationMatrix::reset() noexcept
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
+    resetLocked();
+}
+
+void ModulationMatrix::resetLocked() noexcept
+{
     // Reset both buffers so neither contains stale data.
     for (auto& buf : buffers_)
     {
@@ -53,14 +60,35 @@ void ModulationMatrix::apply(
     std::vector<float>& output) noexcept
 {
     const int paramCount = static_cast<int>(output.size());
-    const int idx = readIndex_.load(std::memory_order_acquire);
-    const RouteBuffer& buf = buffers_[idx];
+    if (paramCount == 0) return;
 
-    if (paramCount == 0 || buf.assignedCount == 0) return;
+    // MODULATION-1 FIX: seqlock read. Snapshot the active route buffer to a
+    // local copy so a concurrent publishAndMirror() (which mirrors into the
+    // buffer a reader that captured the previous readIndex_ may still hold)
+    // cannot tear the routes mid-iteration. Retry if seq changed parity during
+    // the copy. Writers are serialized by writeLock_, so this is the standard
+    // single-writer seqlock; a torn read is impossible regardless of timing.
+    RouteBuffer local{};
+    bool snapshotOk = false;
+    for (int attempt = 0; attempt < kMaxReadRetries; ++attempt)
+    {
+        const uint32_t s1 = seq_.load(std::memory_order_acquire);
+        if ((s1 & 1u) != 0u) continue;  // writer in progress
 
+        const int idx = readIndex_.load(std::memory_order_acquire);
+        local = buffers_[idx];          // full RouteBuffer copy (~2 KB, trivially copyable)
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+        const uint32_t s2 = seq_.load(std::memory_order_acquire);
+        if (s1 == s2) { snapshotOk = true; break; }
+    }
+
+    if (!snapshotOk || local.assignedCount == 0) return;
+
+    // Apply from the local snapshot — no concurrent writer can touch it.
     for (int i = 0; i < MAX_ROUTES; ++i)
     {
-        const ModRoute& r = buf.routes[i];
+        const ModRoute& r = local.routes[i];
 
         // Skip unassigned or disabled routes
         if (!r.enabled || r.destParamIndex < 0 || r.destParamIndex >= paramCount)
@@ -117,6 +145,9 @@ int ModulationMatrix::addRoute(ModSourceId source, int destParamIndex, float dep
     if (destParamIndex < 0 || destParamIndex >= maxParamCount_)
         return -1;
 
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
+
     const int slot = findFreeSlot();
     if (slot < 0) return -1;
 
@@ -133,7 +164,9 @@ int ModulationMatrix::addRoute(ModSourceId source, int destParamIndex, float dep
 
 void ModulationMatrix::removeRoute(int routeId)
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
     if (!isValidRouteId(routeId)) return;
+    WriteScope ws(*this);
 
     RouteBuffer& buf = buffers_[writeIndex_];
     buf.routes[routeId].destParamIndex = -1;
@@ -146,14 +179,18 @@ void ModulationMatrix::removeRoute(int routeId)
 
 void ModulationMatrix::setRouteDepth(int routeId, float depth)
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
     if (!isValidRouteId(routeId)) return;
+    WriteScope ws(*this);
     buffers_[writeIndex_].routes[routeId].depth = std::clamp(depth, -1.0f, 1.0f);
     publishAndMirror();
 }
 
 void ModulationMatrix::setRouteEnabled(int routeId, bool enabled)
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
     if (!isValidRouteId(routeId)) return;
+    WriteScope ws(*this);
     buffers_[writeIndex_].routes[routeId].enabled = enabled;
     publishAndMirror();
 }
@@ -199,7 +236,10 @@ void ModulationMatrix::fromXml(const juce::XmlElement& xml)
 {
     if (!xml.hasTagName("ModulationMatrix")) return;
 
-    reset();
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
+
+    resetLocked();
 
     RouteBuffer& buf = buffers_[writeIndex_];
 
