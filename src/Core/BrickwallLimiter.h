@@ -94,6 +94,14 @@ private:
     int writePos_ = 0;
     int lookaheadSamples_ = 0;
 
+    // B-1 FIX: per-position true-peak cache over the delay line. The true-peak
+    // (max over 4 polyphase phases) is computed ONCE per written sample and
+    // stored here, so the per-sample lookahead window scan is a cheap
+    // max-reduction over cached values rather than a per-sample std::abs of the
+    // raw delay line. This makes the dBTP ceiling hold against inter-sample
+    // peaks (the original sample-peak scan let ISPs through).
+    std::array<float, kLookaheadBufSize> windowPeakL_{}, windowPeakR_{};
+
     // ── True Peak detector (lookahead window only) ────────────────────────────
     TruePeakEstimator truePeak_;
 

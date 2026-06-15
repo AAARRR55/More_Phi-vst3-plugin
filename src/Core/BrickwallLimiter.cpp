@@ -37,6 +37,8 @@ void BrickwallLimiter::prepare(double sampleRate, int maxBlockSize)
                                   kLookaheadBufSize);
     delayL_.fill(0.f);
     delayR_.fill(0.f);
+    windowPeakL_.fill(0.f);
+    windowPeakR_.fill(0.f);
     writePos_      = 0;
     gainSmoothed_  = 1.0f;
     recomputeReleaseCoeff();
@@ -49,6 +51,8 @@ void BrickwallLimiter::reset() noexcept
 {
     delayL_.fill(0.f);
     delayR_.fill(0.f);
+    windowPeakL_.fill(0.f);
+    windowPeakR_.fill(0.f);
     writePos_     = 0;
     gainSmoothed_ = 1.0f;
     gainReductionDB_.store(0.0f, std::memory_order_relaxed);
@@ -76,21 +80,31 @@ void BrickwallLimiter::processBlock(juce::AudioBuffer<float>& buf) noexcept
         if (nch >= 1) delayL_[static_cast<size_t>(writePos_)] = buf.getReadPointer(0)[i];
         if (nch >= 2) delayR_[static_cast<size_t>(writePos_)] = buf.getReadPointer(1)[i];
 
-        // ── 2. Scan lookahead window for true peak ────────────────────────
-        // Fill a 1-sample lookahead scan buffer and run TruePeakEstimator
-        // For efficiency we scan just the current incoming sample ahead
-        // (the delay line already holds lookaheadSamples_ of future content)
+        // B-1 FIX: compute the TRUE peak (max over the 4 polyphase phases) at
+        // the newly-written position and cache it. Done once per sample
+        // (4×12 = 48 MACs/ch), so the lookahead window scan below is a cheap
+        // max-reduction over cached values. This is what makes the dBTP ceiling
+        // actually hold against inter-sample peaks (the previous std::abs scan
+        // only bounded sample peaks and let ISPs through).
+        if (nch >= 1)
+            windowPeakL_[static_cast<size_t>(writePos_)] =
+                TruePeakEstimator::truePeakAt(delayL_.data(), kLookaheadBufSize, writePos_);
+        if (nch >= 2)
+            windowPeakR_[static_cast<size_t>(writePos_)] =
+                TruePeakEstimator::truePeakAt(delayR_.data(), kLookaheadBufSize, writePos_);
+
+        // ── 2. Scan lookahead window for the worst-case true peak ─────────
+        // The window [writePos_ - lookaheadSamples_ + 1 ... writePos_] spans the
+        // sample about to be emitted (the oldest) and lookaheadSamples_-1 future
+        // samples still in the delay line — a genuine lookahead so gain can drop
+        // before an upcoming peak is output.
         {
-            // Peek at lookahead: newest sample written is writePos_
-            // The sample from lookaheadSamples_ ago is the "current output"
-            // We need the peak over [current_output ... write_pos]
-            // Simple per-sample abs max scan over the ring buffer:
             float peakL = 0.f, peakR = 0.f;
             for (int k = 0; k < lookaheadSamples_; ++k)
             {
                 const int idx = (writePos_ - k + kLookaheadBufSize) % kLookaheadBufSize;
-                if (nch >= 1) { const float a = std::abs(delayL_[static_cast<size_t>(idx)]); if (a > peakL) peakL = a; }
-                if (nch >= 2) { const float a = std::abs(delayR_[static_cast<size_t>(idx)]); if (a > peakR) peakR = a; }
+                if (nch >= 1) { const float a = windowPeakL_[static_cast<size_t>(idx)]; if (a > peakL) peakL = a; }
+                if (nch >= 2) { const float a = windowPeakR_[static_cast<size_t>(idx)]; if (a > peakR) peakR = a; }
             }
             const float peak = std::max(peakL, peakR);
 

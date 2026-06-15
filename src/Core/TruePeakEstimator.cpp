@@ -88,6 +88,27 @@ float TruePeakEstimator::applyPhase(const float* delay, int pos,
     return acc;
 }
 
+float TruePeakEstimator::truePeakAt(const float* delay, int delayLen, int pos) noexcept
+{
+    // Max over all 4 polyphase phases of the kFIRTaps samples ending at @p pos.
+    // Generalized ring indexing (delayLen may differ from kFIRTaps) so this
+    // works against BrickwallLimiter's wide lookahead ring as well as the
+    // estimator's own kFIRTaps-length delay line.
+    float peak = 0.0f;
+    for (int ph = 0; ph < kUpsampleFactor; ++ph)
+    {
+        float acc = 0.0f;
+        for (int k = 0; k < kFIRTaps; ++k)
+        {
+            const int readIdx = (pos - k + delayLen) % delayLen;
+            acc += kPolyCoeffs[ph][k] * delay[readIdx];
+        }
+        const float a = acc < 0.0f ? -acc : acc;
+        if (a > peak) peak = a;
+    }
+    return peak;
+}
+
 // ── Audio thread ──────────────────────────────────────────────────────────────
 
 void TruePeakEstimator::processBlock(const juce::AudioBuffer<float>& buf) noexcept
