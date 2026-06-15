@@ -366,6 +366,35 @@ TEST_CASE("AutoMasteringEngine publishes live analyzer snapshots", "[audio_engin
     CHECK(stereo.stereoWidth > 0.0f);
 }
 
+TEST_CASE("HarmonicExciter oversampled saturation stays bounded when enabled (ENHANCERS-1)", "[audio_engine][mastering]")
+{
+    // The exciter is disabled by default, so no existing test exercises its
+    // (now oversampled) process path. Enable it with heavy drive on a hot HF
+    // sine — the aliasing-prone case — and assert the output stays finite and
+    // bounded (no NaN/Inf blow-up from the 4x round-trip or the Padé tanh).
+    HarmonicExciter exciter;
+    exciter.prepare(48000.0, 512);
+    exciter.setDrive(12.0f);     // +12 dB — heavy drive
+    exciter.setDryWet(0.5f);
+    exciter.setEnabled(true);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 20; ++block)
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 5000.0f, 48000.0f, 0.9f);
+        exciter.processBlock(buffer);
+    }
+
+    float peak = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            peak = std::max(peak, std::abs(buffer.getSample(ch, i)));
+
+    CHECK(std::isfinite(peak));
+    CHECK(peak < 2.0f);  // dry+wet of bounded signals; tanh saturates, can't explode
+}
+
 TEST_CASE("AutoMasteringEngine applies only validated neural mastering plans", "[audio_engine][mastering][NeuralMasteringController]")
 {
     AutoMasteringEngine engine;
