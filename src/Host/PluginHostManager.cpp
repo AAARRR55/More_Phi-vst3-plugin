@@ -242,10 +242,17 @@ void PluginHostManager::unloadPlugin()
     // state-restore paths.
     if (hostedPlugin)
     {
-        // Non-audio lifecycle paths must not destroy the instance while an
-        // exclusive state capture/restore is holding the raw plugin pointer.
-        while (exclusivePluginUseRequested_.load(std::memory_order_acquire))
-            juce::Thread::yield();
+        // H-3 FIX: Bounded wait for an in-flight exclusive state capture/restore.
+        // The previous unbounded `while (...) yield()` could hang the destructor
+        // forever if a beginExclusivePluginUse() caller faulted without calling
+        // endExclusivePluginUse() — which hangs the DAW on track removal. After a
+        // 200 ms grace window (exclusive ops are sub-millisecond in practice),
+        // force-release the flag and proceed. NOTE: the activePluginUsers_ wait
+        // below is intentionally still unbounded — proceeding past a live audio
+        // lease would be a use-after-free, so we must wait for audio to drain.
+        for (int i = 0; i < 200 && exclusivePluginUseRequested_.load(std::memory_order_acquire); ++i)
+            juce::Thread::sleep(1);
+        exclusivePluginUseRequested_.store(false, std::memory_order_release);
 
         hostedPluginPtr_.store(nullptr, std::memory_order_release);
         while (activePluginUsers_.load(std::memory_order_acquire) > 0)

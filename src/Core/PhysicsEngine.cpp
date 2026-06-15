@@ -13,13 +13,17 @@ void PhysicsEngine::updateElastic(ElasticState& s,
                                    float targetX, float targetY,
                                    ElasticPreset preset, float dt) noexcept
 {
-    // H-5 FIX: Reference constants are tuned at 44100 Hz with a 512-sample block.
-    // dt = blockSize / sampleRate varies across hosts. To keep spring behavior
-    // consistent, we scale stiffness and damping by the ratio of the reference dt
-    // to the actual dt. This normalizes the spring frequency and damping ratio.
-    constexpr float kRefDt = 512.0f / 44100.0f;  // ~0.0116
-    const float dtScale = (dt > 1e-8f) ? kRefDt / dt : 1.0f;
-
+    // H-2 FIX: The preset constants below are the TRUE physical stiffness and
+    // damping, tuned at 44100 Hz / 512-sample block (where dt == kRefDt and the
+    // previous dtScale compensation was a no-op). Sample-rate independence comes
+    // from the adaptive sub-stepping below: it advances the spring by the full
+    // physical dt every block regardless of how that dt is sliced, so the spring
+    // settles in the same wall-clock time at any sample rate / block size.
+    //
+    // The previous code ALSO multiplied stiffness & damping by kRefDt/dt, which
+    // double-compensated: scaling k and c by s scales BOTH the natural frequency
+    // and the damping ratio by sqrt(s), making the spring faster and less bouncy
+    // at higher sample rates (a 96 kHz project felt different from 44.1 kHz).
     float stiffness, damping;
     switch (preset)
     {
@@ -28,10 +32,6 @@ void PhysicsEngine::updateElastic(ElasticState& s,
         case ElasticPreset::Heavy:  stiffness = 8.0f; damping = 0.95f; break;
         default:                    stiffness = 2.0f; damping = 0.7f; break;
     }
-
-    // Apply sample-rate compensation
-    stiffness *= dtScale;
-    damping   *= dtScale;
 
     // C-D1 FIX: Adaptive sub-stepping for stability with large dt
     const float maxStableDt = 1.0f / (2.0f * std::sqrt(std::max(stiffness, 0.01f)));

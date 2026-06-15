@@ -42,8 +42,9 @@ TEST_CASE("PhysicsEngine::updateElastic: position converges toward target", "[ph
         PhysicsEngine::updateElastic(s, targetX, targetY, ElasticPreset::Medium, dt);
 
     // Should be significantly closer than initial (0,0) to target.
-    // dtScale compensation (kRefDt/dt) makes the spring converge more slowly
-    // at 60fps than at the reference 44100/512 rate, so use generous tolerance.
+    // (H-2: the dtScale double-compensation was removed; the spring now uses
+    // true physical stiffness with adaptive sub-stepping, converging promptly
+    // at any frame rate. Tolerance kept generous for stability.)
     REQUIRE(std::abs(s.x - targetX) < 0.3f);
     REQUIRE(std::abs(s.y - targetY) < 0.3f);
 }
@@ -76,6 +77,36 @@ TEST_CASE("PhysicsEngine::updateElastic: is noexcept", "[physics]")
 {
     ElasticState s{};
     STATIC_REQUIRE(noexcept(PhysicsEngine::updateElastic(s, 0.f, 0.f, ElasticPreset::Medium, 0.016f)));
+}
+
+TEST_CASE("PhysicsEngine::updateElastic: sample-rate independent (H-2)", "[physics]")
+{
+    // The spring must simulate the same physical system regardless of the host's
+    // sample rate / block size, so a project authored at 44.1 kHz feels identical
+    // at 96 kHz. Two real DAW configs must track a fine-step reference at matched
+    // wall-clock time. Before the H-2 fix, dtScale made the 96 kHz path diverge
+    // sharply from 44.1 kHz (stiffness scaled by kRefDt/dt).
+    const float targetX = 0.8f, targetY = 0.4f;
+    constexpr double kSeconds = 0.5;
+
+    const auto runForWallClock = [](double sampleRate, int blockSize)
+    {
+        ElasticState s{};
+        const float dt = static_cast<float>(blockSize / sampleRate);
+        const int blocks = static_cast<int>(kSeconds * sampleRate / blockSize);
+        for (int i = 0; i < blocks; ++i)
+            PhysicsEngine::updateElastic(s, targetX, targetY, ElasticPreset::Medium, dt);
+        return s;
+    };
+
+    const auto ref = runForWallClock(44100.0 * 100.0, 512);  // ~1.16 us step — quasi-continuous
+    const auto a   = runForWallClock(44100.0, 512);          // dt ~ 0.0116
+    const auto b   = runForWallClock(96000.0, 512);          // dt ~ 0.00533
+
+    REQUIRE(std::abs(a.x - ref.x) < 0.03f);
+    REQUIRE(std::abs(b.x - ref.x) < 0.03f);
+    REQUIRE(std::abs(a.y - ref.y) < 0.03f);
+    REQUIRE(std::abs(b.y - ref.y) < 0.03f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
