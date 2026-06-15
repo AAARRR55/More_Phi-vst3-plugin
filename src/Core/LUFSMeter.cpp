@@ -4,6 +4,7 @@
  * ITU-R BS.1770-4 integrated loudness meter implementation.
  */
 #include "LUFSMeter.h"
+#include <juce_audio_basics/juce_audio_basics.h>  // juce::ScopedNoDenormals (LUFS-3)
 #include <cstring>
 #include <numeric>
 
@@ -96,6 +97,12 @@ void LUFSMeter::processBlock(const float* const* channels,
                               int numChannels,
                               int numSamples) noexcept
 {
+    // LUFS-3 FIX: K-weighting uses DF2T biquads with near-DC / high-shelf poles;
+    // on silence following a transient the internal state denormalizes and the
+    // recursive filter runs ~50-100x slower, glitching the audio thread. Flush
+    // denormals to zero (FTZ) for the duration of this block.
+    const juce::ScopedNoDenormals noDenormals;
+
     const int nch = std::min(numChannels, kMaxChannels);
 
     for (int i = 0; i < numSamples; ++i)

@@ -53,6 +53,9 @@ class ModulationMatrix
 {
 public:
     static constexpr int MAX_ROUTES = 128;
+    // Max seqlock read retries in apply() before accepting the last snapshot
+    // read (extremely rare — only under sustained concurrent publishing).
+    static constexpr int kMaxReadRetries = 64;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -150,6 +153,34 @@ private:
 
     int maxParamCount_ = 0;
 
+    // MODULATION-1 FIX: seqlock so the audio-thread reader can snapshot the
+    // route buffer without racing publishAndMirror()'s mirror copy — which
+    // overwrites the exact buffer a reader that captured the previous
+    // readIndex_ may still be iterating. Mirrors SnapshotBank's seqlock.
+    // seq_ odd  => a write is in progress (readers retry);
+    // seq_ even => buffers_ / readIndex_ are stable.
+    // writeLock_ serializes any concurrent message-thread writers (UI + MCP).
+    mutable juce::SpinLock          writeLock_;
+    mutable std::atomic<uint32_t>  seq_{ 0 };
+
+    class WriteScope
+    {
+    public:
+        explicit WriteScope(ModulationMatrix& m) noexcept : m_(m) { m_.beginWrite(); }
+        ~WriteScope() { m_.endWrite(); }
+    private:
+        ModulationMatrix& m_;
+    };
+    void beginWrite() noexcept
+    {
+        seq_.fetch_add(1, std::memory_order_acq_rel);  // -> odd (write in progress)
+    }
+    void endWrite() noexcept
+    {
+        std::atomic_thread_fence(std::memory_order_release);
+        seq_.fetch_add(1, std::memory_order_release);  // -> even (stable)
+    }
+
     // ── Helpers (message thread — operate on buffers_[writeIndex_]) ───────────
 
     /** Find the first unassigned slot in the write buffer; returns -1 if full. */
@@ -157,6 +188,9 @@ private:
 
     /** Return true if routeId names an assigned slot in the write buffer. */
     bool isValidRouteId(int routeId) const noexcept;
+
+    /** Reset body without acquiring writeLock_ — for callers already holding it. */
+    void resetLocked() noexcept;
 
     /**
      * Atomically publish writeIndex_ as the new read buffer, then flip
