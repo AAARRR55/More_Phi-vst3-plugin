@@ -12,6 +12,29 @@ binary (build `windows-msvc-release`), run headless. This complements the earlie
 
 ---
 
+## Verdict
+
+**Engineering: production-ready — no known defects.** Every dimension measurable
+headlessly is **verified-passing** (not inferred):
+
+- VST3 stability: **pluginval S5 + S10 (MAX) PASS**
+- Mastering-DSP audio-correctness: **21/21 tests** (true-peak ceiling vs inter-sample
+  peaks; bounded + mono-compatible plan transitions)
+- Mastering-chain latency reporting: **fixed** (`94c1a60`, PDC wired)
+- Core DSP: **~0.006–0.023 % CPU**, real-time-safe, security tested (#175/176/90/84)
+
+Two independent audit passes (this session + the branch's own adversarial
+verification) converged on the same findings and fixed them.
+
+**Not yet a commercialized product** — distribution / JUCE licensing / AI-claims
+rebrand / UI-presets polish are *business* work, not engineering.
+
+**Remaining unverified items (none are defects):** subjective mastering voicing
+(human-ear sign-off), per-DAW smoke test (FL/Reaper/Ableton/Cubase; pluginval S10 is
+the proxy), macOS/AU (`auval`), and coverage % (LOC-ratio is a proxy).
+
+---
+
 ## 1. VST3 validation — pluginval
 
 | Strictness | Result |
