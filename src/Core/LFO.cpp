@@ -37,7 +37,7 @@ void LFO::reset() noexcept
 
 void LFO::setRate(float hz) noexcept
 {
-    rate_ = std::clamp(hz, kMinRate, kMaxRate);
+    rate_.store(std::clamp(hz, kMinRate, kMaxRate), std::memory_order_relaxed);
 }
 
 void LFO::setPhaseOffset(float phase) noexcept
@@ -45,25 +45,27 @@ void LFO::setPhaseOffset(float phase) noexcept
     // Wrap to [0, 1)
     phase = std::fmod(phase, 1.0f);
     if (phase < 0.0f) phase += 1.0f;
-    phaseOffset_ = phase;
+    phaseOffset_.store(phase, std::memory_order_relaxed);
 }
 
 void LFO::setSyncDivision(int division) noexcept
 {
     // Clamp to sensible range: 1 (whole note) … 64 (64th note)
-    syncDivision_ = std::clamp(division, 1, 64);
+    syncDivision_.store(std::clamp(division, 1, 64), std::memory_order_relaxed);
 }
 
 // ── Effective rate resolution ─────────────────────────────────────────────────
 
 float LFO::effectiveRate() const noexcept
 {
-    if (!tempoSync_) return rate_;
+    if (!tempoSync_.load(std::memory_order_relaxed)) return rate_.load(std::memory_order_relaxed);
 
     // Tempo sync: one cycle = (division / bpm) * 60 seconds
     // e.g. division=4 (quarter note), bpm=120 → rate = 120/60/4 = 0.5 Hz
-    const float safeBpm   = bpm_ > 0.0f ? bpm_ : 120.0f;
-    const float safeDivision = syncDivision_ > 0 ? static_cast<float>(syncDivision_) : 4.0f;
+    const float bpm = bpm_.load(std::memory_order_relaxed);
+    const float safeBpm = bpm > 0.0f ? bpm : 120.0f;
+    const int   div = syncDivision_.load(std::memory_order_relaxed);
+    const float safeDivision = div > 0 ? static_cast<float>(div) : 4.0f;
     return (safeBpm / 60.0f) / safeDivision;
 }
 
@@ -128,12 +130,12 @@ float LFO::process(float dt) noexcept
         phase_ = std::fmod(phase_, 1.0f);
 
     // Apply offset for read (do not mutate phase_)
-    float readPhase = phase_ + phaseOffset_;
+    float readPhase = phase_ + phaseOffset_.load(std::memory_order_relaxed);
     if (readPhase >= 1.0f) readPhase -= 1.0f;
 
     float output = 0.0f;
 
-    switch (shape_)
+    switch (static_cast<LFOShape>(shape_.load(std::memory_order_relaxed)))
     {
         case LFOShape::Sine:
             output = sine(readPhase);

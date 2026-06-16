@@ -13,6 +13,7 @@
 #pragma once
 
 #include "ModulationTypes.h"
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 
@@ -47,33 +48,36 @@ public:
 
     // ── Parameter setters (message thread) ────────────────────────────────────
 
-    void setShape(LFOShape shape) noexcept    { shape_ = shape; }
+    void setShape(LFOShape shape) noexcept    { shape_.store(static_cast<int>(shape), std::memory_order_relaxed); }
     void setRate(float hz) noexcept;          // 0.01 – 50 Hz
     void setPhaseOffset(float phase) noexcept; // 0.0 – 1.0
-    void setTempoSync(bool synced) noexcept   { tempoSync_ = synced; }
-    void setBPM(float bpm) noexcept           { bpm_ = bpm; }
+    void setTempoSync(bool synced) noexcept   { tempoSync_.store(synced, std::memory_order_relaxed); }
+    void setBPM(float bpm) noexcept           { bpm_.store(bpm, std::memory_order_relaxed); }
     void setSyncDivision(int division) noexcept; // 1=whole, 2=half, 4=quarter …
 
     // ── Getters ───────────────────────────────────────────────────────────────
 
-    LFOShape getShape()      const noexcept { return shape_; }
-    float    getRate()       const noexcept { return rate_; }
-    float    getPhaseOffset()const noexcept { return phaseOffset_; }
-    bool     getTempoSync()  const noexcept { return tempoSync_; }
-    float    getBPM()        const noexcept { return bpm_; }
-    int      getSyncDivision()const noexcept{ return syncDivision_; }
+    LFOShape getShape()      const noexcept { return static_cast<LFOShape>(shape_.load(std::memory_order_relaxed)); }
+    float    getRate()       const noexcept { return rate_.load(std::memory_order_relaxed); }
+    float    getPhaseOffset()const noexcept { return phaseOffset_.load(std::memory_order_relaxed); }
+    bool     getTempoSync()  const noexcept { return tempoSync_.load(std::memory_order_relaxed); }
+    float    getBPM()        const noexcept { return bpm_.load(std::memory_order_relaxed); }
+    int      getSyncDivision()const noexcept{ return syncDivision_.load(std::memory_order_relaxed); }
 
 private:
     // ── State ─────────────────────────────────────────────────────────────────
 
     float       phase_       = 0.0f;
-    float       rate_        = 1.0f;       // Hz (after tempo-sync resolution)
-    float       phaseOffset_ = 0.0f;       // 0.0 – 1.0
-    LFOShape    shape_       = LFOShape::Sine;
     double      sampleRate_  = 48000.0;
-    bool        tempoSync_   = false;
-    float       bpm_         = 120.0f;
-    int         syncDivision_= 4;          // quarter note by default
+
+    // MOD-4: source parameters are written from the message thread (setters) and
+    // read on the audio thread (process/effectiveRate) — atomics prevent torn reads.
+    std::atomic<float> rate_        { 1.0f };       // Hz
+    std::atomic<float> phaseOffset_ { 0.0f };       // 0.0 – 1.0
+    std::atomic<int>   shape_       { static_cast<int>(LFOShape::Sine) };
+    std::atomic<bool>  tempoSync_   { false };
+    std::atomic<float> bpm_         { 120.0f };
+    std::atomic<int>   syncDivision_{ 4 };          // quarter note by default
 
     // S&H / Random state
     float       shValue_     = 0.0f;       // current latched value (S&H)
