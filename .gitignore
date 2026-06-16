@@ -130,3 +130,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# pluginval validation tool (downloaded, not source)
+tools/pluginval.exe
+tools/pluginval.zip
