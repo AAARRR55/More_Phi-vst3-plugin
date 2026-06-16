@@ -109,6 +109,34 @@ Three thread domains with strict boundaries:
                     └──────────────────────────────────────────────┘
 ```
 
+### Mastering-chain routing (important clarification)
+
+The pipeline above is the **default real-time audio path** and terminates at the
+hosted plugin. The mastering processors — `BrickwallLimiter`,
+`MultibandDynamicsProcessor`, `AdaptiveEQ`, `StereoImager`, `HarmonicExciter`,
+`LoudnessNormalizer`, `AutoMasteringEngine` — are owned by `MorePhiProcessor`
+but are **not** in this default signal path:
+
+- In `processBlock`, `AutoMasteringEngine::analyzeBlock(buffer)` runs as
+  **measurement only** (metering + neural-mastering input). It does not alter the
+  buffer. See the in-source comment: *"measures the final audio … without running
+  the autonomous mastering processor."*
+- The mastering processors **apply** audio changes only when a **validated
+  neural-mastering plan** is executed (`AutoMasteringEngine`, gated by
+  `NeuralMasteringSafetyPolicy`), on the message/background thread — never on the
+  default audio path.
+
+Consequences (verified 2026-06-16, see `validation/2026-06-16_headless_validation_findings.md`):
+
+- Default-operation CPU is morph + modulation + analysis + output gain (+ hosted
+  plugin); the heavy mastering/oversampling DSP engages **only when a plan runs**.
+- Reported latency is **0** in the default state; mastering processors add latency
+  only when a plan engages them.
+- A default headless render with **no hosted inner plugin** produces bit-exact
+  silence (the hosted-plugin stage has nothing to route through). Exercising the
+  mastering chain requires a hosted plugin + a triggered plan (DAW/MCP context),
+  not a bare render.
+
 ## State Persistence
 
 `getStateInformation()` / `setStateInformation()` serialize:

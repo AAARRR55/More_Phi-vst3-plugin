@@ -9,7 +9,7 @@
  * - Seqlock allows concurrent reads without locks, writers get exclusive access
  *
  * MEMORY:
- * - slots_ is heap-allocated (unique_ptr) to avoid placing ~384 KB of raw
+ * - slots_ is heap-allocated (unique_ptr) to avoid placing ~97 KB of raw
  *   parameter data on the plugin's stack and triggering stack-overflow in
  *   hosts that use small thread stacks (e.g. FL Studio).
  */
@@ -328,7 +328,10 @@ private:
     mutable juce::SpinLock chunksLock_;
 
     // Heap-allocated to keep SnapshotBank (and its owner MorePhiProcessor)
-    // off the stack. Each ParameterState holds 2048 floats; 12 slots = ~384 KB.
+    // off the stack. Each ParameterState holds 2048 floats; 12 slots ≈ 96.8 KB
+    // (12 × 2048 × 4 B = 98,304 B = 96.0 KB + per-slot overhead → 96.8 KB
+    // measured via sizeof in the benchmark memory test). NOTE: was previously
+    // documented as ~384 KB, stale from when MAX_PARAMETERS was larger.
     std::unique_ptr<std::array<ParameterState, NUM_SLOTS>> slots_;
     std::atomic<int> preparedParamCount_{0};
     std::atomic<RecallMode> recallMode_{RecallMode::Fast};
