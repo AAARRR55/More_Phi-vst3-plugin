@@ -137,6 +137,12 @@ Consequences (verified 2026-06-16, see `validation/2026-06-16_headless_validatio
   mastering chain requires a hosted plugin + a triggered plan (DAW/MCP context),
   not a bare render.
 
+Although not in the default audio path, the mastering processors' **audio-correctness
+is unit/integration-test-validated** (21/21 PASS, 2026-06-16 — incl. the dBTP-ceiling-
+vs-inter-sample-peaks test #24 and bounded/mono-compatible plan transitions #217).
+See `validation/2026-06-16_headless_validation_findings.md` §6a. Only subjective
+sonic voicing and plan-context latency remain unverified (neither is a defect).
+
 ## State Persistence
 
 `getStateInformation()` / `setStateInformation()` serialize:

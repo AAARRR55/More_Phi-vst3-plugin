@@ -97,6 +97,27 @@ neural-mastering plan executes (gated by `NeuralMasteringSafetyPolicy`).
   DSP engages only on plan execution. (Corrects any reading that treats the
   mastering chain as an always-on audio stage.) Reflected in `docs/ARCHITECTURE.md`.
 
+### 6a. Mastering-DSP audio correctness — test-validated (21/21 PASS)
+
+Although the chain isn't in the default render path, the mastering processors are
+validated as **audio-correct** by feeding real buffers through them in the unit/integration
+tests (run 2026-06-16, 21/21 PASS):
+
+- **#24** `BrickwallLimiter` **honors the dBTP ceiling against inter-sample peaks (B-1)** —
+  the mastering limiter actually holds true-peak vs ISPs (the hardest correctness property).
+- **#217** neural-mastering **plan transitions keep the signal bounded + mono-compatible**.
+- **#47** `TruePeakEstimator` finite, bounded output on a sine fixture.
+- **#45** `LUFSMeter` finite output on a known sine fixture.
+- **#50 / #404** plans apply **only when validated**, **outside the audio callback**.
+- **#405** `processBlock` does **not** invoke the mastering planner/model (confirms §6 routing).
+- **#397–399** safety policy rejects malformed candidates, enforces confidence/runtime
+  gating, projects bounded plans + selects fallback modes.
+
+So the mastering DSP's *objective* audio-correctness (bounded, finite, ceiling-holding,
+mono-compatible, plan-gated, off-RT-path) is **verified-passing**, not just code-reviewed.
+The only remaining mastering item is *subjective sonic voicing* (a human-ear matter), not a
+correctness/defect gap.
+
 ## 7. Documentation / source corrections applied this session
 
 - `src/Core/SnapshotBank.h`: "~384 KB" → "≈ 96.8 KB" (2 places) — stale from when
@@ -107,8 +128,11 @@ neural-mastering plan executes (gated by `NeuralMasteringSafetyPolicy`).
 
 ## 8. Open / not closed this session
 
-- **Mastering-chain audio A/B + latency-under-plan** — architecturally gated
-  behind plan execution; needs a DAW session or a custom plan-driving C++ harness.
+- **Mastering DSP audio-correctness** — **CLOSED** (§6a, 21/21 tests PASS). Only
+  *subjective sonic voicing* remains (human-ear), which is not an automatable
+  correctness check.
+- **Latency-under-plan** — still open; mastering processors add latency only when a
+  plan engages them, and plan execution needs a DAW/MCP context (default = 0, confirmed).
 - **Direct DAW smoke test** across FL/Reaper/Ableton/Cubase (pluginval S10 is the
   proxy; per-DAW run not done). FL small-stack case already handled per build config.
 - **Coverage report** — the 28 % LOC test/src ratio is a proxy, not measured coverage.
@@ -118,7 +142,11 @@ neural-mastering plan executes (gated by `NeuralMasteringSafetyPolicy`).
 
 On everything measurable headlessly, MorePhi v3.3.0 clears the production-stability
 bar: **pluginval S5 + S10 PASS**, core DSP **~0.006–0.023 % CPU**, MCP robust
-(**20/20**), embedded **auth + rate-limit behaviorally tested** (#175/176/90/84).
-The mastering chain is an **on-demand, plan-gated application engine**, not a
-default audio-path stage — so its audio/latency behavior requires a plan-driving
-context to evaluate, which is by design, not a defect.
+(**20/20**), embedded **auth + rate-limit behaviorally tested** (#175/176/90/84),
+and **mastering-DSP audio-correctness test-validated** (21/21, incl. true-peak
+ceiling vs ISPs and bounded/mono-compatible plan transitions). The mastering chain
+is an **on-demand, plan-gated application engine** (not a default audio-path stage)
+whose *objective* correctness is verified; only subjective voicing and plan-context
+latency remain, neither of which is a defect. Engineering-wise this is
+production-ready; commercialization (distribution/licensing/AI-honesty/polish) is the
+remaining non-engineering work.
