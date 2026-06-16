@@ -905,7 +905,14 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
         const auto valuesJson = plan.value("values", json::array());
         std::vector<MorePhiProcessor::ParamCommand> commands;
         commands.reserve(valuesJson.size());
-        for (size_t i = 0; i < valuesJson.size(); ++i)
+        // MCP-CONTROL-04: bound the rollback to the project's parameter ceiling
+        // (MAX_PARAMETERS=2048). A tampered/oversized ledger could otherwise queue
+        // commands for non-existent param indices, and enqueueParameterBatch
+        // rejects the ENTIRE batch if any index >= MAX_PARAMETERS — breaking the
+        // whole rollback. (writeParameter still drops any index beyond the live
+        // hosted-plugin count, so this is robustness, not memory-safety.)
+        constexpr int kMaxRollbackParamIndex = 2047;
+        for (size_t i = 0; i < valuesJson.size() && static_cast<int>(i) <= kMaxRollbackParamIndex; ++i)
         {
             if (!valuesJson[i].is_number())
                 continue;
