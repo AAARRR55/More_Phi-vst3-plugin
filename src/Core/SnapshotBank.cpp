@@ -193,6 +193,9 @@ bool SnapshotBank::isOccupied(int slot) const noexcept
 
         bool occupied = (*slots_)[slot].occupied;
 
+        // C-1: acquire fence pairs with writer's release fence (seqlock
+        // correctness on weakly-ordered CPUs; see tryReadLocked).
+        std::atomic_thread_fence(std::memory_order_acquire);
         uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
         if (seq1 == seq2)
             return occupied;
@@ -224,6 +227,9 @@ bool SnapshotBank::hasAnyOccupied() const noexcept
             }
         }
 
+        // C-1: acquire fence pairs with writer's release fence (seqlock
+        // correctness on weakly-ordered CPUs; see tryReadLocked).
+        std::atomic_thread_fence(std::memory_order_acquire);
         uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
         if (seq1 == seq2)
             return anyOccupied;
@@ -252,6 +258,9 @@ int SnapshotBank::getOccupiedSlots(std::array<int, NUM_SLOTS>& occupiedSlots) co
                 occupiedSlots[occupiedCount++] = i;
         }
 
+        // C-1: acquire fence pairs with writer's release fence (seqlock
+        // correctness on weakly-ordered CPUs; see tryReadLocked).
+        std::atomic_thread_fence(std::memory_order_acquire);
         uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
         if (seq1 == seq2)
             return occupiedCount;

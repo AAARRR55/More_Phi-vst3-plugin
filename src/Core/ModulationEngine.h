@@ -164,6 +164,28 @@ private:
     std::array<float,            NUM_MACROS>    macros_{};
     std::array<StepSequencer,    NUM_STEP_SEQS> stepSequencers_;
 
+    // MOD-4: macros_ is written from the message thread (setMacro/fromXml) and
+    // read on the audio thread (processBlock). A seqlock lets processBlock
+    // snapshot the array without tearing; macroWriteLock_ serializes writers.
+    mutable juce::SpinLock        macroWriteLock_;
+    mutable std::atomic<uint32_t> macroSeq_{ 0 };
+    static constexpr int          kMacroReadRetries = 64;
+
+    class MacroWriteScope
+    {
+    public:
+        explicit MacroWriteScope(ModulationEngine& e) noexcept : e_(e) { e_.beginMacroWrite(); }
+        ~MacroWriteScope() { e_.endMacroWrite(); }
+    private:
+        ModulationEngine& e_;
+    };
+    void beginMacroWrite() noexcept { macroSeq_.fetch_add(1, std::memory_order_acq_rel); }
+    void endMacroWrite() noexcept
+    {
+        std::atomic_thread_fence(std::memory_order_release);
+        macroSeq_.fetch_add(1, std::memory_order_release);
+    }
+
     /**
      * Per-block source value accumulator, indexed by ModSourceId.
      * Written entirely in updateSourceValues(); read by ModulationMatrix::apply().

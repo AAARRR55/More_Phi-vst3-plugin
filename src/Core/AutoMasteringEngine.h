@@ -99,6 +99,12 @@ public:
     [[nodiscard]] float getTruePeak_dBTP()  const noexcept { return analysisTruePeak_.getTruePeak_dBTP(); }
     [[nodiscard]] float getLimiterGainReductionDB() const noexcept { return limiter_.getGainReductionDB(); }
     [[nodiscard]] float getGainReductionDB(int band) const noexcept { return dynamics_.getGainReductionDB(band); }
+
+    /** ENHANCERS-1/PDC: total lookahead latency of the mastering chain in
+     *  host-rate samples (brickwall-limiter lookahead + exciter oversampling
+     *  when enabled). Returns 0 when the chain is inactive (dormant), so the
+     *  shipped plugin's reported latency is unchanged until mastering is engaged. */
+    [[nodiscard]] int getMasteringChainLatency() const noexcept;
     [[nodiscard]] MeterWindowAccumulator::WindowStatistics computeMeterWindow(float windowSeconds) const noexcept
     {
         return meterWindow_.computeWindow(windowSeconds);

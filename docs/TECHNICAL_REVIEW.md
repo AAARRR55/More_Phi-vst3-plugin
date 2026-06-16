@@ -442,3 +442,35 @@ Independent confirmation (grep of `autoMasteringEngine_.` in `PluginProcessor.cp
 3. **LUFS-3** — `ScopedNoDenormals` in `LUFSMeter::processBlock` (live RT risk, one line).
 4. **LUFS-7** — incremental LUFS/LRA accumulators (live perf, larger).
 5. **Pre-enablement (before mastering is wired in):** LUFS-1 (chain reorder), ENHANCERS-1 (oversampled exciter), B-1 follow-up (oversampled gain), MULTIBAND-2/3 (stereo-link + per-sample detector).
+
+---
+
+## 12. Adversarial Verification of Shipped Fixes (2026-06-16)
+
+After applying the §1–§11 fixes, a 5-agent workflow ran independent skeptics over the **five subtlest** shipped fixes — reading the actual committed code for correctness bugs the 421/421 test suite *cannot* catch (memory ordering, DSP control-loop stability, PDC/latency). Result:
+
+| Fix | Verdict | Notes |
+|---|---|---|
+| MODULATION-1 | ✅ correct | seqlock retry, writeLock serialization, no deadlock — all sound. (Low-sev latent: query methods `getRoute`/`toXml` aren't locked; fine while message-thread-only.) |
+| LUFS-1 | ✅ correct | limiter is terminal; normalizer feedback loop is convergent negative feedback (bounded gain, ~1 s ramp, 10 Hz update on a multi-second integrated window — cannot oscillate); reported LUFS matches delivered. |
+| MULTIBAND-2/3/4 | ✅ correct | stereo-link + per-sample + GR-meter-without-makeup all verified. (Low-sev hygiene: no `ScopedNoDenormals` in this TU — covered by the processor-level guard; stale GR for disabled bands; dead legacy `followers[]`/`gainSmoothed[]` members.) |
+| **C-1** | 🐞 **bug — found & fixed** | see below |
+| **ENHANCERS-1** | 🐞 **bug (latent) — documented** | see below |
+
+### C-1 was INCOMPLETE → fixed (`5a451f8`)
+The C-1 fix added `std::atomic_thread_fence(acquire)` to `tryReadLocked`, `copySlotValues`, and `toXml` — but **four sibling seqlock readers were missed**: `isOccupied`, `hasAnyOccupied`, `getOccupiedSlots` (`SnapshotBank.cpp`) and `copyStateChunkInternal` (`SnapshotBank.h`). All read non-atomic `ParameterState::occupied` between two acquire seq loads with no intervening fence — the same torn-read defect class C-1 targets, on weakly-ordered CPUs (ARM/Apple Silicon).
+
+**Two are on the audio thread:** `hasAnyOccupied()` is called every block in `MorphProcessor::process` (the morph gate), and `isOccupied()` in the MIDI snapshot callback. A torn read of `occupied` that validates as consistent can intermittently **drop morph processing for a block** or **miss a MIDI snapshot trigger** — a real, platform-specific bug the x86 CI cannot catch.
+
+**Fix (`5a451f8`):** added the acquire fence before the `seq2` load in all four readers, mirroring the already-fixed paths. Verified: clean build, 421/421 tests. (This is the highest-value outcome of the verification pass — it caught a live audio-thread bug that review + tests both missed.)
+
+### ENHANCERS-1 PDC gap — latent, documented (not yet fixed)
+The oversampling itself is correct (aliasing suppressed, no lost signal, dry/wet aligned, HP coefficients at the 4× rate) — **but its latency is never reported to the DAW**. `HarmonicExciter::os_.getLatencyInSamples()` has no caller anywhere in `src/`; `LatencyManager::setMasteringChainLatency` is never invoked (the slot is dead); `PluginProcessor::updateReportedLatency` does not query it; and `AutoMasteringEngine::applyPlan`/`applyValidatedPlan` toggle the exciter without signaling `latencyConfigDirty_`. When the exciter is enabled, the whole mastering output shifts by ~1–3 ms that the DAW does not compensate — desyncing against dry/parallel paths and sample-accurate automation. (Latent: exciter is off by default and the mastering chain is dormant.)
+
+**Fix plan (focused follow-up):**
+1. Add `int HarmonicExciter::getLatencyInSamples() const noexcept { return os_.getLatencyInSamples(); }`.
+2. In `PluginProcessor::updateReportedLatency`, compute `chainLat = (exciterEnabled ? exciterLatency : 0) + limiter_.getLookaheadSamples()` and call `latencyManager_.setMasteringChainLatency(chainLat)` before `setLatencySamples(getTotal())` — wiring the currently-dead slot.
+3. In `AutoMasteringEngine::applyPlan`/`applyValidatedPlan`, after toggling `exciter_.setEnabled(...)`, signal the processor to set `latencyConfigDirty_` and re-run `updateReportedLatency()` on the message thread so PDC updates live.
+
+### Verification verdict
+The shipped fixes are fundamentally sound; MODULATION-1/LUFS-1/MULTIBAND are correct as committed. The verification caught one live audio-thread bug (C-1 incomplete, now fixed) and one latent PDC defect (ENHANCERS-1, with a precise fix plan above). The exercise validated the value of independent adversarial review for correctness properties that tests cannot observe (memory ordering, control-loop stability, latency reporting).

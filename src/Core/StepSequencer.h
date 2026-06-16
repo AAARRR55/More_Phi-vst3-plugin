@@ -16,8 +16,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <juce_core/juce_core.h>
 
 namespace more_phi {
 
@@ -79,7 +81,12 @@ public:
     void setSmoothing(float amount) noexcept;
 
     /** Set traversal direction. */
-    void setDirection(Direction dir) noexcept { direction_ = dir; }
+    void setDirection(Direction dir) noexcept
+    {
+        const juce::SpinLock::ScopedLockType lock(writeLock_);
+        WriteScope ws(*this);
+        direction_ = dir;
+    }
 
     // ── Getters ───────────────────────────────────────────────────────────────
 
@@ -105,6 +112,29 @@ private:
     bool      pingPongForward_= true;
     double    sampleRate_     = 48000.0;
 
+    // MOD-4: config (steps_, stepCount_, beatsPerStep_, smoothing_, direction_)
+    // is written from the message thread (setters) and read on the audio thread
+    // (process). steps_ is an array, so scalar atomics don't suffice — a seqlock
+    // lets process() snapshot the config without tearing. Mirrors ModulationMatrix.
+    mutable juce::SpinLock          writeLock_;
+    mutable std::atomic<uint32_t>   seq_{ 0 };
+    static constexpr int            kMaxReadRetries = 64;
+
+    class WriteScope
+    {
+    public:
+        explicit WriteScope(StepSequencer& s) noexcept : s_(s) { s_.beginWrite(); }
+        ~WriteScope() { s_.endWrite(); }
+    private:
+        StepSequencer& s_;
+    };
+    void beginWrite() noexcept { seq_.fetch_add(1, std::memory_order_acq_rel); }
+    void endWrite() noexcept
+    {
+        std::atomic_thread_fence(std::memory_order_release);
+        seq_.fetch_add(1, std::memory_order_release);
+    }
+
     // ── PRNG (xorshift32, lock-free, audio-thread safe) ───────────────────────
 
     uint32_t  rngState_       = 0xDEADBEEFu; // non-zero seed
@@ -114,8 +144,9 @@ private:
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Advance currentStep_ according to the direction mode. */
-    void advanceStep() noexcept;
+    /** Advance currentStep_ according to the direction mode (using the snapshotted
+     *  step count + direction so it doesn't race a concurrent setter). */
+    void advanceStep(int stepCount, Direction dir) noexcept;
 };
 
 } // namespace more_phi

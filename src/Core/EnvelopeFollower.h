@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cmath>
 
 namespace more_phi {
@@ -60,16 +61,20 @@ public:
 
     float getAttack()      const noexcept { return attackMs_; }
     float getRelease()     const noexcept { return releaseMs_; }
-    float getSensitivity() const noexcept { return sensitivity_; }
+    float getSensitivity() const noexcept { return sensitivity_.load(std::memory_order_relaxed); }
 
 private:
     // ── State ─────────────────────────────────────────────────────────────────
 
     float  envelope_      = 0.0f;
-    float  attackCoeff_   = 0.0f;
-    float  releaseCoeff_  = 0.0f;
-    float  sensitivity_   = 1.0f;
     double sampleRate_    = 48000.0;
+
+    // MOD-4: coefficients/sensitivity are written from the message thread
+    // (setAttack/setRelease/setSensitivity) and read on the audio thread
+    // (process) — atomics prevent torn reads.
+    std::atomic<float> attackCoeff_  { 0.0f };
+    std::atomic<float> releaseCoeff_ { 0.0f };
+    std::atomic<float> sensitivity_  { 1.0f };
 
     // Shadow values used to recompute coefficients when sample rate is set
     float  attackMs_  = 10.0f;

@@ -186,6 +186,20 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     monoChecker_.accumulateSamples(buf);
 }
 
+int AutoMasteringEngine::getMasteringChainLatency() const noexcept
+{
+    // ENHANCERS-1/PDC: report 0 while the chain is dormant (the shipped plugin
+    // only meters via analyzeBlock), so the live plugin's reported latency is
+    // unchanged. When mastering is engaged, report the lookahead stages: the
+    // brickwall limiter (always in the chain) plus the exciter's 4x oversampling
+    // delay when it is enabled. Both were previously never reported (the
+    // masteringChainLatency slot in LatencyManager was dead).
+    if (!active_.load(std::memory_order_relaxed)) return 0;
+    int latency = limiter_.getLookaheadSamples();
+    latency += exciter_.getLatencyInSamples();  // 0 when the exciter is disabled
+    return latency;
+}
+
 void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept
 {
     const int ns  = buf.getNumSamples();
