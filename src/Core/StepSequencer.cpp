@@ -55,23 +55,32 @@ float StepSequencer::nextRandom() noexcept
 
 void StepSequencer::setStepCount(int count) noexcept
 {
-    stepCount_   = std::clamp(count, 1, MAX_STEPS);
-    currentStep_ = std::min(currentStep_, stepCount_ - 1);
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
+    stepCount_ = std::clamp(count, 1, MAX_STEPS);
+    // currentStep_ is audio-internal state; its bounds are handled in process()
+    // (modulo/clamp), so we don't touch it here — that would race the audio thread.
 }
 
 void StepSequencer::setStepValue(int step, float value) noexcept
 {
     if (step < 0 || step >= MAX_STEPS) return;
-    steps_[step] = std::clamp(value, -1.0f, 1.0f);
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
+    steps_[static_cast<size_t>(step)] = std::clamp(value, -1.0f, 1.0f);
 }
 
 void StepSequencer::setRate(float beatsPerStep) noexcept
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
     beatsPerStep_ = std::clamp(beatsPerStep, kMinBeatsPerStep, kMaxBeatsPerStep);
 }
 
 void StepSequencer::setSmoothing(float amount) noexcept
 {
+    const juce::SpinLock::ScopedLockType lock(writeLock_);
+    WriteScope ws(*this);
     smoothing_ = std::clamp(amount, 0.0f, 1.0f);
 }
 
@@ -85,25 +94,25 @@ float StepSequencer::getStepValue(int step) const noexcept
 
 // ── Step advancement ──────────────────────────────────────────────────────────
 
-void StepSequencer::advanceStep() noexcept
+void StepSequencer::advanceStep(int stepCount, Direction dir) noexcept
 {
-    switch (direction_)
+    switch (dir)
     {
         case Direction::Forward:
-            currentStep_ = (currentStep_ + 1) % stepCount_;
+            currentStep_ = (currentStep_ + 1) % stepCount;
             break;
 
         case Direction::Backward:
-            currentStep_ = (currentStep_ - 1 + stepCount_) % stepCount_;
+            currentStep_ = (currentStep_ - 1 + stepCount) % stepCount;
             break;
 
         case Direction::PingPong:
             if (pingPongForward_)
             {
                 ++currentStep_;
-                if (currentStep_ >= stepCount_)
+                if (currentStep_ >= stepCount)
                 {
-                    currentStep_     = std::max(0, stepCount_ - 2);
+                    currentStep_     = std::max(0, stepCount - 2);
                     pingPongForward_ = false;
                 }
             }
@@ -112,18 +121,18 @@ void StepSequencer::advanceStep() noexcept
                 --currentStep_;
                 if (currentStep_ < 0)
                 {
-                    currentStep_     = std::min(1, stepCount_ - 1);
+                    currentStep_     = std::min(1, stepCount - 1);
                     pingPongForward_ = true;
                 }
             }
             break;
 
         case Direction::Random:
-            currentStep_ = static_cast<int>(nextRandom() * static_cast<float>(stepCount_));
+            currentStep_ = static_cast<int>(nextRandom() * static_cast<float>(stepCount));
             break;
 
         default:
-            currentStep_ = (currentStep_ + 1) % stepCount_;
+            currentStep_ = (currentStep_ + 1) % stepCount;
             break;
     }
 }
@@ -132,35 +141,58 @@ void StepSequencer::advanceStep() noexcept
 
 float StepSequencer::process(float dt, float bpm) noexcept
 {
-    if (dt <= 0.0f || stepCount_ <= 0)
+    // MOD-4: snapshot the config under the seqlock so a concurrent setter
+    // (setStepValue/setStepCount/setRate/setSmoothing/setDirection from the
+    // message thread) can't tear the steps_ array or the scalar config. Writers
+    // are serialized by writeLock_; the reader is lock-free with bounded retry.
+    std::array<float, MAX_STEPS> localSteps{};
+    int       localStepCount    = 0;
+    float     localBeatsPerStep = 0.25f;
+    float     localSmoothing    = 0.0f;
+    Direction localDir          = Direction::Forward;
+
+    for (int attempt = 0; attempt < kMaxReadRetries; ++attempt)
+    {
+        const uint32_t s1 = seq_.load(std::memory_order_acquire);
+        if ((s1 & 1u) != 0u) continue;
+        localSteps        = steps_;
+        localStepCount    = stepCount_;
+        localBeatsPerStep = beatsPerStep_;
+        localSmoothing    = smoothing_;
+        localDir          = direction_;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        const uint32_t s2 = seq_.load(std::memory_order_acquire);
+        if (s1 == s2) break;
+    }
+
+    if (dt <= 0.0f || localStepCount <= 0)
         return smoothedValue_;
 
     const float safeBpm = bpm > 0.0f ? bpm : 120.0f;
 
-    // Phase increment: beats-per-second × beats-per-step × dt-in-seconds
-    // (bpm/60) = beats/second; multiply by beatsPerStep → steps/second * dt = step-fraction
-    // Actually: phase advances at (beats/sec) * dt per beat per step, so:
-    //   phaseInc = (bpm / 60.0) * dt / beatsPerStep
-    const float phaseInc = (safeBpm / 60.0f) * dt / beatsPerStep_;
+    // Phase increment: (bpm / 60.0) * dt / beatsPerStep
+    const float phaseInc = (safeBpm / 60.0f) * dt / localBeatsPerStep;
     phase_ += phaseInc;
 
     if (phase_ >= 1.0f)
     {
         phase_ = std::fmod(phase_, 1.0f);
-        advanceStep();
+        advanceStep(localStepCount, localDir);
     }
 
-    // Update target from current step
-    targetValue_ = steps_[currentStep_];
+    // Update target from current step (clamp guards against a stepCount shrink
+    // landing currentStep_ out of range for one block until modulo re-aligns it).
+    const int idx = std::clamp(currentStep_, 0, MAX_STEPS - 1);
+    targetValue_ = localSteps[static_cast<size_t>(idx)];
 
     // Apply smoothing: coeff in [0, 0.99] mapped from smoothing_ in [0, 1]
-    if (smoothing_ <= 0.0f)
+    if (localSmoothing <= 0.0f)
     {
         smoothedValue_ = targetValue_;
     }
     else
     {
-        const float coeff = smoothing_ * 0.99f;
+        const float coeff = localSmoothing * 0.99f;
         smoothedValue_    = smoothedValue_ * coeff + targetValue_ * (1.0f - coeff);
     }
 
