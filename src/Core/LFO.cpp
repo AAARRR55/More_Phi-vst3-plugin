@@ -168,8 +168,13 @@ float LFO::process(float dt) noexcept
             {
                 randTarget_ = nextRandom() * 2.0f - 1.0f;
             }
-            // Smooth coefficient: heavier smoothing at higher rates
-            const float smoothCoeff = std::clamp(1.0f - hz * dt * 0.5f, 0.0f, 0.99f);
+            // MOD-5 FIX: smooth toward randTarget_ with a rate-INDEPENDENT time
+            // constant. The previous `1 - hz*dt*0.5` coupled smoothing to the LFO
+            // rate (and was inverted — higher rate gave LESS smoothing) and barely
+            // moved per call, leaving the output stuck near the old target. Use a
+            // fixed ~50 ms tau per process() call.
+            constexpr float kSmoothTauSec = 0.050f;
+            const float smoothCoeff = std::exp(-dt / kSmoothTauSec);
             smoothRand_ = smoothRand_ * smoothCoeff + randTarget_ * (1.0f - smoothCoeff);
             output      = smoothRand_;
             break;

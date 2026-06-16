@@ -107,6 +107,7 @@ void MultibandDynamicsProcessor::reset() noexcept
             bd.followers[ch].reset();
             bd.gainSmoothed[ch] = 1.0f;
         }
+        bd.envLinked = 0.0f;  // MULTIBAND-2/3
         grDB_[b].store(0.f, std::memory_order_relaxed);
     }
 }
@@ -129,8 +130,7 @@ float MultibandDynamicsProcessor::computeCompressorGain(float rmsLinear,
     }
     else if (excess < kneeH)
     {
-        // Soft-knee interpolation
-        const float t = (excess + kneeH) / kneeDB;
+        // Soft-knee interpolation (quadratic blend into compression)
         gainDB = (1.f / ratio - 1.f) * (excess + kneeH) * (excess + kneeH) / (2.f * kneeDB);
     }
     else
@@ -156,41 +156,49 @@ void MultibandDynamicsProcessor::processBlock(juce::AudioBuffer<float> bands[kNu
         juce::AudioBuffer<float>& buf = bands[b];
         const int ns  = buf.getNumSamples();
         const int nch = std::min(buf.getNumChannels(), kMaxChannels);
+        if (ns == 0) continue;
 
-        float worstGR = 1.0f;
+        // MULTIBAND-2/3 FIX: stereo-LINKED, per-SAMPLE detection. Previously
+        // each channel had its own block-RMS detector + gain, so a hard-panned
+        // transient caused L/R gain to diverge (image wander) and the single
+        // block-RMS target could not track intra-block transients. Now one
+        // linked peak detector feeds one gain applied equally to both channels,
+        // updated every sample (which also makes the attack/release coefficients
+        // — already per-sample — behave with the correct time constant).
+        const float attackCoeff  = std::exp(-1.f / (bd.attackMs.load(std::memory_order_relaxed)
+                                            * 0.001f * static_cast<float>(sampleRate_)));
+        const float releaseCoeff = std::exp(-1.f / (bd.releaseMs.load(std::memory_order_relaxed)
+                                            * 0.001f * static_cast<float>(sampleRate_)));
 
-        for (int ch = 0; ch < nch; ++ch)
+        float* L = (nch >= 1) ? buf.getWritePointer(0) : nullptr;
+        float* R = (nch >= 2) ? buf.getWritePointer(1) : nullptr;
+
+        float worstGain = 1.0f;  // MULTIBAND-4: pure compression gain (no makeup) for the meter
+
+        for (int i = 0; i < ns; ++i)
         {
-            float* data = buf.getWritePointer(ch);
+            // Linked peak detector across active channels
+            float det = 0.0f;
+            if (L != nullptr) det = std::abs(L[i]);
+            if (R != nullptr) det = std::max(det, std::abs(R[i]));
 
-            // RMS detection via EnvelopeFollower
-            const float rms = bd.followers[ch].process(data, ns);
+            // Per-sample envelope (attack/release on the detector level)
+            const float coeff = (det > bd.envLinked) ? attackCoeff : releaseCoeff;
+            bd.envLinked = bd.envLinked * coeff + det * (1.0f - coeff);
 
-            // Compute target gain
-            const float targetGain = computeCompressorGain(rms, threshLinear, ratio, kneeDB, makeup);
+            // Compression gain from the smoothed level (makeup applied separately
+            // so the GR meter reads pure compression).
+            const float gain = computeCompressorGain(bd.envLinked, threshLinear, ratio, kneeDB, 1.0f);
+            if (gain < worstGain) worstGain = gain;
 
-            // Smooth gain
-            const float attackCoeff  = std::exp(-1.f / (bd.attackMs.load(std::memory_order_relaxed)
-                                                * 0.001f * static_cast<float>(sampleRate_)));
-            const float releaseCoeff = std::exp(-1.f / (bd.releaseMs.load(std::memory_order_relaxed)
-                                                * 0.001f * static_cast<float>(sampleRate_)));
-
-            for (int i = 0; i < ns; ++i)
-            {
-                if (targetGain < bd.gainSmoothed[ch])
-                    bd.gainSmoothed[ch] = bd.gainSmoothed[ch] * attackCoeff + targetGain * (1.f - attackCoeff);
-                else
-                    bd.gainSmoothed[ch] = bd.gainSmoothed[ch] * releaseCoeff + targetGain * (1.f - releaseCoeff);
-
-                data[i] *= bd.gainSmoothed[ch];
-            }
-
-            if (bd.gainSmoothed[ch] < worstGR) worstGR = bd.gainSmoothed[ch];
+            const float applied = gain * makeup;
+            if (L != nullptr) L[i] *= applied;
+            if (R != nullptr) R[i] *= applied;
         }
 
-        // Update GR meter
-        const float grDB = (worstGR < 1.f && worstGR > 1e-12f)
-                           ? 20.f * std::log10(worstGR) : 0.f;
+        // MULTIBAND-4 FIX: GR meter reports pure compression gain, independent of makeup.
+        const float grDB = (worstGain < 1.f && worstGain > 1e-12f)
+                           ? 20.f * std::log10(worstGain) : 0.f;
         grDB_[b].store(grDB, std::memory_order_relaxed);
     }
 }

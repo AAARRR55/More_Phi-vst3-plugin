@@ -30,6 +30,11 @@ public:
     static constexpr float kAbsoluteGateLUFS   = -70.0f;   // ITU-R BS.1770-4 absolute gate
     static constexpr float kRelativeGateOffset = -10.0f;   // relative gate: ungated_LUFS - 10
     static constexpr int   kHistoryBlocks      = 18000;     // 30 min at 10 blocks/s
+    // LUFS-7: the gated integrated+LRA pass is O(historyCount). Recompute every
+    // commit during warmup (short sessions + tests stay exact), then throttle to
+    // ~once/sec once the history is long enough for the per-commit cost to grow.
+    static constexpr int   kRecomputeWarmup    = 60;        // 6s: always recompute below this
+    static constexpr int   kRecomputeInterval  = 10;        // ~1s between recomputes above warmup
 
 
     LUFSMeter() = default;
@@ -102,6 +107,7 @@ private:
     std::array<float, kHistoryBlocks> blockMS_{};      // per-block K-weighted mean-square
     int historyHead_  { 0 };
     int historyCount_ { 0 };
+    int commitsSinceRecompute_ { 0 };  // LUFS-7: throttle counter for integrated/LRA
 
     std::vector<float> gated_;
     std::vector<float> lraGated_;

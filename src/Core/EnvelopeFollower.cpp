@@ -92,8 +92,13 @@ float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
     const float rms   = std::sqrt(sumSq / static_cast<float>(numSamples));
     const float level = std::clamp(rms * sensitivity_, 0.0f, 1.0f);
 
-    // One-pole filter with asymmetric attack/release
-    const float coeff = (level > envelope_) ? attackCoeff_ : releaseCoeff_;
+    // One-pole filter with asymmetric attack/release.
+    // MOD-3 FIX: attackCoeff_/releaseCoeff_ are per-SAMPLE coefficients, but we
+    // apply a single update per BLOCK. Raise the coefficient to numSamples so the
+    // effective time constant matches the configured ms — previously it tracked
+    // blockSize× too fast (a 10 ms attack became ~0.02 ms at 512 samples/48 kHz).
+    const float baseCoeff = (level > envelope_) ? attackCoeff_ : releaseCoeff_;
+    const float coeff = std::pow(baseCoeff, static_cast<float>(numSamples));
     envelope_ = envelope_ * coeff + level * (1.0f - coeff);
     envelope_ = std::clamp(envelope_, 0.0f, 1.0f);
 

@@ -294,6 +294,28 @@ TEST_CASE("LUFSMeter reports finite output for a known sine fixture", "[audio_en
     CHECK(meter.getIntegrated() < 0.0f);
 }
 
+TEST_CASE("LUFSMeter throttled recompute still yields valid integrated/LRA on long sessions (LUFS-7)", "[audio_engine][LUFS]")
+{
+    // Run well past the recompute warmup (kRecomputeWarmup=60 blocks ≈ 6s) so the
+    // LUFS-7 throttle path is exercised; the gated integrated/LRA must still be
+    // valid (finite, in range) even though it is only recomputed ~once/sec.
+    LUFSMeter meter;
+    meter.prepare(48000.0, 512);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 1000; ++block)  // ≈106 commits -> historyCount well past warmup
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 1000.0f, 48000.0f, 0.25f);
+        meter.processBlock(buffer.getArrayOfReadPointers(), buffer.getNumChannels(), buffer.getNumSamples());
+    }
+
+    CHECK(std::isfinite(meter.getIntegrated()));
+    CHECK(meter.getIntegrated() > -80.0f);
+    CHECK(meter.getIntegrated() < 0.0f);
+    CHECK(meter.getLRA() >= 0.0f);
+}
+
 TEST_CASE("TruePeakEstimator reports finite bounded output for a known sine fixture", "[audio_engine][TruePeak]")
 {
     TruePeakEstimator estimator;
@@ -342,6 +364,35 @@ TEST_CASE("AutoMasteringEngine publishes live analyzer snapshots", "[audio_engin
     CHECK(stereo.frameIndex > 0);
     CHECK(spectrum.spectralCentroid > 500.0f);
     CHECK(stereo.stereoWidth > 0.0f);
+}
+
+TEST_CASE("HarmonicExciter oversampled saturation stays bounded when enabled (ENHANCERS-1)", "[audio_engine][mastering]")
+{
+    // The exciter is disabled by default, so no existing test exercises its
+    // (now oversampled) process path. Enable it with heavy drive on a hot HF
+    // sine — the aliasing-prone case — and assert the output stays finite and
+    // bounded (no NaN/Inf blow-up from the 4x round-trip or the Padé tanh).
+    HarmonicExciter exciter;
+    exciter.prepare(48000.0, 512);
+    exciter.setDrive(12.0f);     // +12 dB — heavy drive
+    exciter.setDryWet(0.5f);
+    exciter.setEnabled(true);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 20; ++block)
+    {
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 5000.0f, 48000.0f, 0.9f);
+        exciter.processBlock(buffer);
+    }
+
+    float peak = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            peak = std::max(peak, std::abs(buffer.getSample(ch, i)));
+
+    CHECK(std::isfinite(peak));
+    CHECK(peak < 2.0f);  // dry+wet of bounded signals; tanh saturates, can't explode
 }
 
 TEST_CASE("AutoMasteringEngine applies only validated neural mastering plans", "[audio_engine][mastering][NeuralMasteringController]")
