@@ -1425,6 +1425,20 @@ static std::atomic<uint64_t> gNextDryRunBatchId{1};
 
 static std::mutex gRenderJobsMutex;
 static std::map<std::string, std::shared_ptr<RenderJobRecord>> gRenderJobs;
+
+// MCP-FILES-04: cap the global result caches so a chatty client / long-lived
+// session can't grow process memory without bound. Evicts the lowest-keyed entry
+// when over the cap (entries are keyed by unique id, so eviction is
+// arbitrary-but-bounded — sufficient to stop unbounded growth).
+template <typename MapT>
+static void capGlobalCache(MapT& m, typename MapT::size_type maxEntries)
+{
+    while (m.size() > maxEntries && !m.empty())
+        m.erase(m.begin());
+}
+static constexpr size_t kMaxRenderJobCache          = 64;
+static constexpr size_t kMaxDryRunCandidateCache    = 256;
+static constexpr size_t kMaxSafeActionSnapshotCache = 256;
 static std::atomic<uint64_t> gNextRenderJobId{1};
 
 static constexpr const char* kAnalysisMethodology = "deterministic_dsp";
@@ -4280,6 +4294,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
                 gDryRunCandidates[candidateId.toStdString()] = {
                     candidateId, plan, score, measuredInputs, rulesApplied
                 };
+                capGlobalCache(gDryRunCandidates, kMaxDryRunCandidateCache);  // MCP-FILES-04
             }
 
             json candidate = planToJson(plan);
@@ -4343,6 +4358,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
     {
         const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
         gRenderJobs[jobId.toStdString()] = job;
+        capGlobalCache(gRenderJobs, kMaxRenderJobCache);  // MCP-FILES-04
     }
 
     const auto track = TrackAssistantStore::upsertFileTrack(inputFile, jobId);
@@ -4681,6 +4697,7 @@ juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, More
     {
         std::lock_guard<std::mutex> lock(gSafeActionSnapshotsMutex);
         gSafeActionSnapshots[snapshotId.toStdString()] = std::move(record);
+        capGlobalCache(gSafeActionSnapshots, kMaxSafeActionSnapshotCache);  // MCP-FILES-04
     }
 
     const auto flush = p.flushPendingParameterCommandsForAssistant(

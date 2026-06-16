@@ -425,9 +425,13 @@ bool DatasetGeneratorV2::startGeneration()
         finalizeGeneration();
     });
 
-    if (generationThread_)
-        generationThread_->detach();
-
+    // DATASET-2 FIX: do NOT detach this thread. The lambda captures `this` and
+    // calls member functions (initializeModules, processSample, finalizeGeneration);
+    // detaching allowed the generator to be destroyed while the thread still ran →
+    // use-after-free. (The previous detach made stopGeneration()'s joinable() check
+    // false, so the destructor skipped the join and tore down members under the
+    // running thread.) Keep the thread joinable so stopGeneration()/~Destructor
+    // join() it — the object is guaranteed to outlive the worker.
     return true;
 }
 
