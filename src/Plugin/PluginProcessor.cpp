@@ -2075,6 +2075,11 @@ void MorePhiProcessor::updateReportedLatency()
     latencyManager_.setFFTWindowLatency((audioDomainActive && spectralEngine_.isActive())
                                             ? spectralEngine_.getLatencyInSamples()
                                             : 0);
+    // ENHANCERS-1/PDC: report the mastering-chain lookahead (brickwall-limiter
+    // + exciter 4x oversampling) so the DAW compensates. Returns 0 while the
+    // chain is dormant (shipped plugin only meters), so the live reported latency
+    // is unchanged until mastering is engaged.
+    latencyManager_.setMasteringChainLatency(autoMasteringEngine_.getMasteringChainLatency());
     setLatencySamples(latencyManager_.getTotal());
     latencyConfigDirty_.store(false, std::memory_order_release);
 }

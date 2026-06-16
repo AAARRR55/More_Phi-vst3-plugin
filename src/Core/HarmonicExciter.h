@@ -50,6 +50,14 @@ public:
 
     /** Enable/disable the exciter. Disabled = pass-through with no CPU cost. */
     void setEnabled(bool enabled) noexcept { enabled_.store(enabled, std::memory_order_relaxed); }
+    [[nodiscard]] bool isEnabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
+
+    /** ENHANCERS-1/PDC: oversampling latency in host-rate samples when enabled
+     *  (the 4x FIR group delay), else 0. For DAW PDC reporting. */
+    [[nodiscard]] int getLatencyInSamples() const noexcept
+    {
+        return isEnabled() ? os_.getLatencyInSamples() : 0;
+    }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
