@@ -315,15 +315,25 @@ void LUFSMeter::updateLongTermMetrics() noexcept
 
     if (lraRelCount >= 2)
     {
-        const int idx10 = std::max(0, static_cast<int>(lraRelCount * 0.10f));
-        const int idx95 = std::min(lraRelCount - 1, static_cast<int>(lraRelCount * 0.95f));
+        // LUFS-6 FIX: EBU Tech 3342 specifies the 10th/95th percentiles with
+        // linear interpolation between adjacent ranked values. Fully sort the
+        // (bounded, now throttled by LUFS-7) gated range and interpolate at the
+        // fractional rank, instead of flooring to an integer index (which was
+        // off by up to one rank-step in each bound).
+        std::sort(lraGated_.begin(), lraGated_.begin() + lraRelCount);
 
-        std::nth_element(lraGated_.begin(), lraGated_.begin() + idx10, lraGated_.begin() + lraRelCount);
-        const float val10 = lraGated_[static_cast<size_t>(idx10)];
+        const auto percentile = [&](float p) noexcept -> float
+        {
+            const float rank = p * static_cast<float>(lraRelCount - 1);
+            const int   lo   = static_cast<int>(rank);
+            const int   hi   = std::min(lo + 1, lraRelCount - 1);
+            const float frac = rank - static_cast<float>(lo);
+            return lraGated_[static_cast<size_t>(lo)]
+                 + frac * (lraGated_[static_cast<size_t>(hi)] - lraGated_[static_cast<size_t>(lo)]);
+        };
 
-        std::nth_element(lraGated_.begin(), lraGated_.begin() + idx95, lraGated_.begin() + lraRelCount);
-        const float val95 = lraGated_[static_cast<size_t>(idx95)];
-
+        const float val10 = percentile(0.10f);
+        const float val95 = percentile(0.95f);
         lra_.store(val95 - val10, std::memory_order_relaxed);
     }
     else
