@@ -258,6 +258,12 @@ void DatasetGeneratorV3::dispatchLoop(uint64_t startBatchId, uint64_t startFrame
         // --- Generate parameter samples for this batch ---
         SamplingConfig samplingCfg;
         samplingCfg.sampleCount = currentBatchSize;
+        // NOTE (DATASET-1, unfixed): the sample-vector dimension should be the
+        // hosted chain's real parameter count, not config_.baseConfig.totalSamples
+        // (the sample COUNT). V2 uses chainEngine_.getTotalParameterCount() here,
+        // but V3 has no chainEngine_ member (it delegates to v2_) — the correct
+        // V3 param-count source needs investigation. Left as-is to avoid a
+        // non-compiling guess; tracked in docs/TECHNICAL_REVIEW.md.
         auto batch = sampler.generateLHS(samplingCfg,
                                           config_.baseConfig.totalSamples);
 

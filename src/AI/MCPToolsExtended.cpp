@@ -509,7 +509,9 @@ juce::String MCPToolsExtended::setParametersOptimized(
         const auto resolution = bridge.resolveParameter(stableId, idx, name);
         if (resolution.success && resolution.index >= 0 && resolution.index < maxParamCount)
         {
-            updates.push_back({resolution.index, val});
+            // MCP-PARAMS-01: reject non-finite values (juce::jlimit is a no-op for NaN).
+            if (!std::isfinite(val)) { ++rejected; continue; }
+            updates.push_back({resolution.index, juce::jlimit(0.0f, 1.0f, val)});
         }
         else
         {

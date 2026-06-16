@@ -143,10 +143,19 @@ float MultibandDynamicsProcessor::computeCompressorGain(float rmsLinear,
 
 void MultibandDynamicsProcessor::processBlock(juce::AudioBuffer<float> bands[kNumBands]) noexcept
 {
+    // Self-contained denormal guard: the per-sample envelope can denormalize on
+    // silence. The DAW audio path is also covered by PluginProcessor's guard, but
+    // the offline render / CLI path may not be, so flush here to be safe.
+    const juce::ScopedNoDenormals noDenormals;
+
     for (int b = 0; b < kNumBands; ++b)
     {
         auto& bd = bands_[b];
-        if (!bd.enabled.load(std::memory_order_relaxed)) continue;
+        if (!bd.enabled.load(std::memory_order_relaxed))
+        {
+            grDB_[b].store(0.0f, std::memory_order_relaxed);  // don't show stale GR for a bypassed band
+            continue;
+        }
 
         const float threshLinear = bd.thresholdLinear.load(std::memory_order_relaxed);
         const float ratio        = bd.ratio.load(std::memory_order_relaxed);

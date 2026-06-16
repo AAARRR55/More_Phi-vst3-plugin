@@ -1425,6 +1425,20 @@ static std::atomic<uint64_t> gNextDryRunBatchId{1};
 
 static std::mutex gRenderJobsMutex;
 static std::map<std::string, std::shared_ptr<RenderJobRecord>> gRenderJobs;
+
+// MCP-FILES-04: cap the global result caches so a chatty client / long-lived
+// session can't grow process memory without bound. Evicts the lowest-keyed entry
+// when over the cap (entries are keyed by unique id, so eviction is
+// arbitrary-but-bounded — sufficient to stop unbounded growth).
+template <typename MapT>
+static void capGlobalCache(MapT& m, typename MapT::size_type maxEntries)
+{
+    while (m.size() > maxEntries && !m.empty())
+        m.erase(m.begin());
+}
+static constexpr size_t kMaxRenderJobCache          = 64;
+static constexpr size_t kMaxDryRunCandidateCache    = 256;
+static constexpr size_t kMaxSafeActionSnapshotCache = 256;
 static std::atomic<uint64_t> gNextRenderJobId{1};
 
 static constexpr const char* kAnalysisMethodology = "deterministic_dsp";
@@ -2760,7 +2774,15 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
             {"rejected", 1}
         });
     const int id = resolution.index;
-    const float value = static_cast<float>(params.getProperty("value", 0.0));
+    const auto rawValue = static_cast<float>(params.getProperty("value", 0.0));
+    // MCP-PARAMS-01: reject non-finite values. juce::jlimit is a no-op for NaN
+    // (NaN comparisons are false), so without this gate a client-supplied NaN/Inf
+    // reaches hostedPlugin->setValue() on the audio thread (UB). The more_phi.*
+    // tools already validate this way — apply the same gate to the hosted path.
+    if (!std::isfinite(rawValue))
+        return toJString(json{{"success", false}, {"error", "value_must_be_finite"},
+                              {"index", id}, {"rejected", 1}});
+    const float value = juce::jlimit(0.0f, 1.0f, rawValue);
 
     // Route through the command queue first, then ask the processor to flush it
     // through exclusive hosted-plugin access when the DAW is idle.
@@ -2823,10 +2845,13 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         const auto stableId = item.getProperty("stableId",
                               item.getProperty("stable_id", "")).toString();
         const auto name = item.getProperty("name", "").toString();
-        const float value = static_cast<float>(item.getProperty("value", 0.0));
+        const auto rawValue = static_cast<float>(item.getProperty("value", 0.0));
         const auto resolution = bridge.resolveParameter(stableId, rawId, name);
         if (resolution.success)
         {
+            // MCP-PARAMS-01: reject non-finite values (juce::jlimit no-op for NaN).
+            if (!std::isfinite(rawValue)) { ++rejected; continue; }
+            const float value = juce::jlimit(0.0f, 1.0f, rawValue);
             if (p.enqueueParameterSet(resolution.index, value,
                                       MorePhiProcessor::ParameterEditSource::MCP,
                                       true))
@@ -2981,11 +3006,16 @@ juce::String MCPToolHandler::setMorphPosition(const juce::var& params, MorePhiPr
     if (sourceExplicitlySet)
         source = p.getMorphSource();
 
-    p.setMorphPositionExternal(
-        static_cast<float>(params.getProperty("x", p.getMorphX())), hasX,
-        static_cast<float>(params.getProperty("y", p.getMorphY())), hasY,
-        static_cast<float>(params.getProperty("fader", p.getFaderPos())), hasFader,
-        source);
+    // MCP-PARAMS-02: reject non-finite morph coordinates — they survive jlimit and
+    // propagate through interpolation into setValue() on the audio thread.
+    const float xIn     = static_cast<float>(params.getProperty("x", p.getMorphX()));
+    const float yIn     = static_cast<float>(params.getProperty("y", p.getMorphY()));
+    const float faderIn = static_cast<float>(params.getProperty("fader", p.getFaderPos()));
+    if ((hasX && !std::isfinite(xIn)) || (hasY && !std::isfinite(yIn)) ||
+        (hasFader && !std::isfinite(faderIn)))
+        return toJString(json{{"success", false}, {"error", "morph_values_must_be_finite"}});
+
+    p.setMorphPositionExternal(xIn, hasX, yIn, hasY, faderIn, hasFader, source);
 
     return toJString(json{{"success",true}});
 }
@@ -4264,6 +4294,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
                 gDryRunCandidates[candidateId.toStdString()] = {
                     candidateId, plan, score, measuredInputs, rulesApplied
                 };
+                capGlobalCache(gDryRunCandidates, kMaxDryRunCandidateCache);  // MCP-FILES-04
             }
 
             json candidate = planToJson(plan);
@@ -4327,6 +4358,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
     {
         const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
         gRenderJobs[jobId.toStdString()] = job;
+        capGlobalCache(gRenderJobs, kMaxRenderJobCache);  // MCP-FILES-04
     }
 
     const auto track = TrackAssistantStore::upsertFileTrack(inputFile, jobId);
@@ -4342,6 +4374,10 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
     std::thread([job, inputFile, outputDirectory, pluginFile, candidateCount,
                  blockSize, channels, workers, sampleRate, durationSeconds, maxInputFileSizeMB]()
     {
+        // MCP-FILES-01: this runs on a detached thread; an uncaught exception
+        // calls std::terminate and crashes the host (DAW). Wrap the whole body
+        // so any throw fails the job cleanly instead of terminating the process.
+        try {
         {
             const std::lock_guard<std::mutex> jobGuard(job->mutex);
             job->status = "configuring";
@@ -4429,6 +4465,23 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             job->completed = true;
             job->status = "failed";
             job->message = "Failed to start offline renderer";
+        }
+        }  // close try (MCP-FILES-01)
+        catch (const std::exception& e)
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->success = false;
+            job->completed = true;
+            job->status = "failed";
+            job->message = std::string("Render thread exception: ") + e.what();
+        }
+        catch (...)
+        {
+            const std::lock_guard<std::mutex> jobGuard(job->mutex);
+            job->success = false;
+            job->completed = true;
+            job->status = "failed";
+            job->message = "Unknown render thread exception";
         }
     }).detach();
 
@@ -4644,6 +4697,7 @@ juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, More
     {
         std::lock_guard<std::mutex> lock(gSafeActionSnapshotsMutex);
         gSafeActionSnapshots[snapshotId.toStdString()] = std::move(record);
+        capGlobalCache(gSafeActionSnapshots, kMaxSafeActionSnapshotCache);  // MCP-FILES-04
     }
 
     const auto flush = p.flushPendingParameterCommandsForAssistant(

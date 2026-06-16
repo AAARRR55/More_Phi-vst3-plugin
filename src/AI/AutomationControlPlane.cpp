@@ -1521,6 +1521,21 @@ MemoryStore::MemoryStore(juce::File storeDirectory)
     load();
 }
 
+// MCP-CONTROL-02: cap MemoryStore growth so a long-lived MCP session can't grow
+// process memory without bound. Evicts the least-recently-used (oldest
+// lastUsedAt) record when over the cap; called after every insert.
+static constexpr size_t kMaxMemoryRecords = 5000;
+static void enforceMemoryCapacity(std::vector<MemoryRecord>& records)
+{
+    if (records.size() <= kMaxMemoryRecords) return;
+    const auto oldest = std::min_element(records.begin(), records.end(),
+        [](const MemoryRecord& a, const MemoryRecord& b) {
+            return a.lastUsedAt.toMilliseconds() < b.lastUsedAt.toMilliseconds();
+        });
+    if (oldest != records.end())
+        records.erase(oldest);
+}
+
 MemoryRecord MemoryStore::remember(MemoryRecord record)
 {
     if (record.id.isEmpty())
@@ -1532,6 +1547,7 @@ MemoryRecord MemoryStore::remember(MemoryRecord record)
 
     std::lock_guard<std::mutex> lock(mutex_);
     records_.push_back(record);
+    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
     persist();
     return record;
 }
@@ -1578,6 +1594,7 @@ MemoryRecord MemoryStore::recordOutcome(ActionOutcome outcome)
 
     record.id = makeAutomationId("mem");
     records_.push_back(record);
+    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
     persist();
     return record;
 }
@@ -1630,12 +1647,13 @@ json MemoryStore::search(MemoryScope scope,
     };
 
     std::vector<ScoredRecord> scored;
-    for (auto& record : records_)
+    for (const auto& record : records_)
     {
         const int score = scoreRecord(record, scope, subjectId, query);
         if (score > 0)
         {
-            record.lastUsedAt = juce::Time::getCurrentTime();
+            // MCP-CONTROL-03: reads must not mutate state — updating lastUsedAt
+            // here forced a persist() on every search (a full file rewrite).
             scored.push_back({score, record});
         }
     }
@@ -1655,7 +1673,8 @@ json MemoryStore::search(MemoryScope scope,
         out.push_back(item);
     }
 
-    persist();
+    // MCP-CONTROL-03: search is a read — do NOT persist (was a full file rewrite
+    // on every search; intentContext called search 4x → 4 synchronous rewrites).
     return out;
 }
 
