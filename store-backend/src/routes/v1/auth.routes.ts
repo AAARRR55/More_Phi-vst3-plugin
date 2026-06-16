@@ -1,10 +1,9 @@
 import { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { CustomerService } from "../../services/CustomerService.js";
 import { verifyPassword } from "../../lib/crypto.js";
 import {
-  generateRefreshToken,
   signAccessToken,
   signRefreshToken,
   verifyRefreshToken,
@@ -68,8 +67,11 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       const accessToken = signAccessToken({ sub: customer.id, email: customer.email });
-      const { jti, hash: tokenHash } = generateRefreshToken();
+      const jti = randomBytes(32).toString("hex");
       const refreshToken = signRefreshToken(customer.id, jti);
+      // Store the hash of the JWT that actually goes into the cookie, so the
+      // refresh path (which hashes the presented cookie value) can match it.
+      const tokenHash = createHash("sha256").update(refreshToken).digest("hex");
 
       await prisma.refreshToken.create({
         data: {
@@ -102,19 +104,9 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const { customerId, email } = await rotateRefreshToken(request, reply);
+      const { customerId, email, refreshToken } = await rotateRefreshToken(request, reply);
 
       const accessToken = signAccessToken({ sub: customerId, email });
-      const { jti, hash: tokenHash } = generateRefreshToken();
-      const refreshToken = signRefreshToken(customerId, jti);
-
-      await prisma.refreshToken.create({
-        data: {
-          customerId,
-          tokenHash,
-          expiresAt: new Date(Date.now() + env.JWT_REFRESH_TTL * 1000),
-        },
-      });
 
       setAuthCookies(reply, accessToken, refreshToken);
 
