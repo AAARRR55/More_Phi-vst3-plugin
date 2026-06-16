@@ -142,22 +142,23 @@ void ModulationEngine::updateSourceValues(float dt) noexcept
     sourceValues_[static_cast<int>(ModSourceId::Envelope_2)] = envelopes_[1].getCurrentValue();
 
     // ── Macro knobs ───────────────────────────────────────────────────────────
-    sourceValues_[static_cast<int>(ModSourceId::Macro_1)]  = macros_[0];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_2)]  = macros_[1];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_3)]  = macros_[2];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_4)]  = macros_[3];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_5)]  = macros_[4];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_6)]  = macros_[5];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_7)]  = macros_[6];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_8)]  = macros_[7];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_9)]  = macros_[8];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_10)] = macros_[9];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_11)] = macros_[10];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_12)] = macros_[11];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_13)] = macros_[12];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_14)] = macros_[13];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_15)] = macros_[14];
-    sourceValues_[static_cast<int>(ModSourceId::Macro_16)] = macros_[15];
+    // MOD-4: snapshot the macro array under the seqlock (setMacro writes from the
+    // message thread) so a torn read can't deliver a half-updated macro set.
+    {
+        std::array<float, NUM_MACROS> localMacros{};
+        for (int attempt = 0; attempt < kMacroReadRetries; ++attempt)
+        {
+            const uint32_t s1 = macroSeq_.load(std::memory_order_acquire);
+            if ((s1 & 1u) != 0u) continue;
+            for (int i = 0; i < NUM_MACROS; ++i) localMacros[i] = macros_[i];
+            std::atomic_thread_fence(std::memory_order_acquire);
+            const uint32_t s2 = macroSeq_.load(std::memory_order_acquire);
+            if (s1 == s2) break;
+        }
+        const int macroBase = static_cast<int>(ModSourceId::Macro_1);
+        for (int i = 0; i < NUM_MACROS; ++i)
+            sourceValues_[macroBase + i] = localMacros[i];
+    }
 
     // ── Step sequencers ───────────────────────────────────────────────────────
     sourceValues_[static_cast<int>(ModSourceId::StepSeq_1)] = stepSequencers_[0].process(dt, bpm_);
@@ -236,6 +237,8 @@ const ModRoute& ModulationEngine::getRoute(int routeId) const
 void ModulationEngine::setMacro(int index, float value) noexcept
 {
     if (index < 0 || index >= NUM_MACROS) return;
+    const juce::SpinLock::ScopedLockType lock(macroWriteLock_);
+    MacroWriteScope ws(*this);
     macros_[static_cast<size_t>(index)] = std::clamp(value, 0.0f, 1.0f);
 }
 
@@ -435,6 +438,8 @@ void ModulationEngine::fromXml(const juce::XmlElement& xml)
         {
             const int i = macroEl->getIntAttribute("index", -1);
             if (i < 0 || i >= NUM_MACROS) continue;
+            const juce::SpinLock::ScopedLockType lock(macroWriteLock_);
+            MacroWriteScope ws(*this);
             macros_[static_cast<size_t>(i)] =
                 std::clamp(static_cast<float>(macroEl->getDoubleAttribute("value", 0.0)), 0.0f, 1.0f);
         }
