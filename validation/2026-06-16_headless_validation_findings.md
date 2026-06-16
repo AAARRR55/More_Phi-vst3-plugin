@@ -131,8 +131,13 @@ correctness/defect gap.
 - **Mastering DSP audio-correctness** — **CLOSED** (§6a, 21/21 tests PASS). Only
   *subjective sonic voicing* remains (human-ear), which is not an automatable
   correctness check.
-- **Latency-under-plan** — still open; mastering processors add latency only when a
-  plan engages them, and plan execution needs a DAW/MCP context (default = 0, confirmed).
+- **Latency-under-plan** — measured **0 at default** against the tested build
+  (confirmed). **Update:** subsequent branch commit `94c1a60` ("Report mastering-chain
+  latency to the DAW (ENHANCERS-1 PDC gap)") implements mastering-chain PDC reporting
+  in source — limiter lookahead + exciter 4× oversampling now flow to
+  `setLatencySamples()`, returning 0 while the chain is dormant (matches what was
+  measured). This closes the item at the source level; the tested binary predates it,
+  so end-to-end verification still needs a rebuilt binary + a plan context.
 - **Direct DAW smoke test** across FL/Reaper/Ableton/Cubase (pluginval S10 is the
   proxy; per-DAW run not done). FL small-stack case already handled per build config.
 - **Coverage report** — the 28 % LOC test/src ratio is a proxy, not measured coverage.
