@@ -1,0 +1,157 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  slug           String   @unique
+  name           String
+  description    String
+  priceCents     Int
+  currency       String   @default("usd")
+  version        String
+  downloadUrl    String
+  maxActivations Int      @default(3)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  orders   Order[]
+  licenses License[]
+
+  @@map("products")
+}
+
+model Customer {
+  id               String   @id @default(cuid())
+  email            String   @unique
+  passwordHash     String?
+  name             String?
+  company          String?
+  country          String?
+  stripeCustomerId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  orders        Order[]
+  licenses      License[]
+  refreshTokens RefreshToken[]
+
+  @@map("customers")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Order {
+  id                      String      @id @default(cuid())
+  customerId              String
+  productId               String
+  stripeCheckoutSessionId String      @unique
+  stripePaymentIntentId   String?
+  amountCents             Int
+  currency                String      @default("usd")
+  status                  OrderStatus @default(PENDING)
+  createdAt               DateTime    @default(now())
+  paidAt                  DateTime?
+  refundedAt              DateTime?
+
+  customer      Customer       @relation(fields: [customerId], references: [id])
+  product       Product        @relation(fields: [productId], references: [id])
+  licenses      License[]
+  paymentEvents PaymentEvent[]
+
+  @@index([customerId])
+  @@map("orders")
+}
+
+enum LicenseStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+model License {
+  id             String        @id @default(cuid())
+  customerId     String
+  orderId        String
+  productId      String
+  key            String        @unique
+  keyHash        String        @unique
+  status         LicenseStatus @default(ACTIVE)
+  maxActivations Int           @default(3)
+  createdAt      DateTime      @default(now())
+  revokedAt      DateTime?
+
+  customer    Customer     @relation(fields: [customerId], references: [id])
+  order       Order        @relation(fields: [orderId], references: [id])
+  product     Product      @relation(fields: [productId], references: [id])
+  activations Activation[]
+
+  @@index([customerId])
+  @@map("licenses")
+}
+
+enum ActivationStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+model Activation {
+  id              String           @id @default(cuid())
+  licenseId       String
+  fingerprintHash String
+  hostname        String?
+  os              String?
+  appVersion      String?
+  status          ActivationStatus @default(ACTIVE)
+  activatedAt     DateTime         @default(now())
+  lastSeenAt      DateTime         @default(now())
+  deactivatedAt   DateTime?
+
+  license License @relation(fields: [licenseId], references: [id])
+
+  @@unique([licenseId, fingerprintHash])
+  @@index([fingerprintHash])
+  @@map("activations")
+}
+
+model PaymentEvent {
+  id            String   @id @default(cuid())
+  orderId       String?
+  stripeEventId String   @unique
+  type          String
+  amountCents   Int?
+  status        String
+  rawPayload    Json
+  createdAt     DateTime @default(now())
+
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([type])
+  @@index([orderId])
+  @@map("payment_events")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  customerId String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@map("refresh_tokens")
+}
