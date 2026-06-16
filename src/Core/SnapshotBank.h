@@ -435,6 +435,8 @@ private:
             uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
             if ((seq1 & 1) != 0) continue;
             occupied = (*slots_)[slot].occupied;
+            // C-1: acquire fence pairs with writer's release fence.
+            std::atomic_thread_fence(std::memory_order_acquire);
             uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
             if (seq1 == seq2)
             {
