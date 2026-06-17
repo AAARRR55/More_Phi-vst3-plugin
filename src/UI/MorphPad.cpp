@@ -227,6 +227,17 @@ void MorphPad::paint(juce::Graphics& g)
     g.setColour(padGrid());
     g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2, 1.5f);
 
+    // Center "MORPH" watermark label (mockup style) — sits behind the cursor
+    {
+        float labelFont = juce::jlimit(8.0f, 11.0f, radius * 0.055f);
+        g.setColour(accent().withAlpha(0.45f));
+        g.setFont(juce::Font(labelFont, juce::Font::bold));
+        g.drawText("MORPH",
+                   juce::Rectangle<float>(centre.x - radius * 0.4f, centre.y - labelFont,
+                                          radius * 0.8f, labelFont * 2.0f),
+                   juce::Justification::centred);
+    }
+
     // ── Cursor trail (from audio thread) ───────────────────────────────────────
     auto& morph = proc_.getMorphProcessor();
     const auto& trail = morph.getTrail();
@@ -248,26 +259,40 @@ void MorphPad::paint(juce::Graphics& g)
         g.drawLine(px0, py0, px1, py1, 1.5f);
     }
 
-    // ── Snapshot dots (clock layout) ───────────────────────────────────────────
+    // ── Snapshot nodes (clock layout) ──────────────────────────────────────────
+    // Mockup style: numbered ring-nodes around the clock. Filled slots glow cyan
+    // with the number inside; empty slots are muted hairline circles.
     auto positions = InterpolationEngine::getClockPositions(0.85f);
     auto& bank = proc_.getSnapshotBank();
+    float nodeR = juce::jmax(radius * 0.075f, 11.0f);
+    float nodeFontSize = juce::jmax(radius * 0.06f, 9.0f);
     for (int i = 0; i < 12; ++i)
     {
         float dotX = centre.x + positions[i].x * radius;
         float dotY = centre.y + positions[i].y * radius;
-        float dotR = bank.isOccupied(i) ? radius * 0.04f : radius * 0.027f;
+        bool occupied = bank.isOccupied(i);
 
-        g.setColour(bank.isOccupied(i) ? padDot() : padDotEmpty());
-        g.fillEllipse(dotX - dotR, dotY - dotR, dotR * 2, dotR * 2);
+        // Glow halo behind filled nodes
+        if (occupied)
+        {
+            float haloR = nodeR * 1.8f;
+            g.setColour(cyan().withAlpha(0.18f));
+            g.fillEllipse(dotX - haloR, dotY - haloR, haloR * 2, haloR * 2);
+        }
 
-        // Slot number — scaled proportionally with a minimum floor
-        float slotFontSize = juce::jmax(radius * 0.06f, 10.0f);
-        g.setColour(textSlot().withAlpha(0.7f));
-        g.setFont(slotFontSize);
-        float labelW = juce::jmax(radius * 0.08f, 12.0f);
-        float labelH = juce::jmax(radius * 0.07f, 14.0f);
+        // Node body
+        g.setColour(occupied ? cyan().withAlpha(0.18f) : surfaceLit());
+        g.fillEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+
+        // Node ring
+        g.setColour(occupied ? cyanBright() : border());
+        g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+
+        // Slot number centered inside the node
+        g.setColour(occupied ? cyanBright() : textSlot());
+        g.setFont(juce::Font(nodeFontSize, juce::Font::bold));
         g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(dotX - labelW, dotY + dotR + 2.0f, labelW * 2, labelH),
+                   juce::Rectangle<float>(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2),
                    juce::Justification::centred);
     }
 
@@ -347,6 +372,22 @@ void MorphPad::paint(juce::Graphics& g)
         cy = centre.y + rawY * radius;
     }
 
+    // ── Dashed connection lines (cursor → filled snapshots) ────────────────────
+    // Mockup style: faint cyan dashed links from the puck to each occupied slot.
+    {
+        const float dashes[] = { 3.0f, 4.0f };
+        g.setColour(cyan().withAlpha(0.22f));
+        for (int i = 0; i < 12; ++i)
+        {
+            if (!bank.isOccupied(i))
+                continue;
+            float dotX = centre.x + positions[i].x * radius;
+            float dotY = centre.y + positions[i].y * radius;
+            juce::Line<float> link(cx, cy, dotX, dotY);
+            g.drawDashedLine(link, dashes, 2, 1.0f);
+        }
+    }
+
     // Radial glow (Stitch-enhanced pulsing effect) — scaled to radius
     float glowPhase = static_cast<float>(juce::Time::getMillisecondCounter() % 2000) / 2000.0f;
     float glowAlpha = 0.12f + 0.06f * std::sin(glowPhase * 6.2832f);
@@ -359,13 +400,18 @@ void MorphPad::paint(juce::Graphics& g)
 
     // Glow ring
     float ringR = radius * 0.08f;
-    g.setColour(padTrail().withAlpha(0.3f));
+    g.setColour(accent().withAlpha(0.35f));
     g.drawEllipse(cx - ringR, cy - ringR, ringR * 2, ringR * 2, 1.0f);
 
-    // Cursor dot
-    float cursorR = radius * 0.033f;
-    g.setColour(padTrail());
-    g.fillEllipse(cx - cursorR, cy - cursorR, cursorR * 2, cursorR * 2);
+    // Puck (mockup style: gold fill with bright gold rim + soft halo)
+    float puckR = radius * 0.038f;
+    float puckHaloR = puckR * 2.4f;
+    g.setColour(accent().withAlpha(0.25f));
+    g.fillEllipse(cx - puckHaloR, cy - puckHaloR, puckHaloR * 2, puckHaloR * 2);
+    g.setColour(accent());
+    g.fillEllipse(cx - puckR, cy - puckR, puckR * 2, puckR * 2);
+    g.setColour(amber());
+    g.drawEllipse(cx - puckR, cy - puckR, puckR * 2, puckR * 2, 1.5f);
 
     // Mode label (top-left corner of pad) — now shows source + physics mode
     const char* sourceNames[] = {"2D Pad", "Fader"};
