@@ -551,7 +551,7 @@ juce::String MCPToolsExtended::setParametersOptimized(
     optimizer.recordUsage(usage);
 
     const auto flush = applied > 0
-        ? processor.flushPendingParameterCommandsForAssistant(juce::jmax(2048, applied), 75)
+        ? processor.flushPendingParameterCommandsForAssistant(juce::jmax(2048, applied))
         : MorePhiProcessor::ParameterCommandFlushResult{};
     
     const bool allQueued = requested > 0

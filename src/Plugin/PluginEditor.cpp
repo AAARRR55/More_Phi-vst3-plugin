@@ -126,7 +126,7 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
 
     // M-16 FIX: Reduced from 30Hz to 15Hz — sufficient for UI updates,
     // reduces CPU overhead and message-thread contention.
-    startTimerHz(15);
+    startTimerHz(30);  // 30 FPS for smooth meter-glide animation
 }
 
 MorePhiEditor::~MorePhiEditor()
@@ -161,11 +161,9 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("v3.3.0", titleTextArea.removeFromLeft(72).translated(0, 1),
                juce::Justification::centredLeft, false);
 
-    // RMS meter
+    // RMS meter — uses the eased level updated in timerCallback() for a smooth glide
     auto meterArea = titleArea.removeFromRight(120).reduced(10, 14);
-    float rms = processor.getRmsLevel();
-    float dbLevel = juce::jlimit(0.0f, 1.0f,
-        (juce::Decibels::gainToDecibels(rms) + 60.0f) / 60.0f);
+    float dbLevel = juce::jlimit(0.0f, 1.0f, smoothedDbLevel_);
 
     g.setColour(lnf.padBackground);
     g.fillRoundedRectangle(meterArea.toFloat(), 3.0f);
@@ -176,6 +174,9 @@ void MorePhiEditor::paint(juce::Graphics& g)
         juce::Colour meterColour = dbLevel > 0.9f ? juce::Colour(0xffef4444) :
                                     dbLevel > 0.7f ? lnf.accentCoral :
                                                      lnf.accentGreen;
+        // Neon glow underneath the fill (matches the mockup's glowing meter).
+        g.setColour(meterColour.withAlpha(0.35f));
+        g.fillRoundedRectangle(fillArea.expanded(1.5f), 4.0f);
         g.setColour(meterColour);
         g.fillRoundedRectangle(fillArea, 3.0f);
     }
@@ -364,13 +365,21 @@ void MorePhiEditor::timerCallback()
     if (deactivateBtn_.isVisible() != isLicensed)
         deactivateBtn_.setVisible(isLicensed);
 
-    // M-3 FIX: Only repaint title bar when RMS level visually changes
+    // OUT meter: ease the raw RMS toward its target for a smooth glide
+    // (mirrors the mockup's `transition-[width] duration-300 ease-out`).
     float currentRms = processor.getRmsLevel();
     float dbLevel = juce::jlimit(0.0f, 1.0f,
         (juce::Decibels::gainToDecibels(currentRms) + 60.0f) / 60.0f);
-    if (std::abs(dbLevel - lastDbLevel_) > 0.02f)
+
+    // Asymmetric easing: rise quickly on transients, fall back slowly.
+    const float attack = 0.6f;   // toward a louder target
+    const float release = 0.18f; // toward a quieter target
+    const float coeff = dbLevel > smoothedDbLevel_ ? attack : release;
+    smoothedDbLevel_ += (dbLevel - smoothedDbLevel_) * coeff;
+
+    if (std::abs(smoothedDbLevel_ - lastDbLevel_) > 0.004f)
     {
-        lastDbLevel_ = dbLevel;
+        lastDbLevel_ = smoothedDbLevel_;
         repaint(0, 0, getWidth(), 48);
     }
 }

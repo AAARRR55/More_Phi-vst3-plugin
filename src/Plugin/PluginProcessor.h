@@ -47,6 +47,8 @@
 
 namespace more_phi {
 
+class VST3IPCBridge;
+
 namespace standalone_mcp {
 class IZotopeIPCAssistant;
 class IZotopeIPCDiscovery;
@@ -99,6 +101,8 @@ public:
     MorphProcessor&    getMorphProcessor()                 { return morphProcessor; }
     MCPServer&         getMCPServer()                      { return mcpServer; }
     const MCPServer&   getMCPServer() const                { return mcpServer; }
+    VST3IPCBridge*     getVST3IPCBridge() noexcept         { return vst3IpcBridge_.get(); }
+    const VST3IPCBridge* getVST3IPCBridge() const noexcept { return vst3IpcBridge_.get(); }
     standalone_mcp::IZotopeIPCDiscovery& getIZotopeIPCDiscovery();
     standalone_mcp::IZotopeIPCAssistant& getIZotopeIPCAssistant();
     const InstanceIdentity& getInstanceIdentity() const   { return instanceIdentity_; }
@@ -217,10 +221,12 @@ public:
         int pendingAfter = 0;
         bool pluginUnavailable = false;
         bool exclusiveAccessTimedOut = false;
+        int retryCount = 0;
+        int waitedMs = 0;
     };
 
     ParameterCommandFlushResult flushPendingParameterCommandsForAssistant(int maxCommands = 2048,
-                                                                          int timeoutMs = 50);
+                                                                          int timeoutMs = 250);
 
     juce::uint64 getProcessorGenerationToken() const noexcept { return processorGenerationToken_; }
     PerformanceProfiler& getProfiler() { return profiler_; }
@@ -445,6 +451,7 @@ private:
     MorphProcessor     morphProcessor;
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
+    std::unique_ptr<VST3IPCBridge> vst3IpcBridge_;
     std::unique_ptr<standalone_mcp::IZotopeIPCDiscovery> ipcDiscovery_;
     std::unique_ptr<standalone_mcp::IZotopeIPCAssistant> ipcAssistant_;
     LinkBroadcaster    linkBroadcaster_;

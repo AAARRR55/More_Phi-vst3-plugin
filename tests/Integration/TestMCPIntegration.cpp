@@ -317,6 +317,7 @@ juce::File createMCPRenderInputFile()
 
 TEST_CASE("MCP initialize rejects missing bearer token", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -342,6 +343,7 @@ TEST_CASE("MCP initialize rejects missing bearer token", "[integration][mcp]")
 
 TEST_CASE("MCP initialize succeeds with instance auth token", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -361,6 +363,7 @@ TEST_CASE("MCP initialize succeeds with instance auth token", "[integration][mcp
 
 TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -410,6 +413,7 @@ TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[
 
 TEST_CASE("MCP tools/call can edit More-Phi runtime parameters", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -448,6 +452,7 @@ TEST_CASE("MCP tools/call can edit More-Phi runtime parameters", "[integration][
 
 TEST_CASE("MCP mastering render job can be started, polled, and selected", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -624,6 +629,7 @@ TEST_CASE("MCP mastering render job can be started, polled, and selected", "[int
 
 TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 
@@ -669,6 +675,7 @@ TEST_CASE("MCP set/get morph state uses authenticated flow and public accessors"
 
 TEST_CASE("MCP rate limit is enforced through token optimizer bookkeeping", "[integration][mcp]")
 {
+    juce::ScopedJuceInitialiser_GUI initialiser;
     if (!localTcpProviderAvailable())
         SKIP("Local TCP provider unavailable; MCP integration coverage blocked");
 

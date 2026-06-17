@@ -13,6 +13,7 @@
 #include "AI/OzonePlanApplicator.h"
 #include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
 #include "AI/StandaloneMcp/IZotopeIPCDiscovery.h"
+#include "AI/VST3IPCBridge.h"
 #include <algorithm>
 #include <atomic>
 
@@ -133,13 +134,29 @@ MorePhiProcessor::MorePhiProcessor()
 
 MorePhiProcessor::~MorePhiProcessor()
 {
+    std::cout << "[~MorePhiProcessor] entering destructor" << std::endl;
     stopTimer();
-    aiAssistant_.reset();       // Stop AI background thread first
+    std::cout << "[~MorePhiProcessor] stopped timer" << std::endl;
+    aiAssistant_.reset();
+    std::cout << "[~MorePhiProcessor] reset aiAssistant_" << std::endl;
     linkBroadcaster_.detach();
+    std::cout << "[~MorePhiProcessor] detached linkBroadcaster_" << std::endl;
+    if (vst3IpcBridge_ != nullptr)
+    {
+        std::cout << "[~MorePhiProcessor] stopping vst3IpcBridge_..." << std::endl;
+        vst3IpcBridge_->stop();
+        std::cout << "[~MorePhiProcessor] stopped vst3IpcBridge_" << std::endl;
+    }
+    std::cout << "[~MorePhiProcessor] stopping mcpServer..." << std::endl;
     mcpServer.stopServer();
+    std::cout << "[~MorePhiProcessor] stopped mcpServer" << std::endl;
     InstanceRegistry::getInstance().deregisterInstance(instanceIdentity_.instanceId);
+    std::cout << "[~MorePhiProcessor] deregistered instance" << std::endl;
     clearHostedMasteringApplicators();
+    std::cout << "[~MorePhiProcessor] cleared hosted mastering applicators" << std::endl;
+    std::cout << "[~MorePhiProcessor] unloading hosted plugin..." << std::endl;
     hostManager.unloadPlugin();
+    std::cout << "[~MorePhiProcessor] unloaded hosted plugin" << std::endl;
 }
 
 standalone_mcp::IZotopeIPCDiscovery& MorePhiProcessor::getIZotopeIPCDiscovery()
@@ -582,16 +599,50 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
         return result;
     }
 
-    juce::SpinLock::ScopedLockType commandGuard(commandConsumerLock_);
+    // Retry a few times if exclusive access is temporarily unavailable.  The
+    // audio thread may be in the middle of a callback, or another message-thread
+    // operation (state capture/restore) may hold the exclusive lease.  A single
+    // short timeout is often too aggressive in a loaded DAW.
+    constexpr int kMaxRetries = 2;
+    juce::AudioPluginInstance* plugin = nullptr;
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt)
+    {
+        const auto t0 = juce::Time::getMillisecondCounter();
+        plugin = hostManager.beginExclusivePluginUse(timeoutMs);
+        const auto t1 = juce::Time::getMillisecondCounter();
+        result.waitedMs += static_cast<int>(t1 - t0);
 
-    auto* plugin = hostManager.beginExclusivePluginUse(timeoutMs);
+        if (plugin != nullptr)
+        {
+            result.retryCount = attempt;
+            break;
+        }
+
+        // No plugin is loaded: retries cannot help.
+        if (!hostManager.hasPlugin())
+        {
+            result.pluginUnavailable = true;
+            result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
+            return result;
+        }
+
+        result.exclusiveAccessTimedOut = true;
+
+        // Brief backoff before retrying, but not on the last attempt.
+        if (attempt + 1 < kMaxRetries)
+            juce::Thread::sleep(juce::jmin(20 * (attempt + 1), 50));
+    }
+
     if (plugin == nullptr)
     {
-        result.pluginUnavailable = !hostManager.hasPlugin();
-        result.exclusiveAccessTimedOut = !result.pluginUnavailable;
         result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
         return result;
     }
+
+    // We got the plugin lease; clear the timeout flag.
+    result.exclusiveAccessTimedOut = false;
+
+    juce::SpinLock::ScopedLockType commandGuard(commandConsumerLock_);
 
     struct ScopedExclusivePluginUse
     {
@@ -1955,6 +2006,9 @@ bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& 
         refreshDiscreteMap();
         refreshHostedMasteringApplicators(desc);
 
+        if (vst3IpcBridge_ != nullptr)
+            vst3IpcBridge_->exportParameterRegistry();
+
         // Unblock the morph engine on success
         // Release semantics ensure all prior writes (including discreteMap_ update)
         // are visible to audio thread when it loads isRestoring_ with acquire.
@@ -2056,6 +2110,12 @@ void MorePhiProcessor::startMCPServerIfNeeded()
 
     mcpServer.setIdentity(instanceIdentity_);
     mcpServer.startServer(instanceIdentity_.port);
+
+    if (vst3IpcBridge_ == nullptr)
+        vst3IpcBridge_ = std::make_unique<VST3IPCBridge>(*this, instanceIdentity_);
+
+    vst3IpcBridge_->start();
+    vst3IpcBridge_->exportParameterRegistry();
 }
 
 void MorePhiProcessor::reconfigureAudioDomainProcessing()

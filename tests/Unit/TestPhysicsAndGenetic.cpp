@@ -21,6 +21,7 @@
 #include "Core/ParameterState.h"
 #include "Core/BrickwallLimiter.h"
 #include "Core/TruePeakEstimator.h"
+#include "Core/DiscreteParameterHandler.h"
 
 #include <array>
 #include <cmath>
@@ -533,4 +534,54 @@ TEST_CASE("ModulationMatrix: concurrent mutation + apply stays consistent (MODUL
     stop.store(true, std::memory_order_relaxed);
     w.join();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DiscreteParameterHandler — step snapping and valueToStep correctness
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("DiscreteParameterHandler: step mapping and rounding correctness", "[discrete][production]")
+{
+    ParameterClassifier classifier;
+    std::vector<uint8_t> payload;
+    payload.push_back(1); // version
+    uint32_t count = 1;
+    payload.insert(payload.end(), reinterpret_cast<const uint8_t*>(&count), reinterpret_cast<const uint8_t*>(&count) + sizeof(count));
+    ParameterMetadata meta;
+    meta.type = ParameterType::Discrete;
+    meta.stepCount = 10;
+    payload.insert(payload.end(), reinterpret_cast<const uint8_t*>(&meta), reinterpret_cast<const uint8_t*>(&meta) + sizeof(meta));
+    classifier.deserialize(payload.data(), payload.size());
+
+    DiscreteParameterHandler handler;
+    handler.initialize(classifier);
+    handler.setDefaultStrategy(DiscreteParameterHandler::BlendStrategy::Stepwise);
+    handler.setCooldownFrames(0); // disable cooldown so it responds immediately
+    
+    std::vector<float> input = { 0.95f };
+    std::vector<float> output = { 0.0f };
+    
+    // Stepwise strategy moves one step per call. Loop 9 times to reach step 9 from 0.
+    for (int i = 0; i < 9; ++i)
+        handler.processDiscreteParameters(input, output, 0.5f);
+    
+    // Check if step 9 was selected (value 1.0f)
+    REQUIRE(output[0] == Approx(1.0f));
+    
+    // From step 9 to step 8 is a delta of 1, so it takes 1 step to go directly
+    input[0] = 0.94f;
+    handler.processDiscreteParameters(input, output, 0.5f);
+    REQUIRE(output[0] == Approx(8.0f / 9.0f));
+    
+    // From step 8 to step 0 is a delta of 8, so loop 8 times to settle
+    input[0] = 0.04f;
+    for (int i = 0; i < 8; ++i)
+        handler.processDiscreteParameters(input, output, 0.5f);
+    REQUIRE(output[0] == Approx(0.0f));
+    
+    // From step 0 to step 1 is a delta of 1, so 1 step to go directly
+    input[0] = 0.06f;
+    handler.processDiscreteParameters(input, output, 0.5f);
+    REQUIRE(output[0] == Approx(1.0f / 9.0f));
+}
+
 

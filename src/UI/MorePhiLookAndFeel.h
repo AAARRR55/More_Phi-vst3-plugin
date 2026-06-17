@@ -101,7 +101,14 @@ public:
     // Settable reference width — updated by MorePhiEditor::resized().
     void setEditorWidth(float w) { editorWidth_ = w; }
 
+    // Embedded-typeface accessors (Syncopate = display, Outfit = body).
+    static const juce::String& displayTypefaceName();
+    static const juce::String& bodyTypefaceName();
+
 private:
+    // Registers the embedded BinaryData fonts with JUCE exactly once.
+    static void ensureFontsRegistered();
+
     mutable float editorWidth_ = 920.0f;
 };
 

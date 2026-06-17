@@ -27,6 +27,7 @@ void DiscreteParameterHandler::initialize(const ParameterClassifier& classifier)
     const uint32_t count = parameterCount_.load();
     paramStates_.resize(count);
     paramStrategies_.resize(count, defaultStrategy_);
+    strategyOverrides_.clear();
 
     // H-3 FIX: Read per-parameter step counts from classifier metadata.
     // Default to 10 steps when classifier reports 0 (backwards compatible).
@@ -231,7 +232,9 @@ int DiscreteParameterHandler::valueToStep(int index, float value) const
     const int steps = (index >= 0 && index < static_cast<int>(stepCount_.size()))
                         ? stepCount_[index] : 10;
     const float maxStep = static_cast<float>(steps - 1);
-    return std::clamp(static_cast<int>(value * maxStep), 0, steps - 1);
+    // Use std::round to ensure values map to the nearest step.
+    // Truncating via static_cast<int> causes the highest step to be practically unreachable.
+    return std::clamp(static_cast<int>(std::round(value * maxStep)), 0, steps - 1);
 }
 
 float DiscreteParameterHandler::stepToValue(int index, int step) const

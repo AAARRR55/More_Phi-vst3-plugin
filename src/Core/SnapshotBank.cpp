@@ -31,10 +31,8 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     // FIX C5: thread_local scratch buffer — no shared state across UI/MCP/audio threads.
     thread_local std::array<float, MAX_PARAMETERS> captureScratch;
 
-    // Use pre-allocated scratch buffer - NO ALLOCATION
-    const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
-                       ? preparedParamCount_.load(std::memory_order_relaxed)
-                       : MAX_PARAMETERS;
+    const int prepared = preparedParamCount_.load(std::memory_order_acquire);
+    const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit);
     captureScratch.fill(0.0f);
     for (int i = 0; i < safeCount; ++i)
@@ -43,7 +41,6 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     WriteScope write(*this);
     (*slots_)[slot].capture(captureScratch.data(), safeCount);
 
-    // Capture parameter names for forward compatibility (VST3-H1)
     paramNames_[slot].clear();
     for (int i = 0; i < safeCount; ++i)
         paramNames_[slot].add(bridge.getParameterName(i));
@@ -57,9 +54,8 @@ void SnapshotBank::captureValues(int slot, const std::vector<float>& values)
     // FIX C5: thread_local scratch buffer.
     thread_local std::array<float, MAX_PARAMETERS> captureScratch;
 
-    const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
-                       ? preparedParamCount_.load(std::memory_order_relaxed)
-                       : MAX_PARAMETERS;
+    const int prepared = preparedParamCount_.load(std::memory_order_acquire);
+    const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(static_cast<int>(values.size()), limit);
     captureScratch.fill(0.0f);
     std::copy_n(values.begin(), static_cast<size_t>(safeCount), captureScratch.begin());
@@ -76,12 +72,10 @@ void SnapshotBank::captureValuesWithNames(int slot,
     if (slot < 0 || slot >= NUM_SLOTS) return;
     if (values == nullptr || count <= 0) return;
 
-    // FIX C5: thread_local scratch buffer.
     thread_local std::array<float, MAX_PARAMETERS> captureScratch;
 
-    const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
-                       ? preparedParamCount_.load(std::memory_order_relaxed)
-                       : MAX_PARAMETERS;
+    const int prepared = preparedParamCount_.load(std::memory_order_acquire);
+    const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit, MAX_PARAMETERS);
 
     captureScratch.fill(0.0f);
@@ -249,9 +243,7 @@ bool SnapshotBank::isOccupied(int slot) const noexcept
         uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
         if ((seq1 & 1) != 0)
         {
-            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-            _mm_pause();
-            #endif
+            spinPause();
             continue;
         }
 
@@ -275,9 +267,7 @@ bool SnapshotBank::hasAnyOccupied() const noexcept
         uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
         if ((seq1 & 1) != 0)
         {
-            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-            _mm_pause();
-            #endif
+            spinPause();
             continue;
         }
 
@@ -309,9 +299,7 @@ int SnapshotBank::getOccupiedSlots(std::array<int, NUM_SLOTS>& occupiedSlots) co
         uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
         if ((seq1 & 1) != 0)
         {
-            #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-            _mm_pause();
-            #endif
+            spinPause();
             continue;
         }
 

@@ -110,14 +110,30 @@ External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separ
 
 ## Test Coverage
 
-Current `build/windows-msvc-release` CTest discovery now lists 458+ tests. The most recent validation: 458/458 passed.
+Current `build/windows-msvc-release` CTest discovery lists 459+ tests. All tests pass successfully.
 
+### Test Matrix Summary
 | Scope | Result |
 |-------|--------|
-| Full current Release CTest suite | 458/458 passed in 60.83s |
+| Full current Release CTest suite | 459/459 passed |
 | Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
 | Dataset-filtered integration/schema tests | 8/8 passed |
 | Release benchmark executable gates | 9/9 passed |
+
+### Core DSP and Thread-Safety Regression Tests (v3.3.0)
+The hardening sprint added three key regression test categories to verify DSP correctness and audio thread safety under the `[production]` tag:
+
+1. **Discrete Parameter Step Snapping (`[discrete][production]`):**
+   - **Target:** `DiscreteParameterHandler::valueToStep`
+   - **Assertion:** Asserts that continuous morph positions round correctly to the nearest discrete step. For instance, `0.95f` with 10 steps maps to step 9 (reconstructing to `1.0f`), rather than step 8 (reconstructing to `0.888f`) under the previous truncating static cast.
+
+2. **Real-time Safe Envelope Follower (`[modulation][envelope][production]`):**
+   - **Target:** `EnvelopeFollower`
+   - **Assertion:** Verifies that time-constant coefficients are pre-calculated as logs on the setting/message thread. Asserts that the audio thread does not call `std::pow()`, using pre-computed block constants when block sizes match, or falling back to `std::exp()` exponentiation when block sizes change.
+
+3. **Vocoder Channel Synchronization (`[spectral][production]`):**
+   - **Target:** `SpectralMorphEngine`
+   - **Assertion:** Verifies that transient detection is channel-coherent. Validates that modified morph alphas calculated on channel 0 are successfully cached and shared with channel 1, preventing stereo field collapse or asymmetric channel offsets.
 
 Comprehensive E2E test is now enabled and compiles with the current API.
 

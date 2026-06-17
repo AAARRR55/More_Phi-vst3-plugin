@@ -54,17 +54,17 @@ A comprehensive production-readiness audit identified 47 issues across threading
 - **Fix:** Buffer allocation in `prepare()` is now `maxBlockSize + MAX_GRAIN_SIZE` (with a safety margin of 256 samples). `process()` clamps the output write position to `bufferSize - 1`.  
 - **Impact:** Prevents buffer overflow during formant morphing.
 
-### C7: SpectralMorphEngine Stereo Incoherence
+### C7: SpectralMorphEngine Stereo Incoherence (Transient Detection)
 - **File:** `src/Core/SpectralMorphEngine.cpp`  
-- **Root Cause:** The left and right channels computed separate FFT magnitudes and phases, causing stereo field collapse or comb-filtering when the two channels drifted.  
-- **Fix:** Both channels now use the **same** interpolated magnitude and phase from the spectral analysis, applied to each channel's original signal. This preserves the stereo field while morphing the spectral content.  
-- **Impact:** Stereo spectral morphing now preserves spatial coherence.
+- **Root Cause:** Transient detection ran independently on each channel during spectral processing, modifying the morph alpha parameter dynamically per channel. This caused stereo image shifts and phase issues when transients were detected asymmetrically.  
+- **Fix:** Share transient-modified alpha values between channels. Channel 0 runs transient detection and saves the resulting alphas to the `blockAlphas_` shared array; subsequent channels reuse the cached alpha for that hop index.  
+- **Impact:** Perfect channel synchronization and stereo coherence during transient-preserved morphing.
 
 ### C8 + C9: PhysicsEngine Underdamped + Energy Injection
 - **File:** `src/Core/PhysicsEngine.cpp` / `.h`  
 - **Root Cause:** Heavy preset used `dampingRatio = 0.9` (underdamped), causing oscillation. The update order was explicit Euler (position then velocity), which is unconditionally unstable for springs. The symplectic formulation was missing the implicit damping term, injecting energy.  
-- **Fix:** Heavy preset: `dampingRatio = 1.02` (critically damped). Updated to **symplectic Euler with half-step implicit damping**: compute damping factor first, then velocity, then position.  
-- **Impact:** Elastic physics no longer oscillates or blows up.
+- **Fix:** Raised Heavy preset to `dampingRatio = 1.5f` (overdamped) to ensure no overshoot or oscillation. Updated the spring integration to **symplectic Euler with fully implicit velocity damping** (`1.0f / (1.0f + damping * subDt)`) to guarantee energy dissipation. Added adaptive sub-stepping to guarantee numerical stability at larger time steps (`dt`).  
+- **Impact:** Elastic physics settles smoothly and predictably without ringing, jitter, or numerical blow-up.
 
 ### C10: `getAIAssistant()` Null Dereference
 - **File:** `src/Plugin/PluginProcessor.h`  
@@ -99,8 +99,8 @@ A comprehensive production-readiness audit identified 47 issues across threading
 ### C15: EnvelopeFollower `std::pow` on Audio Thread
 - **File:** `src/Core/EnvelopeFollower.cpp`  
 - **Root Cause:** The attack/release shaping used `std::pow()` inside the per-sample audio loop. `std::pow` is not real-time safe on many platforms.  
-- **Fix:** Replaced with `fastLog2Approx()` + bit-shift exponentiation (polynomial approximation). Result is within 0.01 dB of `std::pow` and executes in constant time.  
-- **Impact:** Envelope follower no longer allocates or calls non-RT functions on the audio thread.
+- **Fix:** Pre-computes `logAttackCoeff_`/`logReleaseCoeff_` on the setting/message thread using `std::log(coeff)`. In the audio callback, if `numSamples` matches the prepared `blockSize_`, uses pre-computed block coefficients (`attackCoeffPerBlock_`/`releaseCoeffPerBlock_`). If the sizes differ, it falls back to `std::exp(numSamples * logBase)` which is significantly faster than `std::pow` and real-time safe.  
+- **Impact:** Envelope follower no longer calls `std::pow` on the audio thread, guaranteeing real-time safety.
 
 ### C16: PerformanceProfiler Allocation on Audio Thread
 - **File:** `src/Core/PerformanceProfiler.cpp` / `.h`  

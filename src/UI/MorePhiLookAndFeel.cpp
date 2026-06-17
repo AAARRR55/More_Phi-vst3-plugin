@@ -1,11 +1,61 @@
 /* More-Phi — UI/MorePhiLookAndFeel.cpp */
 #include "MorePhiLookAndFeel.h"
+#include "BinaryData.h"
 #include <cmath>
 
 namespace more_phi {
 
+namespace {
+// Cached typeface family names resolved from the embedded TTFs.
+juce::String g_displayTypeface;  // Syncopate
+juce::String g_bodyTypeface;     // Outfit
+bool g_fontsRegistered = false;
+}
+
+void MorePhiLookAndFeel::ensureFontsRegistered()
+{
+    if (g_fontsRegistered)
+        return;
+    g_fontsRegistered = true;
+
+    auto registerFace = [](const void* data, int size) -> juce::String
+    {
+        if (data == nullptr || size <= 0)
+            return {};
+        auto tf = juce::Typeface::createSystemTypefaceFor(data, static_cast<size_t>(size));
+        return tf != nullptr ? tf->getName() : juce::String{};
+    };
+
+    // Syncopate (display) — bold weight is the brand wordmark look.
+    g_displayTypeface = registerFace(BinaryData::SyncopateBold_ttf,
+                                     BinaryData::SyncopateBold_ttfSize);
+    registerFace(BinaryData::SyncopateRegular_ttf, BinaryData::SyncopateRegular_ttfSize);
+
+    // Outfit (body / values).
+    g_bodyTypeface = registerFace(BinaryData::OutfitRegular_ttf,
+                                  BinaryData::OutfitRegular_ttfSize);
+    registerFace(BinaryData::OutfitSemiBold_ttf, BinaryData::OutfitSemiBold_ttfSize);
+
+    if (g_displayTypeface.isEmpty()) g_displayTypeface = "Syncopate";
+    if (g_bodyTypeface.isEmpty())    g_bodyTypeface = "Outfit";
+}
+
+const juce::String& MorePhiLookAndFeel::displayTypefaceName()
+{
+    ensureFontsRegistered();
+    return g_displayTypeface;
+}
+
+const juce::String& MorePhiLookAndFeel::bodyTypefaceName()
+{
+    ensureFontsRegistered();
+    return g_bodyTypeface;
+}
+
 MorePhiLookAndFeel::MorePhiLookAndFeel()
 {
+    ensureFontsRegistered();
+
     // Global defaults — gold primary, cyan interactive accents
     setColour(juce::ResizableWindow::backgroundColourId, backgroundDark);
     setColour(juce::TextButton::buttonColourId, surfaceColour);
@@ -26,8 +76,8 @@ MorePhiLookAndFeel::MorePhiLookAndFeel()
     setColour(juce::Slider::textBoxTextColourId, textSecondary);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
-    // Default font with fallbacks (matches the landing page's clean grotesk body)
-    setDefaultSansSerifTypefaceName("Inter");
+    // Default body font: Outfit (matches the landing page's clean grotesk body)
+    setDefaultSansSerifTypefaceName(g_bodyTypeface);
 }
 
 // ── Font Scaling ─────────────────────────────────────────────────────────────
@@ -42,7 +92,7 @@ float MorePhiLookAndFeel::getScaledFontSize(float baseSize, float editorWidth, f
 juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float editorWidth,
                                                 float minSize, int style)
 {
-    return juce::Font(juce::FontOptions("Inter",
+    return juce::Font(juce::FontOptions(bodyTypefaceName(),
                                          getScaledFontSize(baseSize, editorWidth, minSize),
                                          style));
 }
@@ -69,10 +119,17 @@ juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float minSize, int
 
 juce::Font MorePhiLookAndFeel::makeRoleFont(FontRole role, int style) const
 {
+    // Title + Section labels use Syncopate (display); everything else uses Outfit.
+    auto withFamily = [this, style](const juce::String& family, float base, float minSize)
+    {
+        return juce::Font(juce::FontOptions(
+            family, getScaledFontSize(base, minSize), style));
+    };
+
     switch (role)
     {
-        case FontRole::Title:   return makeScaledFont(20.0f, 16.0f, style);
-        case FontRole::Section: return makeScaledFont(10.5f, kMinSectionLabel, style);
+        case FontRole::Title:   return withFamily(displayTypefaceName(), 20.0f, 16.0f);
+        case FontRole::Section: return withFamily(displayTypefaceName(), 10.5f, kMinSectionLabel);
         case FontRole::Control: return makeScaledFont(12.0f, kMinControlLabel, style);
         case FontRole::Value:   return makeScaledFont(11.0f, kMinValueLabel, style);
         case FontRole::Micro:   return makeScaledFont(10.0f, kMinModeLabel, style);
@@ -183,7 +240,16 @@ void MorePhiLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
                 valueArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f,
                                         angle, centreAngle, true);
 
-            g.setColour(clampedPos >= centreNorm ? fillColour : accentPurple.withMultipliedAlpha(alpha));
+            const juce::Colour arcColour =
+                clampedPos >= centreNorm ? fillColour : accentPurple.withMultipliedAlpha(alpha);
+            // Neon glow: wide, low-alpha passes underneath the crisp value arc.
+            g.setColour(arcColour.withMultipliedAlpha(0.18f));
+            g.strokePath(valueArc, juce::PathStrokeType(stroke * 3.0f, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+            g.setColour(arcColour.withMultipliedAlpha(0.30f));
+            g.strokePath(valueArc, juce::PathStrokeType(stroke * 1.9f, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+            g.setColour(arcColour);
             g.strokePath(valueArc, juce::PathStrokeType(stroke, juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
         }
@@ -193,6 +259,13 @@ void MorePhiLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
         juce::Path valueArc;
         valueArc.addCentredArc(cx, cy, radius - stroke, radius - stroke, 0.0f,
                                 startAngle, angle, true);
+        // Neon glow: wide, low-alpha passes underneath the crisp value arc.
+        g.setColour(fillColour.withMultipliedAlpha(0.18f));
+        g.strokePath(valueArc, juce::PathStrokeType(stroke * 3.0f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+        g.setColour(fillColour.withMultipliedAlpha(0.30f));
+        g.strokePath(valueArc, juce::PathStrokeType(stroke * 1.9f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
         g.setColour(fillColour);
         g.strokePath(valueArc, juce::PathStrokeType(stroke, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));

@@ -89,9 +89,9 @@ LLMModelFetchResult modelError(const juce::String& message)
 juce::String authHeadersFor(LLMProviderId providerId, const juce::String& apiKey)
 {
     if (providerId == LLMProviderId::Anthropic)
-        return "x-api-key: " + apiKey + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\n";
+        return "x-api-key: " + apiKey + "\r\nanthropic-version: 2023-06-01\r\nContent-Type: application/json; charset=utf-8\r\n";
 
-    return "Authorization: Bearer " + apiKey + "\r\ncontent-type: application/json\r\n";
+    return "Authorization: Bearer " + apiKey + "\r\nContent-Type: application/json; charset=utf-8\r\n";
 }
 
 void addModelId(juce::StringArray& models, const nlohmann::json& item)
@@ -308,18 +308,70 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
 
     const auto body = request.body.toRawUTF8();
     const DWORD bodyBytes = request.method == LLMHttpMethod::Post
-                                ? static_cast<DWORD>(std::strlen(body))
+                                ? static_cast<DWORD>(request.body.getNumBytesAsUTF8())
                                 : 0;
+
+    // Pre-send validation: verify the request body is valid UTF-8 and parseable
+    // JSON. This catches any encoding corruption that could cause the provider
+    // to reject the request with HTTP 400 ("Expecting ':' delimiter" etc.) —
+    // e.g. if a previous response was decoded as Windows-1252 and the mojibake
+    // leaked into conversation history. The canary is cheap (single-pass UTF-8
+    // check + JSON parse on an already-built body) and prevents the most common
+    // class of transport-level body corruption.
+    if (bodyBytes > 0)
+    {
+        const auto* ubody = reinterpret_cast<const unsigned char*>(body);
+        bool validUtf8 = true;
+        for (DWORD i = 0; i < bodyBytes && validUtf8;)
+        {
+            const auto b = ubody[i];
+            const int seqLen = (b < 0x80) ? 1
+                             : (b < 0xC0) ? 0   // continuation without lead — invalid
+                             : (b < 0xE0) ? 2
+                             : (b < 0xF0) ? 3
+                             : (b < 0xF5) ? 4
+                             : 0;               // 0xF5..0xFF — invalid lead
+            if (seqLen == 0 || i + seqLen > bodyBytes)
+            { validUtf8 = false; break; }
+            for (int j = 1; j < seqLen; ++j)
+                if ((ubody[i + j] & 0xC0) != 0x80)
+                { validUtf8 = false; break; }
+            i += seqLen;
+        }
+        if (!validUtf8)
+            return {0, "Request body contains invalid UTF-8 — possible encoding corruption "
+                       "from a previous LLM response. Clear the conversation history and retry.", {}};
+
+        try { (void)nlohmann::json::parse(body, body + bodyBytes); }
+        catch (const nlohmann::json::parse_error& e)
+        {
+            return {0, juce::String("Request body is not valid JSON (") + e.what() +
+                       "). This indicates request-body corruption. "
+                       "Clear the conversation history and retry.", {}};
+        }
+    }
 
     if (!WinHttpSendRequest(httpRequest,
                             WINHTTP_NO_ADDITIONAL_HEADERS,
                             0,
-                            bodyBytes > 0 ? const_cast<char*>(body) : WINHTTP_NO_REQUEST_DATA,
-                            bodyBytes,
+                            WINHTTP_NO_REQUEST_DATA,
+                            0,
                             bodyBytes,
                             0))
     {
         return winHttpFailure("send request");
+    }
+
+    if (bodyBytes > 0)
+    {
+        DWORD bytesWritten = 0;
+        if (!WinHttpWriteData(httpRequest,
+                              body,
+                              bodyBytes,
+                              &bytesWritten))
+        {
+            return winHttpFailure("write data");
+        }
     }
 
     if (!WinHttpReceiveResponse(httpRequest, nullptr))
@@ -351,7 +403,18 @@ LLMHttpResponse executeWithWinHttp(const LLMHttpRequest& request)
         responseBody.write(buffer.data(), bytesRead);
     }
 
-    return {static_cast<int>(statusCode), responseBody.toString(), {}};
+    // Decode the response body as strict UTF-8. Do NOT use MemoryOutputStream::toString()
+    // (-> String::createStringFromData): if the body contains even one byte that isn't valid
+    // UTF-8, that helper re-decodes the WHOLE body as Windows-1252, mojibake'ing every UTF-8
+    // emoji/em-dash in LLM replies. The corrupted text is then stored in conversation history
+    // and re-sent, injecting invalid bytes that make the provider's JSON parser fail
+    // ("Expecting ':' delimiter" HTTP 400). fromUTF8 preserves valid UTF-8 and degrades any
+    // stray byte to U+FFFD instead of corrupting the entire string.
+    const auto responseText = juce::String::fromUTF8(
+        static_cast<const char*>(responseBody.getData()),
+        static_cast<int>(responseBody.getDataSize()));
+
+    return {static_cast<int>(statusCode), responseText, {}};
 }
 #endif
 
@@ -436,24 +499,24 @@ LLMHttpRequest LLMConnectionValidator::buildTestPromptRequestForTest(LLMProvider
     if (providerId == LLMProviderId::Anthropic)
     {
         nlohmann::json body;
-        body["model"] = model.toStdString();
+        body["model"] = model.toRawUTF8();
         body["max_tokens"] = 16;
         body["messages"] = {{{"role", "user"}, {"content", testPrompt}}};
         return {LLMHttpMethod::Post,
                 baseUrl + "/v1/messages",
                 authHeadersFor(providerId, settings.apiKey.trim()),
-                juce::String(body.dump()),
+                juce::String::fromUTF8(body.dump().c_str()),
                 timeoutFor(providerId, LLMValidationOperation::TestPrompt)};
     }
 
     nlohmann::json body;
-    body["model"] = model.toStdString();
+    body["model"] = model.toRawUTF8();
     body["max_tokens"] = 16;
     body["messages"] = {{{"role", "user"}, {"content", testPrompt}}};
     return {LLMHttpMethod::Post,
             baseUrl + "/chat/completions",
             authHeadersFor(providerId, settings.apiKey.trim()),
-            juce::String(body.dump()),
+            juce::String::fromUTF8(body.dump().c_str()),
             timeoutFor(providerId, LLMValidationOperation::TestPrompt)};
 }
 
@@ -468,7 +531,7 @@ LLMModelFetchResult LLMConnectionValidator::parseModelListForTest(LLMProviderId 
 
     try
     {
-        const auto root = nlohmann::json::parse(body.toStdString());
+        const auto root = nlohmann::json::parse(body.toRawUTF8());
         juce::StringArray models;
         if (root.contains("data"))
             collectModels(models, root["data"]);
@@ -501,7 +564,7 @@ LLMValidationResult LLMConnectionValidator::parseTestPromptForTest(LLMProviderId
 
     try
     {
-        const auto root = nlohmann::json::parse(body.toStdString());
+        const auto root = nlohmann::json::parse(body.toRawUTF8());
         const auto text = providerId == LLMProviderId::Anthropic ? extractAnthropicText(root) : extractOpenAIText(root);
         if (!text.trim().contains("OK"))
             return inputError("Test prompt failure: provider did not reply with OK.");

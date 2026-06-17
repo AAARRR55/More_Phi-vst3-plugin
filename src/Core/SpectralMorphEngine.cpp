@@ -131,6 +131,11 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
         ch.hopCount = 0;
     }
 
+    // Size blockAlphas_ to support the maximum number of hops in a block.
+    // Minimum 128 elements to prevent reallocation in the audio path.
+    const int maxHops = std::max(128, (maxBlockSize / hopSize_) + 2);
+    blockAlphas_.assign(static_cast<size_t>(maxHops), 0.0f);
+
     for (auto& det : transientDetectors_)
         det.prepare(static_cast<float>(sampleRate_), hopSize_);
 }
@@ -215,8 +220,6 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
     if (numSamples <= 0)
         return;
 
-    float effectiveAlpha = alpha;
-
     for (int c = 0; c < numChannels; ++c)
     {
         ChannelState& ch = channels_[static_cast<size_t>(c)];
@@ -226,6 +229,8 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
                            ? std::min(c, bufB.getNumChannels() - 1) : -1;
         const float* inA = bufA.getReadPointer(c);
         const float* inB = (chB >= 0) ? bufB.getReadPointer(chB) : nullptr;
+
+        int hopIndex = 0;
 
         // ── Feed input into circular ring buffers and trigger frames ──────────
         for (int i = 0; i < numSamples; ++i)
@@ -241,14 +246,30 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
             {
                 ch.hopCount = 0;
 
-                // Transient detection uses previous frame's magA (stale by one
-                // hop, which is acceptable — detection latency = one hop = ~12ms).
-                // Compute once on channel 0 and apply to all channels for stereo coherence.
-                if (transientPreserve_.load(std::memory_order_relaxed) && c == 0)
-                    effectiveAlpha = transientDetectors_[0].process(
-                        ch.magA.data(), numBins_, alpha);
+                float currentAlpha = alpha;
+                if (transientPreserve_.load(std::memory_order_relaxed))
+                {
+                    if (c == 0)
+                    {
+                        // Transient detection uses previous frame's magA (stale by one
+                        // hop, which is acceptable — detection latency = one hop = ~12ms).
+                        currentAlpha = transientDetectors_[0].process(
+                            ch.magA.data(), numBins_, alpha);
+                        
+                        // Store the alpha for subsequent channels
+                        if (hopIndex < static_cast<int>(blockAlphas_.size()))
+                            blockAlphas_[static_cast<size_t>(hopIndex)] = currentAlpha;
+                    }
+                    else
+                    {
+                        // Reuse the stored alpha from channel 0 for perfect stereo coherence
+                        if (hopIndex < static_cast<int>(blockAlphas_.size()))
+                            currentAlpha = blockAlphas_[static_cast<size_t>(hopIndex)];
+                    }
+                }
 
-                processFrame(ch, effectiveAlpha);
+                processFrame(ch, currentAlpha);
+                ++hopIndex;
             }
         }
 

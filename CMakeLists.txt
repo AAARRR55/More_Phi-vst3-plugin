@@ -124,6 +124,17 @@ else()
     set(MORE_PHI_PLUGIN_FORMATS VST3)
 endif()
 
+# ── Embedded Fonts (BinaryData) ───────────────────────────────────────────────
+# Bundle the landing-page brand typefaces so the GUI renders identically on every
+# machine (Syncopate = wordmark/section labels, Outfit = body/value text).
+juce_add_binary_data(MorePhiFonts
+    SOURCES
+        assets/fonts/Syncopate-Bold.ttf
+        assets/fonts/Syncopate-Regular.ttf
+        assets/fonts/Outfit-Regular.ttf
+        assets/fonts/Outfit-SemiBold.ttf
+)
+
 # ── Plugin Target ─────────────────────────────────────────────────────────────
 juce_add_plugin(MorePhi
     COMPANY_NAME            "MorePhi"
@@ -371,12 +382,18 @@ set(MORE_PHI_AI_SOURCES
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
     src/AI/MCPToolHandler.cpp
+    src/AI/ToolResultCache.h
+    src/AI/ToolResultCache.cpp
+    src/AI/AsyncToolExecutor.h
+    src/AI/AsyncToolExecutor.cpp
     src/AI/LinkBroadcaster.h
     src/AI/LinkBroadcaster.cpp
     src/AI/TokenOptimizer.h
     src/AI/TokenOptimizer.cpp
     src/AI/MCPToolsExtended.h
     src/AI/MCPToolsExtended.cpp
+    src/AI/VST3IPCBridge.h
+    src/AI/VST3IPCBridge.cpp
     src/AI/OzoneParameterMap.h
     src/AI/OzoneParameterMap.cpp
     src/AI/OzonePlanApplicator.h
@@ -603,6 +620,7 @@ endif()
 # ── JUCE Modules ──────────────────────────────────────────────────────────────
 target_link_libraries(MorePhi
     PRIVATE
+        MorePhiFonts
         juce::juce_audio_basics
         juce::juce_audio_formats
         juce::juce_audio_plugin_client

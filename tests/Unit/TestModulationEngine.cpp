@@ -22,6 +22,7 @@
 
 #include "Core/ModulationTypes.h"
 #include "../Mocks/MockV2Interfaces.h"
+#include "Core/EnvelopeFollower.h"
 
 #include <vector>
 #include <array>
@@ -829,4 +830,31 @@ TEST_CASE("ModulationMatrix: output is always clamped to [0, 1]", "[modulation][
 
     REQUIRE(params[0] <= 1.0f);
     REQUIRE(params[0] >= 0.0f);
+}
+
+// ── Added Tests for production EnvelopeFollower ────────────────────────────────
+TEST_CASE("Production EnvelopeFollower: precomputed log coefficients and block size mismatch fallback", "[modulation][envelope][production]")
+{
+    EnvelopeFollower ef;
+    
+    // Test prepare and parameter settings
+    ef.prepare(44100.0, 256);
+    ef.setAttack(10.0f);
+    ef.setRelease(100.0f);
+    
+    // Process matching block size (256 samples)
+    std::vector<float> matchingBlock(256, 0.5f);
+    float outMatching = ef.process(matchingBlock.data(), 256);
+    REQUIRE(outMatching > 0.0f);
+    REQUIRE(outMatching <= 1.0f);
+    
+    // Process mismatching block size (128 samples) to trigger exp/log precomputed fallback path
+    std::vector<float> mismatchingBlock(128, 0.5f);
+    float outMismatching = ef.process(mismatchingBlock.data(), 128);
+    REQUIRE(outMismatching > outMatching); // Signal is steady, follower should rise further
+    REQUIRE(outMismatching <= 1.0f);
+    
+    // Process zero samples
+    float outZero = ef.process(nullptr, 0);
+    REQUIRE(outZero == Approx(outMismatching));
 }

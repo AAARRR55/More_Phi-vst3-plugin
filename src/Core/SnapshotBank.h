@@ -37,6 +37,15 @@ namespace more_phi {
 
 class IParameterBridge;  // forward
 
+inline void spinPause() noexcept
+{
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    _mm_pause();
+#elif defined(__arm__) || defined(__aarch64__)
+    __asm__ __volatile__("yield" ::: "memory");
+#endif
+}
+
 /** Controls how snapshots are recalled.
  *  Fast: normalized floats only (instant, works for most plugins)
  *  Full: also stores/restores VST3 opaque state chunk (for Kontakt, wavetable synths) */
@@ -118,7 +127,7 @@ public:
             for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
             {
                 uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
-                if ((seq1 & 1) != 0) continue;
+                if ((seq1 & 1) != 0) { spinPause(); continue; }
 
                 occupied = (*slots_)[i].occupied;
                 count = (*slots_)[i].parameterCount;
@@ -126,54 +135,53 @@ public:
                 if (occupied && count > 0)
                     std::copy_n((*slots_)[i].values.begin(), count, valuesBuf.begin());
 
-                std::atomic_thread_fence(std::memory_order_acquire);
-                uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
-                if (seq1 == seq2)
-                {
-                    readOk = true;
-                    break;
-                }
-            }
-
-            if (!readOk) continue;
-
-            if (occupied)
-            {
-                // Read paramNames and chunk outside the seqlock window.
                 juce::StringArray namesBuf;
-                juce::MemoryBlock chunkBuf;
                 {
                     const juce::SpinLock::ScopedLockType lock(writeLock_);
                     namesBuf = paramNames_[i];
                 }
+                juce::MemoryBlock chunkBuf;
                 {
                     const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
                     if (occupied)
                         chunkBuf = stateChunks_[i];
                 }
 
-                auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
-                slotXml->setAttribute("id", i);
-                slotXml->setAttribute("paramCount", count);
-                slotXml->setAttribute("name", juce::String(nameBuf));
+                std::atomic_thread_fence(std::memory_order_acquire);
+                uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+                if (seq1 == seq2)
+                {
+                    readOk = true;
 
-                if (count > 0) {
-                    juce::MemoryBlock block(valuesBuf.data(),
-                                            static_cast<size_t>(count) * sizeof(float));
-                    slotXml->setAttribute("values", block.toBase64Encoding());
+                    if (occupied)
+                    {
+                        auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
+                        slotXml->setAttribute("id", i);
+                        slotXml->setAttribute("paramCount", count);
+                        slotXml->setAttribute("name", juce::String(nameBuf));
 
-                    // Store parameter names for forward compatibility (VST3-H1)
-                    auto namesXml = slotXml->createNewChildElement("PARAM_NAMES");
-                    const int nameCount = juce::jmin(namesBuf.size(), count);
-                    for (int p = 0; p < nameCount; ++p)
-                        namesXml->setAttribute("p" + juce::String(p), namesBuf[p]);
+                        if (count > 0) {
+                            juce::MemoryBlock block(valuesBuf.data(),
+                                                    static_cast<size_t>(count) * sizeof(float));
+                            slotXml->setAttribute("values", block.toBase64Encoding());
+
+                            auto namesXml = slotXml->createNewChildElement("PARAM_NAMES");
+                            const int nameCount = juce::jmin(namesBuf.size(), count);
+                            for (int p = 0; p < nameCount; ++p)
+                                namesXml->setAttribute("p" + juce::String(p), namesBuf[p]);
+                        }
+
+                        if (chunkBuf.getSize() > 0)
+                            slotXml->setAttribute("stateChunk", chunkBuf.toBase64Encoding());
+
+                        xml->addChildElement(slotXml.release());
+                    }
+
+                    break;
                 }
-
-                if (chunkBuf.getSize() > 0)
-                    slotXml->setAttribute("stateChunk", chunkBuf.toBase64Encoding());
-
-                xml->addChildElement(slotXml.release());
             }
+
+            if (!readOk) continue;
         }
         return xml;
     }
@@ -195,19 +203,18 @@ public:
 
             int slot = child->getIntAttribute("id", -1);
             int count = child->getIntAttribute("paramCount", 0);
-            count = juce::jlimit(0, MAX_PARAMETERS, count);
+            int safeCount = juce::jlimit(0, MAX_PARAMETERS, count);
             if (slot < 0 || slot >= NUM_SLOTS) continue;
 
             juce::String name = child->getStringAttribute("name", "");
             juce::String base64 = child->getStringAttribute("values", "");
             juce::String stateBase64 = child->getStringAttribute("stateChunk", "");
 
-            if (base64.isNotEmpty() && count > 0)
+            if (base64.isNotEmpty() && safeCount > 0)
             {
                 juce::MemoryBlock block;
                 if (block.fromBase64Encoding(base64))
                 {
-                    int safeCount = juce::jmin(count, MAX_PARAMETERS);
                     int expectedBytes = safeCount * static_cast<int>(sizeof(float));
                     if (static_cast<int>(block.getSize()) >= expectedBytes)
                     {
@@ -217,7 +224,6 @@ public:
                 }
             }
             else {
-                // FIX C23: An empty slot with only a name is not occupied.
                 (*tmpSlots)[slot].setName(name.toRawUTF8());
                 (*tmpSlots)[slot].occupied = false;
             }
@@ -225,7 +231,7 @@ public:
             // Restore parameter names (VST3-H1)
             if (auto* namesEl = child->getChildByName("PARAM_NAMES"))
             {
-                for (int p = 0; p < count; ++p)
+                for (int p = 0; p < safeCount; ++p)
                 {
                     juce::String paramName = namesEl->getStringAttribute("p" + juce::String(p), "");
                     if (paramName.isNotEmpty())
@@ -278,12 +284,7 @@ public:
             // If odd, a write is in progress - retry immediately
             if ((seq1 & 1) != 0)
             {
-                // Spin pause hint for better performance on x86
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                _mm_pause();
-                #elif defined(__arm__) || defined(__aarch64__)
-                __asm__ __volatile__("yield" ::: "memory");
-                #endif
+                spinPause();
                 continue;
             }
 
@@ -385,11 +386,7 @@ private:
             uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
             if ((seq1 & 1) != 0)
             {
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                _mm_pause();
-                #elif defined(__arm__) || defined(__aarch64__)
-                __asm__ __volatile__("yield" ::: "memory");
-                #endif
+                spinPause();
                 continue;
             }
 
@@ -440,7 +437,7 @@ private:
         for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
         {
             uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
-            if ((seq1 & 1) != 0) continue;
+            if ((seq1 & 1) != 0) { spinPause(); continue; }
             occupied = (*slots_)[slot].occupied;
             // C-1: acquire fence pairs with writer's release fence.
             std::atomic_thread_fence(std::memory_order_acquire);

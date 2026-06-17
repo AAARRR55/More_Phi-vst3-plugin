@@ -98,7 +98,8 @@ private:
     void setPresetsTabVisible(bool visible);
     void setAITabVisible(bool visible);
 
-    float lastDbLevel_ = -1.0f;  // RMS meter throttle state (per-instance)
+    float lastDbLevel_ = -1.0f;     // RMS meter throttle state (per-instance)
+    float smoothedDbLevel_ = 0.0f;  // Eased OUT-meter level for smooth glide animation
 
     LicenseActivationOverlay licenseOverlay;
 

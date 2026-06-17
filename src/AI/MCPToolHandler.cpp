@@ -52,6 +52,21 @@ namespace more_phi {
 
 using json = nlohmann::json;
 
+// Static cache/executor instances for read-only tool acceleration and
+// background tool execution. These are keyed by generation token / job id
+// so they are safe across multiple More-Phi instances.
+static ToolResultCache& toolResultCache()
+{
+    static ToolResultCache instance(128);
+    return instance;
+}
+
+static AsyncToolExecutor& asyncToolExecutor()
+{
+    static AsyncToolExecutor instance;
+    return instance;
+}
+
 // Serialize a nlohmann::json object to juce::String
 static juce::String toJString(const json& j)
 {
@@ -316,6 +331,26 @@ static json buildApprovalPredictedDiff(const juce::String& method,
     return preview;
 }
 
+static juce::String suggestedActionForError(const juce::String& errorCode)
+{
+    auto lower = errorCode.toLowerCase();
+    if (lower == "queue_full")          return "Retry after 50 ms or reduce the parameter batch size.";
+    if (lower == "plugin_not_loaded")   return "Load a hosted plugin first using hosted_plugin.load.";
+    if (lower == "invalid_param_id")    return "Use list_parameters to find a valid stableId/index/name.";
+    if (lower == "approval_required")   return "Request user approval or raise the autonomy level.";
+    if (lower == "rate_limit_exceeded") return "Wait briefly before sending the next request.";
+    if (lower == "snapshot_slot_empty") return "Capture a snapshot into the slot before recalling it.";
+    if (lower == "transaction_not_found") return "Check the transaction_id or use automation.history.";
+    if (lower == "rollback_unavailable") return "This transaction type does not support rollback.";
+    if (lower == "pending_parameter_edits") return "Flush pending edits or wait for the queue to drain.";
+    // Verification failure modes (Phase 1 execution verification).
+    if (lower == "value_drift")        return "The applied value differs from the request (the parameter may be discrete or clamped by the host); re-read the parameter and adjust.";
+    if (lower == "out_of_range")       return "Clamp the value to the parameter's valid range and retry.";
+    if (lower == "timeout")            return "Retry with a smaller batch or check the hosted plugin's responsiveness.";
+    if (lower == "plugin_not_ready")   return "Wait for the hosted plugin to finish initializing, then retry.";
+    return "Check the error details and retry; report if the error persists.";
+}
+
 static juce::String dispatchWithAutomationTransaction(const juce::String& method,
                                                        const juce::var& params,
                                                        MorePhiProcessor& p,
@@ -381,6 +416,7 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
     });
 
     juce::String rawResponse;
+    const auto execT0 = std::chrono::high_resolution_clock::now();
     try
     {
         rawResponse = executor();
@@ -393,13 +429,18 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
     {
         rawResponse = toJString(json{{"success", false}, {"error", "unknown_exception"}});
     }
+    const auto execT1 = std::chrono::high_resolution_clock::now();
+    const double latencyMs = std::chrono::duration<double, std::milli>(execT1 - execT0).count();
 
     transaction.completedAt = juce::Time::getCurrentTime();
     transaction.afterState = captureAutomationState(p);
     transaction.result = parseToolResponse(rawResponse);
     transaction.success = transaction.result.is_object() && transaction.result.value("success", false);
+    if (transaction.success)
+        MCPToolHandler::invalidateToolResultCache();
     transaction.errorCode = extractErrorCode(transaction.result);
     transaction.measurements = buildTransactionMeasurements(transaction.beforeState, transaction.afterState);
+    transaction.measurements["latency_ms"] = latencyMs;
     transaction = runtime.ledger().record(transaction);
     std::optional<MemoryRecord> automaticOutcomeRecord;
 
@@ -431,11 +472,53 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
     if (transaction.result.is_object())
     {
         transaction.result["transaction_id"] = transaction.id.toStdString();
+        transaction.result["latency_ms"] = latencyMs;
+        if (!transaction.success && transaction.errorCode.isNotEmpty())
+            transaction.result["suggested_action"] = suggestedActionForError(transaction.errorCode).toStdString();
+
         transaction.result["automation"] = json{
             {"transaction_id", transaction.id.toStdString()},
             {"risk", toString(transaction.risk).toStdString()},
             {"rollback_available", transaction.rollbackPlan.value("available", false)}
         };
+
+        // Inject transaction context into every nested verification object so the
+        // AI caller receives a self-contained VerificationReceipt per spec §5.1
+        // (transaction_id, rollback_id, audio_state_delta).
+        const std::string txnId = transaction.id.toStdString();
+        const std::string rbId = transaction.rollbackPlan.value("rollback_id", "");
+        const float stateDelta = transaction.beforeState.is_object() && transaction.afterState.is_object()
+            ? static_cast<float>(transaction.afterState.value("param_checksum", 0ull) -
+                                 transaction.beforeState.value("param_checksum", 0ull))
+            : 0.0f;
+
+        auto injectVerificationContext = [&](json& obj, auto& self) -> void
+        {
+            if (obj.is_object())
+            {
+                if (obj.contains("verification") && obj["verification"].is_object())
+                {
+                    auto& v = obj["verification"];
+                    v["transaction_id"] = txnId;
+                    if (!rbId.empty()) v["rollback_id"] = rbId;
+                    v["audio_state_delta"] = stateDelta;
+                }
+                for (auto& [key, val] : obj.items())
+                    self(val, self);
+            }
+            else if (obj.is_array())
+            {
+                for (auto& item : obj)
+                    self(item, self);
+            }
+        };
+        injectVerificationContext(transaction.result, injectVerificationContext);
+
+        if (transaction.result.contains("verification"))
+        {
+            transaction.result["receipt"] = transaction.result["verification"];
+        }
+
         if (automaticOutcomeRecord.has_value())
         {
             transaction.result["automation"]["outcome_recorded"] = true;
@@ -924,7 +1007,7 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
             return json{{"success", false}, {"error", "queue_full"}, {"transaction_id", transactionId.toStdString()}};
 
         const auto flush = p.flushPendingParameterCommandsForAssistant(
-            juce::jmax(2048, static_cast<int>(commands.size())), 75);
+            juce::jmax(2048, static_cast<int>(commands.size())));
         return json{
             {"success", true},
             {"transaction_id", transactionId.toStdString()},
@@ -1365,7 +1448,14 @@ struct ToolDefinition
     const char* name;
     const char* description;
     const char* inputSchema;
+    const char* outputSchema = nullptr;   // optional; emitted in tools/list when present
 };
+
+// Shared output schema for the verified parameter-write tools. Declares the
+// `verification{}` block (Phase 1 execution verification) so clients know the
+// success/index/value_before/value_after/verified fields to expect.
+static constexpr const char* kVerifiedWriteOutputSchema =
+R"({"type":"object","properties":{"success":{"type":"boolean"},"index":{"type":"integer"},"value":{"type":"number"},"queued":{"type":"integer"},"rejected":{"type":"integer"},"verification":{"type":"object","properties":{"status":{"type":"string","enum":["success","queued","value_drift","failure"]},"requested_value":{"type":"number"},"value_before":{"type":"number"},"value_after":{"type":"number"},"human_before":{"type":"string"},"human_after":{"type":"string"},"execution_time_ms":{"type":"number"},"verified":{"type":"boolean"},"error_reason":{"type":"string"},"corrective_action":{"type":"string"}},"required":["status","value_before","value_after","verified"]}}})";
 
 struct DryRunCandidateRecord
 {
@@ -1614,8 +1704,100 @@ static json parameterFlushToJson(const MorePhiProcessor::ParameterCommandFlushRe
         {"drained", flush.drained},
         {"pending_after", flush.pendingAfter},
         {"plugin_unavailable", flush.pluginUnavailable},
-        {"exclusive_access_timed_out", flush.exclusiveAccessTimedOut}
+        {"exclusive_access_timed_out", flush.exclusiveAccessTimedOut},
+        {"retry_count", flush.retryCount},
+        {"waited_ms", flush.waitedMs}
     };
+}
+
+// ── Execution verification (AI↔MCP↔VST3 Phase 1) ──────────────────────────
+// Every parameter-write tool captures value_before / value_after so the AI's
+// "applied X → Y" confirmations are verifiable rather than assumed. Continuous
+// parameters apply within tolerance; discrete parameters may legitimately snap
+// to a step, which surfaces as a (non-fatal) value_drift status with a
+// corrective action instead of a silent mismatch.
+static constexpr float kVerificationDriftTolerance = 0.01f;
+
+struct VerificationCapture
+{
+    float requestedValue = 0.0f;
+    float valueBefore = 0.0f;
+    float valueAfter = 0.0f;
+    juce::String humanBefore;
+    juce::String humanAfter;
+    juce::String status;
+    juce::String errorReason;
+    juce::String correctiveAction;
+    double executionTimeMs = 0.0;
+    juce::String transactionId;
+    juce::String rollbackId;
+    float audioStateDelta = 0.0f;
+};
+
+// Classifies a write outcome.
+//   applied  - the edit reached the parameter path (queue/resolve succeeded)
+//   drained  - it was actually applied to the underlying parameter this call
+//              (false when still pending in the realtime queue)
+//   requestedValue / valueAfter - clamped normalized target and post-write read
+//   failureCode - error code when !applied (e.g. "queue_full")
+static VerificationCapture classifyVerification(bool applied, bool drained,
+                                                float requestedValue, float valueAfter,
+                                                double executionTimeMs,
+                                                const juce::String& failureCode = {})
+{
+    VerificationCapture v;
+    v.requestedValue = requestedValue;
+    v.valueAfter = valueAfter;
+    v.executionTimeMs = executionTimeMs;
+    if (!applied)
+    {
+        const auto code = failureCode.isEmpty() ? "queue_full" : failureCode;
+        v.status = "failure";
+        v.errorReason = code;
+        v.correctiveAction = suggestedActionForError(code);
+        return v;
+    }
+    if (!drained)
+    {
+        v.status = "queued";
+        v.errorReason = "pending_apply";
+        v.correctiveAction = suggestedActionForError("pending_parameter_edits");
+        return v;
+    }
+    if (std::abs(valueAfter - requestedValue) > kVerificationDriftTolerance)
+    {
+        v.status = "value_drift";
+        v.errorReason = "applied_value_differs_from_requested";
+        v.correctiveAction = suggestedActionForError("value_drift");
+        return v;
+    }
+    v.status = "success";
+    return v;
+}
+
+static json verificationToJson(const VerificationCapture& v)
+{
+    json j{
+        {"status", v.status.toStdString()},
+        {"requested_value", v.requestedValue},
+        {"value_before", v.valueBefore},
+        {"value_after", v.valueAfter},
+        {"human_before", v.humanBefore.toStdString()},
+        {"human_after", v.humanAfter.toStdString()},
+        {"execution_time_ms", v.executionTimeMs},
+        {"verified", v.status == "success"},
+        {"audio_state_delta", v.audioStateDelta}
+    };
+    if (!v.transactionId.isEmpty())
+        j["transaction_id"] = v.transactionId.toStdString();
+    if (!v.rollbackId.isEmpty())
+        j["rollback_id"] = v.rollbackId.toStdString();
+    if (!v.errorReason.isEmpty())
+    {
+        j["error_reason"] = v.errorReason.toStdString();
+        j["corrective_action"] = v.correctiveAction.toStdString();
+    }
+    return j;
 }
 
 static uint64_t checksumNormalizedValues(const std::vector<float>& values)
@@ -1708,16 +1890,16 @@ static const ToolDefinition kCoreTools[] = {
     {"get_plugin_info", "Return More-Phi and hosted plugin identity information.", R"({"type":"object","properties":{}})"},
     {"list_parameters", "List hosted plugin parameters with stable IDs and normalized values.", R"({"type":"object","properties":{}})"},
     {"get_parameter", "Read a hosted plugin parameter by stableId, index, or exact name.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
-    {"set_parameter", "Set one hosted plugin parameter by stableId, index, or exact name using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})"},
-    {"set_parameters_batch", "Set multiple hosted plugin parameters using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}},"params":{"type":"array","items":{"type":"object"}}}})"},
+    {"set_parameter", "Set one hosted plugin parameter by stableId, index, or exact name using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
+    {"set_parameters_batch", "Set multiple hosted plugin parameters using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}},"params":{"type":"array","items":{"type":"object"}}}})", kVerifiedWriteOutputSchema},
     {"capture_snapshot", "Capture the current hosted parameter state into a More-Phi snapshot slot.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"includeState":{"type":"boolean","default":true}},"required":["slot"]})"},
     {"recall_snapshot", "Recall a More-Phi snapshot through the realtime-safe queue.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"mode":{"type":"string","enum":["fast","full"]}},"required":["slot"]})"},
     {"set_morph_position", "Set More-Phi morph pad/fader state.", R"({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"fader":{"type":"number"},"source":{"type":"string","enum":["xy","xypad","fader"]}}})"},
     {"get_morph_state", "Return More-Phi morph pad/fader state.", R"({"type":"object","properties":{}})"},
     {"more_phi.parameters", "List More-Phi's own APVTS runtime controls with normalized values.", R"({"type":"object","properties":{}})"},
     {"more_phi.get_parameter", "Read a More-Phi APVTS runtime control by parameter_id, index, or exact name.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
-    {"more_phi.set_parameter", "Set one More-Phi APVTS runtime control by normalized value.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})"},
-    {"more_phi.set_parameters", "Set multiple More-Phi APVTS runtime controls by normalized value.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}}}},"params":{"type":"array","items":{"type":"object"}}}})"},
+    {"more_phi.set_parameter", "Set one More-Phi APVTS runtime control by normalized value.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
+    {"more_phi.set_parameters", "Set multiple More-Phi APVTS runtime controls by normalized value.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}}}},"params":{"type":"array","items":{"type":"object"}}}})", kVerifiedWriteOutputSchema},
     {"run_self_test", "Run a deterministic local More-Phi self-test without waiting for an external LLM.", R"({"type":"object","properties":{"suite":{"type":"string","enum":["quick","snapshot","full"],"default":"quick"}}})"},
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
@@ -1821,7 +2003,17 @@ static const ToolDefinition kCoreTools[] = {
      R"({"type":"object","properties":{"track_id":{"type":"string","pattern":"^trk_[A-Za-z0-9]{20}$"},"force_reanalyze":{"type":"boolean","default":false},"analysis_profile":{"type":"string","enum":["standard","streaming","vinyl_master","broadcast"],"default":"standard"}},"required":["track_id"]})"},
     {"ozone_track_search",
      "Search local Track Assistant records by title, artist, status, or date range.",
-     R"({"type":"object","properties":{"query":{"type":"string","maxLength":200},"status_filter":{"type":"array","items":{"type":"string","enum":["pending_review","in_mastering","mastering_complete","approved","rejected","on_hold"]}},"date_from":{"type":"string","format":"date"},"date_to":{"type":"string","format":"date"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":50,"default":20}}})"}
+     R"({"type":"object","properties":{"query":{"type":"string","maxLength":200},"status_filter":{"type":"array","items":{"type":"string","enum":["pending_review","in_mastering","mastering_complete","approved","rejected","on_hold"]}},"date_from":{"type":"string","format":"date"},"date_to":{"type":"string","format":"date"},"page":{"type":"integer","minimum":1,"default":1},"page_size":{"type":"integer","minimum":1,"maximum":50,"default":20}}})"},
+    // ── Async tool execution ───────────────────────────────────────────────────
+    {"async_tool.submit",
+     "Run a long-running tool on a background thread and return a job_id immediately.",
+     R"({"type":"object","properties":{"tool":{"type":"string","description":"Name of the tool to run asynchronously"},"tool_name":{"type":"string"},"arguments":{"type":"object"},"params":{"type":"object"}},"required":["tool"]})"},
+    {"async_tool.status",
+     "Poll the status of a job submitted via async_tool.submit.",
+     R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"},
+    {"async_tool.result",
+     "Retrieve the final result of a completed async_tool.submit job.",
+     R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"}
 };
 
 static json plannerInputsToJson(int genreIndex,
@@ -2353,7 +2545,7 @@ static standalone_mcp::ToolCallOutcome applyIpcAssistantParametersToHostedPlugin
     }
 
     const auto flush = p.flushPendingParameterCommandsForAssistant(
-        juce::jmax(2048, static_cast<int>(commands.size())), 75);
+        juce::jmax(2048, static_cast<int>(commands.size())));
 
     json applied = json::array();
     for (const auto& command : commands)
@@ -2530,23 +2722,167 @@ static json runSnapshotSelfTest(MorePhiProcessor& processor)
     };
 }
 
+// ── Caching helpers ───────────────────────────────────────────────────────────
+
+ToolResultCache& MCPToolHandler::getToolResultCache()
+{
+    return toolResultCache();
+}
+
+AsyncToolExecutor& MCPToolHandler::getAsyncToolExecutorInternal()
+{
+    return asyncToolExecutor();
+}
+
+AsyncToolExecutor& MCPToolHandler::getAsyncToolExecutor()
+{
+    return asyncToolExecutor();
+}
+
+void MCPToolHandler::invalidateToolResultCache()
+{
+    toolResultCache().invalidateAll();
+}
+
+bool MCPToolHandler::isCacheableTool(const juce::String& method)
+{
+    static const std::set<juce::String, std::less<>> cacheable = {
+        "get_plugin_info",
+        "hosted_plugin.info",
+        "list_parameters",
+        "hosted_plugin.parameters",
+        "get_parameter",
+        "get_morph_state",
+        "more_phi.parameters",
+        "analysis.get_summary",
+        "analysis.get_spectrum",
+        "analysis.get_stereo_field",
+        "plugin_profile.describe_semantics",
+        "plugin_profile.describe_semantic_map",
+        "describe_plugin_semantic_map",
+        "diagnose_parameter_pipeline",
+        "get_instance_info",
+        "list_instances",
+        "automation.history",
+        "automation.get_transaction",
+        "permission.get_state",
+        "permission.list_approvals",
+        "workflow.list",
+        "memory.search",
+        "memory.list_outcomes",
+        "context.get_session",
+        "context.get_transport",
+        "context.get_track_state",
+        "events.list_recent"
+    };
+    return cacheable.count(method) > 0;
+}
+
+juce::String MCPToolHandler::getCachedToolResult(const juce::String& method,
+                                                  const juce::var& params,
+                                                  MorePhiProcessor& p)
+{
+    if (!isCacheableTool(method))
+        return {};
+
+    const auto cached = toolResultCache().get(method, params, p.getProcessorGenerationToken());
+    if (!cached.has_value())
+        return {};
+
+    json wrapper = *cached;
+    wrapper["cached"] = true;
+    return toJString(wrapper);
+}
+
+void MCPToolHandler::cacheToolResult(const juce::String& method,
+                                      const juce::var& params,
+                                      MorePhiProcessor& p,
+                                      const juce::String& result)
+{
+    if (!isCacheableTool(method))
+        return;
+
+    try
+    {
+        const auto parsed = json::parse(result.toStdString());
+        // Avoid caching error responses.
+        if (parsed.is_object() && parsed.value("success", true) == false)
+            return;
+
+        toolResultCache().put(method, params, p.getProcessorGenerationToken(), parsed,
+                              std::chrono::seconds(30));
+    }
+    catch (...)
+    {
+        // Ignore malformed JSON — never let caching break tool dispatch.
+    }
+}
+
+// ── Async tool helpers ───────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::submitAsyncTool(const juce::String& /*method*/,
+                                              const juce::var& params,
+                                              MorePhiProcessor& p,
+                                              const InstanceIdentity& identity,
+                                              AutomationRuntime& runtime)
+{
+    const auto innerMethod = params.getProperty("tool", params.getProperty("tool_name", "")).toString();
+    const auto innerParams = params.getProperty("arguments", params.getProperty("params", juce::var(new juce::DynamicObject())));
+    if (innerMethod.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_tool"},
+                              {"message", "async_tool.submit requires 'tool' (tool name)."}});
+
+    const auto jobId = asyncToolExecutor().submit(
+        innerMethod.toStdString(),
+        [innerMethod, innerParams, &p, &identity, &runtime]() -> json {
+            return parseToolResponse(MCPToolHandler::handle(innerMethod, innerParams, p, identity, runtime));
+        });
+
+    return toJString(json{
+        {"success", true},
+        {"job_id", jobId.toStdString()},
+        {"tool", innerMethod.toStdString()},
+        {"status", "queued"}
+    });
+}
+
+juce::String MCPToolHandler::getAsyncToolStatus(const juce::var& params)
+{
+    const auto jobId = params.getProperty("job_id", "").toString();
+    if (jobId.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_job_id"}});
+    return toJString(asyncToolExecutor().status(jobId));
+}
+
+juce::String MCPToolHandler::getAsyncToolResult(const juce::var& params)
+{
+    const auto jobId = params.getProperty("job_id", "").toString();
+    if (jobId.isEmpty())
+        return toJString(json{{"success", false}, {"error", "missing_job_id"}});
+    return toJString(asyncToolExecutor().result(jobId));
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 juce::String MCPToolHandler::getToolList()
 {
     json tools = json::array();
 
-    auto appendTool = [&tools](const char* name, const char* description, const char* schemaText)
+    auto appendTool = [&tools](const char* name, const char* description,
+                               const char* schemaText, const char* outputSchemaText = nullptr)
     {
-        tools.push_back({
+        json tool{
             {"name", name},
             {"description", description != nullptr ? description : ""},
             {"inputSchema", parseSchema(schemaText)}
-        });
+        };
+        if (outputSchemaText != nullptr && outputSchemaText[0] != '\0')
+            tool["outputSchema"] = parseSchema(outputSchemaText);
+        tools.push_back(std::move(tool));
     };
 
     for (const auto& tool : kCoreTools)
-        appendTool(tool.name, tool.description, tool.inputSchema);
+        appendTool(tool.name, tool.description, tool.inputSchema, tool.outputSchema);
 
     for (int i = 0; i < kExtendedToolCount; ++i)
         appendTool(kExtendedTools[i].name, kExtendedTools[i].description, kExtendedTools[i].schema);
@@ -2571,61 +2907,70 @@ juce::String MCPToolHandler::handle(const juce::String& method,
                                      const InstanceIdentity& identity,
                                      AutomationRuntime& runtime)
 {
-    if (method == "get_plugin_info")      return getPluginInfo(p);
-    if (method == "list_parameters")      return listParameters(params, p);
-    if (method == "get_parameter")        return getParameter(params, p);
-    if (method == "set_parameter")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
-    if (method == "set_parameters_batch") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
-    if (method == "capture_snapshot")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureSnapshot(params, p); });
-    if (method == "recall_snapshot")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return recallSnapshot(params, p); });
-    if (method == "set_morph_position")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorphPosition(params, p); });
-    if (method == "get_morph_state")      return getMorphState(p);
-    if (method == "run_self_test")        return runSelfTest(params, p);
-    if (method == "more_phi.parameters")     return listMorePhiParameters(p);
-    if (method == "more_phi.get_parameter")  return getMorePhiParameter(params, p);
-    if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameter(params, p); });
-    if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameters(params, p); });
-    if (method == "ozone.audit_parameters") return auditOzoneParameters(params, p);
-    if (method == "izotope_ipc_attach")   return izotopeIpcAttach(params, p);
-    if (method == "izotope_ipc_detach")   return izotopeIpcDetach(p);
-    if (method == "izotope_ipc_status")   return izotopeIpcStatus(p);
-    if (method == "izotope_ipc_snapshot") return izotopeIpcSnapshot(params, p);
-    if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcDump(params, p); });
-    if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcCapture(params, p); });
-    if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return ozoneRunAssistantIpc(params, p); });
+    // Fast path: read-only tool results may be cached.
+    if (auto cached = getCachedToolResult(method, params, p); cached.isNotEmpty())
+        return cached;
+
+    juce::String result;
+
+    if (method == "get_plugin_info")      result = getPluginInfo(p);
+    else if (method == "list_parameters") result = listParameters(params, p);
+    else if (method == "get_parameter")   result = getParameter(params, p);
+    else if (method == "set_parameter")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
+    else if (method == "set_parameters_batch") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
+    else if (method == "capture_snapshot")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureSnapshot(params, p); });
+    else if (method == "recall_snapshot")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return recallSnapshot(params, p); });
+    else if (method == "set_morph_position")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorphPosition(params, p); });
+    else if (method == "get_morph_state")      result = getMorphState(p);
+    else if (method == "run_self_test")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return runSelfTest(params, p); });
+    else if (method == "more_phi.parameters")     result = listMorePhiParameters(p);
+    else if (method == "more_phi.get_parameter")  result = getMorePhiParameter(params, p);
+    else if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameter(params, p); });
+    else if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameters(params, p); });
+    else if (method == "ozone.audit_parameters")  result = auditOzoneParameters(params, p);
+    else if (method == "izotope_ipc_attach")      result = izotopeIpcAttach(params, p);
+    else if (method == "izotope_ipc_detach")      result = izotopeIpcDetach(p);
+    else if (method == "izotope_ipc_status")      result = izotopeIpcStatus(p);
+    else if (method == "izotope_ipc_snapshot")    result = izotopeIpcSnapshot(params, p);
+    else if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcDump(params, p); });
+    else if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcCapture(params, p); });
+    else if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return ozoneRunAssistantIpc(params, p); });
+    else if (method == "async_tool.submit")  return submitAsyncTool(method, params, p, identity, runtime);
+    else if (method == "async_tool.status")  return getAsyncToolStatus(params);
+    else if (method == "async_tool.result")  return getAsyncToolResult(params);
 
     // MCP workflow aliases from the hosted mastering integration plan
-    if (method == "hosted_plugin.scan")          return scanHostedPlugin(params, p);
-    if (method == "hosted_plugin.load")          return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return loadHostedPlugin(params, p); });
-    if (method == "hosted_plugin.info")          return getPluginInfo(p);
-    if (method == "hosted_plugin.parameters")    return listParameters(params, p);
-    if (method == "hosted_plugin.set_parameter") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
-    if (method == "hosted_plugin.set_parameters")return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
-    if (method == "hosted_plugin.capture_state") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureHostedState(params, p); });
-    if (method == "diagnose_parameter_pipeline") return diagnoseParameterPipeline(params, p);
-    if (method == "analysis.get_summary")        return getAnalysisSummary(p);
-    if (method == "analysis.get_spectrum")       return getSpectrumAnalysis(params, p);
-    if (method == "analysis.get_stereo_field")   return getStereoFieldAnalysis(p);
-    if (method == "analysis.capture_window")     return captureAnalysisWindow(params, p);
-    if (method == "analysis.compare_render")     return compareAnalysis(params, p);
-    if (method == "mastering.plan_preview")      return previewMasteringPlan(params, p);
-    if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
-    if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return renderMasteringBatch(params, p, identity); });
-    if (method == "mastering.render_status")     return getMasteringRenderStatus(params, identity.instanceId);
-    if (method == "mastering.select_candidate")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return selectMasteringCandidate(params, p, identity); });
-    if (method == "plugin_profile.audit_parameters") return auditPluginProfile(p);
-    if (method == "plugin_profile.describe_semantics") return describePluginSemantics(p);
-    if (method == "plugin_profile.apply_safe_action") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applySafePluginAction(params, p, identity); });
-    if (method == "plugin_profile.restore_safe_snapshot") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return restoreSafePluginSnapshot(params, p, identity); });
-    if (method == "plugin_profile.get")          return getPluginProfile(params, p);
-    if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return savePluginProfile(params, p); });
-    if (method == "plugin_profile.describe_semantic_map" || method == "describe_plugin_semantic_map")
-        return describePluginSemanticMap(params, p);
+    else if (method == "hosted_plugin.scan")          return scanHostedPlugin(params, p);
+    else if (method == "hosted_plugin.load")          return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return loadHostedPlugin(params, p); });
+    else if (method == "hosted_plugin.info")          result = getPluginInfo(p);
+    else if (method == "hosted_plugin.parameters")    result = listParameters(params, p);
+    else if (method == "hosted_plugin.set_parameter") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
+    else if (method == "hosted_plugin.set_parameters")return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
+    else if (method == "hosted_plugin.capture_state") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureHostedState(params, p); });
+    else if (method == "diagnose_parameter_pipeline") result = diagnoseParameterPipeline(params, p);
+    else if (method == "analysis.get_summary")        result = getAnalysisSummary(p);
+    else if (method == "analysis.get_spectrum")       result = getSpectrumAnalysis(params, p);
+    else if (method == "analysis.get_stereo_field")   result = getStereoFieldAnalysis(p);
+    else if (method == "analysis.capture_window")     result = captureAnalysisWindow(params, p);
+    else if (method == "analysis.compare_render")     result = compareAnalysis(params, p);
+    else if (method == "mastering.plan_preview")      result = previewMasteringPlan(params, p);
+    else if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
+    else if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return renderMasteringBatch(params, p, identity); });
+    else if (method == "mastering.render_status")     result = getMasteringRenderStatus(params, identity.instanceId);
+    else if (method == "mastering.select_candidate")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return selectMasteringCandidate(params, p, identity); });
+    else if (method == "plugin_profile.audit_parameters") result = auditPluginProfile(p);
+    else if (method == "plugin_profile.describe_semantics") result = describePluginSemantics(p);
+    else if (method == "plugin_profile.apply_safe_action") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applySafePluginAction(params, p, identity); });
+    else if (method == "plugin_profile.restore_safe_snapshot") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return restoreSafePluginSnapshot(params, p, identity); });
+    else if (method == "plugin_profile.get")          result = getPluginProfile(params, p);
+    else if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return savePluginProfile(params, p); });
+    else if (method == "plugin_profile.describe_semantic_map" || method == "describe_plugin_semantic_map")
+        result = describePluginSemanticMap(params, p);
 
-    if (method == "sync.apply_envelope")
+    else if (method == "sync.apply_envelope")
         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
 
-    if (method == "workflow.submit" || method == "workflow.execute" || method == "workflow.cancel"
+    else if (method == "workflow.submit" || method == "workflow.execute" || method == "workflow.cancel"
         || method == "memory.remember" || method == "memory.record_outcome"
         || method == "memory.update_outcome_feedback" || method == "memory.forget"
         || method == "permission.set_autonomy" || method == "permission.approve"
@@ -2635,65 +2980,72 @@ juce::String MCPToolHandler::handle(const juce::String& method,
             [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
     }
 
-    if (method.startsWith("automation.") || method.startsWith("workflow.")
+    else if (method.startsWith("automation.") || method.startsWith("workflow.")
         || method.startsWith("permission.") || method.startsWith("context.")
         || method.startsWith("events.") || method.startsWith("sync.")
         || method.startsWith("memory.") || method == "plugin_adapter.describe_capabilities"
         || method == "plugin_adapter.plan_action")
-        return handleControlPlaneTool(method, params, p, identity, runtime);
+        result = handleControlPlaneTool(method, params, p, identity, runtime);
 
-    if (method == "plugin_adapter.apply_action")
+    else if (method == "plugin_adapter.apply_action")
         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applySafePluginAction(params, p, identity); });
 
     // Extended AI Tools
-    if (method == "analyze_parameters")             return MCPToolsExtended::analyzeParameters(params, p, p.getParameterClassifier());
-    if (method == "expose_parameters")              return MCPToolsExtended::exposeParameters(params, p, p.getParameterClassifier());
-    if (method == "get_token_estimate")             return MCPToolsExtended::getTokenEstimate(params, p.getTokenOptimizer());
-    if (method == "set_parameters_optimized")       return MCPToolsExtended::setParametersOptimized(params, p, p.getTokenOptimizer());
-    if (method == "get_morph_compatibility")        return MCPToolsExtended::getMorphCompatibility(params, p, p.getParameterClassifier());
-    if (method == "suggest_intermediate_snapshots") return MCPToolsExtended::suggestIntermediateSnapshots(params, p, p.getParameterClassifier());
-    if (method == "get_parameter_categories")       return MCPToolsExtended::getParameterCategories(params, p, p.getParameterClassifier());
-    if (method == "learn_from_adjustment")          return MCPToolsExtended::learnFromAdjustment(params, p.getParameterClassifier());
-    if (method == "get_learn_mode_status")          return MCPToolsExtended::getLearnModeStatus(params, p.getParameterClassifier());
-    if (method == "set_learn_mode_config")          return MCPToolsExtended::setLearnModeConfig(params, p.getParameterClassifier());
-    if (method == "reset_learning_data")            return MCPToolsExtended::resetLearningData(params, p.getParameterClassifier());
-    if (method == "get_discrete_parameters")        return MCPToolsExtended::getDiscreteParameters(params, p, p.getParameterClassifier());
-    if (method == "suggest_morph_settings")         return MCPToolsExtended::suggestMorphSettings(params, p, p.getParameterClassifier());
-    if (method == "get_usage_stats")                return MCPToolsExtended::getUsageStats(params, p.getTokenOptimizer());
-    if (method == "set_token_budget")               return MCPToolsExtended::setTokenBudget(params, p.getTokenOptimizer());
-    if (method == "explain_parameter")              return MCPToolsExtended::explainParameter(params, p, p.getParameterClassifier());
-    if (method == "find_related_parameters")        return MCPToolsExtended::findRelatedParameters(params, p, p.getParameterClassifier());
-    if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
-    if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
-    if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
+    else if (method == "analyze_parameters")             result = MCPToolsExtended::analyzeParameters(params, p, p.getParameterClassifier());
+    else if (method == "expose_parameters")              result = MCPToolsExtended::exposeParameters(params, p, p.getParameterClassifier());
+    else if (method == "get_token_estimate")             result = MCPToolsExtended::getTokenEstimate(params, p.getTokenOptimizer());
+    else if (method == "set_parameters_optimized")       return MCPToolsExtended::setParametersOptimized(params, p, p.getTokenOptimizer());
+    else if (method == "get_morph_compatibility")        result = MCPToolsExtended::getMorphCompatibility(params, p, p.getParameterClassifier());
+    else if (method == "suggest_intermediate_snapshots") result = MCPToolsExtended::suggestIntermediateSnapshots(params, p, p.getParameterClassifier());
+    else if (method == "get_parameter_categories")       result = MCPToolsExtended::getParameterCategories(params, p, p.getParameterClassifier());
+    else if (method == "learn_from_adjustment")          return MCPToolsExtended::learnFromAdjustment(params, p.getParameterClassifier());
+    else if (method == "get_learn_mode_status")          result = MCPToolsExtended::getLearnModeStatus(params, p.getParameterClassifier());
+    else if (method == "set_learn_mode_config")          return MCPToolsExtended::setLearnModeConfig(params, p.getParameterClassifier());
+    else if (method == "reset_learning_data")            return MCPToolsExtended::resetLearningData(params, p.getParameterClassifier());
+    else if (method == "get_discrete_parameters")        result = MCPToolsExtended::getDiscreteParameters(params, p, p.getParameterClassifier());
+    else if (method == "suggest_morph_settings")         result = MCPToolsExtended::suggestMorphSettings(params, p, p.getParameterClassifier());
+    else if (method == "get_usage_stats")                result = MCPToolsExtended::getUsageStats(params, p.getTokenOptimizer());
+    else if (method == "set_token_budget")               return MCPToolsExtended::setTokenBudget(params, p.getTokenOptimizer());
+    else if (method == "explain_parameter")              result = MCPToolsExtended::explainParameter(params, p, p.getParameterClassifier());
+    else if (method == "find_related_parameters")        result = MCPToolsExtended::findRelatedParameters(params, p, p.getParameterClassifier());
+    else if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
+    else if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
+    else if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
 
     // EQ Assistant Tools (Natural Language EQ Control)
-    if (method == "eq_adjust")                      return MCPEQTool::adjustEQ(params, p, p.getAIAssistant()).jsonResult;
-    if (method == "eq_preview")                     return MCPEQTool::previewEQ(params, p, p.getAIAssistant()).jsonResult;
-    if (method == "eq_apply")                       return MCPEQTool::applyEQ(params, p).jsonResult;
-    if (method == "eq_reject")                      return MCPEQTool::rejectEQ(params, p).jsonResult;
-    if (method == "eq_context")                     return MCPEQTool::getContext(params, p).jsonResult;
-    if (method == "eq_reset_context")               return MCPEQTool::resetContext(params, p).jsonResult;
-    if (method == "eq_validate")                    return MCPEQTool::validateEQ(params, p).jsonResult;
-    if (method == "eq_suggest")                     return MCPEQTool::suggestEQ(params, p, p.getAIAssistant()).jsonResult;
+    else if (method == "eq_adjust")                      return MCPEQTool::adjustEQ(params, p, p.getAIAssistant()).jsonResult;
+    else if (method == "eq_preview")                     result = MCPEQTool::previewEQ(params, p, p.getAIAssistant()).jsonResult;
+    else if (method == "eq_apply")                       return MCPEQTool::applyEQ(params, p).jsonResult;
+    else if (method == "eq_reject")                      return MCPEQTool::rejectEQ(params, p).jsonResult;
+    else if (method == "eq_context")                     result = MCPEQTool::getContext(params, p).jsonResult;
+    else if (method == "eq_reset_context")               return MCPEQTool::resetContext(params, p).jsonResult;
+    else if (method == "eq_validate")                    result = MCPEQTool::validateEQ(params, p).jsonResult;
+    else if (method == "eq_suggest")                     result = MCPEQTool::suggestEQ(params, p, p.getAIAssistant()).jsonResult;
 
     // Multi-instance tools
-    if (method == "get_instance_info")    return getInstanceInfo(identity);
-    if (method == "list_instances")       return listInstances();
+    else if (method == "get_instance_info")    result = getInstanceInfo(identity);
+    else if (method == "list_instances")       result = listInstances();
 
     // Ozone mastering tools
-    if (method == "get_mastering_state")  return getMasteringState(p);
-    if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
+    else if (method == "get_mastering_state")  result = getMasteringState(p);
+    else if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
 
     // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
-    if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
-        return ozoneTrackGetInfo(params, p, identity);
-    if (method == "ozone.track.update_status" || method == "ozone_track_update_status")
+    else if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
+        result = ozoneTrackGetInfo(params, p, identity);
+    else if (method == "ozone.track.update_status" || method == "ozone_track_update_status")
         return ozoneTrackUpdateStatus(params, identity);
-    if (method == "ozone.track.analyze" || method == "ozone_track_analyze")
-        return ozoneTrackAnalyze(params, p, identity);
-    if (method == "ozone.track.search" || method == "ozone_track_search")
-        return ozoneTrackSearch(params, p, identity);
+    else if (method == "ozone.track.analyze" || method == "ozone_track_analyze")
+        result = ozoneTrackAnalyze(params, p, identity);
+    else if (method == "ozone.track.search" || method == "ozone_track_search")
+        result = ozoneTrackSearch(params, p, identity);
+
+    if (result.isNotEmpty())
+    {
+        if (isCacheableTool(method))
+            cacheToolResult(method, params, p, result);
+        return result;
+    }
 
     return toJString(json{{"error","unknown_method"}});
 }
@@ -2803,17 +3155,30 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
                               {"index", id}, {"rejected", 1}});
     const float value = juce::jlimit(0.0f, 1.0f, rawValue);
 
+    // Verification: capture the pre-edit value before routing through the queue.
+    const auto t0 = std::chrono::steady_clock::now();
+    const float valueBefore = bridge.getParameterNormalized(id);
+    const juce::String humanBefore = bridge.getParameterDisplayValueAtNormalized(id, valueBefore);
+
     // Route through the command queue first, then ask the processor to flush it
     // through exclusive hosted-plugin access when the DAW is idle.
     if (!p.enqueueParameterSet(id, value, MorePhiProcessor::ParameterEditSource::MCP, true))
+    {
+        const auto t1f = std::chrono::steady_clock::now();
+        const double elapsedMs = std::chrono::duration<double, std::milli>(t1f - t0).count();
+        auto v = classifyVerification(false, false, value, 0.0f, elapsedMs, "queue_full");
+        v.valueBefore = valueBefore;
+        v.humanBefore = humanBefore;
         return toJString(json{
             {"success", false},
             {"error", "queue_full"},
             {"index", id},
             {"value", value},
             {"queued", 0},
-            {"rejected", 0}
+            {"rejected", 0},
+            {"verification", verificationToJson(v)}
         });
+    }
 
     auto& optimizer = p.getTokenOptimizer();
     const auto estimate = optimizer.estimateSetParameter(1);
@@ -2827,7 +3192,17 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
 
     const auto flush = p.flushPendingParameterCommandsForAssistant();
 
-    return toJString(json{
+    // Verification: read back the post-flush value.
+    const auto t1 = std::chrono::steady_clock::now();
+    const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const float valueAfter = bridge.getParameterNormalized(id);
+    const juce::String humanAfter = bridge.getParameterDisplayValueAtNormalized(id, valueAfter);
+    auto verification = classifyVerification(true, flush.drained > 0, value, valueAfter, elapsedMs);
+    verification.valueBefore = valueBefore;
+    verification.humanBefore = humanBefore;
+    verification.humanAfter = humanAfter;
+
+    json response{
         {"success", true},
         {"index", id},
         {"value", value},
@@ -2835,8 +3210,25 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
         {"rejected", 0},
         {"appliedNow", flush.drained},
         {"pendingAfter", flush.pendingAfter},
-        {"flush", parameterFlushToJson(flush)}
-    });
+        {"flush", parameterFlushToJson(flush)},
+        {"verification", verificationToJson(verification)}
+    };
+
+    if (flush.drained == 0 && flush.pendingBefore > 0)
+    {
+        if (flush.pluginUnavailable)
+        {
+            response["warning"] = "Value was queued but the hosted plugin is currently unavailable; it will apply once a plugin is loaded.";
+            response["suggested_action"] = suggestedActionForError("plugin_not_loaded").toStdString();
+        }
+        else if (flush.exclusiveAccessTimedOut)
+        {
+            response["warning"] = "Value was queued but could not be flushed immediately because the hosted plugin was in use; the audio thread will apply it on the next callback.";
+            response["suggested_action"] = suggestedActionForError("pending_parameter_edits").toStdString();
+        }
+    }
+
+    return toJString(response);
 }
 
 juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhiProcessor& p)
@@ -2854,6 +3246,23 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
     int rejected = 0;
     int queueFailures = 0;
 
+    // Per-item verification capture, resolved during the enqueue loop and
+    // finalized after the single flush reads each parameter back.
+    struct BatchVerificationItem
+    {
+        int index = -1;
+        float requested = 0.0f;
+        float valueBefore = 0.0f;
+        juce::String stableId;
+        juce::String name;
+        bool enqueued = false;
+        juce::String failureCode;
+    };
+    std::vector<BatchVerificationItem> verificationItems;
+    verificationItems.reserve(static_cast<size_t>(requested));
+
+    const auto t0 = std::chrono::steady_clock::now();
+
     // Route all parameter changes through the command queue, then flush once
     // after batching so assistant edits can apply immediately when safe.
     for (const auto& item : *list)
@@ -2866,22 +3275,44 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         const auto name = item.getProperty("name", "").toString();
         const auto rawValue = static_cast<float>(item.getProperty("value", 0.0));
         const auto resolution = bridge.resolveParameter(stableId, rawId, name);
+
+        BatchVerificationItem vi;
+        vi.stableId = stableId;
+        vi.name = name;
+        vi.requested = std::isfinite(rawValue) ? juce::jlimit(0.0f, 1.0f, rawValue) : 0.0f;
+        vi.index = resolution.success ? resolution.index : rawId;
+
         if (resolution.success)
         {
             // MCP-PARAMS-01: reject non-finite values (juce::jlimit no-op for NaN).
-            if (!std::isfinite(rawValue)) { ++rejected; continue; }
+            if (!std::isfinite(rawValue))
+            {
+                ++rejected;
+                vi.failureCode = "non_finite_value";
+                verificationItems.push_back(std::move(vi));
+                continue;
+            }
             const float value = juce::jlimit(0.0f, 1.0f, rawValue);
+            vi.valueBefore = bridge.getParameterNormalized(resolution.index);
             if (p.enqueueParameterSet(resolution.index, value,
                                       MorePhiProcessor::ParameterEditSource::MCP,
                                       true))
+            {
                 ++applied;
+                vi.enqueued = true;
+            }
             else
+            {
                 ++queueFailures;
+                vi.failureCode = "queue_full";
+            }
         }
         else
         {
             ++rejected;
+            vi.failureCode = resolution.error.isEmpty() ? "unresolved_parameter" : resolution.error;
         }
+        verificationItems.push_back(std::move(vi));
     }
 
     auto& optimizer = p.getTokenOptimizer();
@@ -2895,8 +3326,39 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
     optimizer.recordUsage(usage);
 
     const auto flush = applied > 0
-        ? p.flushPendingParameterCommandsForAssistant(juce::jmax(2048, applied), 75)
+        ? p.flushPendingParameterCommandsForAssistant(juce::jmax(2048, applied))
         : MorePhiProcessor::ParameterCommandFlushResult{};
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const bool drained = flush.drained > 0;
+
+    // Finalize per-item verification now that the flush has applied the batch.
+    json verificationArray = json::array();
+    for (auto& vi : verificationItems)
+    {
+        VerificationCapture v;
+        if (vi.enqueued)
+        {
+            const float valueAfter = bridge.getParameterNormalized(vi.index);
+            v = classifyVerification(true, drained, vi.requested, valueAfter, elapsedMs);
+            v.humanBefore = bridge.getParameterDisplayValueAtNormalized(vi.index, vi.valueBefore);
+            v.humanAfter = bridge.getParameterDisplayValueAtNormalized(vi.index, valueAfter);
+        }
+        else
+        {
+            v = classifyVerification(false, false, vi.requested, 0.0f, elapsedMs, vi.failureCode);
+        }
+        v.valueBefore = vi.valueBefore;
+
+        json viJson{
+            {"index", vi.index},
+            {"verification", verificationToJson(v)}
+        };
+        if (vi.stableId.isNotEmpty()) viJson["stableId"] = vi.stableId.toStdString();
+        if (vi.name.isNotEmpty())     viJson["name"] = vi.name.toStdString();
+        verificationArray.push_back(std::move(viJson));
+    }
 
     const bool allQueued = requested > 0
         && applied == requested
@@ -2912,7 +3374,8 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         {"rejected", rejected},
         {"queueFailures", queueFailures},
         {"pendingAfter", flush.pendingAfter},
-        {"flush", parameterFlushToJson(flush)}
+        {"flush", parameterFlushToJson(flush)},
+        {"verification", verificationArray}
     };
 
     if (queueFailures > 0)
@@ -2923,6 +3386,20 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         response["error"] = "no_parameters_queued";
     else if (rejected > 0)
         response["error"] = "partial_rejected";
+
+    if (flush.drained == 0 && flush.pendingBefore > 0)
+    {
+        if (flush.pluginUnavailable)
+        {
+            response["warning"] = "Parameters were queued but the hosted plugin is currently unavailable; they will apply once a plugin is loaded.";
+            response["suggested_action"] = suggestedActionForError("plugin_not_loaded").toStdString();
+        }
+        else if (flush.exclusiveAccessTimedOut)
+        {
+            response["warning"] = "Parameters were queued but could not be flushed immediately because the hosted plugin was in use; the audio thread will apply them on the next callback.";
+            response["suggested_action"] = suggestedActionForError("pending_parameter_edits").toStdString();
+        }
+    }
 
     return toJString(response);
 }
@@ -3270,17 +3747,38 @@ juce::String MCPToolHandler::setMorePhiParameter(const juce::var& params,
     }
 
     const auto value = juce::jlimit(0.0f, 1.0f, rawValue);
+
+    // Verification: capture the pre-edit value, apply, then read back.
+    const auto t0 = std::chrono::steady_clock::now();
+    const float valueBefore = resolution.parameter->getValue();
+    const juce::String humanBefore = resolution.parameter->getText(valueBefore, 128);
+
     const bool applied = setMorePhiParameterWithGesture(*resolution.parameter, value);
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
     if (!applied)
     {
+        auto v = classifyVerification(false, false, value, 0.0f, elapsedMs, "message_thread_unavailable");
+        v.valueBefore = valueBefore;
+        v.humanBefore = humanBefore;
         return toJString(json{
             {"success", false},
             {"error", "message_thread_unavailable"},
             {"parameter_id", resolution.parameterId.toStdString()},
             {"rejected", 0},
-            {"applied", 0}
+            {"applied", 0},
+            {"verification", verificationToJson(v)}
         });
     }
+
+    const float valueAfter = resolution.parameter->getValue();
+    const juce::String humanAfter = resolution.parameter->getText(valueAfter, 128);
+    auto v = classifyVerification(true, true, value, valueAfter, elapsedMs);
+    v.valueBefore = valueBefore;
+    v.humanBefore = humanBefore;
+    v.humanAfter = humanAfter;
 
     return toJString(json{
         {"success", true},
@@ -3291,7 +3789,8 @@ juce::String MCPToolHandler::setMorePhiParameter(const juce::var& params,
         {"clamped", std::abs(value - rawValue) > 0.000001f},
         {"applied", 1},
         {"rejected", 0},
-        {"parameter", morePhiParameterToJson(p, *resolution.parameter)}
+        {"parameter", morePhiParameterToJson(p, *resolution.parameter)},
+        {"verification", verificationToJson(v)}
     });
 }
 
@@ -3311,12 +3810,12 @@ juce::String MCPToolHandler::setMorePhiParameters(const juce::var& params,
 
     for (const auto& item : *list)
     {
-        json detail;
-
         if (!item.hasProperty("value"))
         {
             ++rejected;
-            details.push_back(json{{"success", false}, {"error", "missing_value"}});
+            auto v = classifyVerification(false, false, 0.0f, 0.0f, 0.0, "missing_value");
+            details.push_back(json{{"success", false}, {"error", "missing_value"},
+                                   {"verification", verificationToJson(v)}});
             continue;
         }
 
@@ -3324,7 +3823,9 @@ juce::String MCPToolHandler::setMorePhiParameters(const juce::var& params,
         if (!std::isfinite(rawValue))
         {
             ++rejected;
-            details.push_back(json{{"success", false}, {"error", "non_finite_value"}});
+            auto v = classifyVerification(false, false, 0.0f, 0.0f, 0.0, "non_finite_value");
+            details.push_back(json{{"success", false}, {"error", "non_finite_value"},
+                                   {"verification", verificationToJson(v)}});
             continue;
         }
 
@@ -3332,33 +3833,54 @@ juce::String MCPToolHandler::setMorePhiParameters(const juce::var& params,
         if (resolution.parameter == nullptr)
         {
             ++rejected;
-            details.push_back(json{
-                {"success", false},
-                {"error", resolution.error.toStdString()}
-            });
+            auto v = classifyVerification(false, false, juce::jlimit(0.0f, 1.0f, rawValue), 0.0f, 0.0,
+                                          resolution.error.isEmpty() ? "unresolved_parameter" : resolution.error);
+            details.push_back(json{{"success", false}, {"error", resolution.error.toStdString()},
+                                   {"verification", verificationToJson(v)}});
             continue;
         }
 
         const auto value = juce::jlimit(0.0f, 1.0f, rawValue);
+
+        // Verification: capture pre-edit value, apply, read back.
+        const auto t0 = std::chrono::steady_clock::now();
+        const float valueBefore = resolution.parameter->getValue();
+        const juce::String humanBefore = resolution.parameter->getText(valueBefore, 128);
+
         if (!setMorePhiParameterWithGesture(*resolution.parameter, value))
         {
             ++rejected;
+            const auto t1f = std::chrono::steady_clock::now();
+            const double elapsedMs = std::chrono::duration<double, std::milli>(t1f - t0).count();
+            auto v = classifyVerification(false, false, value, 0.0f, elapsedMs, "message_thread_unavailable");
+            v.valueBefore = valueBefore;
+            v.humanBefore = humanBefore;
             details.push_back(json{
                 {"success", false},
                 {"error", "message_thread_unavailable"},
-                {"parameter_id", resolution.parameterId.toStdString()}
+                {"parameter_id", resolution.parameterId.toStdString()},
+                {"verification", verificationToJson(v)}
             });
             continue;
         }
 
         ++applied;
+        const auto t1 = std::chrono::steady_clock::now();
+        const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const float valueAfter = resolution.parameter->getValue();
+        const juce::String humanAfter = resolution.parameter->getText(valueAfter, 128);
+        auto v = classifyVerification(true, true, value, valueAfter, elapsedMs);
+        v.valueBefore = valueBefore;
+        v.humanBefore = humanBefore;
+        v.humanAfter = humanAfter;
         details.push_back(json{
             {"success", true},
             {"parameter_id", resolution.parameterId.toStdString()},
             {"index", resolution.index},
             {"value", value},
             {"requested_value", rawValue},
-            {"clamped", std::abs(value - rawValue) > 0.000001f}
+            {"clamped", std::abs(value - rawValue) > 0.000001f},
+            {"verification", verificationToJson(v)}
         });
     }
 
@@ -3889,6 +4411,7 @@ juce::String MCPToolHandler::loadHostedPlugin(const juce::var& params, MorePhiPr
         p.getParameterClassifier().analyzeParameters(p.getParameterBridge());
         p.getDiscreteHandler().initialize(p.getParameterClassifier());
         p.reportLatencyToHost();
+        invalidateToolResultCache();
     }
 
     return toJString(json{
@@ -4030,6 +4553,18 @@ juce::String MCPToolHandler::diagnoseParameterPipeline(const juce::var& params, 
 
         result["parameterDiagnostic"] = paramDiag;
     }
+
+    auto& cache = getToolResultCache();
+    const auto cacheStats = cache.getStats();
+    result["tool_cache"] = json{
+        {"entries", cacheStats.size},
+        {"hits", cacheStats.hits},
+        {"misses", cacheStats.misses},
+        {"evictions", cacheStats.evictions},
+        {"hit_rate_percent", (cacheStats.hits + cacheStats.misses) > 0
+            ? static_cast<int>(100.0 * cacheStats.hits / (cacheStats.hits + cacheStats.misses))
+            : 0}
+    };
 
     return toJString(result);
 }
@@ -4720,7 +5255,7 @@ juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, More
     }
 
     const auto flush = p.flushPendingParameterCommandsForAssistant(
-        juce::jmax(2048, static_cast<int>(commands.size())), 75);
+        juce::jmax(2048, static_cast<int>(commands.size())));
 
     return toJString(json{
         {"success", true},
@@ -4792,7 +5327,7 @@ juce::String MCPToolHandler::restoreSafePluginSnapshot(const juce::var& params, 
     }
 
     const auto flush = p.flushPendingParameterCommandsForAssistant(
-        juce::jmax(2048, static_cast<int>(commands.size())), 75);
+        juce::jmax(2048, static_cast<int>(commands.size())));
 
     return toJString(json{
         {"success", true},

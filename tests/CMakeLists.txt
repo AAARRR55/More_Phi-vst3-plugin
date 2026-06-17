@@ -67,6 +67,7 @@ add_executable(MorePhiTests
     # Module 7: AI / MCP Server (P2)
     Unit/TestMCPServerUnit.cpp
     Unit/TestAutomationControlPlane.cpp
+    Unit/TestVST3IPCBridge.cpp
     # Ozone 11 mastering integration
     Unit/TestOzoneIntegration.cpp
     # Neural mastering safety projection
@@ -79,6 +80,12 @@ add_executable(MorePhiTests
     Unit/TestStereoFieldAnalyzer.cpp
     Unit/TestLicensing.cpp
 )
+
+# Python stdio MCP server integration test. Only compiled once the C++ IPC
+# bridge (VST3IPCBridge) from the cpp-bridge-core scope is present.
+if(EXISTS "${CMAKE_SOURCE_DIR}/src/AI/VST3IPCBridge.h")
+    target_sources(MorePhiTests PRIVATE Integration/TestPythonMCPIntegration.cpp)
+endif()
 
 # Link the compiled plugin objects in (shared) so the test binary has access
 # to ParameterState, LockFreeQueue, InterpolationEngine, SnapshotBank
