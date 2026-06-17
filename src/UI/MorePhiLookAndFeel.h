@@ -1,7 +1,8 @@
 /*
  * More-Phi — UI/MorePhiLookAndFeel.h
- * Premium dark theme derived from Stitch design system.
- * Palette: Deep navy, coral accents, purple highlights, glassmorphic surfaces.
+ * Premium ultra-dark theme derived from the More-Phi landing page.
+ * Palette: Near-black surfaces, gold primary, cyan + magenta accents,
+ *          glassmorphic depth. (sRGB conversions of landing-page oklch tokens.)
  */
 #pragma once
 
@@ -14,7 +15,7 @@ class MorePhiLookAndFeel : public juce::LookAndFeel_V4
 public:
     MorePhiLookAndFeel();
 
-    // ── Color Palette (Stitch-derived) ───────────────────────────────────────
+    // ── Color Palette (More-Phi brand) ───────────────────────────────────────
     static constexpr float cornerRadius = 8.0f;
 
     // Baseline editor width for font scaling calculations
@@ -37,25 +38,32 @@ public:
     };
 
     // Backgrounds
-    const juce::Colour backgroundDark  {0xff0d1b2a};  // Deep navy
-    const juce::Colour surfaceColour   {0xff16213e};  // Surface navy
-    const juce::Colour surfaceLight    {0xff1a2742};  // Elevated surface
-    const juce::Colour padBackground   {0xff0a1628};  // XY pad inner
+    const juce::Colour backgroundDark  {0xff070709};  // App base (near-black)
+    const juce::Colour surfaceColour   {0xff0d0d10};  // Card / panel surface
+    const juce::Colour surfaceLight    {0xff17181c};  // Elevated surface
+    const juce::Colour padBackground   {0xff09090b};  // XY pad inner well
 
-    // Accents
-    const juce::Colour accentCoral     {0xffec415d};  // Primary (Stitch: #ec415d)
-    const juce::Colour accentPurple    {0xff533483};  // Secondary
-    const juce::Colour accentGreen     {0xff4ade80};  // Status: online
-    const juce::Colour accentAmber     {0xfffbbf24};  // Status: warning
+    // Accents — gold primary, cyan interactive, magenta bipolar/secondary
+    const juce::Colour accentGold      {0xffe5c057};  // Primary (landing: gold)
+    const juce::Colour accentGoldBright{0xfff9e596};  // Gold highlight
+    const juce::Colour accentCyan      {0xff00bdca};  // Interactive / active
+    const juce::Colour accentCyanBright{0xff00e2ed};  // Cyan highlight
+    const juce::Colour accentMagenta   {0xffe22edb};  // Secondary / bipolar negative
+    const juce::Colour accentGreen     {0xff34d399};  // Status: online
+    const juce::Colour accentAmber     {0xfff9e596};  // Status: warning (warm gold)
+
+    // Legacy aliases (kept so existing call sites compile) — remapped to brand.
+    const juce::Colour accentCoral     {0xffe5c057};  // → gold (was Stitch coral)
+    const juce::Colour accentPurple    {0xffe22edb};  // → magenta
 
     // Text
-    const juce::Colour textPrimary     {0xffe8eaed};
-    const juce::Colour textSecondary   {0xff8b95a5};
-    const juce::Colour textDim         {0xff4a5568};
+    const juce::Colour textPrimary     {0xffeeeef2};
+    const juce::Colour textSecondary   {0xff8e8f95};
+    const juce::Colour textDim         {0xff5a5a60};
 
     // Borders
-    const juce::Colour borderColour    {0xff1e3a5f};
-    const juce::Colour borderGlow      {0x40ec415d};  // Coral glow (25% alpha)
+    const juce::Colour borderColour    {0xff323237};
+    const juce::Colour borderGlow      {0x40e5c057};  // Gold glow (25% alpha)
 
     // ── LookAndFeel Overrides ────────────────────────────────────────────────
     void drawButtonBackground(juce::Graphics&, juce::Button&,

@@ -393,9 +393,19 @@ void MorphPad::mouseDrag(const juce::MouseEvent& e) { updatePosition(e.position)
 
 void MorphPad::updatePosition(juce::Point<float> pos)
 {
-    auto bounds = getLocalBounds().toFloat();
-    float x = juce::jlimit(0.0f, 1.0f, pos.x / bounds.getWidth());
-    float y = juce::jlimit(0.0f, 1.0f, pos.y / bounds.getHeight());
+    auto bounds = getLocalBounds().toFloat().reduced(2.0f);
+    auto centre = bounds.getCentre();
+    float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+
+    // Work in centre-relative coordinates and clamp to the circular boundary so
+    // the cursor can never leave the round pad (matches the circular visuals).
+    juce::Point<float> rel = pos - centre;
+    if (radius > 0.0f && rel.getDistanceFromOrigin() > radius)
+        rel = rel * (radius / rel.getDistanceFromOrigin());
+
+    // Map clamped [-radius, radius] back to normalized [0, 1] parameter space.
+    float x = juce::jlimit(0.0f, 1.0f, (rel.x / radius) * 0.5f + 0.5f);
+    float y = juce::jlimit(0.0f, 1.0f, (rel.y / radius) * 0.5f + 0.5f);
 
     // Route through APVTS so DAW automation captures the change.
     // syncStateFromAPVTS() bridges APVTS → atomics on the audio thread.

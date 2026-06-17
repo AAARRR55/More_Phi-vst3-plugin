@@ -46,8 +46,8 @@ void V2TabBar::paint(juce::Graphics& g)
                static_cast<float>(bounds.getWidth()), 0.0f,
                1.0f);
 
-    auto tabFont = juce::Font(juce::FontOptions("Segoe UI", 11.0f, juce::Font::plain));
-    auto selectedFont = juce::Font(juce::FontOptions("Segoe UI", 11.0f, juce::Font::bold));
+    auto tabFont = juce::Font(juce::FontOptions("Inter", 11.0f, juce::Font::plain));
+    auto selectedFont = juce::Font(juce::FontOptions("Inter", 11.0f, juce::Font::bold));
 
     for (int i = 0; i < NumTabs; ++i)
     {

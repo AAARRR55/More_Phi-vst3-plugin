@@ -21,16 +21,16 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     {
         button->setClickingTogglesState(true);
         button->setColour(juce::TextButton::buttonColourId,
-                          juce::Colour(0xff16213e));
+                          juce::Colour(0xff0d0d10));
         button->setColour(juce::TextButton::textColourOffId,
-                          juce::Colour(0xffe8eaed));
+                          juce::Colour(0xffeeeef2));
         button->setColour(juce::TextButton::textColourOnId,
                           juce::Colours::white);
         addAndMakeVisible(*button);
     }
 
     sanityToggle_.setColour(juce::TextButton::buttonOnColourId,
-                            juce::Colour(0xffec415d));
+                            juce::Colour(0xffe5c057));
 
     if (auto* param = processor.getAPVTS().getParameter("sanityEnabled"))
     {
@@ -57,7 +57,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
 
     // ── Sidechain controls ─────────────────────────────────────────────────
     sidechainToggle_.setColour(juce::ToggleButton::tickColourId,
-                                juce::Colour(0xffec415d));
+                                juce::Colour(0xffe5c057));
     addAndMakeVisible(sidechainToggle_);
 
     if (auto* param = processor.getAPVTS().getParameter("sidechainEnabled"))
@@ -77,8 +77,8 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
             processor.getAPVTS(), "sidechainThreshold", thresholdKnob_);
     }
 
-    thresholdLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
-    thresholdLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
+    thresholdLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    thresholdLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
     thresholdLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(thresholdLabel_);
 
@@ -119,11 +119,11 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     outputGainKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 48, 14);
     outputGainKnob_.setTextValueSuffix(" dB");
     outputGainKnob_.setColour(juce::Slider::rotarySliderFillColourId,
-                               juce::Colour(0xffec415d));
+                               juce::Colour(0xffe5c057));
     outputGainKnob_.setColour(juce::Slider::rotarySliderOutlineColourId,
-                               juce::Colour(0xff1a2742));
+                               juce::Colour(0xff17181c));
     outputGainKnob_.setColour(juce::Slider::textBoxTextColourId,
-                               juce::Colour(0xffe8eaed));
+                               juce::Colour(0xffeeeef2));
     outputGainKnob_.setColour(juce::Slider::textBoxOutlineColourId,
                                juce::Colours::transparentBlack);
     addAndMakeVisible(outputGainKnob_);
@@ -134,19 +134,19 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
             processor.getAPVTS(), "outputGain", outputGainKnob_);
     }
 
-    outputGainLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
-    outputGainLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
+    outputGainLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    outputGainLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
     outputGainLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(outputGainLabel_);
 
     // ── Bypass button ──────────────────────────────────────────────────────
     bypassBtn_.setClickingTogglesState(true);
     bypassBtn_.setColour(juce::TextButton::buttonColourId,
-                          juce::Colour(0xff16213e));
+                          juce::Colour(0xff0d0d10));
     bypassBtn_.setColour(juce::TextButton::buttonOnColourId,
-                          juce::Colour(0xffec415d));
+                          juce::Colour(0xffe5c057));
     bypassBtn_.setColour(juce::TextButton::textColourOffId,
-                          juce::Colour(0xffe8eaed));
+                          juce::Colour(0xffeeeef2));
     bypassBtn_.setColour(juce::TextButton::textColourOnId,
                           juce::Colours::white);
     addAndMakeVisible(bypassBtn_);
@@ -164,7 +164,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
     const bool compact = getWidth() < 760;
 
     // Glassmorphic background
-    g.setColour(juce::Colour(0xff16213e).withAlpha(0.85f));
+    g.setColour(juce::Colour(0xff0d0d10).withAlpha(0.85f));
     g.fillRoundedRectangle(bounds.reduced(4, 0), 6.0f);
 
     // Subtle top border glow
@@ -172,7 +172,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
     g.drawRoundedRectangle(bounds.reduced(4, 0), 6.0f, 1.0f);
 
     // Section dividers
-    g.setColour(juce::Colour(0xff1e3a5f));
+    g.setColour(juce::Colour(0xff323237));
     if (compact)
     {
         const int midX = getWidth() / 2;
@@ -183,7 +183,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
                    static_cast<float>(getWidth() - 8), static_cast<float>(midY), 1.0f);
 
         g.setColour(juce::Colour(0x704a5568));
-        g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+        g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
         g.drawText("SAFETY", 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("RECALL", midX + 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("OUTPUT", 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
@@ -203,7 +203,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
                static_cast<float>(divX3), static_cast<float>(getHeight() - 4), 1.0f);
 
     g.setColour(juce::Colour(0x704a5568));
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     g.drawText("SAFETY", 10, 3, divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 12, juce::Justification::centredLeft);
@@ -323,17 +323,17 @@ void BottomControlStrip::updateRecallButtons()
     auto* param = processor.getAPVTS().getParameter("recallMode");
     bool isFast = (param == nullptr) || param->getValue() < 0.5f;
 
-    auto coralColour = juce::Colour(0xffec415d);
-    auto dimColour = juce::Colour(0xff16213e);
+    auto coralColour = juce::Colour(0xffe5c057);
+    auto dimColour = juce::Colour(0xff0d0d10);
 
     recallFastBtn_.setColour(juce::TextButton::buttonColourId,
                               isFast ? coralColour : dimColour);
     recallFastBtn_.setColour(juce::TextButton::textColourOffId,
-                              isFast ? juce::Colours::white : juce::Colour(0xff8b95a5));
+                              isFast ? juce::Colours::white : juce::Colour(0xff8e8f95));
     recallFullBtn_.setColour(juce::TextButton::buttonColourId,
                               !isFast ? coralColour : dimColour);
     recallFullBtn_.setColour(juce::TextButton::textColourOffId,
-                              !isFast ? juce::Colours::white : juce::Colour(0xff8b95a5));
+                              !isFast ? juce::Colours::white : juce::Colour(0xff8e8f95));
 }
 
 } // namespace more_phi

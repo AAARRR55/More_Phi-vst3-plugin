@@ -36,14 +36,14 @@ public:
                           int width, int height, bool isSelected) override;
 
     // Colours shared with the panel (set once after construction).
-    juce::Colour colBackground   { 0xff16213e };
-    juce::Colour colAltRow       { 0xff1a2742 };
+    juce::Colour colBackground   { 0xff0d0d10 };
+    juce::Colour colAltRow       { 0xff17181c };
     juce::Colour colSelected     { 0x30ec415d };
-    juce::Colour colText         { 0xffe8eaed };
-    juce::Colour colDim          { 0xff8b95a5 };
-    juce::Colour colTags         { 0xff4a5568 };
-    juce::Colour colStarFilled   { 0xfffbbf24 };
-    juce::Colour colStarEmpty    { 0xff4a5568 };
+    juce::Colour colText         { 0xffeeeef2 };
+    juce::Colour colDim          { 0xff8e8f95 };
+    juce::Colour colTags         { 0xff3a3a40 };
+    juce::Colour colStarFilled   { 0xfff9e596 };
+    juce::Colour colStarEmpty    { 0xff3a3a40 };
 
 private:
     void drawStars(juce::Graphics& g, int rating, juce::Rectangle<float> area) const;
@@ -128,16 +128,16 @@ private:
 
     // ── Colours ───────────────────────────────────────────────────────────────
 
-    static constexpr juce::uint32 kBackground  = 0xff16213e;
-    static constexpr juce::uint32 kSurface     = 0xff1a2742;
-    static constexpr juce::uint32 kPadBg       = 0xff0a1628;
-    static constexpr juce::uint32 kBorder      = 0xff1e3a5f;
-    static constexpr juce::uint32 kTextPrimary = 0xffe8eaed;
-    static constexpr juce::uint32 kTextDim     = 0xff8b95a5;
-    static constexpr juce::uint32 kCoral       = 0xffec415d;
+    static constexpr juce::uint32 kBackground  = 0xff0d0d10;
+    static constexpr juce::uint32 kSurface     = 0xff17181c;
+    static constexpr juce::uint32 kPadBg       = 0xff050506;
+    static constexpr juce::uint32 kBorder      = 0xff323237;
+    static constexpr juce::uint32 kTextPrimary = 0xffeeeef2;
+    static constexpr juce::uint32 kTextDim     = 0xff8e8f95;
+    static constexpr juce::uint32 kCoral       = 0xffe5c057;
     static constexpr juce::uint32 kCoralSel    = 0x30ec415d;
-    static constexpr juce::uint32 kAmber       = 0xfffbbf24;
-    static constexpr juce::uint32 kStarEmpty   = 0xff4a5568;
+    static constexpr juce::uint32 kAmber       = 0xfff9e596;
+    static constexpr juce::uint32 kStarEmpty   = 0xff3a3a40;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(V2PresetBrowserPanel)
 };

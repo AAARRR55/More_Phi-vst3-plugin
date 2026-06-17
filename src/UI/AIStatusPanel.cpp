@@ -38,7 +38,7 @@ void AIStatusPanel::resized()
 
 void AIStatusPanel::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff16213e));
+    g.setColour(juce::Colour(0xff0d0d10));
     g.fillRect(getLocalBounds());
     g.setColour(juce::Colour(0xff0f3460));
     g.drawLine(0, 0, static_cast<float>(getWidth()), 0, 1.0f);
@@ -51,7 +51,7 @@ void AIStatusPanel::timerCallback()
 
     statusLabel_.setText(running ? "MCP: ON" : "MCP: OFF", juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId,
-                           running ? juce::Colour(0xff4ade80)  // green
+                           running ? juce::Colour(0xff34d399)  // green
                                    : juce::Colour(0xff888888));
 
     portLabel_.setText(running ? "Port: " + juce::String(mcp.getPort()) : "",

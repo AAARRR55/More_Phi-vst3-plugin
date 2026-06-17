@@ -49,7 +49,7 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
         g.setColour(juce::Colour(colSelected));
         g.fillRect(0, 0, width, height);
         // Subtle left accent bar for selected row
-        g.setColour(juce::Colour(0xffec415d));
+        g.setColour(juce::Colour(0xffe5c057));
         g.fillRect(0, 0, 3, height);
     }
     else
@@ -78,8 +78,8 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
                                            : juce::String("  " + entry->author);
 
         // Measure name width to position author inline
-        juce::Font boldFont(juce::FontOptions("Segoe UI", 12.5f, juce::Font::bold));
-        juce::Font dimFont (juce::FontOptions("Segoe UI", 11.0f, juce::Font::plain));
+        juce::Font boldFont(juce::FontOptions("Inter", 12.5f, juce::Font::bold));
+        juce::Font dimFont (juce::FontOptions("Inter", 11.0f, juce::Font::plain));
 
         juce::GlyphArrangement ga;
         ga.addLineOfText(boldFont, nameStr, 0.0f, 0.0f);
@@ -123,7 +123,7 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
             joined += entry->tags[i];
         }
 
-        juce::Font tagFont(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain));
+        juce::Font tagFont(juce::FontOptions("Inter", 10.0f, juce::Font::plain));
         g.setFont(tagFont);
         g.setColour(juce::Colour(colTags));
         g.drawText(juce::String(joined),
@@ -141,7 +141,7 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
     drawStars(g, entry->rating, starArea);
 
     // ── Bottom separator line ─────────────────────────────────────────────────
-    g.setColour(juce::Colour(0xff1e3a5f).withAlpha(0.6f));
+    g.setColour(juce::Colour(0xff323237).withAlpha(0.6f));
     g.drawHorizontalLine(height - 1, 0.0f, static_cast<float>(width));
 }
 

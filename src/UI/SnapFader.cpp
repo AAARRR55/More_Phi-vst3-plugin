@@ -22,11 +22,11 @@ void SnapFader::paint(juce::Graphics& g)
     if (trackH <= 0.0f) trackH = 1.0f;
 
     // Background
-    g.setColour(juce::Colour(0xff0d1b2a));
+    g.setColour(juce::Colour(0xff070709));
     g.fillRoundedRectangle(bounds, 6.0f);
 
     // Track groove
-    g.setColour(juce::Colour(0xff1a2742));
+    g.setColour(juce::Colour(0xff17181c));
     g.fillRoundedRectangle(trackX - 2.5f, trackTop, 5, trackH, 2.5f);
 
     // Slot markers along the track
@@ -45,11 +45,11 @@ void SnapFader::paint(juce::Graphics& g)
             float markerY = trackTop + (1.0f - frac) * trackH;
 
             // Tick mark
-            g.setColour(juce::Colour(0xff533483));
+            g.setColour(juce::Colour(0xffe22edb));
             g.fillRoundedRectangle(trackX - 8, markerY - 1.5f, 16, 3, 1.5f);
 
             // Slot number — with minimum font size for readability
-            g.setColour(juce::Colour(0xff8b95a5));
+            g.setColour(juce::Colour(0xff8e8f95));
             float slotFont = juce::jmax(bounds.getWidth() * 0.16f, 10.0f);
             g.setFont(slotFont);
             g.drawText(juce::String(i + 1), static_cast<int>(trackX + 10),
@@ -66,17 +66,17 @@ void SnapFader::paint(juce::Graphics& g)
     lastSnapshotMask_ = snapshotMask;
     float thumbY = trackTop + (1.0f - faderPos) * trackH;
 
-    g.setColour(juce::Colour(0xffec415d).withAlpha(0.6f));
+    g.setColour(juce::Colour(0xffe5c057).withAlpha(0.6f));
     g.fillRoundedRectangle(trackX - 2.5f, thumbY, 5, trackBot - thumbY, 2.5f);
 
     // Thumb glow
-    g.setColour(juce::Colour(0xffec415d).withAlpha(0.15f));
+    g.setColour(juce::Colour(0xffe5c057).withAlpha(0.15f));
     g.fillEllipse(trackX - 12, thumbY - 12, 24, 24);
 
     // Thumb
-    g.setColour(juce::Colour(0xffe8eaed));
+    g.setColour(juce::Colour(0xffeeeef2));
     g.fillRoundedRectangle(trackX - 10, thumbY - 5, 20, 10, 5.0f);
-    g.setColour(juce::Colour(0xffec415d));
+    g.setColour(juce::Colour(0xffe5c057));
     g.fillRoundedRectangle(trackX - 6, thumbY - 1.5f, 12, 3, 1.5f);
 }
 
