@@ -184,6 +184,10 @@ private:
     std::atomic<bool> transientPreserve_ { true  };
     std::atomic<bool> formantPreserve_   { false };
 
+    // Holds transient-modified alphas computed on channel 0 for each hop in a block.
+    // Reused by channel 1 to guarantee stereo phase and timing coherence.
+    std::vector<float> blockAlphas_;
+
     // ── Internal DSP helpers (audio thread, all noexcept) ─────────────────
 
     void processFrame(ChannelState& ch, float alpha) noexcept;

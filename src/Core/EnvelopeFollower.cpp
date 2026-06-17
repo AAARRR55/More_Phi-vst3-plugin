@@ -51,6 +51,7 @@ void EnvelopeFollower::setAttack(float ms) noexcept
     attackMs_ = std::clamp(ms, kMinAttackMs, kMaxAttackMs);
     const float c = computeCoeff(attackMs_);
     attackCoeff_.store(c, std::memory_order_relaxed);
+    logAttackCoeff_.store(c > 0.0f ? std::log(c) : -100.0f, std::memory_order_relaxed);
     const int bs = blockSize_.load(std::memory_order_relaxed);
     if (bs > 0)
         attackCoeffPerBlock_.store(std::pow(c, static_cast<float>(bs)), std::memory_order_relaxed);
@@ -61,6 +62,7 @@ void EnvelopeFollower::setRelease(float ms) noexcept
     releaseMs_ = std::clamp(ms, kMinReleaseMs, kMaxReleaseMs);
     const float c = computeCoeff(releaseMs_);
     releaseCoeff_.store(c, std::memory_order_relaxed);
+    logReleaseCoeff_.store(c > 0.0f ? std::log(c) : -100.0f, std::memory_order_relaxed);
     const int bs = blockSize_.load(std::memory_order_relaxed);
     if (bs > 0)
         releaseCoeffPerBlock_.store(std::pow(c, static_cast<float>(bs)), std::memory_order_relaxed);
@@ -89,6 +91,8 @@ void EnvelopeFollower::recomputeCoefficients() noexcept
     const float releaseC = computeCoeff(releaseMs_);
     attackCoeff_.store(attackC, std::memory_order_relaxed);
     releaseCoeff_.store(releaseC, std::memory_order_relaxed);
+    logAttackCoeff_.store(attackC > 0.0f ? std::log(attackC) : -100.0f, std::memory_order_relaxed);
+    logReleaseCoeff_.store(releaseC > 0.0f ? std::log(releaseC) : -100.0f, std::memory_order_relaxed);
     if (blockSize_ > 0)
     {
         attackCoeffPerBlock_.store(std::pow(attackC,  static_cast<float>(blockSize_)), std::memory_order_relaxed);
@@ -119,10 +123,6 @@ float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
     // C15 FIX: avoid std::pow on the audio thread. Per-block coefficients are
     // pre-computed in prepare()/setAttack()/setRelease(). If numSamples differs
     // from the prepared block size, fall back to exp/log (still faster than pow).
-    const float attackC  = attackCoeff_.load(std::memory_order_relaxed);
-    const float releaseC = releaseCoeff_.load(std::memory_order_relaxed);
-    const float baseCoeff = (level > env) ? attackC : releaseC;
-
     float coeff;
     if (numSamples == blockSize_ && blockSize_ > 0)
     {
@@ -131,7 +131,9 @@ float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
     }
     else
     {
-        coeff = std::exp(static_cast<float>(numSamples) * std::log(baseCoeff));
+        const float logBase = (level > env) ? logAttackCoeff_.load(std::memory_order_relaxed)
+                                            : logReleaseCoeff_.load(std::memory_order_relaxed);
+        coeff = std::exp(static_cast<float>(numSamples) * logBase);
     }
     env = env * coeff + level * (1.0f - coeff);
     env = std::clamp(env, 0.0f, 1.0f);

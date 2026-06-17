@@ -11,9 +11,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
+#include <regex>
 
 namespace more_phi {
 
@@ -142,7 +144,7 @@ std::vector<ToolNameMapping> buildChatToolNameMap()
     try
     {
         const auto toolListStr = MCPToolHandler::getToolList();
-        const auto root = json::parse(toolListStr.toStdString());
+        const auto root = json::parse(toolListStr.toRawUTF8());
         if (!root.contains("tools") || !root["tools"].is_array())
             return mappings;
 
@@ -177,192 +179,7 @@ std::string resolveApiToolNameToMcpName(const std::string& apiToolName)
     return {};
 }
 
-class LocalMcpClientSession
-{
-public:
-    ~LocalMcpClientSession()
-    {
-        socket_.close();
-    }
 
-    bool connectAndInitialize(int port, const juce::String& bearerToken, juce::String& error)
-    {
-        if (port <= 0)
-        {
-            error = "MCP server has no valid port.";
-            return false;
-        }
-
-        if (!socket_.connect("127.0.0.1", port, 3000))
-        {
-            error = "Could not connect to MCP server on 127.0.0.1:" + juce::String(port) + ".";
-            return false;
-        }
-
-        json params{
-            {"protocolVersion", "2024-11-05"},
-            {"capabilities", json::object()},
-            {"bearer_token", bearerToken.toStdString()}
-        };
-
-        auto response = sendRequest("initialize", params, error);
-        if (response.is_null())
-            return false;
-
-        if (response.contains("error"))
-        {
-            error = "MCP initialize failed: "
-                    + juce::String(response["error"].value("message", "unknown error"));
-            return false;
-        }
-
-        initialized_ = response.contains("result");
-        if (!initialized_)
-            error = "MCP initialize returned no result.";
-
-        return initialized_;
-    }
-
-    juce::String callTool(const juce::String& toolName, const juce::String& argumentsJson)
-    {
-        if (!initialized_)
-            return R"({"success":false,"error":"mcp_not_initialized"})";
-
-        json arguments = json::object();
-        if (argumentsJson.isNotEmpty())
-        {
-            try
-            {
-                arguments = json::parse(argumentsJson.toStdString());
-                if (!arguments.is_object())
-                    arguments = json::object();
-            }
-            catch (...)
-            {
-                return R"({"success":false,"error":"invalid_tool_arguments_json"})";
-            }
-        }
-
-        juce::String error;
-        auto response = sendRequest("tools/call",
-                                    json{{"name", toolName.toStdString()}, {"arguments", arguments}},
-                                    error);
-        if (response.is_null())
-            return juce::String(R"({"success":false,"error":")") + error + "\"}";
-
-        if (response.contains("error"))
-        {
-            return juce::String(json{
-                {"success", false},
-                {"error", response["error"].value("message", "MCP tool call failed")}
-            }.dump());
-        }
-
-        if (!response.contains("result"))
-            return R"({"success":false,"error":"mcp_tool_call_missing_result"})";
-
-        const auto& result = response["result"];
-        if (result.contains("structuredContent"))
-            return juce::String(result["structuredContent"].dump());
-
-        if (result.contains("content") && result["content"].is_array() && !result["content"].empty())
-        {
-            const auto& first = result["content"].front();
-            if (first.is_object() && first.contains("text") && first["text"].is_string())
-                return juce::String(first["text"].get<std::string>());
-        }
-
-        return juce::String(result.dump());
-    }
-
-private:
-    json sendRequest(const std::string& method, const json& params, juce::String& error)
-    {
-        const int id = nextId_++;
-        const json request{
-            {"jsonrpc", "2.0"},
-            {"method", method},
-            {"params", params},
-            {"id", id}
-        };
-
-        const auto payload = request.dump() + "\n";
-        const char* data = payload.data();
-        int remaining = static_cast<int>(payload.size());
-        while (remaining > 0)
-        {
-            const int written = socket_.write(data, remaining);
-            if (written <= 0)
-            {
-                error = "MCP socket write failed.";
-                return {};
-            }
-
-            data += written;
-            remaining -= written;
-        }
-
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
-        while (std::chrono::steady_clock::now() < deadline)
-        {
-            std::string line;
-            if (!readLine(line, 500))
-                continue;
-
-            try
-            {
-                auto response = json::parse(line);
-                if (response.contains("id") && response["id"].is_number_integer()
-                    && response["id"].get<int>() == id)
-                {
-                    return response;
-                }
-            }
-            catch (const std::exception& e)
-            {
-                error = juce::String("MCP response parse failed: ") + e.what();
-                return {};
-            }
-        }
-
-        error = "MCP response timed out.";
-        return {};
-    }
-
-    bool readLine(std::string& line, int waitMs)
-    {
-        if (const auto newlinePos = receiveBuffer_.find('\n'); newlinePos != std::string::npos)
-        {
-            line = receiveBuffer_.substr(0, newlinePos);
-            receiveBuffer_.erase(0, newlinePos + 1);
-            return true;
-        }
-
-        const int ready = socket_.waitUntilReady(true, waitMs);
-        if (ready <= 0)
-            return false;
-
-        char chunk[4096];
-        const int bytesRead = socket_.read(chunk, sizeof(chunk) - 1, false);
-        if (bytesRead <= 0)
-            return false;
-
-        receiveBuffer_.append(chunk, chunk + bytesRead);
-        if (const auto newlinePos = receiveBuffer_.find('\n'); newlinePos != std::string::npos)
-        {
-            line = receiveBuffer_.substr(0, newlinePos);
-            receiveBuffer_.erase(0, newlinePos + 1);
-            return true;
-        }
-
-        return false;
-    }
-
-    juce::StreamingSocket socket_;
-    std::string receiveBuffer_;
-    int nextId_ = 1;
-    bool initialized_ = false;
-};
 
 } // namespace
 
@@ -430,7 +247,7 @@ juce::String LLMChatClient::mcpToolsToOpenAIJson()
     try
     {
         const auto toolListStr = MCPToolHandler::getToolList();
-        const auto root = json::parse(toolListStr.toStdString());
+        const auto root = json::parse(toolListStr.toRawUTF8());
         if (!root.contains("tools") || !root["tools"].is_array())
             return "[]";
 
@@ -457,7 +274,7 @@ juce::String LLMChatClient::mcpToolsToOpenAIJson()
                   {"parameters", inputSchema}}}
             });
         }
-        return juce::String(openAITools.dump());
+        return juce::String::fromUTF8(openAITools.dump().c_str());
     }
     catch (...)
     {
@@ -470,7 +287,7 @@ juce::String LLMChatClient::mcpToolsToAnthropicJson()
     try
     {
         const auto toolListStr = MCPToolHandler::getToolList();
-        const auto root = json::parse(toolListStr.toStdString());
+        const auto root = json::parse(toolListStr.toRawUTF8());
         if (!root.contains("tools") || !root["tools"].is_array())
             return "[]";
 
@@ -495,7 +312,7 @@ juce::String LLMChatClient::mcpToolsToAnthropicJson()
                 {"input_schema", inputSchema}
             });
         }
-        return juce::String(anthropicTools.dump());
+        return juce::String::fromUTF8(anthropicTools.dump().c_str());
     }
     catch (...)
     {
@@ -505,19 +322,19 @@ juce::String LLMChatClient::mcpToolsToAnthropicJson()
 
 juce::String LLMChatClient::resolveToolNameForTest(const juce::String& apiToolName)
 {
-    return juce::String(resolveApiToolNameToMcpName(apiToolName.toStdString()));
+    return juce::String::fromUTF8(resolveApiToolNameToMcpName(std::string(apiToolName.toRawUTF8())).c_str());
 }
 
 juce::String LLMChatClient::chatToolsOpenAIJsonForTest()
 {
-    const auto all = json::parse(mcpToolsToOpenAIJson().toStdString());
-    return juce::String(filterToolsForChat(all, false).dump());
+    const auto all = json::parse(mcpToolsToOpenAIJson().toRawUTF8());
+    return juce::String::fromUTF8(filterToolsForChat(all, false).dump().c_str());
 }
 
 juce::String LLMChatClient::chatToolsAnthropicJsonForTest()
 {
-    const auto all = json::parse(mcpToolsToAnthropicJson().toStdString());
-    return juce::String(filterToolsForChat(all, true).dump());
+    const auto all = json::parse(mcpToolsToAnthropicJson().toRawUTF8());
+    return juce::String::fromUTF8(filterToolsForChat(all, true).dump().c_str());
 }
 
 juce::String LLMChatClient::systemPromptForTest()
@@ -529,19 +346,19 @@ juce::String LLMChatClient::parseOpenAIResponseForTest(int statusCode, const juc
 {
     const auto parsed = parseOpenAIResponse(statusCode, body);
     json result;
-    result["text"] = parsed.textContent.toStdString();
-    result["error"] = parsed.errorMessage.toStdString();
+    result["text"] = std::string(parsed.textContent.toRawUTF8());
+    result["error"] = std::string(parsed.errorMessage.toRawUTF8());
     json tcs = json::array();
     for (const auto& tc : parsed.toolCalls)
     {
         tcs.push_back({
-            {"id",   tc.id.toStdString()},
-            {"name", tc.name.toStdString()},
-            {"arguments", tc.argumentsJson.toStdString()}
+            {"id",   std::string(tc.id.toRawUTF8())},
+            {"name", std::string(tc.name.toRawUTF8())},
+            {"arguments", std::string(tc.argumentsJson.toRawUTF8())}
         });
     }
     result["tool_calls"] = tcs;
-    return juce::String(result.dump());
+    return juce::String::fromUTF8(result.dump().c_str());
 }
 
 // ── Anthropic message conversion ───────────────────────────────────────────
@@ -698,7 +515,7 @@ juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*
     try
     {
         json body;
-        body["model"]      = model.toStdString();
+        body["model"]      = std::string(model.toRawUTF8());
         body["max_tokens"] = kMaxTokens;
         body["messages"]   = json::parse(messagesJson);
 
@@ -708,7 +525,7 @@ juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*
             body["tool_choice"] = "auto";
         }
 
-        return juce::String(body.dump());
+        return juce::String::fromUTF8(body.dump().c_str());
     }
     catch (...)
     {
@@ -726,7 +543,7 @@ juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings&
         auto [anthropicMsgsJson, systemText] = convertToAnthropicMessages(messagesJson);
 
         json body;
-        body["model"]      = model.toStdString();
+        body["model"]      = std::string(model.toRawUTF8());
         body["max_tokens"] = kMaxTokens;
         body["messages"]   = json::parse(anthropicMsgsJson);
 
@@ -736,7 +553,7 @@ juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings&
         if (!toolsArray.empty())
             body["tools"] = toolsArray;
 
-        return juce::String(body.dump());
+        return juce::String::fromUTF8(body.dump().c_str());
     }
     catch (...)
     {
@@ -758,9 +575,9 @@ LLMChatClient::parseOpenAIResponse(int statusCode, const juce::String& body)
         juce::String detail;
         try
         {
-            const auto root = json::parse(body.toStdString());
+            const auto root = json::parse(body.toRawUTF8());
             if (root.contains("error") && root["error"].is_object())
-                detail = juce::String(root["error"].value("message", ""));
+                detail = juce::String::fromUTF8(root["error"].value("message", "").c_str());
         }
         catch (...) {}
         return {{}, {}, "LLM request failed (HTTP " + juce::String(statusCode) + ")"
@@ -769,7 +586,7 @@ LLMChatClient::parseOpenAIResponse(int statusCode, const juce::String& body)
 
     try
     {
-        const auto root = json::parse(body.toStdString());
+        const auto root = json::parse(body.toRawUTF8());
         if (!root.contains("choices") || !root["choices"].is_array() || root["choices"].empty())
             return {{}, {}, "No choices in LLM response."};
 
@@ -884,9 +701,9 @@ LLMChatClient::parseAnthropicResponse(int statusCode, const juce::String& body)
         juce::String detail;
         try
         {
-            const auto root = json::parse(body.toStdString());
+            const auto root = json::parse(body.toRawUTF8());
             if (root.contains("error") && root["error"].is_object())
-                detail = juce::String(root["error"].value("message", ""));
+                detail = juce::String::fromUTF8(root["error"].value("message", "").c_str());
         }
         catch (...) {}
         return {{}, {}, "LLM request failed (HTTP " + juce::String(statusCode) + ")"
@@ -895,7 +712,7 @@ LLMChatClient::parseAnthropicResponse(int statusCode, const juce::String& body)
 
     try
     {
-        const auto root = json::parse(body.toStdString());
+        const auto root = json::parse(body.toRawUTF8());
         if (!root.contains("content") || !root["content"].is_array())
             return {{}, {}, "No content in Anthropic response."};
 
@@ -964,7 +781,7 @@ static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
                                           const juce::String& apiToolName,
                                           const juce::String& argumentsJson)
 {
-    const auto dispatchName = juce::String(resolveApiToolNameToMcpName(apiToolName.toStdString()));
+    const auto dispatchName = juce::String::fromUTF8(resolveApiToolNameToMcpName(std::string(apiToolName.toRawUTF8())).c_str());
     if (dispatchName.isEmpty())
         return juce::String(R"({"success":false,"error":"unknown_tool_alias","tool":)")
              + juce::JSON::toString(apiToolName) + "}";
@@ -991,23 +808,7 @@ static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
     }
 }
 
-static juce::String executeToolThroughMcp(LocalMcpClientSession* mcpSession,
-                                          MorePhiProcessor& processor,
-                                          const InstanceIdentity& identity,
-                                          AutomationRuntime& runtime,
-                                          const juce::String& apiToolName,
-                                          const juce::String& argumentsJson)
-{
-    if (mcpSession == nullptr)
-        return dispatchToolInProcess(processor, identity, runtime, apiToolName, argumentsJson);
 
-    const auto dispatchName = juce::String(resolveApiToolNameToMcpName(apiToolName.toStdString()));
-    if (dispatchName.isEmpty())
-        return juce::String(R"({"success":false,"error":"unknown_tool_alias","tool":)")
-             + juce::JSON::toString(apiToolName) + "}";
-
-    return mcpSession->callTool(dispatchName, argumentsJson);
-}
 
 // ── Main chat entry point ──────────────────────────────────────────────────
 
@@ -1017,6 +818,156 @@ void LLMChatClient::chat(const LLMSettings& settings,
                           ReplyCallback callback,
                           ProgressCallback progress)
 {
+    // ── Fast local intent pre-parser (Tier-1 deterministic) ───────────────────
+    {
+        const auto userMsgStr = std::string(userMessage.toRawUTF8());
+        juce::String toolName;
+        juce::String toolArgs;
+        juce::String verificationText;
+        std::smatch match;
+
+        static const std::regex kRecallSnapshot(R"(^\s*recall\s+(?:snapshot\s+)?(\d+)\s*$)", std::regex_constants::icase);
+        static const std::regex kMorphPosition(R"(^\s*set\s+morph\s+position\s+to\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*$)", std::regex_constants::icase);
+        static const std::regex kCaptureSnapshot(R"(^\s*capture\s+(?:snapshot\s+)?(\d+)\s*$)", std::regex_constants::icase);
+        static const std::regex kSetParamToValue(R"(^\s*set\s+(.+?)\s+to\s+(-?\d+(?:\.\d+)?)\s*$)", std::regex_constants::icase);
+        static const std::regex kSetMorePhiParam(R"(^\s*set\s+more[_ ]?phi\s+(\w+)\s+to\s+(-?\d+(?:\.\d+)?)\s*$)", std::regex_constants::icase);
+        static const std::regex kBypassOn(R"(^\s*bypass\s+(?:on|true|1)\s*$)", std::regex_constants::icase);
+        static const std::regex kBypassOff(R"(^\s*bypass\s+(?:off|false|0)\s*$)", std::regex_constants::icase);
+        static const std::regex kGetParameter(R"(^\s*(?:get|read|show|what(?:\s+is)?)\s+(.+?)\s*$)", std::regex_constants::icase);
+        static const std::regex kGetMorphState(R"(^\s*(?:get|read|show)\s+morph\s+state\s*$)", std::regex_constants::icase);
+        static const std::regex kGetParamsList(R"(^\s*list\s+(?:all\s+)?parameters?\s*$)", std::regex_constants::icase);
+
+        if (std::regex_match(userMsgStr, match, kRecallSnapshot))
+        {
+            int slot = std::stoi(match[1].str());
+            if (slot >= 0 && slot < 12)
+            {
+                toolName = "recall_snapshot";
+                toolArgs = "{\"slot\":" + juce::String(slot) + "}";
+                verificationText = "Recalled snapshot " + juce::String(slot) + ".";
+            }
+        }
+        else if (std::regex_match(userMsgStr, match, kCaptureSnapshot))
+        {
+            int slot = std::stoi(match[1].str());
+            if (slot >= 0 && slot < 12)
+            {
+                toolName = "capture_snapshot";
+                toolArgs = "{\"slot\":" + juce::String(slot) + "}";
+                verificationText = "Captured snapshot " + juce::String(slot) + ".";
+            }
+        }
+        else if (std::regex_match(userMsgStr, match, kMorphPosition))
+        {
+            double x = std::stod(match[1].str());
+            double y = std::stod(match[2].str());
+            toolName = "set_morph_position";
+            toolArgs = "{\"x\":" + juce::String(x) + ",\"y\":" + juce::String(y) + "}";
+            verificationText = "Set morph position to (" + juce::String(x, 2) + ", " + juce::String(y, 2) + ").";
+        }
+        else if (std::regex_match(userMsgStr, match, kSetParamToValue))
+        {
+            const auto paramName = juce::String(match[1].str()).trim();
+            const double value = std::stod(match[2].str());
+            toolName = "set_parameter";
+            toolArgs = juce::String("{\"name\":\"") + paramName.replaceCharacter(' ', '_')
+                     + "\",\"value\":" + juce::String(value, 6) + "}";
+            verificationText = "Set " + paramName + " to " + juce::String(value) + ".";
+        }
+        else if (std::regex_match(userMsgStr, match, kSetMorePhiParam))
+        {
+            const auto paramId = juce::String(match[1].str()).trim().toLowerCase();
+            const double value = std::stod(match[2].str());
+            toolName = "more_phi.set_parameter";
+            toolArgs = "{\"parameter_id\":\"" + paramId + "\",\"value\":" + juce::String(value, 6) + "}";
+            verificationText = "Set more-phi " + paramId + " to " + juce::String(value) + ".";
+        }
+        else if (std::regex_match(userMsgStr, match, kBypassOn))
+        {
+            toolName = "more_phi.set_parameter";
+            toolArgs = "{\"parameter_id\":\"bypass\",\"value\":1.0}";
+            verificationText = "Bypass enabled.";
+        }
+        else if (std::regex_match(userMsgStr, match, kBypassOff))
+        {
+            toolName = "more_phi.set_parameter";
+            toolArgs = "{\"parameter_id\":\"bypass\",\"value\":0.0}";
+            verificationText = "Bypass disabled.";
+        }
+        else if (std::regex_match(userMsgStr, match, kGetMorphState))
+        {
+            toolName = "get_morph_state";
+            toolArgs = "{}";
+            verificationText = {};
+        }
+        else if (std::regex_match(userMsgStr, match, kGetParamsList))
+        {
+            toolName = "list_parameters";
+            toolArgs = "{}";
+            verificationText = {};
+        }
+        else if (std::regex_match(userMsgStr, match, kGetParameter))
+        {
+            const auto paramName = juce::String(match[1].str()).trim();
+            if (!paramName.containsIgnoreCase("morph") && !paramName.containsIgnoreCase("parameter")
+                && paramName.length() >= 2)
+            {
+                toolName = "get_parameter";
+                toolArgs = "{\"name\":\"" + paramName.replaceCharacter(' ', '_') + "\"}";
+                verificationText = {};
+            }
+        }
+
+        if (toolName.isNotEmpty())
+        {
+            juce::String toolResult = executeTool(toolName, toolArgs);
+            bool success = false;
+            juce::String errorMsg;
+            try
+            {
+                auto r = json::parse(toolResult.toStdString());
+                success = r.value("success", false);
+                if (!success)
+                    errorMsg = juce::String::fromUTF8(r.value("error", "unknown error").c_str());
+            }
+            catch (...)
+            {
+                errorMsg = "failed to parse result";
+            }
+
+            if (verificationText.isEmpty())
+            {
+                if (success)
+                    verificationText = juce::String::fromUTF8(toolResult.toStdString().c_str());
+                else
+                    verificationText = "Failed: " + errorMsg;
+            }
+            else if (!success)
+            {
+                verificationText = "Failed: " + errorMsg;
+            }
+
+            json messages = json::array();
+            if (historyJson.isNotEmpty())
+            {
+                try { messages = json::parse(historyJson.toStdString()); }
+                catch (...) {}
+            }
+            if (messages.empty())
+                messages.push_back({{"role", "system"}, {"content", kSystemPrompt}});
+
+            messages.push_back({{"role", "user"}, {"content", userMsgStr}});
+            messages.push_back({{"role", "assistant"}, {"content", std::string(verificationText.toRawUTF8())}});
+            const juce::String newHistory = juce::String::fromUTF8(messages.dump().c_str());
+
+            juce::MessageManager::callAsync([callback, verificationText, newHistory]()
+            {
+                callback(verificationText, {}, newHistory);
+            });
+            return;
+        }
+    }
+
     // Validate provider configuration before spawning a thread
     if (!settings.activeProvider.has_value())
     {
@@ -1053,7 +1004,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
     const bool isAnthropic  = (providerId == LLMProviderId::Anthropic);
     const juce::String toolsStr = isAnthropic ? mcpToolsToAnthropicJson() : mcpToolsToOpenAIJson();
     json toolsArray;
-    try { toolsArray = filterToolsForChat(json::parse(toolsStr.toStdString()), isAnthropic); }
+    try { toolsArray = filterToolsForChat(json::parse(toolsStr.toRawUTF8()), isAnthropic); }
     catch (...) { toolsArray = json::array(); }
 
     // Capture everything the background thread needs
@@ -1072,7 +1023,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
         json messages = json::array();
         if (historyJson.isNotEmpty())
         {
-            try { messages = json::parse(historyJson.toStdString()); }
+            try { messages = json::parse(historyJson.toRawUTF8()); }
             catch (...) { messages = json::array(); }
         }
 
@@ -1081,21 +1032,10 @@ void LLMChatClient::chat(const LLMSettings& settings,
             messages.push_back({{"role", "system"}, {"content", kSystemPrompt}});
 
         // Append user message
-        messages.push_back({{"role", "user"}, {"content", userMessage.toStdString()}});
+        messages.push_back({{"role", "user"}, {"content", std::string(userMessage.toRawUTF8())}});
 
         juce::String finalText;
         juce::String errorText;
-
-        auto mcpSession = std::make_unique<LocalMcpClientSession>();
-        juce::String mcpConnectError;
-        if (!mcpSession->connectAndInitialize(processor_.getMCPServer().getPort(),
-                                              processor_.getMCPServer().getAuthToken(),
-                                              mcpConnectError))
-        {
-            // TCP MCP session is unavailable - fall back to in-process tool dispatch
-            // via MCPToolHandler::handle so the assistant retains full tool access.
-            mcpSession.reset();
-        }
 
         // ── Agent loop ──────────────────────────────────────────────────
         const auto loopStart = std::chrono::steady_clock::now();
@@ -1178,7 +1118,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
                 // Final text response — done
                 finalText = parsed.textContent;
                 // Append assistant reply to history
-                messages.push_back({{"role", "assistant"}, {"content", finalText.toStdString()}});
+                messages.push_back({{"role", "assistant"}, {"content", std::string(finalText.toRawUTF8())}});
                 break;
             }
 
@@ -1187,16 +1127,16 @@ void LLMChatClient::chat(const LLMSettings& settings,
             for (const auto& tc : parsed.toolCalls)
             {
                 toolCallsJson.push_back({
-                    {"id", tc.id.toStdString()},
+                    {"id", std::string(tc.id.toRawUTF8())},
                     {"type", "function"},
                     {"function",
-                     {{"name", tc.name.toStdString()},
-                      {"arguments", tc.argumentsJson.toStdString()}}}
+                     {{"name", std::string(tc.name.toRawUTF8())},
+                      {"arguments", std::string(tc.argumentsJson.toRawUTF8())}}}
                 });
             }
 
             // Any text before tool calls becomes part of the assistant message
-            const auto preText = parsed.textContent.toStdString();
+            const auto preText = std::string(parsed.textContent.toRawUTF8());
             json assistantMsg  = {
                 {"role", "assistant"},
                 {"content", preText.empty() ? json(nullptr) : json(preText)},
@@ -1204,37 +1144,94 @@ void LLMChatClient::chat(const LLMSettings& settings,
             };
             messages.push_back(assistantMsg);
 
-            // Execute each tool call and append results
-            for (const auto& tc : parsed.toolCalls)
+            // Execute each tool call and append results.
+            // Coalesce duplicate set_parameter/set_parameters_batch calls so the
+            // last value for any given parameter wins — the LLM sometimes revises
+            // its target within a single turn, and intermediate writes just add
+            // latency and jitter.
             {
-                const auto result = executeToolThroughMcp(mcpSession.get(),
-                                                          processor_,
-                                                          processor_.getInstanceIdentity(),
-                                                          automationRuntime_,
-                                                          tc.name,
-                                                          tc.argumentsJson);
-                messages.push_back({
-                    {"role",         "tool"},
-                    {"tool_call_id", tc.id.toStdString()},
-                    {"content",      result.toStdString()}
-                });
+                struct PendingSet { int toolCallIdx; juce::String paramId; float value; };
+                std::vector<PendingSet> pendingSets;
+                std::map<juce::String, int> lastSetIdx;
+                for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)
+                {
+                    const auto& tc = parsed.toolCalls[static_cast<size_t>(i)];
+                    if (tc.name == "set_parameter" || tc.name == "hosted_plugin.set_parameter"
+                        || tc.name == "more_phi.set_parameter")
+                    {
+                        try
+                        {
+                            auto args = json::parse(tc.argumentsJson.toStdString());
+                            const auto id = juce::String(args.value("index", -1) != -1
+                                ? std::to_string(args.value("index", -1))
+                                : args.value("name", args.value("parameter_id", "")));
+                            if (id.isNotEmpty())
+                                lastSetIdx[id] = i;
+                        }
+                        catch (...) {}
+                    }
+                }
+
+                std::set<int> skipIndices;
+                if (lastSetIdx.size() > 1)
+                {
+                    // Collect earlier duplicate writes to skip
+                    std::map<juce::String, int> firstSeen;
+                    for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)
+                    {
+                        const auto& tc = parsed.toolCalls[static_cast<size_t>(i)];
+                        if (tc.name != "set_parameter" && tc.name != "hosted_plugin.set_parameter"
+                            && tc.name != "more_phi.set_parameter")
+                            continue;
+                        try
+                        {
+                            auto args = json::parse(tc.argumentsJson.toStdString());
+                            const auto id = juce::String(args.value("index", -1) != -1
+                                ? std::to_string(args.value("index", -1))
+                                : args.value("name", args.value("parameter_id", "")));
+                            if (id.isNotEmpty() && lastSetIdx.count(id) && lastSetIdx[id] != i)
+                                skipIndices.insert(i);
+                        }
+                        catch (...) {}
+                    }
+                }
+
+                for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)
+                {
+                    const auto& tc = parsed.toolCalls[static_cast<size_t>(i)];
+                    if (skipIndices.count(i))
+                    {
+                        messages.push_back({
+                            {"role",         "tool"},
+                            {"tool_call_id", std::string(tc.id.toRawUTF8())},
+                            {"content",      "{\"success\":true,\"note\":\"coalesced: superseded by later write in same turn\"}"}
+                        });
+                        continue;
+                    }
+                    const auto result = executeTool(tc.name, tc.argumentsJson);
+                    messages.push_back({
+                        {"role",         "tool"},
+                        {"tool_call_id", std::string(tc.id.toRawUTF8())},
+                        {"content",      std::string(result.toRawUTF8())}
+                    });
+                }
             }
 
             // If on last allowed iteration, note that
             if (iteration == kMaxToolIterations - 1)
             {
                 finalText = "Reached the maximum tool-call limit. Partial work may have been applied.";
-                messages.push_back({{"role", "assistant"}, {"content", finalText.toStdString()}});
+                messages.push_back({{"role", "assistant"}, {"content", std::string(finalText.toRawUTF8())}});
             }
         }
 
-        const juce::String updatedHistory(messages.dump());
+        const juce::String updatedHistory = juce::String::fromUTF8(messages.dump().c_str());
 
         // ── Post result to message thread ───────────────────────────────
         juce::MessageManager::callAsync([callback,
-                                          ft = finalText,
-                                          et = errorText,
-                                          uh = updatedHistory]() mutable
+                                         ft = finalText,
+                                         et = errorText,
+                                         uh = updatedHistory]() mutable
         {
             callback(ft, et, uh);
         });

@@ -382,12 +382,18 @@ set(MORE_PHI_AI_SOURCES
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
     src/AI/MCPToolHandler.cpp
+    src/AI/ToolResultCache.h
+    src/AI/ToolResultCache.cpp
+    src/AI/AsyncToolExecutor.h
+    src/AI/AsyncToolExecutor.cpp
     src/AI/LinkBroadcaster.h
     src/AI/LinkBroadcaster.cpp
     src/AI/TokenOptimizer.h
     src/AI/TokenOptimizer.cpp
     src/AI/MCPToolsExtended.h
     src/AI/MCPToolsExtended.cpp
+    src/AI/VST3IPCBridge.h
+    src/AI/VST3IPCBridge.cpp
     src/AI/OzoneParameterMap.h
     src/AI/OzoneParameterMap.cpp
     src/AI/OzonePlanApplicator.h

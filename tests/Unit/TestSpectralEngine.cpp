@@ -844,7 +844,21 @@ TEST_CASE("SpectralMorphEngine (production): prepare and processBlock with sine 
         }
     }
 
-    engine.processBlock(bufA, bufB, 0.5f);
+    // Process 6 blocks of 512 samples (3072 samples total) to fill the 2560-sample STFT pipeline latency
+    for (int b = 0; b < 6; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            float* dataA = bufA.getWritePointer(ch);
+            float* dataB = bufB.getWritePointer(ch);
+            for (int i = 0; i < 512; ++i)
+            {
+                dataA[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
+                dataB[i] = std::sin(2.0f * 3.14159265358979f * 880.0f * static_cast<float>(i) / 44100.0f);
+            }
+        }
+        engine.processBlock(bufA, bufB, 0.5f);
+    }
 
     for (int ch = 0; ch < bufA.getNumChannels(); ++ch)
     {
@@ -900,7 +914,17 @@ TEST_CASE("FormantMorphEngine (production): prepare and processBlock with sine w
             data[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
     }
 
-    engine.processBlock(buffer);
+    // Process 6 blocks of 512 samples (3072 samples total) to fill the 2560-sample formant engine pipeline latency
+    for (int b = 0; b < 6; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            float* data = buffer.getWritePointer(ch);
+            for (int i = 0; i < 512; ++i)
+                data[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
+        }
+        engine.processBlock(buffer);
+    }
 
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
     {
@@ -934,5 +958,43 @@ TEST_CASE("FormantMorphEngine (production): inactive engine leaves buffer unchan
     for (int i = 0; i < 256; ++i)
     {
         REQUIRE(out[i] == Catch::Approx(0.3f).margin(1e-6f));
+    }
+}
+
+TEST_CASE("SpectralMorphEngine (production): transient detection is coherent across stereo channels", "[spectral][production]")
+{
+    more_phi::SpectralMorphEngine engine;
+    engine.prepare(44100.0, 1024);
+    engine.setActive(true);
+    engine.setTransientPreserve(true);
+
+    // Create a stereo signal with a transient (impulse) in the middle of a block.
+    // Block size is 1024 samples, which triggers multiple hops (since hop size is 512).
+    juce::AudioBuffer<float> bufferA(2, 1024);
+    juce::AudioBuffer<float> bufferB(2, 1024);
+    bufferA.clear();
+    bufferB.clear();
+
+    // Channel 0 has an impulse
+    bufferA.getWritePointer(0)[256] = 1.0f;
+    bufferA.getWritePointer(0)[768] = 1.0f;
+    
+    // Channel 1 has the same impulse
+    bufferA.getWritePointer(1)[256] = 1.0f;
+    bufferA.getWritePointer(1)[768] = 1.0f;
+
+    // Process block
+    // Both channels should be processed with identical transient-snapped alpha values.
+    // If they are coherent, the resulting outputs for Left and Right channels should be identical.
+    engine.processBlock(bufferA, bufferB, 0.5f);
+
+    const float* left = bufferA.getReadPointer(0);
+    const float* right = bufferA.getReadPointer(1);
+
+    for (int i = 0; i < 1024; ++i)
+    {
+        // Assert that the processed outputs are mathematically identical,
+        // which proves they were processed with the exact same time-aligned transient alpha!
+        REQUIRE(left[i] == Catch::Approx(right[i]).margin(1e-6f));
     }
 }

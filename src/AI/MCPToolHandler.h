@@ -6,6 +6,8 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include "ToolResultCache.h"
+#include "AsyncToolExecutor.h"
 
 namespace more_phi {
 
@@ -31,6 +33,12 @@ public:
 
     /** Return an MCP-compatible tools/list result object. */
     static juce::String getToolList();
+
+    /** Invalidate cached read-only tool results, e.g. after plugin load. */
+    static void invalidateToolResultCache();
+
+    /** Access the async executor for long-running tools. */
+    static AsyncToolExecutor& getAsyncToolExecutor();
 
 private:
     static juce::String getPluginInfo(MorePhiProcessor& p);
@@ -115,6 +123,28 @@ private:
     // Multi-instance tools
     static juce::String getInstanceInfo(const InstanceIdentity& id);
     static juce::String listInstances();
+
+    // Async tool management
+    static juce::String submitAsyncTool(const juce::String& method,
+                                        const juce::var& params,
+                                        MorePhiProcessor& p,
+                                        const InstanceIdentity& identity,
+                                        AutomationRuntime& runtime);
+    static juce::String getAsyncToolStatus(const juce::var& params);
+    static juce::String getAsyncToolResult(const juce::var& params);
+
+    // Caching helpers
+    static bool isCacheableTool(const juce::String& method);
+    static juce::String getCachedToolResult(const juce::String& method,
+                                            const juce::var& params,
+                                            MorePhiProcessor& p);
+    static void cacheToolResult(const juce::String& method,
+                                const juce::var& params,
+                                MorePhiProcessor& p,
+                                const juce::String& result);
+
+    static ToolResultCache& getToolResultCache();
+    static AsyncToolExecutor& getAsyncToolExecutorInternal();
 };
 
 } // namespace more_phi

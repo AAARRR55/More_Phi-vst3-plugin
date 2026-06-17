@@ -88,6 +88,10 @@ private:
     std::atomic<float> attackCoeffPerBlock_  { 0.0f };
     std::atomic<float> releaseCoeffPerBlock_ { 0.0f };
 
+    // Pre-computed logarithms of coefficients to avoid calling std::log on the audio thread fallback.
+    std::atomic<float> logAttackCoeff_{ 0.0f };
+    std::atomic<float> logReleaseCoeff_{ 0.0f };
+
     // Shadow values used to recompute coefficients when sample rate is set
     float  attackMs_  = 10.0f;
     float  releaseMs_ = 100.0f;
