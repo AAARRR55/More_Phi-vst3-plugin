@@ -45,9 +45,9 @@ LicenseActivationOverlay::~LicenseActivationOverlay() = default;
 void LicenseActivationOverlay::paint(juce::Graphics& g)
 {
     auto* lnf = dynamic_cast<MorePhiLookAndFeel*>(&getLookAndFeel());
-    juce::Colour bg = lnf ? lnf->backgroundDark : juce::Colour(0xff0d1b2a);
-    juce::Colour surface = lnf ? lnf->surfaceColour : juce::Colour(0xff16213e);
-    juce::Colour border = lnf ? lnf->borderColour : juce::Colour(0xff1e3a5f);
+    juce::Colour bg = lnf ? lnf->backgroundDark : juce::Colour(0xff070709);
+    juce::Colour surface = lnf ? lnf->surfaceColour : juce::Colour(0xff0d0d10);
+    juce::Colour border = lnf ? lnf->borderColour : juce::Colour(0xff323237);
 
     // Draw dark semi-translucent background overlay over the entire editor
     g.fillAll(bg.withAlpha(0.85f));
@@ -76,7 +76,7 @@ void LicenseActivationOverlay::resized()
     auto* lnf = dynamic_cast<MorePhiLookAndFeel*>(&getLookAndFeel());
     juce::Colour textCol = lnf ? lnf->textPrimary : juce::Colours::white;
     juce::Colour textDim = lnf ? lnf->textSecondary : juce::Colours::grey;
-    juce::Colour coralAccent = lnf ? lnf->accentCoral : juce::Colour(0xffec415d);
+    juce::Colour coralAccent = lnf ? lnf->accentCoral : juce::Colour(0xffe5c057);
     
     // Layout coordinates inside dialog card
     auto inner = dialogArea.reduced(24);
@@ -93,9 +93,9 @@ void LicenseActivationOverlay::resized()
 
     keyInput_.setBounds(inner.removeFromTop(40).reduced(24, 0));
     keyInput_.setColour(juce::TextEditor::textColourId, textCol);
-    keyInput_.setColour(juce::TextEditor::backgroundColourId, lnf ? lnf->backgroundDark : juce::Colour(0xff0d1b2a));
+    keyInput_.setColour(juce::TextEditor::backgroundColourId, lnf ? lnf->backgroundDark : juce::Colour(0xff070709));
     keyInput_.setColour(juce::TextEditor::focusedOutlineColourId, coralAccent);
-    keyInput_.setColour(juce::TextEditor::outlineColourId, lnf ? lnf->borderColour : juce::Colour(0xff1e3a5f));
+    keyInput_.setColour(juce::TextEditor::outlineColourId, lnf ? lnf->borderColour : juce::Colour(0xff323237));
     
     inner.removeFromTop(12); // spacer
 

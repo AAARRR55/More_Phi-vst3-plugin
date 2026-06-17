@@ -15,8 +15,8 @@ ParameterRow::ParameterRow(int paramIndex, MorePhiProcessor& proc)
 
     auto& bridge = proc_.getParameterBridge();
     nameLabel_.setText(bridge.getParameterName(index_), juce::dontSendNotification);
-    nameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe8eaed));
-    nameLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 11.0f, juce::Font::plain)));
+    nameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffeeeef2));
+    nameLabel_.setFont(juce::Font(juce::FontOptions("Inter", 11.0f, juce::Font::plain)));
     addAndMakeVisible(nameLabel_);
 
     slider_.setRange(0.0, 1.0, 0.001);
@@ -40,8 +40,8 @@ ParameterRow::ParameterRow(int paramIndex, MorePhiProcessor& proc)
     };
     addAndMakeVisible(slider_);
 
-    valueLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
-    valueLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    valueLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+    valueLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     valueLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(valueLabel_);
 
@@ -78,8 +78,8 @@ void ParameterRow::refresh()
 ParameterMapPanel::ParameterMapPanel(MorePhiProcessor& proc) : proc_(proc)
 {
     headerLabel_.setText("Parameter Mapping", juce::dontSendNotification);
-    headerLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 13.0f, juce::Font::bold)));
-    headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffec415d));
+    headerLabel_.setFont(juce::Font(juce::FontOptions("Inter", 13.0f, juce::Font::bold)));
+    headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe5c057));
     addAndMakeVisible(headerLabel_);
 
     selectAllBtn_.onClick = [this]()
@@ -132,9 +132,9 @@ void ParameterMapPanel::resized()
 
 void ParameterMapPanel::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff0d1b2a));
+    g.setColour(juce::Colour(0xff070709));
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.0f);
-    g.setColour(juce::Colour(0xff1e3a5f));
+    g.setColour(juce::Colour(0xff323237));
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.0f, 1.0f);
 }
 

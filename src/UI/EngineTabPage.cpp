@@ -45,7 +45,7 @@ EngineTabPage::~EngineTabPage() = default;
 void EngineTabPage::paint(juce::Graphics& g)
 {
     // Subtle surface fill — matches the rest of the editor's dark theme.
-    g.setColour(juce::Colour(0xff16213e));
+    g.setColour(juce::Colour(0xff0d0d10));
     g.fillRect(getLocalBounds());
 }
 

@@ -49,7 +49,7 @@ void PluginBrowserPanel::resized()
 
 void PluginBrowserPanel::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff16213e));
+    g.setColour(juce::Colour(0xff0d0d10));
     g.fillRect(getLocalBounds());
     g.setColour(juce::Colour(0xff0f3460));
     g.drawLine(0, static_cast<float>(getHeight()), static_cast<float>(getWidth()),

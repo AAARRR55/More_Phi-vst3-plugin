@@ -31,8 +31,8 @@ MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
         };
         addAndMakeVisible(knobs_[i]);
 
-        labels_[i].setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
-        labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
+        labels_[i].setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+        labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
         labels_[i].setJustificationType(juce::Justification::centred);
         labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);
         addAndMakeVisible(labels_[i]);
@@ -55,7 +55,7 @@ void MacroKnobStrip::resized()
 
 void MacroKnobStrip::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff16213e));
+    g.setColour(juce::Colour(0xff0d0d10));
     g.fillRect(getLocalBounds());
     g.setColour(juce::Colour(0xff0f3460));
     g.drawLine(0, 0, static_cast<float>(getWidth()), 0, 0.5f);

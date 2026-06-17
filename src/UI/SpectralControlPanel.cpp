@@ -42,7 +42,7 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
                              border());
 
     fftSizeLabel_.setText("FFT Size", juce::dontSendNotification);
-    fftSizeLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    fftSizeLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     fftSizeLabel_.setColour(juce::Label::textColourId, textDim());
     fftSizeLabel_.setJustificationType(juce::Justification::centredLeft);
 
@@ -63,7 +63,7 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    alphaLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     alphaLabel_.setColour(juce::Label::textColourId, textDim());
     alphaLabel_.setJustificationType(juce::Justification::centred);
 
@@ -183,7 +183,7 @@ void SpectralControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }

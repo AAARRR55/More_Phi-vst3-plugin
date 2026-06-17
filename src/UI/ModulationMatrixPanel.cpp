@@ -24,13 +24,13 @@ namespace more_phi {
 
 namespace colours {
 
-static const juce::Colour background    { 0xff16213e };
-static const juce::Colour headerText    { 0xff4a5568 };
-static const juce::Colour activeAccent  { 0xffec415d };  // coral knob / left border
-static const juce::Colour comboFill     { 0xff1a2742 };
-static const juce::Colour comboText     { 0xffe8eaed };
-static const juce::Colour border        { 0xff1e3a5f };
-static const juce::Colour textSecondary { 0xff8b95a5 };
+static const juce::Colour background    { 0xff0d0d10 };
+static const juce::Colour headerText    { 0xff3a3a40 };
+static const juce::Colour activeAccent  { 0xffe5c057 };  // coral knob / left border
+static const juce::Colour comboFill     { 0xff17181c };
+static const juce::Colour comboText     { 0xffeeeef2 };
+static const juce::Colour border        { 0xff323237 };
+static const juce::Colour textSecondary { 0xff8e8f95 };
 
 } // namespace colours
 
@@ -286,7 +286,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 {
     // Label "LFO N"
     label_.setText("LFO " + juce::String(lfoIndex_ + 1), juce::dontSendNotification);
-    label_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
+    label_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
     label_.setColour(juce::Label::textColourId, colours::headerText);
     label_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(label_);
@@ -320,7 +320,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 
     // "Hz" unit label
     rateLabel_.setText("Hz", juce::dontSendNotification);
-    rateLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    rateLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     rateLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     rateLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(rateLabel_);
@@ -371,7 +371,7 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
 {
     // ---- Section header: route list ----
     routeListHeader_.setText("Routes", juce::dontSendNotification);
-    routeListHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
+    routeListHeader_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
     routeListHeader_.setColour(juce::Label::textColourId, colours::headerText);
     routeListHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeListHeader_);
@@ -392,14 +392,14 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
     addAndMakeVisible(clearAllBtn_);
 
     // ---- Route count label ----
-    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::plain)));
+    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
     routeCountLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     routeCountLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeCountLabel_);
 
     // ---- Section header: LFOs ----
     lfoHeader_.setText("LFOs", juce::dontSendNotification);
-    lfoHeader_.setFont(juce::Font(juce::FontOptions("Segoe UI", 10.0f, juce::Font::bold)));
+    lfoHeader_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
     lfoHeader_.setColour(juce::Label::textColourId, colours::headerText);
     lfoHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(lfoHeader_);

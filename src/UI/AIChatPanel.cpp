@@ -351,7 +351,7 @@ void AIChatPanel::refreshLLMToolbar()
     statusChip_.setText(toDisplayString(status), juce::dontSendNotification);
     statusChip_.setColour(juce::Label::textColourId,
         status == LLMValidationStatus::Active
-            ? juce::Colour(0xff4ade80)
+            ? juce::Colour(0xff34d399)
             : juce::Colour(0xffa5afbf));
 }
 
@@ -959,23 +959,23 @@ void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::Strin
 
 void AIChatPanel::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff0d1b2a));
+    g.fillAll(juce::Colour(0xff070709));
 
     const auto transcriptBounds = transcript_.getBounds().toFloat();
     if (! transcriptBounds.isEmpty())
     {
         g.setColour(juce::Colour(0xff171a1f));
         g.fillRoundedRectangle(transcriptBounds, 4.0f);
-        g.setColour(juce::Colour(0xff1e3a5f).withAlpha(0.7f));
+        g.setColour(juce::Colour(0xff323237).withAlpha(0.7f));
         g.drawRoundedRectangle(transcriptBounds.reduced(0.5f), 4.0f, 1.0f);
     }
 
     const auto statusBounds = statusChip_.getBounds().toFloat().reduced(1.0f, 2.0f);
     if (! statusBounds.isEmpty())
     {
-        g.setColour(juce::Colour(0xff1a2742));
+        g.setColour(juce::Colour(0xff17181c));
         g.fillRoundedRectangle(statusBounds, 7.0f);
-        g.setColour(juce::Colour(0xff1e3a5f));
+        g.setColour(juce::Colour(0xff323237));
         g.drawRoundedRectangle(statusBounds, 7.0f, 1.0f);
     }
 }

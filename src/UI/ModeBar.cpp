@@ -14,8 +14,8 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
 {
     // ── Morph Source buttons: 2D Pad | Fader ────────────────────────────────
     sourceLabel_.setText("Source", juce::dontSendNotification);
-    sourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
-    sourceLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    sourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+    sourceLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
     sourceLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(sourceLabel_);
 
@@ -45,8 +45,8 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     modeButtons_[0].setToggleState(true, juce::dontSendNotification);
 
     modeLabel_.setText("Mode", juce::dontSendNotification);
-    modeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
-    modeLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    modeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+    modeLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
     modeLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(modeLabel_);
 
@@ -87,8 +87,8 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     addAndMakeVisible(smoothSlider_);
 
     smoothLabel_.setText("Smooth", juce::dontSendNotification);
-    smoothLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b95a5));
-    smoothLabel_.setFont(juce::Font(juce::FontOptions("Segoe UI", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    smoothLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+    smoothLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
     smoothLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(smoothLabel_);
 
@@ -163,7 +163,7 @@ void ModeBar::resized()
 
 void ModeBar::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff16213e));
+    g.setColour(juce::Colour(0xff0d0d10));
     g.fillRect(getLocalBounds());
 }
 

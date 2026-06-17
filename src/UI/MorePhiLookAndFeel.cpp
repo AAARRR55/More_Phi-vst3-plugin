@@ -6,28 +6,28 @@ namespace more_phi {
 
 MorePhiLookAndFeel::MorePhiLookAndFeel()
 {
-    // Global defaults
+    // Global defaults — gold primary, cyan interactive accents
     setColour(juce::ResizableWindow::backgroundColourId, backgroundDark);
     setColour(juce::TextButton::buttonColourId, surfaceColour);
-    setColour(juce::TextButton::buttonOnColourId, accentCoral);
+    setColour(juce::TextButton::buttonOnColourId, accentGold);
     setColour(juce::TextButton::textColourOffId, textPrimary);
-    setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    setColour(juce::TextButton::textColourOnId, backgroundDark);
     setColour(juce::ComboBox::backgroundColourId, surfaceColour);
     setColour(juce::ComboBox::textColourId, textPrimary);
     setColour(juce::ComboBox::outlineColourId, borderColour);
     setColour(juce::PopupMenu::backgroundColourId, surfaceLight);
     setColour(juce::PopupMenu::textColourId, textPrimary);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, accentCoral.withAlpha(0.2f));
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, accentCyan.withAlpha(0.22f));
     setColour(juce::Label::textColourId, textSecondary);
-    setColour(juce::Slider::thumbColourId, accentCoral);
+    setColour(juce::Slider::thumbColourId, accentGold);
     setColour(juce::Slider::trackColourId, borderColour);
-    setColour(juce::Slider::rotarySliderFillColourId, accentCoral);
+    setColour(juce::Slider::rotarySliderFillColourId, accentGold);
     setColour(juce::Slider::rotarySliderOutlineColourId, surfaceColour);
     setColour(juce::Slider::textBoxTextColourId, textSecondary);
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
-    // Default font with fallbacks
-    setDefaultSansSerifTypefaceName("Segoe UI");
+    // Default font with fallbacks (matches the landing page's clean grotesk body)
+    setDefaultSansSerifTypefaceName("Inter");
 }
 
 // ── Font Scaling ─────────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ float MorePhiLookAndFeel::getScaledFontSize(float baseSize, float editorWidth, f
 juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float editorWidth,
                                                 float minSize, int style)
 {
-    return juce::Font(juce::FontOptions("Segoe UI",
+    return juce::Font(juce::FontOptions("Inter",
                                          getScaledFontSize(baseSize, editorWidth, minSize),
                                          style));
 }
@@ -95,7 +95,7 @@ void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
         ? button.findColour(juce::TextButton::buttonOnColourId)
         : button.findColour(juce::TextButton::buttonColourId);
     if (bg.isTransparent())
-        bg = toggled ? accentCoral : surfaceLight;
+        bg = toggled ? accentGold : surfaceLight;
     if (isDown) bg = bg.darker(0.2f);
     else if (isOver) bg = bg.brighter(0.08f);
 
@@ -105,8 +105,9 @@ void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
         bg.darker(0.05f),   0, bounds.getBottom(), false));
     g.fillRoundedRectangle(bounds, cornerRadius);
 
-    // Border
-    g.setColour(toggled ? accentCoral.brighter(0.2f) : borderColour);
+    // Border — cyan on hover, gold when active
+    g.setColour(toggled ? accentGold.brighter(0.2f)
+                        : (isOver ? accentCyan.withAlpha(0.7f) : borderColour));
     g.drawRoundedRectangle(bounds, cornerRadius, 1.0f);
 
     // Glow for active/toggled buttons
