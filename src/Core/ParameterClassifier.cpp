@@ -521,7 +521,7 @@ float ParameterClassifier::calculateImportance(const ParameterMetadata& meta) co
         const auto now = static_cast<int64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         const auto age = static_cast<int64_t>(now - meta.lastModified);
         // Higher score for recent modifications (decay over time)
-        const float recencyBonus = 0.2f * std::exp(-static_cast<double>(age) / 3600000000000.0f); // 1 hour half-life
+        const float recencyBonus = 0.2f * std::exp(-static_cast<float>(age) / 3600000000000.0f); // 1 hour half-life
         score += recencyBonus;
     }
     

@@ -24,7 +24,7 @@ LicenseActivationOverlay::LicenseActivationOverlay(MorePhiProcessor& processor)
     // Configure Key Input
     keyInput_.setTextToShowWhenEmpty("MPHI-XXXXX-XXXXX-XXXXX-XXXXX", juce::Colours::grey);
     keyInput_.setJustification(juce::Justification::centred);
-    keyInput_.setFont(juce::Font(16.0f, juce::Font::bold));
+    keyInput_.setFont(juce::Font(juce::FontOptions(16.0f, static_cast<int>(juce::Font::bold))));
     addAndMakeVisible(keyInput_);
 
     // Status label
@@ -82,11 +82,11 @@ void LicenseActivationOverlay::resized()
     auto inner = dialogArea.reduced(24);
     
     titleLabel_.setBounds(inner.removeFromTop(36));
-    titleLabel_.setFont(juce::Font(22.0f, juce::Font::bold));
+    titleLabel_.setFont(juce::Font(juce::FontOptions(22.0f, static_cast<int>(juce::Font::bold))));
     titleLabel_.setColour(juce::Label::textColourId, coralAccent);
 
     descLabel_.setBounds(inner.removeFromTop(48));
-    descLabel_.setFont(juce::Font(13.0f));
+    descLabel_.setFont(juce::Font(juce::FontOptions(13.0f)));
     descLabel_.setColour(juce::Label::textColourId, textDim);
 
     inner.removeFromTop(12); // spacer
@@ -100,7 +100,7 @@ void LicenseActivationOverlay::resized()
     inner.removeFromTop(12); // spacer
 
     statusLabel_.setBounds(inner.removeFromTop(24));
-    statusLabel_.setFont(juce::Font(12.0f));
+    statusLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));
 
     inner.removeFromTop(8); // spacer
 

@@ -210,8 +210,9 @@ std::vector<float> ParameterBridge::captureParameterState() const noexcept
     // H10 FIX: Message-thread only — touches hosted plugin parameters
     jassert(juce::MessageManager::getInstanceWithoutCreating() == nullptr
             || juce::MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread());
-    jassert(juce::Thread::getCurrentThread() == nullptr
-            || !juce::Thread::getCurrentThread()->isRealtimeThread());
+    const auto* currentThread = juce::Thread::getCurrentThread();
+    jassert(currentThread == nullptr || !currentThread->isRealtimeThread());
+    (void)currentThread;
     return withPlugin(host_, cachedConcreteHost_, "captureParameterState", std::vector<float>{},
         [](juce::AudioPluginInstance& plugin) -> std::vector<float>
     {

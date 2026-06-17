@@ -149,6 +149,8 @@ public:
     juce::String getParameterDisplayValue(int index) const override { return juce::String(values.at(static_cast<size_t>(index))); }
     float getParameterDefault(int) const override { return 0.5f; }
     juce::StringArray getParameterValueStrings(int) const override { return {}; }
+    juce::String getParameterStableID(int index) const override { return "param_" + juce::String(index); }
+    int getParameterNumSteps(int) const override { return 0; }
 
     std::vector<float> values;
     int applyCount = 0;
@@ -546,8 +548,8 @@ TEST_CASE("MorphProcessor: higher smoothing rate converges more slowly", "[smoot
     // Run 10 blocks — fast should be much closer to 1.0 than slow
     for (int i = 0; i < 10; ++i)
     {
-        procFast.process(0.0f, 0.0f, 0.5f, MorphSource::XYPad, MorphMode::Direct, 1.0f/60.0f, outFast);
-        procSlow.process(0.0f, 0.0f, 0.5f, MorphSource::XYPad, MorphMode::Direct, 1.0f/60.0f, outSlow);
+        procFast.process(0.0f, 0.0f, 0.5f, MorphSource::XYPad, MorphMode::Elastic, 1.0f/60.0f, outFast);
+        procSlow.process(0.0f, 0.0f, 0.5f, MorphSource::XYPad, MorphMode::Elastic, 1.0f/60.0f, outSlow);
     }
 
     // Fast smoother should be closer to target (1.0) than slow smoother

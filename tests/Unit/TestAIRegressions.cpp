@@ -99,6 +99,13 @@ public:
     }
     float getParameterDefault(int) const override { return 0.5f; }
     juce::StringArray getParameterValueStrings(int) const override { return {}; }
+    juce::String getParameterStableID(int index) const override
+    {
+        if (index < 0 || static_cast<size_t>(index) >= names_.size())
+            return {};
+        return names_[static_cast<size_t>(index)];
+    }
+    int getParameterNumSteps(int) const override { return 0; }
 
 private:
     std::vector<juce::String> names_;

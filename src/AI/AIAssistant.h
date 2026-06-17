@@ -67,6 +67,10 @@ public:
     AssistantWorkflowResult undoLastAssistantWorkflow();
     AssistantWorkflowResult recordFeedbackForLastWorkflow(const juce::String& text);
 
+    /** Exposes the assistant's persistent AutomationRuntime so MCP tool tests
+     *  can target the same memory/event bus used by executeLocalWorkflowPrompt(). */
+    AutomationRuntime& getAutomationRuntime() const noexcept { return automationRuntime_; }
+
     static bool detectsLocalWorkflowPrompt(const juce::String& text);
     static bool detectsLocalFeedbackPrompt(const juce::String& text);
     static bool detectsLocalUndoPrompt(const juce::String& text);

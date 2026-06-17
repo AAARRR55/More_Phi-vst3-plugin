@@ -5,6 +5,7 @@
 TEST_CASE("PerformanceProfiler measures execution time", "[PerformanceProfiler]")
 {
     more_phi::PerformanceProfiler profiler;
+    profiler.registerSection("test_operation");
 
     {
         auto timer = profiler.createTimer("test_operation");

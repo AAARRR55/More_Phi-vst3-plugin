@@ -60,14 +60,16 @@ void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& fil
 
             if (note >= trigBase && note < trigBase + SnapshotBank::NUM_SLOTS)
             {
+                // FIX C19: Consume both note-ONs and note-OFFs for trigger-range
+                // notes so they don't leak to the hosted plugin.
+                consumed = true;
+
                 if (msg.isNoteOn() && msg.getVelocity() > 0)
                 {
                     const int slot = note - trigBase;
                     auto cb = snapshotCb_.load(std::memory_order_acquire);
                     if (cb) cb(slot, snapshotCtx_.load(std::memory_order_acquire));
-                    consumed = true;  // FIX C19: Only consume note-ONs
                 }
-                // note-OFFs pass through to the hosted plugin
             }
         }
         else if (msg.isController())
@@ -132,7 +134,10 @@ void MIDIRouter::processSidechain(const juce::AudioBuffer<float>& sidechain)
     // H-7 FIX: One-pole envelope follower for smooth sidechain triggering.
     // Without ballistics, instantaneous RMS causes erratic triggering on transients.
     const float coeff = rms > sidechainEnvelope_ ? scAttackCoeff_ : scReleaseCoeff_;
-    sidechainEnvelope_ += coeff * (rms - sidechainEnvelope_);
+    if (coeff <= 0.0f)
+        sidechainEnvelope_ = rms;  // prepare() not called yet — fall back to instantaneous RMS
+    else
+        sidechainEnvelope_ += coeff * (rms - sidechainEnvelope_);
 
     // Edge detection: trigger on rising edge (gate was closed, now above threshold)
     const float threshold = sidechainThreshold_.load(std::memory_order_relaxed);

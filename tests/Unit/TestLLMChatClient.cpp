@@ -303,7 +303,8 @@ TEST_CASE("MCP memory.update_outcome_feedback updates automatic workflow outcome
                 {"user_feedback", "that was too much"}
             }),
             processor,
-            identity).toStdString());
+            identity,
+            assistant.getAutomationRuntime()).toStdString());
 
     REQUIRE(updated["success"].get<bool>());
     REQUIRE(updated["outcome"]["actionId"].get<std::string>() == applied.transactionId.toStdString());
@@ -315,7 +316,8 @@ TEST_CASE("MCP memory.update_outcome_feedback updates automatic workflow outcome
         MCPToolHandler::handle("events.list_recent",
             toVar(nlohmann::json{{"limit", 20}}),
             processor,
-            identity).toStdString());
+            identity,
+            assistant.getAutomationRuntime()).toStdString());
     REQUIRE(events["success"].get<bool>());
 
     bool foundEvent = false;

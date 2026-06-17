@@ -215,6 +215,7 @@ static void computeWithRetry(const SnapshotBank& bank,
                               const char* /*caller*/,
                               Fn&& fn) noexcept
 {
+    (void)output; // Written to by the caller-supplied lambda; kept in signature for clarity.
     constexpr int kMaxRetries = 5;
     bool lockAcquired = false;
 

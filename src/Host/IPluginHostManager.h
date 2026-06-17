@@ -41,7 +41,7 @@ public:
     virtual void scanPluginFolders() = 0;
     
     // Parameter metadata (0 = continuous)
-    virtual int getNumSteps(int /*index*/) const { return 0; }
+    virtual int getNumSteps(int) const { return 0; }
 };
 
 /**

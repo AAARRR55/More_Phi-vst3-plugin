@@ -97,7 +97,7 @@ TEST_CASE("PhysicsEngine::updateElastic: sample-rate independent (H-2)", "[physi
     const float targetX = 0.8f, targetY = 0.4f;
     constexpr double kSeconds = 0.5;
 
-    const auto runForWallClock = [](double sampleRate, int blockSize)
+    const auto runForWallClock = [targetX, targetY](double sampleRate, int blockSize)
     {
         ElasticState s{};
         const float dt = static_cast<float>(blockSize / sampleRate);

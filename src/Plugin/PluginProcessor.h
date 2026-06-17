@@ -674,6 +674,7 @@ private:
 
     // M9 FIX: Output gain smoothing state (audio thread only)
     std::atomic<float> smoothedGain_{1.0f};
+    bool gainSmoothingInitialized_ = false;
 
     // M11 FIX: Atomic flag for deferred state restore from audio thread
     std::atomic<bool> pendingStateRestore_{false};

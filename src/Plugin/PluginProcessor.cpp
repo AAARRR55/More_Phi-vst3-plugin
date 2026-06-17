@@ -1157,9 +1157,9 @@ void MorePhiProcessor::syncStateFromAPVTS()
 
 // ── Process Block ────────────────────────────────────────────────────────────
 
-void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playHead) noexcept
+void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* newPlayHead) noexcept
 {
-    if (playHead == nullptr)
+    if (newPlayHead == nullptr)
     {
         transportAvailable_.store(false, std::memory_order_relaxed);
         transportPlaying_.store(false, std::memory_order_relaxed);
@@ -1167,7 +1167,7 @@ void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playH
         return;
     }
 
-    const auto position = playHead->getPosition();
+    const auto position = newPlayHead->getPosition();
     if (!position.hasValue())
     {
         transportAvailable_.store(false, std::memory_order_relaxed);
@@ -1570,15 +1570,27 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
     {
         const float gainDb = rawParams_.outputGain->load(std::memory_order_relaxed);
         const float targetGainLinear = juce::Decibels::decibelsToGain(gainDb);
-        const float currentGain = smoothedGain_.load(std::memory_order_relaxed);
-        if (buffer.getNumSamples() > 0 && targetGainLinear != currentGain)
+        if (!gainSmoothingInitialized_)
         {
-            buffer.applyGainRamp(0, buffer.getNumSamples(), currentGain, targetGainLinear);
+            // First processed block: jump directly to the current target to avoid
+            // a misleading ramp from the default 1.0f.
             smoothedGain_.store(targetGainLinear, std::memory_order_relaxed);
+            gainSmoothingInitialized_ = true;
+            if (targetGainLinear != 1.0f)
+                buffer.applyGain(targetGainLinear);
         }
-        else if (targetGainLinear != 1.0f)
+        else
         {
-            buffer.applyGain(targetGainLinear);
+            const float currentGain = smoothedGain_.load(std::memory_order_relaxed);
+            if (buffer.getNumSamples() > 0 && targetGainLinear != currentGain)
+            {
+                buffer.applyGainRamp(0, buffer.getNumSamples(), currentGain, targetGainLinear);
+                smoothedGain_.store(targetGainLinear, std::memory_order_relaxed);
+            }
+            else if (targetGainLinear != 1.0f)
+            {
+                buffer.applyGain(targetGainLinear);
+            }
         }
     }
 

@@ -151,7 +151,7 @@ SpectralFeatures FeatureExtractor::extractSpectral(const juce::AudioBuffer<float
         for (size_t i = 0; i < magnitudeBuffer_.size(); ++i)
         {
             const float freq = static_cast<float>(i) * binWidth;
-            spreadSum += magnitudeBuffer_[i] * std::pow(static_cast<double>(freq) - static_cast<double>(centroid), 2.0);
+            spreadSum += magnitudeBuffer_[i] * std::pow(freq - centroid, 2.0f);
         }
         const float spread = centroidDenom > 0.0f ? std::sqrt(spreadSum / centroidDenom) : 0.0f;
         spreadAccum.push_back(spread);

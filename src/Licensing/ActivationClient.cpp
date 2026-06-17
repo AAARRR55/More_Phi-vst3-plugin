@@ -12,9 +12,21 @@ namespace {
 
 juce::String envString(const char* key)
 {
+#if defined(_WIN32)
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, key) == 0 && value != nullptr)
+    {
+        juce::String result(value);
+        std::free(value);
+        return result.trim();
+    }
+    return {};
+#else
     if (const auto* value = std::getenv(key))
         return juce::String(value).trim();
     return {};
+#endif
 }
 
 juce::String cleanBaseUrl(juce::String url)
