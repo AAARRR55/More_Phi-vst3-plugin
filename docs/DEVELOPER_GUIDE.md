@@ -297,8 +297,10 @@ void processBlock(AudioBuffer<float>& buffer, MidiBuffer& midi)
 **Additional rules:**
 - Mark audio-thread functions `noexcept` wherever exceptions are impossible.
 - Never use `jassert` in the audio thread; `jassertfalse` is acceptable only in debug builds.
+- Avoid non-real-time-safe functions like `std::pow()` in the audio thread. Pre-compute coefficients on the message/setting thread where possible, or use log-base exponentiation fallbacks (like `std::exp(numSamples * logBase)`).
 
 ### Thread Communication
+
 
 ```cpp
 // ✅ CORRECT: Use atomics for simple values

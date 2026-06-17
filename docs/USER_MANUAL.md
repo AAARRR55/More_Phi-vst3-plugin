@@ -115,19 +115,22 @@ The MorphPad is the central XY control surface.
 
 | Element | Description |
 |---|---|
-| Cursor | Current XY morph position. |
-| Occupied snapshot dots | Slots containing captured parameter states. |
-| Empty snapshot dots | Available slots. |
-| Movement trail | Recent movement path, when visible. |
+| Gold Puck | Current active/processed XY morph position applied to hosted parameters. |
+| Faint Guide Dot | Raw target position (mouse cursor or DAW automation coordinate). |
+| Occupied snapshot dots | Slots containing captured parameter states (cyan glow with number). |
+| Empty snapshot dots | Available slots (muted outline). |
+| Movement trail | Faded trail showing recent physical/drift trajectory (up to 64 points). |
+| Dashed Connectors | Pulsating links showing active blend pull to occupied snapshots. |
 | Double-click capture | Captures the current hosted-plugin state near the selected slot. |
 | Drag | Moves the morph cursor and updates interpolation weights. |
 
 ### Behavior
 
-- XY morphing uses inverse-distance weighting across occupied snapshot slots.
-- Closer snapshots have stronger influence.
-- The center of the pad blends multiple snapshots more evenly.
-- Using the MorphPad sets morph source to XY mode.
+*   **Morph Interpolation:** XY morphing uses inverse-distance weighting (IDW) across occupied snapshot slots. Closer snapshots exert a stronger influence on the parameters.
+*   **Dual Cursor Feedback:** In **Elastic** or **Drift** modes, the pad separates input from output. The *Faint Guide Dot* tracks your mouse/automation input immediately, while the *Gold Puck* trails and reacts organically according to the selected physics equations.
+*   **Visual Movement Trail:** Trailing lines visualize spring-damper swings or Perlin drift trajectories in real time at 30 FPS.
+*   **Central Blend:** Dragging to the exact center of the pad balances the parameters of all active snapshots equally.
+*   **Source Binding:** Using the MorphPad automatically updates the `morphSource` parameter to `XY Pad` mode.
 
 ## Snapshot Ring
 
@@ -206,11 +209,21 @@ The strip is divided into Safety, Recall, Output, and Sidechain sections.
 
 ### Mode Bar
 
-| Button | Mode | Description |
+Controls the active morph source and physical dynamics engine.
+
+| Button/Slider | Parameter / Mode | Description |
 |---|---|---|
-| Direct | Direct mode | Cursor follows input immediately. |
-| Elastic | Spring-damper mode | Cursor moves toward target with smooth physical lag. |
-| Drift | Perlin/noise drift mode | Cursor wanders organically near target. |
+| **2D Pad / Fader** | `morphSource` | Selects between 2D XY morphing and 1D sequential clock-fader morphing. |
+| **Direct** | `physicsMode = 0` | Cursor follows input target immediately (softened by the Smooth slider). |
+| **Elastic** | `physicsMode = 1` | Mass-spring-damper physical integration on the audio thread with inertial overshoot. |
+| **Drift** | `physicsMode = 2` | 2D Perlin noise walk around the target (with Free, Locked, or Orbit trajectories). |
+| **Smooth** | `smoothing` | Dynamic parameter smoothing rate (from `0.0` to `0.999`) to prevent zipper noise. |
+
+#### Physics DSP Integrator Details
+*   **Symplectic Euler Integration:** Elastic mode calculates position and velocity using a phase-space energy-conserving symplectic scheme on the audio thread, preventing numerical accumulation errors.
+*   **Implicit Velocity Damping:** Damping is solved implicitly ($v_{\text{new}} = \frac{v_{\text{intermediate}}}{1 + c \cdot dt}$) to guarantee the physical model is unconditionally stable and never diverges.
+*   **Adaptive Sub-stepping:** Time steps are divided dynamically to maintain stiffness/damping tuning across all sample rates ($44.1\text{ kHz}$ to $96\text{ kHz}$) and buffer sizes.
+*   **Anisotropic Noise Walk:** Drift mode employs 8-direction Perlin gradients with a quintic fade curve ($6t^5 - 15t^4 + 10t^3$) to provide isotropic, continuous acceleration with zero sudden direction snapping.
 
 ### Macro Knob Strip
 

@@ -170,7 +170,7 @@ The **Output Gain** knob controls More-Phi's final output level. The **Bypass** 
 
 ## Use Physics Modes
 
-Physics modes change how the morph cursor moves toward your input.
+Physics modes change how the morph cursor moves toward your input. Instead of static linear crossfades, More-Phi implements physically modeled inertial movement and fluid dynamics.
 
 ### Direct Mode
 
@@ -180,27 +180,55 @@ Use **Direct** when you need precise, immediate control.
 2. Drag the MorphPad or Snap Fader.
 3. The cursor follows your motion immediately.
 
-> Direct mode now includes a small amount of smoothing to prevent zipper noise on fast morphs. The cursor still follows your motion immediately, but parameter transitions are gently softened.
+> [!NOTE]
+> Direct mode includes a small amount of parameter smoothing (controlled by the **Smooth** slider) to prevent digital "zipper noise" during fast mouse drags or abrupt automation jumps.
 
 ### Elastic Mode
 
-Use **Elastic** for smooth motion with a spring-like feel.
+Use **Elastic** for smooth, organic motion with a spring-like inertia.
 
-1. Select **Elastic**.
-2. Move the target position.
-3. Let the cursor catch up and settle into place.
+1. Select **Elastic** in the mode bar.
+2. Drag the MorphPad cursor to a target position.
+3. The cursor will glide toward your target, overshoot it slightly, and bounce to a stop.
 
-Best for pads, drones, risers, and transitions that should feel alive.
+*   **Tuning Presets:** You can select from three physical presets via DAW automation/MCP:
+    *   **Slow:** Light stiffness and low damping ($\zeta = 0.35$), producing slow, highly elastic swings.
+    *   **Medium:** Balanced stiffness and moderate damping ($\zeta = 0.60$), providing responsive but fluid movement.
+    *   **Heavy:** High stiffness and heavy damping ($\zeta = 1.50$), making the movement overdamped (no overshoot or oscillation, settling directly into place).
+*   **DSP Engine Details:** The motion is calculated on the audio thread using a **Symplectic Euler Integration** scheme that preserves phase-space energy. It employs **Fully Implicit Velocity Damping** ($\text{dampingFactor} = \frac{1}{1 + c \cdot dt}$) to guarantee numerical stability, ensuring the physics never blow up or inject artificial energy.
+*   **Adaptive Sub-stepping:** To ensure sample-rate and block-size independence, the engine calculates a stability limit:
+    $$\Delta t_{\text{stable}} = \frac{1}{2\sqrt{k}}$$
+    If your DAW's buffer size or sample rate causes a time step $dt$ larger than this, the engine automatically sub-divides the step into $N$ stable sub-steps, ensuring the spring behaves identically at $44.1\text{ kHz}$ or $96\text{ kHz}$.
 
 ### Drift Mode
 
-Use **Drift** for evolving movement around the target.
+Use **Drift** for evolving, natural movement around a target point.
 
-1. Select **Drift**.
+1. Select **Drift** in the mode bar.
 2. Set a target position on the MorphPad.
 3. Let More-Phi wander organically around that point.
 
-Best for ambient textures, modulation beds, and generative movement.
+*   **Tuning Variables:** Exposes Speed, Distance, Chaos, and Gravity parameters to the DAW/MCP.
+    *   **Speed:** Controls how fast the Perlin noise cycles.
+    *   **Distance:** Sets the maximum radius of the random walk.
+    *   **Chaos:** Controls the number of noise octaves (up to 4) to add high-frequency detail.
+    *   **Gravity:** When in *Locked* mode, pulls the drift position back toward your anchor.
+*   **Drift Modes:** Exposes three modes:
+    *   **Free:** Unanchored random walk.
+    *   **Locked:** Anchored to your mouse/automation cursor, scaling the drift by $(1.0 - \text{gravity})$.
+    *   **Orbit:** Rotates in a circular path at a defined speed, with Perlin noise acting as a secondary dynamic wobble.
+*   **DSP Engine Details:** Driven by a standard 2D Perlin gradient noise generator with an 8-way hashing scheme to eliminate directional bias (anisotropy). It utilizes a quintic fade curve ($6t^5 - 15t^4 + 10t^3$) to guarantee continuous acceleration, ensuring there are no sudden "snaps" or velocity jumps in the morphing path.
+
+---
+
+## Physics Visualizers on the MorphPad
+
+When using **Elastic** or **Drift** modes, the MorphPad provides active visual cues to show exactly how the physics engine behaves in relation to your input:
+
+1.  **The Gold Puck:** Renders the *processed* physical position currently being applied to the hosted parameters.
+2.  **The Faint Guide Dot:** Shows your *raw* input target (where your mouse is clicked or where DAW automation is pointing). You will see the Gold Puck stretch away from the Guide Dot and pull toward it.
+3.  **Faded Line Trail:** Visualizes the recent trajectory of the Gold Puck (up to 64 points of history), showing the curvature, springiness, or noise-drift pattern of the movement.
+4.  **Dashed Connectors:** Draws faint, pulsating dashed lines connecting the Gold Puck to each of the active, occupied snapshot dots on the outer ring, visually representing which snapshot profiles are exerting pull on the morph space.
 
 ## Use Genetic Sound Design
 

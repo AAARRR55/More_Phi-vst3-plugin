@@ -92,6 +92,22 @@ Key primitives:
 - Hosted plugin exclusive access via `PluginHostManager`.
 - `PerformanceProfiler` uses a pre-allocated circular buffer with atomic index — no allocations on audio thread.
 
+### Recent DSP Correctness and Safety Fixes (v3.3.0)
+
+A set of structural audio thread safety fixes were implemented in version 3.3.0 to enforce strict real-time boundaries and mathematical precision:
+
+1. **Real-time Safe Envelope Tracking (`EnvelopeFollower`):**
+   - **Pre-computed Coefficients:** Attack and release coefficients are calculated and converted to log bases on the message thread during parameter updates (`setAttack()` and `setRelease()`).
+   - **Audio Thread Execution:** The processing loop avoids non-real-time-safe functions like `std::pow()`. When processing standard blocks, it reads pre-calculated block coefficients (`attackCoeffPerBlock_`/`releaseCoeffPerBlock_`). If block sizes vary dynamically, it relies on a faster `std::exp(numSamples * logBase)` calculation.
+
+2. **Discrete Parameter Step Snapping (`DiscreteParameterHandler`):**
+   - **Rounding Behavior:** Snaps continuous morph values to nearest discrete states using `std::round(value * maxStep)`. This resolves a truncating cast bug that made the maximum discrete state unreachable.
+   - **Listen Mode Integration:** Snapped outputs are fed into the audio pipeline after the modulation matrix, preventing glitches or intermediate garbage values from being sent to discrete/binary inputs of the hosted plugin.
+
+3. **Phase-Vocoder Stereo Coherence (`SpectralMorphEngine`):**
+   - **Shared Transient Modification:** Runs transient detection on the left channel (Channel 0) and records the resulting morph alpha adjustments into a pre-allocated `blockAlphas_` shared array. Channel 1 (or subsequent channels) reuses these values for identical hop indices, avoiding channel phase drift.
+
+
 ## Installation and Build
 
 ### Install a Release Build

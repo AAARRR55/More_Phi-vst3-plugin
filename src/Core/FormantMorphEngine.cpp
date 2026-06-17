@@ -202,15 +202,6 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
         float* outPtr      = buffer.getWritePointer(c);
         const float* inPtr = buffer.getReadPointer(c);
 
-        // Drain output buffer
-        const int outBufLen = static_cast<int>(ch.outputBuffer.size());
-        const int drainLen  = std::min(numSamples, outBufLen);
-
-        for (int i = 0; i < drainLen; ++i)
-            outPtr[i] = ch.outputBuffer[static_cast<size_t>(i)];
-        for (int i = drainLen; i < numSamples; ++i)
-            outPtr[i] = 0.0f;
-
         for (int i = 0; i < numSamples; ++i)
         {
             ch.inputBuffer[static_cast<size_t>(ch.writePos)] = inPtr[i];
@@ -223,6 +214,15 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
                 processFrame(ch, amount);
             }
         }
+
+        // Drain output buffer
+        const int outBufLen = static_cast<int>(ch.outputBuffer.size());
+        const int drainLen  = std::min(numSamples, outBufLen);
+
+        for (int i = 0; i < drainLen; ++i)
+            outPtr[i] = ch.outputBuffer[static_cast<size_t>(i)];
+        for (int i = drainLen; i < numSamples; ++i)
+            outPtr[i] = 0.0f;
 
         // Shift output buffer left by drainLen
         const int remaining = outBufLen - drainLen;
