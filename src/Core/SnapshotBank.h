@@ -67,10 +67,10 @@ public:
     void recallFast(int slot, IParameterBridge& bridge) const;
 
     // Full mode: capture/recall opaque VST3 state chunks alongside parameters
-    void captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
+    bool captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
     void captureStateChunk(int slot, const juce::MemoryBlock& chunk);
-    void recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
-    void recallStateChunk(int slot, juce::AudioProcessor* plugin) const;
+    bool recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const;
+    bool recallStateChunk(int slot, juce::AudioProcessor* plugin) const;
     bool copyStateChunk(int slot, juce::MemoryBlock& outChunk) const;
     bool hasStateChunk(int slot) const;
 
@@ -93,6 +93,8 @@ public:
     int findParameterIndex(int slot, const juce::String& paramName) const
     {
         if (slot < 0 || slot >= NUM_SLOTS) return -1;
+        // FIX C4: paramNames_ is written under writeLock_; read must serialize too.
+        const juce::SpinLock::ScopedLockType lock(writeLock_);
         const auto& names = paramNames_[slot];
         int idx = names.indexOf(paramName);
         return (idx >= 0) ? idx : -1;
@@ -106,62 +108,71 @@ public:
 
         for (int i = 0; i < NUM_SLOTS; ++i)
         {
-            // Seqlock read for thread safety
+            // Read slot data into local buffers under seqlock, then construct XML outside.
+            bool occupied = false;
+            int count = 0;
+            char nameBuf[64] = {};
+            std::array<float, MAX_PARAMETERS> valuesBuf{};
+            bool readOk = false;
+
             for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
             {
                 uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
                 if ((seq1 & 1) != 0) continue;
 
-                bool occupied = (*slots_)[i].occupied;
-                int count = (*slots_)[i].parameterCount;
+                occupied = (*slots_)[i].occupied;
+                count = (*slots_)[i].parameterCount;
+                std::memcpy(nameBuf, (*slots_)[i].name, sizeof(nameBuf));
+                if (occupied && count > 0)
+                    std::copy_n((*slots_)[i].values.begin(), count, valuesBuf.begin());
 
-                // C-4 FIX: Read state chunk under its own mutex, NOT under seqlock.
-                // MemoryBlock copy can heap-allocate, violating seqlock contract.
-                juce::MemoryBlock chunkCopy;
-                {
-                    const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
-                    if (occupied) {
-                        chunkCopy = stateChunks_[i];
-                    }
-                }
-
-                // Acquire fence before seq2 — pairs with writer's release fence
-                // (seqlock correctness on weakly-ordered CPUs; see tryReadLocked).
                 std::atomic_thread_fence(std::memory_order_acquire);
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
-                if (seq1 != seq2) continue;
-
-                if (occupied)
+                if (seq1 == seq2)
                 {
-                    auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
-                    slotXml->setAttribute("id", i);
-                    slotXml->setAttribute("paramCount", count);
-                    slotXml->setAttribute("name", juce::String((*slots_)[i].name));
-
-                    if (count > 0) {
-                        // Encode float values as base64 for compact, lossless storage
-                        juce::MemoryBlock block((*slots_)[i].values.data(),
-                                                static_cast<size_t>(count) * sizeof(float));
-                        slotXml->setAttribute("values", block.toBase64Encoding());
-
-                        // Store parameter names for forward compatibility (VST3-H1)
-                        // Allows parameter remapping when hosted plugin order changes
-                        {
-                            auto namesXml = slotXml->createNewChildElement("PARAM_NAMES");
-                            const auto& names = paramNames_[i];
-                            const int nameCount = juce::jmin(names.size(), count);
-                            for (int p = 0; p < nameCount; ++p)
-                                namesXml->setAttribute("p" + juce::String(p), names[p]);
-                        }
-                    }
-                    
-                    if (chunkCopy.getSize() > 0) {
-                        slotXml->setAttribute("stateChunk", chunkCopy.toBase64Encoding());
-                    }
-
-                    xml->addChildElement(slotXml.release());
+                    readOk = true;
+                    break;
                 }
-                break;  // Success
+            }
+
+            if (!readOk) continue;
+
+            if (occupied)
+            {
+                // Read paramNames and chunk outside the seqlock window.
+                juce::StringArray namesBuf;
+                juce::MemoryBlock chunkBuf;
+                {
+                    const juce::SpinLock::ScopedLockType lock(writeLock_);
+                    namesBuf = paramNames_[i];
+                }
+                {
+                    const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+                    if (occupied)
+                        chunkBuf = stateChunks_[i];
+                }
+
+                auto slotXml = std::make_unique<juce::XmlElement>("SLOT");
+                slotXml->setAttribute("id", i);
+                slotXml->setAttribute("paramCount", count);
+                slotXml->setAttribute("name", juce::String(nameBuf));
+
+                if (count > 0) {
+                    juce::MemoryBlock block(valuesBuf.data(),
+                                            static_cast<size_t>(count) * sizeof(float));
+                    slotXml->setAttribute("values", block.toBase64Encoding());
+
+                    // Store parameter names for forward compatibility (VST3-H1)
+                    auto namesXml = slotXml->createNewChildElement("PARAM_NAMES");
+                    const int nameCount = juce::jmin(namesBuf.size(), count);
+                    for (int p = 0; p < nameCount; ++p)
+                        namesXml->setAttribute("p" + juce::String(p), namesBuf[p]);
+                }
+
+                if (chunkBuf.getSize() > 0)
+                    slotXml->setAttribute("stateChunk", chunkBuf.toBase64Encoding());
+
+                xml->addChildElement(slotXml.release());
             }
         }
         return xml;
@@ -184,6 +195,7 @@ public:
 
             int slot = child->getIntAttribute("id", -1);
             int count = child->getIntAttribute("paramCount", 0);
+            count = juce::jlimit(0, MAX_PARAMETERS, count);
             if (slot < 0 || slot >= NUM_SLOTS) continue;
 
             juce::String name = child->getStringAttribute("name", "");
@@ -205,8 +217,9 @@ public:
                 }
             }
             else {
+                // FIX C23: An empty slot with only a name is not occupied.
                 (*tmpSlots)[slot].setName(name.toRawUTF8());
-                (*tmpSlots)[slot].occupied = true;
+                (*tmpSlots)[slot].occupied = false;
             }
 
             // Restore parameter names (VST3-H1)
@@ -344,13 +357,7 @@ private:
     // Not read on audio thread, so juce::StringArray (heap-allocating) is safe.
     std::array<juce::StringArray, NUM_SLOTS> paramNames_;
 
-    // Pre-allocated scratch buffer for recall/recallFast — avoids per-call stack
-    // allocation of 8 KB (std::array<float, 2048>) on the audio thread.
-    mutable std::array<float, MAX_PARAMETERS> recallScratch_{};
 
-    // Pre-allocated scratch buffer for capture/captureValues — avoids per-call stack
-    // allocation of 8 KB (std::array<float, 2048>) on the calling thread.
-    mutable std::array<float, MAX_PARAMETERS> captureScratch_{};
 
     // Begin write section - increments seqlock to odd
     void beginWrite()

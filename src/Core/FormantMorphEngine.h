@@ -121,7 +121,7 @@ private:
         // Circular input accumulation buffer (length = fftSize)
         std::vector<float> inputBuffer;
 
-        // Overlap-add output buffer (length = fftSize + hopSize)
+        // Overlap-add output buffer (length = fftSize + max(hopSize, maxBlockSize))
         std::vector<float> outputBuffer;
 
         // Captured source formant envelope (length = numBins)

@@ -1,0 +1,60 @@
+{
+  "name": "more-phi-store-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-ready purchasing and licensing backend for the More-Phi VST3/AU plugin.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "db:reset:test": "cross-env NODE_ENV=test dotenv -e .env.test -- prisma migrate reset --force",
+    "test": "cross-env NODE_ENV=test vitest run",
+    "test:watch": "cross-env NODE_ENV=test vitest",
+    "lint": "eslint src test prisma --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma/**/*.ts\""
+  },
+  "dependencies": {
+    "@fastify/cookie": "^9.4.0",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@prisma/client": "^5.22.0",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "fastify-plugin": "^4.5.1",
+    "fastify": "^4.28.1",
+    "jsonwebtoken": "^9.0.2",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "prisma": "^5.22.0",
+    "stripe": "^17.3.1",
+    "tsx": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^20.17.6",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitest/coverage-v8": "^2.1.5",
+    "cross-env": "^7.0.3",
+    "dotenv-cli": "^7.4.4",
+    "eslint": "^8.57.1",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

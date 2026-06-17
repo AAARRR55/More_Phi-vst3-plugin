@@ -7,6 +7,7 @@
 #include "Core/AllocationTracker.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/OversamplingWrapper.h"
+#include "Core/ABCompareEngine.h"
 #include "AI/InstanceRegistry.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
@@ -287,6 +288,13 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
         return false;
 
+    // M-11 FIX: Runtime enforcement of slot 11 reservation for A/B compare rollback
+    if (slot == 11)
+    {
+        jassertfalse;
+        return false;
+    }
+
     if (auto* plugin = hostManager.beginExclusivePluginUse(200))
     {
         std::vector<float> values;
@@ -340,6 +348,7 @@ bool MorePhiProcessor::recallSnapshot(int slot, SnapshotRecallMode mode)
     {
         pendingFullStateRecallSlot_.store(slot, std::memory_order_relaxed);
         pendingFullStateRecallGeneration_.fetch_add(1, std::memory_order_release);
+        fullStateRecallRetryCount_.store(0, std::memory_order_relaxed);
         requestMessageThreadMaintenance();
     }
 
@@ -353,6 +362,7 @@ void MorePhiProcessor::requestFullStateRecallFromAudioThread(int slot) noexcept
 
     pendingFullStateRecallSlot_.store(slot, std::memory_order_relaxed);
     pendingFullStateRecallGeneration_.fetch_add(1, std::memory_order_release);
+    fullStateRecallRetryCount_.store(0, std::memory_order_relaxed);
 }
 
 void MorePhiProcessor::setMorphPositionExternal(float x, bool hasX,
@@ -943,12 +953,16 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     // Pre-allocate MIDI router buffers (real-time safety)
     midiRouter.prepare(128);  // Expected max MIDI events per block
+    midiRouter.prepare(sampleRate, samplesPerBlock);  // H4 FIX: sidechain coefficients
 
     mcpStartPending_.store(true, std::memory_order_release);
 
     // Initialize AI assistant
     if (!aiAssistant_)
         aiAssistant_ = std::make_unique<AIAssistant>(*this);
+
+    // H1 FIX: Initialize discrete parameter handler for real-time discrete param snapping
+    discreteHandler_.initialize(parameterClassifier_);
 
     // V2: Prepare second host manager
     hostManagerB_.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
@@ -1014,12 +1028,15 @@ bool MorePhiProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
     const auto& mainOut = layouts.getMainOutputChannelSet();
     const auto& mainIn  = layouts.getMainInputChannelSet();
 
-    if (mainOut != juce::AudioChannelSet::stereo() &&
-        mainOut != juce::AudioChannelSet::mono())
+    const int numChannels = mainOut.size();
+    if (numChannels < 1 || numChannels > 8)
         return false;
 
     if (mainIn != mainOut)
         return false;
+    // M-8 FIX: The plugin currently forces symmetric I/O (same channel count on
+    // input and output). Relaxing this would require upmixing/downmixing logic
+    // inside processBlock before routing to the hosted plugin.
 
     // Sidechain bus (index 1) can be disabled or mono/stereo
     if (layouts.inputBuses.size() > 1)
@@ -1140,9 +1157,9 @@ void MorePhiProcessor::syncStateFromAPVTS()
 
 // ── Process Block ────────────────────────────────────────────────────────────
 
-void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playHead) noexcept
+void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* newPlayHead) noexcept
 {
-    if (playHead == nullptr)
+    if (newPlayHead == nullptr)
     {
         transportAvailable_.store(false, std::memory_order_relaxed);
         transportPlaying_.store(false, std::memory_order_relaxed);
@@ -1150,7 +1167,7 @@ void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playH
         return;
     }
 
-    const auto position = playHead->getPosition();
+    const auto position = newPlayHead->getPosition();
     if (!position.hasValue())
     {
         transportAvailable_.store(false, std::memory_order_relaxed);
@@ -1166,18 +1183,32 @@ void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* playH
     transportSecondsPosition_.store(info.getTimeInSeconds().orFallback(0.0), std::memory_order_relaxed);
 
     const auto signature = info.getTimeSignature().orFallback(juce::AudioPlayHead::TimeSignature{});
-    transportTimeSigNumerator_.store(signature.numerator, std::memory_order_relaxed);
-    transportTimeSigDenominator_.store(signature.denominator, std::memory_order_relaxed);
+    // M-10 FIX: Time signature is read but never used internally. Removed dead
+    // atomic stores to avoid unnecessary work on the audio thread.
+    juce::ignoreUnused(signature);
 }
 
 void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
-                                       juce::MidiBuffer& midi) noexcept
+                                    juce::MidiBuffer& midi) noexcept
 {
     // Allocation tracking guard (zero overhead in release)
     ScopedAudioCallback allocGuard;
     juce::ScopedNoDenormals noDenormals;
 
     if (!prepared) return;
+
+    // M11 FIX: If a state restore was deferred from the audio thread, and
+    // processBlock happens to run on the message thread (some hosts), start
+    // the timer here so deferred loading can proceed.
+    if (pendingStateRestore_.load(std::memory_order_acquire))
+    {
+        if (auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+            mm != nullptr && mm->isThisTheMessageThread())
+        {
+            startTimer(50);
+            pendingStateRestore_.store(false, std::memory_order_release);
+        }
+    }
 
     auto* const currentPlayHead = getPlayHead();
     hostManager.setPlayHead(currentPlayHead);
@@ -1210,13 +1241,25 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Profile total processBlock time
     MORE_PHI_PROFILE(profiler_, "processBlock_total");
 
-    // 1) Drain command queue (MCP/LLM → audio thread)
-    {
-        MORE_PHI_PROFILE(profiler_, "command_queue_drain");
-        if (canTouchHostedParameters)
-            (void) drainParameterCommandQueue(cachedParamCount, 2048, nullptr);
-    }
+    drainParameterCommandQueue(cachedParamCount, canTouchHostedParameters);
+    processMIDIAndSidechain(midi, buffer);
+    applyMorphAndParameters(buffer, cachedParamCount, canTouchHostedParameters);
+    applyOutputGainAndMetering(buffer, isBypassed);
+}
 
+// ── Private helpers ─────────────────────────────────────────────────────────
+
+void MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
+                                                  bool canTouchHostedParameters) noexcept
+{
+    MORE_PHI_PROFILE(profiler_, "command_queue_drain");
+    if (canTouchHostedParameters)
+        (void) drainParameterCommandQueue(cachedParamCount, 2048, nullptr);
+}
+
+void MorePhiProcessor::processMIDIAndSidechain(juce::MidiBuffer& midi,
+                                               juce::AudioBuffer<float>& buffer) noexcept
+{
     // 2) Process MIDI: filter trigger notes, pass rest through
     filteredMidiBuffer_.clear();
     midiRouter.processMidi(midi, filteredMidiBuffer_);
@@ -1225,20 +1268,21 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // 2b) Process sidechain trigger (audio-driven snapshot recall)
     if (sidechainEnabled_.load(std::memory_order_relaxed))
     {
-        // H-6 FIX: Check bus pointer and enabled state before accessing sidechain
-        auto* scBus = getBus(true, 1);
-        if (scBus != nullptr && scBus->isEnabled())
+        // H-6 FIX: JUCE 8 sidechain access — getBusBuffer returns empty buffer if bus disabled
+        auto scBuffer = getBusBuffer(buffer, true, 1);
+        if (scBuffer.getNumChannels() > 0)
         {
-            auto scBuffer = getBusBuffer(buffer, true, 1);
-            if (scBuffer.getNumChannels() > 0)
-            {
-                // ATS-5 FIX: Use pre-computed linear threshold (computed in syncStateFromAPVTS)
-                midiRouter.setSidechainThreshold(sidechainThresholdLinear_.load(std::memory_order_relaxed));
-                midiRouter.processSidechain(scBuffer);
-            }
+            // ATS-5 FIX: Use pre-computed linear threshold (computed in syncStateFromAPVTS)
+            midiRouter.setSidechainThreshold(sidechainThresholdLinear_.load(std::memory_order_relaxed));
+            midiRouter.processSidechain(scBuffer);
         }
     }
+}
 
+void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
+                                              int cachedParamCount,
+                                              bool canTouchHostedParameters) noexcept
+{
     // 3) Sync physics tuning from atomics
     morphProcessor.setElasticPreset(
         static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)));
@@ -1254,8 +1298,6 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         MORE_PHI_PROFILE(profiler_, "morph_computation");
         // M-2 FIX: Clamp paramCount to the actual finalOutput_ buffer size.
-        // Previously used COMMAND_QUEUE_CAPACITY (8192) which was larger than the
-        // finalOutput_ allocation — could index out-of-bounds if plugin had >2048 params.
         const int paramCount = juce::jmin(cachedParamCount,
                                           static_cast<int>(finalOutput_.size()));
         if (paramCount > 0 && snapshotBank.hasAnyOccupied())
@@ -1264,7 +1306,7 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // Clear only the portion we'll use
             const size_t usedCount = static_cast<size_t>(paramCount);
             if (finalOutput_.size() >= usedCount)
-                std::fill(finalOutput_.begin(), finalOutput_.begin() + usedCount, 0.0f);
+                juce::FloatVectorOperations::clear(finalOutput_.data(), static_cast<int>(usedCount));
 
             const float dt = static_cast<float>(currentBlockSize) /
                              static_cast<float>(currentSampleRate);
@@ -1295,127 +1337,118 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
             morphProcessor.process(linkX, linkY, fp, source, mode, dt, finalOutput_);
 
-        // V2: Modulation engine — applies LFO/envelope/velocity modulation
-        // to the finalOutput_ vector before parameter apply. Pass-through in MVP.
-        // MODULATION-2 FIX: forward the host BPM each block so tempo-synced
-        // LFOs/step-sequencers track the project tempo (previously bpm_ stayed
-        // at its 120.0 default for the whole session). Fall back to 120 when the
-        // host reports no tempo (transport stopped / no playhead).
-        const double hostBpm = transportBpm_.load(std::memory_order_relaxed);
-        modulationEngine_.setBPM(hostBpm > 0.0 ? static_cast<float>(hostBpm) : 120.0f);
-        modulationEngine_.setMorphPosition(linkX, linkY, fp);
-        modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
-        modulationEngine_.processBlock(finalOutput_, dt);
+            // V2: Modulation engine
+            const double hostBpm = transportBpm_.load(std::memory_order_relaxed);
+            modulationEngine_.setBPM(hostBpm > 0.0 ? static_cast<float>(hostBpm) : 120.0f);
+            modulationEngine_.setMorphPosition(linkX, linkY, fp);
+            modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
+            modulationEngine_.processBlock(finalOutput_, dt);
 
-        // Link Mode: if leader, broadcast current morph position
-        if (linkEnabled_.load(std::memory_order_relaxed) && linkBroadcaster_.isLeader())
-        {
-            linkBroadcaster_.setEnabled(true);
-            linkBroadcaster_.broadcast(linkX, linkY);
-        }
-
-        // Apply interpolated values to hosted plugin
-        // When Listen Mode is active, sentinel values (-1.0f) mark discrete params to skip
-        {
-            MORE_PHI_PROFILE(profiler_, "parameter_application");
-            if (canTouchHostedParameters && finalOutput_.size() >= static_cast<size_t>(paramCount))
+            // Link Mode: if leader, broadcast current morph position
+            if (linkEnabled_.load(std::memory_order_relaxed) && linkBroadcaster_.isLeader())
             {
-                // CRITICAL (Finding 1): Use tryEnter for touch state lock on audio thread.
-            // If message thread is writing (rare, during snapshot recall), skip touch
-            // detection for this block - acceptable tradeoff for real-time safety.
-            const bool hasTouchLock = touchStateLock_.tryEnter();
+                linkBroadcaster_.setEnabled(true);
+                linkBroadcaster_.broadcast(linkX, linkY);
+            }
 
-            for (int i = 0; i < paramCount; ++i)
+            // H1 FIX: Snap discrete parameters to valid steps with hysteresis
+            if (!finalOutput_.empty())
+                discreteHandler_.processDiscreteParameters(finalOutput_, finalOutput_, fp);
+
+            // Apply interpolated values to hosted plugin
             {
-                const float morphVal = finalOutput_[static_cast<size_t>(i)];
-
-                // Skip sentinel-marked discrete params (Listen Mode)
-                if (morphVal < 0.0f) continue;
-
-                if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[static_cast<size_t>(i)] != 0)
+                MORE_PHI_PROFILE(profiler_, "parameter_application");
+                if (canTouchHostedParameters && finalOutput_.size() >= static_cast<size_t>(paramCount))
                 {
-                    if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                    const bool hasTouchLock = touchStateLock_.tryEnter();
+
+                    for (int i = 0; i < paramCount; ++i)
                     {
-                        liveEditHold_[static_cast<size_t>(i)] = 0;
-                    }
-                    else
-                    {
+                        const float morphVal = finalOutput_[static_cast<size_t>(i)];
+
+                        // Skip sentinel-marked discrete params (Listen Mode)
+                        if (morphVal < 0.0f) continue;
+
+                        if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[static_cast<size_t>(i)] != 0)
+                        {
+                            if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                            {
+                                liveEditHold_[static_cast<size_t>(i)] = 0;
+                            }
+                            else
+                            {
+                                if (hasTouchLock)
+                                    lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
+                                continue;
+                            }
+                        }
+
+                        // Touch detection: check if user manually moved this parameter
+                        if (hasTouchLock && lastApplied_[static_cast<size_t>(i)] >= 0.0f)
+                        {
+                            const float currentVal = paramBridge.getParameterNormalized(i);
+                            const float lastVal = lastApplied_[static_cast<size_t>(i)];
+                            const float userDelta = std::abs(currentVal - lastVal);
+
+                            if (userDelta > TOUCH_THRESHOLD)
+                            {
+                                touchMorphX_[static_cast<size_t>(i)] = linkX;
+                                touchMorphY_[static_cast<size_t>(i)] = linkY;
+                                lastApplied_[static_cast<size_t>(i)] = currentVal;
+                                touchCooldown_[static_cast<size_t>(i)] = touchCooldownBlocks_;
+                            }
+                        }
+
+                        // If parameter is in cooldown, skip applying morph output
+                        if (hasTouchLock && touchCooldown_[static_cast<size_t>(i)] > 0)
+                        {
+                            --touchCooldown_[static_cast<size_t>(i)];
+
+                            const float morphDelta = std::abs(linkX - touchMorphX_[static_cast<size_t>(i)]) +
+                                                     std::abs(linkY - touchMorphY_[static_cast<size_t>(i)]);
+                            const bool morphMoved = morphDelta > MORPH_POS_THRESHOLD;
+
+                            if (touchCooldown_[static_cast<size_t>(i)] == 0 && morphMoved)
+                            {
+                                lastApplied_[static_cast<size_t>(i)] = -1.0f;
+                            }
+                            else
+                            {
+                                lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
+                            }
+                            continue;
+                        }
+
+                        // Apply morph output and track what we applied
+                        paramBridge.setParameterNormalized(i, morphVal);
                         if (hasTouchLock)
-                            lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
-                        continue;
+                            lastApplied_[static_cast<size_t>(i)] = morphVal;
                     }
+
+                    if (hasTouchLock)
+                        touchStateLock_.exit();
                 }
-
-                // Touch detection: check if user manually moved this parameter
-                // Only perform if we acquired the lock (avoid data race with message thread)
-                if (hasTouchLock && lastApplied_[static_cast<size_t>(i)] >= 0.0f)
-                {
-                    const float currentVal = paramBridge.getParameterNormalized(i);
-                    const float lastVal = lastApplied_[static_cast<size_t>(i)];
-                    const float userDelta = std::abs(currentVal - lastVal);
-
-                    if (userDelta > TOUCH_THRESHOLD)
-                    {
-                        // User manually changed this param — record morph position and cooldown
-                        touchMorphX_[static_cast<size_t>(i)] = linkX;
-                        touchMorphY_[static_cast<size_t>(i)] = linkY;
-                        lastApplied_[static_cast<size_t>(i)] = currentVal;
-                        touchCooldown_[static_cast<size_t>(i)] = touchCooldownBlocks_;
-                    }
-                }
-
-                // If parameter is in cooldown, skip applying morph output
-                if (hasTouchLock && touchCooldown_[static_cast<size_t>(i)] > 0)
-                {
-                    --touchCooldown_[static_cast<size_t>(i)];
-
-                    // Check if morph position has changed significantly since touch
-                    const float morphDelta = std::abs(linkX - touchMorphX_[static_cast<size_t>(i)]) +
-                                             std::abs(linkY - touchMorphY_[static_cast<size_t>(i)]);
-                    const bool morphMoved = morphDelta > MORPH_POS_THRESHOLD;
-
-                    if (touchCooldown_[static_cast<size_t>(i)] == 0 && morphMoved)
-                    {
-                        // Cooldown expired AND user moved morph pad — resume morph writes
-                        // Reset tracking so next morph value is applied fresh
-                        lastApplied_[static_cast<size_t>(i)] = -1.0f;
-                    }
-                    else
-                    {
-                        // Still in cooldown OR morph hasn't moved — keep user's values
-                        lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
-                    }
-                    continue;
-                }
-
-                // Apply morph output and track what we applied
-                paramBridge.setParameterNormalized(i, morphVal);
-                if (hasTouchLock)
-                    lastApplied_[static_cast<size_t>(i)] = morphVal;
-            }
-
-            if (hasTouchLock)
-                touchStateLock_.exit();
             }
         }
-    }
     }
 
     // 5) Write drift output for DAW automation recording
-    // VST3-M1: Write directly to the raw atomic (no host callback on audio thread)
     if (rawParams_.driftOutputX != nullptr)
         rawParams_.driftOutputX->store((morphProcessor.getProcessedX() + 1.0f) * 0.5f,
                                        std::memory_order_relaxed);
     if (rawParams_.driftOutputY != nullptr)
         rawParams_.driftOutputY->store((morphProcessor.getProcessedY() + 1.0f) * 0.5f,
                                        std::memory_order_relaxed);
+}
 
+void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer,
+                                                   bool isBypassed) noexcept
+{
     // 6) Forward audio + filtered MIDI to hosted plugin
     if (!isBypassed)
         hostManager.processBlock(buffer, filteredMidiBuffer_);
 
-    // V2: Audio-domain morph path. Reconfiguration is message-thread-only;
-    // the audio thread skips this layer while a reprepare is pending.
+    // V2: Audio-domain morph path
     if (!isBypassed
         && audioDomainEnabled_.load(std::memory_order_relaxed)
         && hostManagerB_.hasPlugin()
@@ -1532,20 +1565,36 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // Apply post-processing output gain when not bypassed.
-    if (!isBypassed)
+    // M9 FIX: Ramp gain smoothly across the block to avoid zipper noise.
+    if (!isBypassed && rawParams_.outputGain != nullptr)
     {
-        if (rawParams_.outputGain != nullptr)
+        const float gainDb = rawParams_.outputGain->load(std::memory_order_relaxed);
+        const float targetGainLinear = juce::Decibels::decibelsToGain(gainDb);
+        if (!gainSmoothingInitialized_)
         {
-            const float gainDb = rawParams_.outputGain->load(std::memory_order_relaxed);
-            const float gainLinear = juce::Decibels::decibelsToGain(gainDb);
-            if (gainLinear != 1.0f)
-                buffer.applyGain(gainLinear);
+            // First processed block: jump directly to the current target to avoid
+            // a misleading ramp from the default 1.0f.
+            smoothedGain_.store(targetGainLinear, std::memory_order_relaxed);
+            gainSmoothingInitialized_ = true;
+            if (targetGainLinear != 1.0f)
+                buffer.applyGain(targetGainLinear);
+        }
+        else
+        {
+            const float currentGain = smoothedGain_.load(std::memory_order_relaxed);
+            if (buffer.getNumSamples() > 0 && targetGainLinear != currentGain)
+            {
+                buffer.applyGainRamp(0, buffer.getNumSamples(), currentGain, targetGainLinear);
+                smoothedGain_.store(targetGainLinear, std::memory_order_relaxed);
+            }
+            else if (targetGainLinear != 1.0f)
+            {
+                buffer.applyGain(targetGainLinear);
+            }
         }
     }
 
-    // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools. This
-    // measures the final audio that More-Phi emits after hosted-plugin output
-    // and output gain, without running the autonomous mastering processor.
+    // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools.
     autoMasteringEngine_.analyzeBlock(buffer);
 
     // 8) RMS for UI visualization — M-2 FIX: throttle to every N blocks
@@ -1790,7 +1839,10 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
                 if (!loadHostedPluginFromState(desc))
                 {
                     DBG("setStateInformation: Synchronous load failed, will retry via timer");
-                    pendingPluginDesc_ = desc;
+                    {
+                        const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
+                        pendingPluginDesc_ = desc;
+                    }
                     hasPendingPluginLoad_.store(true, std::memory_order_release);
                     pendingLoadAttempts_.store(1, std::memory_order_relaxed);  // Already tried once
                     startTimer(50);
@@ -1798,23 +1850,16 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
             }
             else
             {
-                // Not on message thread — store description and use Timer to poll.
-                // CRITICAL: startTimer() must be called from the message thread.
-                // callFunctionOnMessageThread synchronously hops to the message thread;
-                // unlike callAsync it cannot silently drop the callback.
+                // M11 FIX: Not on message thread — use atomic flag instead of
+                // callFunctionOnMessageThread to avoid blocking the audio thread.
                 DBG("setStateInformation: Not on message thread, deferring to timer");
-                pendingPluginDesc_ = desc;
+                {
+                    const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
+                    pendingPluginDesc_ = desc;
+                }
                 hasPendingPluginLoad_.store(true, std::memory_order_release);
                 pendingLoadAttempts_.store(0, std::memory_order_relaxed);
-                // BUG-1 FIX: callAsync can silently drop callbacks on FL Studio /
-                // Linux hosts when the editor is closed (see comment above at line 957).
-                // callFunctionOnMessageThread blocks the calling thread briefly but
-                // guarantees execution — no silent drops.
-                juce::MessageManager::getInstance()->callFunctionOnMessageThread(
-                    [](void* ctx) -> void* {
-                        static_cast<MorePhiProcessor*>(ctx)->startTimer(50);
-                        return nullptr;
-                    }, this);
+                pendingStateRestore_.store(true, std::memory_order_release);
             }
         }
         else
@@ -1966,7 +2011,8 @@ bool MorePhiProcessor::hasPendingMessageThreadWork() const noexcept
         || hasPendingPluginLoad_.load(std::memory_order_acquire)
         || audioDomainConfigDirty_.load(std::memory_order_acquire)
         || latencyConfigDirty_.load(std::memory_order_acquire)
-        || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_;
+        || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_
+        || pendingStateRestore_.load(std::memory_order_acquire);
 }
 
 void MorePhiProcessor::loadCachedLicenseIfNeeded()
@@ -2090,13 +2136,17 @@ void MorePhiProcessor::applyPendingFullStateRecall()
     if (generation == appliedFullStateRecallGeneration_)
         return;
 
+    // H8 FIX: Increment retry count on every attempt and give up after max retries
+    if (fullStateRecallRetryCount_.fetch_add(1, std::memory_order_relaxed) > MAX_FULL_STATE_RECALL_RETRIES)
+    {
+        appliedFullStateRecallGeneration_ = generation; // Give up after max retries
+        return;
+    }
+
     const int slot = pendingFullStateRecallSlot_.load(std::memory_order_relaxed);
     juce::MemoryBlock chunk;
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS || !snapshotBank.copyStateChunk(slot, chunk))
-    {
-        appliedFullStateRecallGeneration_ = generation;
         return;
-    }
 
     auto* plugin = hostManager.beginExclusivePluginUse(200);
     if (plugin == nullptr)
@@ -2109,7 +2159,8 @@ void MorePhiProcessor::applyPendingFullStateRecall()
     }
     catch (...)
     {
-        appliedFullStateRecallGeneration_ = generation;
+        // H8 FIX: Do NOT advance the generation on failure. The timer will retry
+        // on the next tick (with a bounded retry limit to avoid infinite loops).
     }
 
     hostManager.endExclusivePluginUse();
@@ -2117,6 +2168,14 @@ void MorePhiProcessor::applyPendingFullStateRecall()
 
 void MorePhiProcessor::timerCallback()
 {
+    // M11 FIX: If a state restore was deferred from the audio thread, ensure
+    // the timer stays running so the deferred load can proceed.
+    if (pendingStateRestore_.load(std::memory_order_acquire))
+    {
+        pendingStateRestore_.store(false, std::memory_order_release);
+        startTimer(50);
+    }
+
     loadCachedLicenseIfNeeded();
     startMCPServerIfNeeded();
 
@@ -2140,10 +2199,15 @@ void MorePhiProcessor::timerCallback()
 
     // Attempt to load — retry up to MAX_PLUGIN_LOAD_RETRIES times (500ms window) in case the host
     // is still initialising when the first tick fires (e.g. FL Studio startup scan, export rendering).
+    juce::PluginDescription desc;
+    {
+        const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
+        desc = pendingPluginDesc_;
+    }
     DBG("timerCallback: Attempt " + juce::String(pendingLoadAttempts_.load(std::memory_order_relaxed) + 1) + " to load plugin: "
-        + pendingPluginDesc_.name);
+        + desc.name);
     
-    const bool loaded = loadHostedPluginFromState(pendingPluginDesc_);
+    const bool loaded = loadHostedPluginFromState(desc);
     if (loaded)
     {
         // Success!
@@ -2159,8 +2223,13 @@ void MorePhiProcessor::timerCallback()
         int totalAttempts = pendingLoadAttempts_.load(std::memory_order_relaxed);
         pendingLoadAttempts_.store(0, std::memory_order_relaxed);
         
+        juce::String pluginName;
+        {
+            const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
+            pluginName = pendingPluginDesc_.name;
+        }
         DBG("MorePhiProcessor::timerCallback — gave up after " + juce::String(totalAttempts) + " attempts: "
-            + pendingPluginDesc_.name);
+            + pluginName);
         
         // Unblock the morph engine so audio can still pass through
         isRestoring_.store(false, std::memory_order_release);
@@ -2253,14 +2322,16 @@ void MorePhiProcessor::reportLatencyToHost()
     updateReportedLatency();
 }
 
-} // namespace more_phi
+    // refreshDiscreteMap — called after plugin load to update discrete parameter classification
+    void MorePhiProcessor::refreshDiscreteMap()
+    {
+        auto map = paramBridge.getDiscreteMap();
+        morphProcessor.setDiscreteMap(std::move(map));
+        parameterClassifier_.analyzeParameters(paramBridge);
+        discreteHandler_.initialize(parameterClassifier_);
+    }
 
-// refreshDiscreteMap — called after plugin load to update discrete parameter classification
-void more_phi::MorePhiProcessor::refreshDiscreteMap()
-{
-    auto map = paramBridge.getDiscreteMap();
-    morphProcessor.setDiscreteMap(std::move(map));
-}
+} // namespace more_phi
 
 // Plugin entry point
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

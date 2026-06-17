@@ -222,7 +222,9 @@ nlohmann::json parseJsonResponse(const juce::String& response)
     }
 }
 
-nlohmann::json buildMorphPreview(MorePhiProcessor& processor, const nlohmann::json& stepParams)
+nlohmann::json buildMorphPreview(MorePhiProcessor& processor,
+                                 AutomationRuntime& runtime,
+                                 const nlohmann::json& stepParams)
 {
     const auto rawPreview = MCPToolHandler::handle("automation.diff_preview",
         jsonToVar(nlohmann::json{
@@ -230,11 +232,13 @@ nlohmann::json buildMorphPreview(MorePhiProcessor& processor, const nlohmann::js
             {"params", stepParams}
         }),
         processor,
-        processor.getInstanceIdentity());
+        processor.getInstanceIdentity(),
+        runtime);
     return parseJsonResponse(rawPreview);
 }
 
-nlohmann::json buildAssistantWorkflowContext(MorePhiProcessor& processor)
+nlohmann::json buildAssistantWorkflowContext(MorePhiProcessor& processor,
+                                             AutomationRuntime& runtime)
 {
     nlohmann::json context{
         {"source", "in_plugin_assistant"},
@@ -245,7 +249,8 @@ nlohmann::json buildAssistantWorkflowContext(MorePhiProcessor& processor)
     const auto rawMemory = MCPToolHandler::handle("memory.get_intent_context",
         jsonToVar(nlohmann::json{{"limit", 6}}),
         processor,
-        processor.getInstanceIdentity());
+        processor.getInstanceIdentity(),
+        runtime);
     const auto memoryResponse = parseJsonResponse(rawMemory);
     if (memoryResponse.value("success", false) && memoryResponse.contains("intent_context"))
     {
@@ -400,10 +405,10 @@ AssistantWorkflowPlan AIAssistant::planLocalWorkflowPrompt(const juce::String& t
     }
 
     plan.summary = "Plan: set " + targetLabel + " through a WorkflowRun.";
-    plan.preview = buildMorphPreview(processor_, stepParams);
+    plan.preview = buildMorphPreview(processor_, automationRuntime_, stepParams);
     plan.workflowSubmitParams = nlohmann::json{
         {"user_intent", text.toStdString()},
-        {"context", buildAssistantWorkflowContext(processor_)},
+        {"context", buildAssistantWorkflowContext(processor_, automationRuntime_)},
         {"steps", nlohmann::json::array({
             {
                 {"id", "set_morph_position"},
@@ -439,7 +444,8 @@ AssistantWorkflowResult AIAssistant::executeLocalWorkflowPrompt(const juce::Stri
     const auto submitResponse = MCPToolHandler::handle("workflow.submit",
                                                        jsonToVar(plan.workflowSubmitParams),
                                                        processor_,
-                                                       identity);
+                                                       identity,
+                                                       automationRuntime_);
     auto submitted = parseJsonResponse(submitResponse);
     if (!submitted.value("success", false))
     {
@@ -461,7 +467,8 @@ AssistantWorkflowResult AIAssistant::executeLocalWorkflowPrompt(const juce::Stri
     const auto executeResponse = MCPToolHandler::handle("workflow.execute",
         jsonToVar(nlohmann::json{{"workflow_run_id", result.workflowRunId.toStdString()}}),
         processor_,
-        identity);
+        identity,
+        automationRuntime_);
     auto executed = parseJsonResponse(executeResponse);
     result.rawResponse = executeResponse;
     result.response = executed;
@@ -512,7 +519,8 @@ AssistantWorkflowResult AIAssistant::undoLastAssistantWorkflow()
     const auto rollbackResponse = MCPToolHandler::handle("automation.rollback",
         jsonToVar(nlohmann::json{{"transaction_id", lastRollbackTransactionId_.toStdString()}}),
         processor_,
-        processor_.getInstanceIdentity());
+        processor_.getInstanceIdentity(),
+        automationRuntime_);
     auto parsed = parseJsonResponse(rollbackResponse);
     result.rawResponse = rollbackResponse;
     result.response = parsed;
@@ -527,7 +535,8 @@ AssistantWorkflowResult AIAssistant::undoLastAssistantWorkflow()
                 {"user_feedback", "undo last assistant workflow"}
             }),
             processor_,
-            processor_.getInstanceIdentity());
+            processor_.getInstanceIdentity(),
+            automationRuntime_);
         auto undoFeedback = parseJsonResponse(undoFeedbackResponse);
         if (undoFeedback.value("success", false))
             result.response = undoFeedback;
@@ -566,7 +575,8 @@ AssistantWorkflowResult AIAssistant::recordFeedbackForLastWorkflow(const juce::S
             {"user_feedback", text.trim().toStdString()}
         }),
         processor_,
-        processor_.getInstanceIdentity());
+        processor_.getInstanceIdentity(),
+        automationRuntime_);
 
     auto parsed = parseJsonResponse(feedbackResponse);
     result.rawResponse = feedbackResponse;

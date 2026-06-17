@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "AutomationControlPlane.h"
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -66,6 +67,10 @@ public:
     AssistantWorkflowResult undoLastAssistantWorkflow();
     AssistantWorkflowResult recordFeedbackForLastWorkflow(const juce::String& text);
 
+    /** Exposes the assistant's persistent AutomationRuntime so MCP tool tests
+     *  can target the same memory/event bus used by executeLocalWorkflowPrompt(). */
+    AutomationRuntime& getAutomationRuntime() const noexcept { return automationRuntime_; }
+
     static bool detectsLocalWorkflowPrompt(const juce::String& text);
     static bool detectsLocalFeedbackPrompt(const juce::String& text);
     static bool detectsLocalUndoPrompt(const juce::String& text);
@@ -78,6 +83,7 @@ private:
     bool previewActive_ = false;
     juce::String lastWorkflowRunId_;
     juce::String lastRollbackTransactionId_;
+    mutable AutomationRuntime automationRuntime_;
 };
 
 } // namespace more_phi

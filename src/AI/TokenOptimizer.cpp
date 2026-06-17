@@ -45,7 +45,6 @@ TokenOptimizer::Estimate TokenOptimizer::estimateRequest(
     const std::vector<std::string>& contextLines) const
 {
     Estimate est;
-    const TokenBudget budget = getTokenBudget();
     
     est.systemTokens = estimateTokensInString(systemPrompt_);
     
@@ -63,6 +62,7 @@ TokenOptimizer::Estimate TokenOptimizer::estimateRequest(
     
     // Check budget
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     uint32_t totalTokens = stats.totalTokens() + est.totalTokens;
     float totalCost = stats.totalCostUsd + est.estimatedCostUsd;
     
@@ -126,23 +126,23 @@ TokenOptimizer::SessionStats TokenOptimizer::getSessionStats() const
 
 bool TokenOptimizer::isBudgetExceeded() const
 {
-    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     return (stats.totalTokens() >= budget.maxTokensPerSession) ||
            (stats.totalCostUsd >= budget.maxCostPerSessionUsd);
 }
 
 float TokenOptimizer::getBudgetRemainingUsd() const
 {
-    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     return std::max(0.0f, budget.maxCostPerSessionUsd - stats.totalCostUsd);
 }
 
 uint32_t TokenOptimizer::getTokenBudgetRemaining() const
 {
-    const TokenBudget budget = getTokenBudget();
     SessionStats stats = getSessionStats();
+    const TokenBudget budget = getTokenBudget();
     return std::max(0u, budget.maxTokensPerSession - stats.totalTokens());
 }
 
@@ -453,8 +453,9 @@ float TokenOptimizer::getTimeUntilNextRequest() const
 
 std::string TokenOptimizer::generateUsageReport() const
 {
-    SessionStats stats = getSessionStats();
+    // FIX C16: Enforce consistent lock order budget -> stats to avoid deadlock.
     const TokenBudget budget = getTokenBudget();
+    SessionStats stats = getSessionStats();
     
     std::ostringstream report;
     report << "=== MorePhi AI Usage Report ===\n\n";
@@ -489,9 +490,10 @@ std::string TokenOptimizer::generateOptimizationSuggestions() const
 {
     std::ostringstream suggestions;
     suggestions << "=== Optimization Suggestions ===\n\n";
-    
-    SessionStats stats = getSessionStats();
+
+    // FIX C16: Enforce consistent lock order budget -> stats.
     const TokenBudget budget = getTokenBudget();
+    SessionStats stats = getSessionStats();
     
     if (stats.totalCostUsd > budget.maxCostPerSessionUsd * 0.5f)
     {
@@ -536,8 +538,9 @@ void TokenOptimizer::resetSession()
 TokenOptimizer::DisplayData TokenOptimizer::getDisplayData() const
 {
     DisplayData data;
-    SessionStats stats = getSessionStats();
+    // FIX C16: Enforce consistent lock order budget -> stats.
     const TokenBudget budget = getTokenBudget();
+    SessionStats stats = getSessionStats();
     
     data.sessionCost = stats.totalCostUsd;
     data.sessionTokens = stats.totalTokens();

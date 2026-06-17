@@ -7,6 +7,7 @@
 
 #include "AI/MCPToolHandler.h"
 #include "AI/InstanceIdentity.h"
+#include "AI/MCPServer.h"
 #include "AI/MasteringCandidateScoring.h"
 #include "AI/TrackAssistantStore.h"
 #include "Plugin/PluginProcessor.h"
@@ -84,9 +85,38 @@ juce::var toVar(const nlohmann::json& value)
 
 } // namespace
 
-TEST_CASE("MCP server audit placeholder compiles", "[mcp]")
+TEST_CASE("MCP server start/stop lifecycle", "[mcp][lifecycle]")
 {
-    REQUIRE(true);
+    // Verify the embedded MCP server can start on a non-zero local port and stop
+    // cleanly without crashing. This is a runtime smoke test, not a full
+    // JSON-RPC functional test (those are covered by TestMCPIntegration.cpp).
+    more_phi::MorePhiProcessor processor;
+
+    // port 0 is rejected by startServer; use a fixed local port for the smoke test.
+    constexpr int kTestPort = 30001;
+    auto identity = more_phi::InstanceIdentity::generate(kTestPort);
+
+    more_phi::MCPServer server(processor);
+    server.setIdentity(identity);
+
+    REQUIRE_FALSE(server.isRunning());
+
+    server.startServer(kTestPort);
+
+    // Give the server thread a moment to start/binding; isRunning() reflects thread state.
+    for (int i = 0; i < 50 && !server.isRunning(); ++i)
+        juce::Thread::sleep(10);
+
+    REQUIRE(server.isRunning());
+    REQUIRE(server.getPort() == kTestPort);
+
+    // Binding may fail in headless/CI environments (socket init, port in use),
+    // so we only assert that the lifecycle is observed and can be torn down.
+    INFO("server healthy = " << server.isHealthy()
+         << ", error count = " << server.getErrorCount());
+
+    server.stopServer();
+    REQUIRE_FALSE(server.isRunning());
 }
 
 TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp][tools]")

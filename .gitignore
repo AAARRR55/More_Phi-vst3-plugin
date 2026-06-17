@@ -130,3 +130,14 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# pluginval validation tool (downloaded, not source)
+tools/pluginval.exe
+tools/pluginval.zip
+
+# Node.js dependencies
+node_modules/
+
+# Stale / backup files
+*.bak
+*.stale

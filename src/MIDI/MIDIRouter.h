@@ -23,10 +23,18 @@ public:
     void setMidiChannel(int channel) { midiChannel_.store(juce::jlimit(0, 16, channel), std::memory_order_relaxed); }
     int getMidiChannel() const { return midiChannel_.load(std::memory_order_relaxed); }
 
+    /** Set the snapshot callback. MUST be called before prepareToPlay() and
+     *  must NOT be changed during audio processing. The callback pointer is
+     *  stored atomically but is NOT guarded by a lock; changing it concurrently
+     *  with processMidi() or processSidechain() is a data race. */
     void setSnapshotCallback(SnapshotCallback cb, void* ctx = nullptr) {
         snapshotCb_.store(cb, std::memory_order_release);
         snapshotCtx_.store(ctx, std::memory_order_release);
     }
+    /** Set the morph callback. MUST be called before prepareToPlay() and
+     *  must NOT be changed during audio processing. The callback pointer is
+     *  stored atomically but is NOT guarded by a lock; changing it concurrently
+     *  with processMidi() or processSidechain() is a data race. */
     void setMorphCallback(MorphCallback cb, void* ctx = nullptr) {
         morphCb_.store(cb, std::memory_order_release);
         morphCtx_.store(ctx, std::memory_order_release);
@@ -41,6 +49,9 @@ public:
 
     // Real-time safety: Pre-allocate MIDI buffer storage
     void prepare(int expectedMidiEventsPerBlock = 128);
+
+    /** H4 FIX: Compute sample-rate-dependent sidechain envelope coefficients. */
+    void prepare(double sampleRate, int blockSize);
 
     // Call from processBlock with incoming MIDI
     void processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& filtered);
@@ -74,11 +85,11 @@ private:
     std::atomic<float> sidechainThreshold_ {0.1f};   // RMS threshold [0,1]
     bool  sidechainGateOpen_  = false;   // Edge detector state (audio thread only)
     int   sidechainSlot_      = 0;       // Current slot in round-robin trigger (audio thread only)
+    float sidechainEnvelope_  = 0.0f;    // Smoothed RMS envelope (audio thread only)
 
-    // H-7 FIX: Envelope follower for smooth sidechain triggering
-    float sidechainEnvelope_  = 0.0f;    // Smoothed RMS level
-    float scAttackCoeff_      = 0.5f;    // Attack coefficient (fast enough to cross threshold in one block)
-    float scReleaseCoeff_     = 0.9f;    // Release coefficient (fast release for responsive gate)
+    // H4: Pre-computed per-block one-pole coefficients (set via prepare(sampleRate, blockSize))
+    float scAttackCoeff_      = 0.0f;    // Attack coefficient (1 ms time constant)
+    float scReleaseCoeff_     = 0.0f;    // Release coefficient (10 ms time constant)
 
     // Real-time safe MIDI storage (pre-allocated in prepare())
     // Capacity: 256 events provides 5x safety margin over typical high-density MIDI

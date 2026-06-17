@@ -17,8 +17,8 @@ constexpr const char* VERSION_STRING = "3.3.0";
 constexpr const char* VERSION_CODENAME = "Synthesizer Edition";
 
 // Build info
-constexpr const char* BUILD_DATE = __DATE__;
-constexpr const char* BUILD_TIME = __TIME__;
+extern const char* BUILD_DATE;
+extern const char* BUILD_TIME;
 
 // Feature flags for this version
 struct VersionFeatures

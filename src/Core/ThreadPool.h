@@ -101,6 +101,10 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
 
     using return_type = typename std::invoke_result<F, Args...>::type;
 
+    // FIX C20: Reject new tasks after shutdown has begun.
+    if (stop_.load(std::memory_order_acquire))
+        throw std::runtime_error("Cannot enqueue on stopped ThreadPool");
+
     auto task = std::make_shared<std::packaged_task<return_type()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
@@ -110,11 +114,10 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     {
         std::unique_lock<std::mutex> lock(queueMutex_);
 
-        activeTasks_.fetch_add(1);
-        tasks_.emplace([task, this]() {
+        tasks_.emplace([task]() {
             (*task)();
-            activeTasks_.fetch_sub(1);
         });
+        activeTasks_.fetch_add(1);
     }
 
     condition_.notify_one();

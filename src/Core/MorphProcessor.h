@@ -43,7 +43,9 @@ public:
     void setDriftDistance(float d)  { driftDistance_.store(d, std::memory_order_relaxed); }
     void setDriftChaos(float c)    { driftChaos_.store(c, std::memory_order_relaxed); }
     void setDriftMode(DriftMode m) { driftMode_.store(static_cast<int>(m), std::memory_order_relaxed); }
-    void setSmoothingRate(float r) { smoothRate_.store(r, std::memory_order_relaxed); }
+    void setSmoothingRate(float r) {
+        smoothRate_.store(std::clamp(r, 0.0f, 1.0f), std::memory_order_relaxed);
+    }
 
     // Listen Mode: when enabled, discrete parameters are excluded from morph output
     void setListenMode(bool enabled) { listenMode_.store(enabled, std::memory_order_relaxed); }
@@ -71,8 +73,8 @@ public:
     static constexpr float SKIP_SENTINEL = -1.0f;
 
     // Read the physics-processed cursor position (for UI trail)
-    float getProcessedX() const { return processedX_; }
-    float getProcessedY() const { return processedY_; }
+    float getProcessedX() const { return processedX_.load(std::memory_order_relaxed); }
+    float getProcessedY() const { return processedY_.load(std::memory_order_relaxed); }
 
     // Cursor trail ring buffer (written by audio, read by UI)
     static constexpr int TRAIL_SIZE = 64;
@@ -81,8 +83,8 @@ public:
     int getTrailHead() const { return trailHead_.load(std::memory_order_relaxed); }
 
 private:
-    void updatePhysics(float targetX, float targetY, MorphMode mode, float dt);
-    void applySmoothing(std::vector<float>& output);
+    void updatePhysics(float targetX, float targetY, MorphMode mode, float dt) noexcept;
+    void applySmoothing(std::vector<float>& output) noexcept;
 
     SnapshotBank& bank_;
 
@@ -95,9 +97,9 @@ private:
     std::atomic<float> driftChaos_{0.5f};
     float driftTime_     = 0.0f;
 
-    // Processed position (after physics)
-    float processedX_ = 0.5f;
-    float processedY_ = 0.5f;
+    // Processed position (after physics) — audio thread writes, UI thread reads.
+    std::atomic<float> processedX_{ 0.5f };
+    std::atomic<float> processedY_{ 0.5f };
 
     // Smoothing
     std::atomic<float> smoothRate_{0.95f};

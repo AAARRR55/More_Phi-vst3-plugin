@@ -73,6 +73,7 @@ private:
 
     // Hosted plugin window (detached)
     std::unique_ptr<HostedPluginWindow> hostedWindow_;
+    juce::AudioPluginInstance* hostedWindowPlugin_ = nullptr; // pointer used at creation; only compared, never dereferenced after unload
     juce::TextButton openPluginBtn_{"Open Plugin UI"};
     juce::TextButton deactivateBtn_{"Deactivate License"};
     void openPluginWindow();

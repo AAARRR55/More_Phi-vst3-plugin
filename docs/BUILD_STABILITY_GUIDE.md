@@ -89,6 +89,10 @@ Recommended local values:
 -DMORE_PHI_SAFE_BUILD_MODE=ON -DMORE_PHI_MSVC_MP=2 -DMORE_PHI_ENABLE_LTO=OFF
 ```
 
+> **JUCE header patching:** `PatchJuceForMSVC.cmake` is now hermetic: `/U` compiler flags undefine conflicting Windows macros instead of mutating source files. This prevents cache poisoning and makes builds reproducible.
+
+> **Version stamping:** To prevent incremental build churn, `src/Version.cpp` is the only translation unit that contains `__DATE__`/`__TIME__`. All other files include `Version.h` which declares `extern const char*` constants.
+
 For aggressive CI/release only:
 
 ```powershell
@@ -102,3 +106,7 @@ For aggressive CI/release only:
 3. Pagefile and disk queue do not climb continuously across runs.
 4. CPU clock ratio stays stable at sustained load.
 5. `--parallel 4` behavior is documented; `--parallel 2` remains the default safe point.
+
+---
+
+*Updated 2026-06-18.*

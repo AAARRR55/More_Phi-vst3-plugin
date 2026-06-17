@@ -64,7 +64,9 @@ static int measureTextHeight(const juce::String& text, int textWidth, float font
     hardLines.addTokens(text, "\n", "");
     for (const auto& line : hardLines)
     {
-        const float lineW = font.getStringWidthFloat(line.isEmpty() ? " " : line);
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText(font, line.isEmpty() ? " " : line, 0.0f, 0.0f);
+        const float lineW = glyphs.getBoundingBox(0, glyphs.getNumGlyphs(), true).getWidth();
         totalLines += juce::jmax(1, static_cast<int>(std::ceil(lineW / static_cast<float>(textWidth))));
     }
     return juce::jmax(kMinRowH, static_cast<int>(static_cast<float>(totalLines) * lineHeight));

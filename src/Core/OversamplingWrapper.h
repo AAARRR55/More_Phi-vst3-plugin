@@ -29,9 +29,9 @@
  */
 #pragma once
 
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include <array>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 
@@ -79,7 +79,7 @@ enum class AAFilterType
 class OversamplingWrapper
 {
 public:
-    static constexpr int kMaxChannels    = 2;
+    static constexpr int kMaxChannels    = 8;
     static constexpr int kMaxOSFactor   = 8;
     static constexpr int kFIRFilterOrder = 128; // taps per polyphase subfilter
 
@@ -121,13 +121,16 @@ public:
      */
     void prepare(int maxSamplesPerBlock, int numChannels, double sampleRate)
     {
-        assert(numChannels >= 1 && numChannels <= kMaxChannels);
-        assert(maxSamplesPerBlock > 0 && maxSamplesPerBlock <= 65536);
-        assert(sampleRate > 0.0);
+        jassert(numChannels >= 1 && numChannels <= kMaxChannels);
+        jassert(maxSamplesPerBlock > 0 && maxSamplesPerBlock <= 65536);
+        jassert(sampleRate > 0.0);
 
         activeFactor_ = pendingFactor_;
         numChannels_  = numChannels;
         sampleRate_   = sampleRate;
+
+        // Size bypass buffer dynamically (non-audio thread only)
+        bypassBuffer_.setSize(numChannels, maxSamplesPerBlock, false, true, true);
 
         // Factor x1 means bypass — no JUCE object needed.
         if (activeFactor_ == OversamplingFactor::x1)
@@ -202,7 +205,7 @@ public:
             const size_t numCh      = input.getNumChannels();
             const size_t numSamples = input.getNumSamples();
             for (size_t ch = 0; ch < numCh && ch < kMaxChannels; ++ch)
-                bypassChannelPtrs_[ch] = bypassBuffer_[ch].data();
+                bypassChannelPtrs_[ch] = bypassBuffer_.getWritePointer(static_cast<int>(ch));
 
             juce::dsp::AudioBlock<float> bypassBlock(
                 bypassChannelPtrs_.data(),
@@ -222,7 +225,7 @@ public:
         const size_t numCh      = input.getNumChannels();
         const size_t numSamples = input.getNumSamples();
         for (size_t ch = 0; ch < numCh && ch < kMaxChannels; ++ch)
-            bypassChannelPtrs_[ch] = bypassBuffer_[ch].data();
+            bypassChannelPtrs_[ch] = bypassBuffer_.getWritePointer(static_cast<int>(ch));
 
         juce::dsp::AudioBlock<float> bypassBlock(
             bypassChannelPtrs_.data(),
@@ -304,8 +307,8 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> oversamplerIIR_;
 
     // Bypass buffer: used in x1 mode to avoid const_cast UB.
-    // Sized to kMaxBypassBlock; filled each call to upsample() when factor == x1.
-    std::array<std::array<float, kMaxBypassBlock>, kMaxChannels> bypassBuffer_{};
+    // Sized dynamically in prepare(); filled each call to upsample() when factor == x1.
+    juce::AudioBuffer<float> bypassBuffer_;
     std::array<float*, kMaxChannels> bypassChannelPtrs_{};
 };
 

@@ -9,9 +9,11 @@
 #include <string>
 
 // Forward declaration — avoid pulling in heavy JUCE headers here.
-namespace juce { class XmlElement; }
+namespace juce { class var; }
 
 namespace more_phi {
+
+class SnapshotBank;
 
 class PresetSerializerV2
 {
@@ -31,7 +33,7 @@ public:
     // ── nlohmann::json API ───────────────────────────────────────────────────
 
     /** Convert a PresetEntry to an nlohmann::json object. */
-    static nlohmann::json toJson(const PresetEntry& preset);
+    static nlohmann::json toJson(const PresetEntry& preset, SnapshotBank* bank = nullptr);
 
     /** Populate outPreset from an nlohmann::json object.
      *  Returns false if required fields are missing or malformed. */
@@ -45,11 +47,11 @@ public:
 
     // ── Migration ───────────────────────────────────────────────────────────
 
-    /** Migrate a V1 XML preset (produced by the original PresetSerializer) to a
+    /** Migrate a V1 JSON preset (produced by the original PresetSerializer) to a
      *  V2 PresetEntry.  The resulting entry will have a freshly generated UUID and
      *  its jsonData field populated.
-     *  Returns false if v1Xml does not look like a V1 preset. */
-    static bool migrateFromV1(const juce::XmlElement& v1Xml, PresetEntry& outPreset);
+     *  Returns false if v1Json does not look like a V1 preset. */
+    static bool migrateFromV1(const juce::var& v1Json, PresetEntry& outPreset);
 
 private:
     // Helpers

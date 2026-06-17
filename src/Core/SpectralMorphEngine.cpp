@@ -131,7 +131,8 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
         ch.hopCount = 0;
     }
 
-    transientDetector_.prepare(static_cast<float>(sampleRate_), hopSize_);
+    for (auto& det : transientDetectors_)
+        det.prepare(static_cast<float>(sampleRate_), hopSize_);
 }
 
 // ─── setFFTSize() ─────────────────────────────────────────────────────────────
@@ -177,7 +178,8 @@ void SpectralMorphEngine::reset() noexcept
         ch.writePos = 0;
         ch.hopCount = 0;
     }
-    transientDetector_.reset();
+    for (auto& det : transientDetectors_)
+        det.reset();
 }
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
@@ -213,6 +215,8 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
     if (numSamples <= 0)
         return;
 
+    float effectiveAlpha = alpha;
+
     for (int c = 0; c < numChannels; ++c)
     {
         ChannelState& ch = channels_[static_cast<size_t>(c)];
@@ -239,9 +243,9 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
 
                 // Transient detection uses previous frame's magA (stale by one
                 // hop, which is acceptable — detection latency = one hop = ~12ms).
-                float effectiveAlpha = alpha;
+                // Compute once on channel 0 and apply to all channels for stereo coherence.
                 if (transientPreserve_.load(std::memory_order_relaxed) && c == 0)
-                    effectiveAlpha = transientDetector_.process(
+                    effectiveAlpha = transientDetectors_[0].process(
                         ch.magA.data(), numBins_, alpha);
 
                 processFrame(ch, effectiveAlpha);

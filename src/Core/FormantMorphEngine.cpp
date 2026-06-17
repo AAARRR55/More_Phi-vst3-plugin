@@ -40,6 +40,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 #include <cassert>
 
 namespace more_phi {
@@ -56,7 +57,7 @@ FormantMorphEngine::~FormantMorphEngine() = default;
 
 // ─── prepare() ───────────────────────────────────────────────────────────────
 
-void FormantMorphEngine::prepare(double sampleRate, int /*maxBlockSize*/)
+void FormantMorphEngine::prepare(double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate;
     hopSize_    = fftSize_ / 4;
@@ -68,10 +69,12 @@ void FormantMorphEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     window_.resize(static_cast<size_t>(fftSize_));
     computeHannWindow();
 
+    const int outBufLen = fftSize_ + std::max(hopSize_, maxBlockSize);
+
     for (auto& ch : channels_)
     {
         ch.inputBuffer.assign(static_cast<size_t>(fftSize_), 0.0f);
-        ch.outputBuffer.assign(static_cast<size_t>(fftSize_ + hopSize_), 0.0f);
+        ch.outputBuffer.assign(static_cast<size_t>(outBufLen), 0.0f);
         ch.sourceEnvelope.assign(static_cast<size_t>(numBins_), 1.0f);
         ch.cepstrumBuffer.assign(static_cast<size_t>(fftSize_), 0.0f);
         ch.currentEnvelope.assign(static_cast<size_t>(numBins_), 1.0f);
@@ -199,6 +202,15 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
         float* outPtr      = buffer.getWritePointer(c);
         const float* inPtr = buffer.getReadPointer(c);
 
+        // Drain output buffer
+        const int outBufLen = static_cast<int>(ch.outputBuffer.size());
+        const int drainLen  = std::min(numSamples, outBufLen);
+
+        for (int i = 0; i < drainLen; ++i)
+            outPtr[i] = ch.outputBuffer[static_cast<size_t>(i)];
+        for (int i = drainLen; i < numSamples; ++i)
+            outPtr[i] = 0.0f;
+
         for (int i = 0; i < numSamples; ++i)
         {
             ch.inputBuffer[static_cast<size_t>(ch.writePos)] = inPtr[i];
@@ -210,19 +222,18 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
                 ch.hopCount = 0;
                 processFrame(ch, amount);
             }
-
-            // Drain output
-            outPtr[i] = ch.outputBuffer[static_cast<size_t>(i % (fftSize_ + hopSize_))];
         }
 
-        // Shift output buffer left
-        const int outBufLen = fftSize_ + hopSize_;
-        const int shift     = std::min(numSamples, outBufLen);
-        for (int k = 0; k < outBufLen - shift; ++k)
-            ch.outputBuffer[static_cast<size_t>(k)] =
-                ch.outputBuffer[static_cast<size_t>(k + shift)];
-        for (int k = outBufLen - shift; k < outBufLen; ++k)
-            ch.outputBuffer[static_cast<size_t>(k)] = 0.0f;
+        // Shift output buffer left by drainLen
+        const int remaining = outBufLen - drainLen;
+        if (remaining > 0)
+        {
+            std::memmove(ch.outputBuffer.data(),
+                         ch.outputBuffer.data() + drainLen,
+                         static_cast<size_t>(remaining) * sizeof(float));
+        }
+        std::fill(ch.outputBuffer.begin() + remaining,
+                  ch.outputBuffer.end(), 0.0f);
     }
 }
 

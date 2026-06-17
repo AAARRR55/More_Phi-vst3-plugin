@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <iterator>
+#include <type_traits>
 #include <juce_core/juce_core.h>
 
 namespace more_phi {
@@ -27,6 +28,8 @@ namespace more_phi {
 template <typename T, size_t Capacity>
 class LockFreeQueue
 {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "LockFreeQueue requires trivially copyable types");
     static_assert((Capacity & (Capacity - 1)) == 0,
                   "Capacity must be a power of 2");
 public:
@@ -65,25 +68,79 @@ public:
     template <typename Range>
     [[nodiscard]] bool pushRange(const Range& items)
     {
-        const juce::SpinLock::ScopedLockType guard(pushMutex_);
+        static_assert(std::is_base_of_v<std::random_access_iterator_tag,
+                      typename std::iterator_traits<decltype(std::begin(items))>::iterator_category>,
+                      "LockFreeQueue::pushRange requires random-access iterators");
         const size_t count = static_cast<size_t>(std::distance(std::begin(items), std::end(items)));
         if (count == 0)
             return true;
 
-        const size_t head = head_.load(std::memory_order_relaxed);
-        const size_t tail = tail_.load(std::memory_order_acquire);
-        const size_t used = (head - tail) & mask_;
-        if (count > usableCapacity() - used)
-            return false;
+        constexpr size_t kChunkSize = 512;
+        size_t copied = 0;
+        auto it = std::begin(items);
 
-        size_t write = head;
-        for (const auto& item : items)
+        while (copied < count)
         {
-            buffer_[write] = item;
-            write = (write + 1) & mask_;
-        }
+            const juce::SpinLock::ScopedLockType guard(pushMutex_);
+            const size_t head = head_.load(std::memory_order_relaxed);
+            const size_t tail = tail_.load(std::memory_order_acquire);
+            const size_t used = (head - tail) & mask_;
+            const size_t available = usableCapacity() - used;
 
-        head_.store(write, std::memory_order_release);
+            if (available == 0)
+                return false;
+
+            const size_t chunk = std::min(kChunkSize, count - copied);
+            if (chunk > available)
+                return false;
+
+            size_t write = head;
+            for (size_t i = 0; i < chunk; ++i)
+            {
+                buffer_[write] = *it++;
+                write = (write + 1) & mask_;
+            }
+
+            head_.store(write, std::memory_order_release);
+            copied += chunk;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool pushRange(const T* items, std::size_t count)
+    {
+        if (count == 0)
+            return true;
+
+        constexpr std::size_t kChunkSize = 512;
+        std::size_t copied = 0;
+        std::size_t idx = 0;
+
+        while (copied < count)
+        {
+            const juce::SpinLock::ScopedLockType guard(pushMutex_);
+            const size_t head = head_.load(std::memory_order_relaxed);
+            const size_t tail = tail_.load(std::memory_order_acquire);
+            const size_t used = (head - tail) & mask_;
+            const size_t available = usableCapacity() - used;
+
+            if (available == 0)
+                return false;
+
+            const std::size_t chunk = std::min(kChunkSize, count - copied);
+            if (chunk > available)
+                return false;
+
+            size_t write = head;
+            for (std::size_t i = 0; i < chunk; ++i)
+            {
+                buffer_[write] = items[idx++];
+                write = (write + 1) & mask_;
+            }
+
+            head_.store(write, std::memory_order_release);
+            copied += chunk;
+        }
         return true;
     }
 

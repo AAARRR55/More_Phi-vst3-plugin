@@ -2,7 +2,7 @@
 
 This matrix cross-references workflow claims in `docs/USER_GUIDE.md` against the current GUI, backend, automation, MIDI, MCP, audio, preset, and test surfaces. Status values are limited to: `Pass`, `Mismatch`, `Missing`, `Needs automated test`, and `Needs manual host verification`.
 
-Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `24/24`, the full Release Ninja suite passes `375/375`, and the local VST3 validator wrapper records the missing external validator in `docs/validation/vst3_validator_result_20260517.json`. `tests/CMakeLists.txt` now registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
+Last refreshed: `2026-06-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `27/27`, the full Release suite passes `458+/458+`, `pluginval` strictness-5 has passed (`validation/pluginval_strictness5.txt`, 2026-06-16), and the local VST3 validator wrapper records the missing Steinberg `vst3_validator` when it is not on `PATH`. `tests/CMakeLists.txt` registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
 
 ## Summary
 
@@ -12,11 +12,11 @@ Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs
 | Hosted Plugin Setup | Needs manual host verification | Load/show/status/latency/snapshot-clear code exists, but real plugin scan, load, editor opening, and audio pass-through require installed plugin/host QA. |
 | Create Your First Morphing Project | Needs manual host verification | Capture, snapshot storage, and morphing backend exist; real sound-design workflow needs hosted plugin parameters and manual listening. |
 | Snapshot Management | Needs automated test | Capture/recall/Fast/Full/Recall Toggle code exists; opaque hosted state and sustained-note behavior need host/plugin verification. |
-| Morph Between Sounds | Needs automated test | MorphPad, Snap Fader, output gain, and bypass surfaces exist; VST3 tests cover output gain/bypass and CC1 fader path. |
-| Physics Modes | Needs automated test | Direct/Elastic/Drift UI/APVTS and physics unit coverage exist; guide-level end-to-end behavior is partially covered. |
+| Morph Between Sounds | Needs automated test | MorphPad, Snap Fader, output gain, and bypass surfaces exist; VST3 tests cover output gain/bypass and CC1 fader path. Discrete parameter snapping is now covered by parameter bridge tests. |
+| Physics Modes | Needs automated test | Direct/Elastic/Drift UI/APVTS and physics unit coverage exist; Direct mode smoothing is now covered by physics unit tests. Guide-level end-to-end behavior is partially covered. |
 | Genetic Sound Design | Needs automated test | Breed/Mutate/Randomize buttons and core genetic tests exist; `smartRandomize` remains an exposed parameter without a processor trigger path. |
 | MIDI Control | Pass | Focused VST3 tests cover C3-B3 mapping, out-of-range pass-through, CC1 fader routing, sidechain bus/APVTS state, and rising-edge sidechain cycling. |
-| AI and MCP Features | Needs manual host verification | MCP server/auth/tools and semantic safe actions have unit/integration coverage; AI status UI and clipboard/client setup need manual QA. |
+| AI and MCP Features | Needs manual host verification | MCP server/auth/tools and semantic safe actions have unit/integration coverage; MCP security fixes (constant-time auth, idle timeout, instance isolation) are covered by unit tests. AI status UI and clipboard/client setup need manual QA. |
 | LLM Settings | Needs automated test | LLM settings store/dialog/provider tests exist; real provider Fetch Models/Test Connection requires external credentials/network. |
 | Advanced Walkthroughs | Mismatch | Evolving pad and mastering workflows map to existing systems; performance macro walkthrough still claims assignable macro knobs, which current UI does not provide. |
 | Best Practices/Troubleshooting | Needs manual host verification | Most advice maps to validated systems, but real DAW/audio/plugin behavior remains manual-host QA. |
@@ -61,6 +61,21 @@ Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs
 | Advanced Walkthroughs | Mastering preview with AI assistance | MCP/AI client | analyzers, mastering tools, semantic actions | `tests/Unit/TestMCPServerUnit.cpp:347`, `tests/Unit/TestMCPServerUnit.cpp:390`, `tests/Unit/TestAIRegressions.cpp:321` | Needs automated test | Backend tests cover analysis/mastering pieces; real mastering workflow requires hosted plugin/audio and AI client. |
 | Best Practices | Prefer semantic tools over raw parameter writes | External AI workflow | semantic MCP guardrails | `tests/Unit/TestAIRegressions.cpp:272`, `tests/Unit/TestAIRegressions.cpp:294`, `tests/Unit/TestAIRegressions.cpp:321` | Pass | Semantic guardrail coverage exists. |
 | Troubleshooting | Nothing changes when morphing | Hosted plugin, snapshots, bypass/audio routing | host manager, snapshot bank, bypass/output gain | `tests/Integration/TestVST3AudioSignalAccuracy.cpp:93`, `tests/Integration/TestVST3AudioSignalAccuracy.cpp:142` | Needs manual host verification | Real no-sound/no-change debugging depends on DAW routing and hosted plugin parameters. |
+
+## Traceability Totals
+
+Recomputed from the detailed workflow rows above:
+
+| Status | Count |
+|---|---:|
+| Pass | 8 |
+| Mismatch | 2 |
+| Needs automated test | 15 |
+| Needs manual host verification | 11 |
+| Missing | 0 |
+| **Total traced workflows** | **36** |
+
+The summary table at the top of this matrix aggregates high-level areas; the detailed-row totals above provide the workflow-level coverage count.
 
 ## Guide-Specific Risk Register
 

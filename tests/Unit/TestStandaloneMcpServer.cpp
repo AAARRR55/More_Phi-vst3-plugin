@@ -136,7 +136,7 @@ public:
     void unloadPlugin() override {}
     bool hasPlugin() const override { return plugin_ != nullptr; }
 
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept override
     {
         if (plugin_ != nullptr)
             plugin_->processBlock(buffer, midi);

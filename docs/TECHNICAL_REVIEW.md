@@ -474,3 +474,37 @@ The oversampling itself is correct (aliasing suppressed, no lost signal, dry/wet
 
 ### Verification verdict
 The shipped fixes are fundamentally sound; MODULATION-1/LUFS-1/MULTIBAND are correct as committed. The verification caught one live audio-thread bug (C-1 incomplete, now fixed) and one latent PDC defect (ENHANCERS-1, with a precise fix plan above). The exercise validated the value of independent adversarial review for correctness properties that tests cannot observe (memory ordering, control-loop stability, latency reporting).
+
+---
+
+## 13. AI Mastering & Analysis — Feature-Readiness (validated 2026-06-16)
+
+> Corrects an earlier mischaracterization. A prior draft of this review stated "AI mastering through the hosted plugin effectively means through Ozone 11." Verified against the code — **that is incorrect.** The hosted-plugin mastering path is **generic and plugin-agnostic.**
+
+### Two distinct "mastering" paths — only one ships
+
+1. **Internal mastering chain** (`AutoMasteringEngine::processBlock` — the 10-stage M/S→multiband→dynamics→EQ→imager→exciter→limiter→normalizer chain). **DORMANT in the shipped plugin** — the processor calls only `analyzeBlock()` (metering); the chain runs solely in a unit test. Its criticals (LUFS-1 chain order, ENHANCERS-1 oversampled exciter, B-1 true-peak limiter, MULTIBAND stereo-link) are now fixed so it's *ready to be enabled*, but it is not on the audio path and is unvalidated end-to-end.
+2. **Mastering through the hosted plugin** — host a mastering plugin (any VST3/AU), audio runs through it live (`hostManager.processBlock` is on the audio path), and More-Phi's AI analysis + parameter control drive that hosted plugin's parameters. **This is the live, functional path.**
+
+### The hosted-plugin path is generic, not Ozone-specific (evidence)
+
+- **`PluginSemanticMapper`** derives a full mastering vocabulary by text-matching *any* plugin's parameter names: EQ (band frequency/Q/gain/filter/enabled), compressor (threshold/ratio/attack/release/knee/makeup), **limiter (ceiling/input_gain/output_level/release)**, imager width, saturation.
+- **`SemanticPluginProfile::classify`** profiles any hosted plugin into those roles; **`SemanticPluginProfile::planSafeAction`** + the MCP tool **`plugin_profile.apply_safe_action`** apply a guarded plan to the hosted plugin through the realtime command queue, **with rollback snapshots** (`plugin_profile.restore_safe_snapshot`).
+- **`OzoneParameterMap::buildFromHostedPlugin(const IParameterBridge&)`** is generic; `buildForOzone11()` is merely an *optimized specialization*, not the only path. Ozone 11 has a hand-tuned map; other plugins use the generic semantic layer.
+
+So an external AI/assistant (via MCP) reads More-Phi's analysis + the hosted plugin's semantic profile, proposes mastering actions, and `SemanticPluginProfile` safeguards + applies them (clamps, enforces safety rules like "ratio max 4:1 without confirmation", supports rollback). This works for **any** plugin whose parameters classify into mastering roles.
+
+### What is validated
+- **Classification is unit-tested** (`tests/Unit/TestAIRegressions.cpp`): `SemanticPluginProfile::classify` correctly identifies EQ + `limiter.ceiling`, disambiguates duplicate semantic IDs, ignores display values, serializes correctly. The profile→plan→apply→rollback path has test coverage.
+- **The AI analysis DSP is spec-correct** (this review, §11): LUFSMeter K-weighting/gating/calibration match BS.1770-4; TruePeakEstimator is 4× polyphase per spec; spectrum/stereo-field analyzers verified. `analyzeBlock()` is live every block and **non-mutating** (safe).
+- **Metering correctness is tested** (true-peak ≤ 0, integrated LUFS finite/in-range).
+
+### What is NOT validated (the genuine gaps)
+- **No end-to-end master-vs-spec/reference test**: nothing renders a master through a hosted plugin driven by an AI plan and checks the output against a delivery spec (−14 LUFS / −1 dBTP) or a reference master. The meters are verified; the mastering *outcome* is not.
+- **Recommendation quality is unproven**: whether the analysis-driven actions produce a *good* master (subjective) has not been tested with real material + an LLM driving it via MCP.
+- **The internal chain's residual**: the B-1 limiter has a ~+0.15 dB true-peak residual (within ±0.3 dBTP specs) — relevant only if/when the internal chain is enabled.
+- The general **validation gauntlet** (DAW host-testing, `pluginval` strictness 5, `auval`, ThreadSanitizer on `linux-clang-asan`) is unrunnable from the development box and remains required.
+
+### Feature-readiness verdict
+- **AI analysis: production-ready for stereo metering.** Spec-correct (BS.1770-4 LUFS/true-peak, spectrum, stereo field), live, non-mutating. Caveats: stereo-only (no surround BS.1770 weights), per-block true-peak (not a held session peak), not compared against a reference meter, and the "AI" semantic classification is heuristic (rule-based), not learned.
+- **AI mastering (through the hosted plugin): production-capable, validation-pending.** A tested, generic, plugin-agnostic semantic-mastering-control layer over any hosted plugin (not Ozone-only), with spec-correct analysis feeding safeguarded, rollback-able actions. **Green once an end-to-end master-vs-spec test passes** and the plugin validation gauntlet runs. Not a blocker for the morphing/hosting/analysis product; a blocker only for an explicit "AI mastering" marketing claim until that validation lands.

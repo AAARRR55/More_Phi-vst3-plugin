@@ -21,7 +21,11 @@ class EnvelopeFollower
 public:
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    /** Set sample rate and recompute filter coefficients. Call from prepareToPlay. */
+    /** Set sample rate and block size, recompute filter coefficients. Call from prepareToPlay. */
+    void prepare(double sampleRate, int blockSize) noexcept;
+
+    /** Set sample rate and recompute filter coefficients. Call from prepareToPlay.
+        Prefer prepare(double, int) so per-block coefficients can be pre-computed. */
     void prepare(double sampleRate) noexcept;
 
     /** Reset envelope state to silence. */
@@ -39,9 +43,9 @@ public:
     /**
      * Return the envelope value computed in the last process() call.
      * Safe from any thread after process() has returned.
-     * noexcept: Trivial float read.
+     * noexcept: Trivial atomic float read.
      */
-    float getCurrentValue() const noexcept { return envelope_; }
+    float getCurrentValue() const noexcept { return envelope_.load(std::memory_order_relaxed); }
 
     // ── Parameter setters (message thread) ────────────────────────────────────
 
@@ -66,7 +70,7 @@ public:
 private:
     // ── State ─────────────────────────────────────────────────────────────────
 
-    float  envelope_      = 0.0f;
+    std::atomic<float> envelope_{ 0.0f };  // audio writes, UI reads
     double sampleRate_    = 48000.0;
 
     // MOD-4: coefficients/sensitivity are written from the message thread
@@ -75,6 +79,14 @@ private:
     std::atomic<float> attackCoeff_  { 0.0f };
     std::atomic<float> releaseCoeff_ { 0.0f };
     std::atomic<float> sensitivity_  { 1.0f };
+
+    // C15 FIX: pre-computed per-block coefficients so process() never calls
+    // std::pow on the audio thread. Updated whenever attack/release or block
+    // size changes (always from the message thread). Atomics prevent torn reads
+    // on the audio thread.
+    std::atomic<int>   blockSize_{ 0 };
+    std::atomic<float> attackCoeffPerBlock_  { 0.0f };
+    std::atomic<float> releaseCoeffPerBlock_ { 0.0f };
 
     // Shadow values used to recompute coefficients when sample rate is set
     float  attackMs_  = 10.0f;

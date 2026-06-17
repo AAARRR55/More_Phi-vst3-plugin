@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+coverage
+.vscode
+.idea
+*.log
+prisma/migrations/*/
+!prisma/migrations/20260616200000_init
+!prisma/migrations/20260616200000_init/*.sql
+!prisma/migrations/migration_lock.toml

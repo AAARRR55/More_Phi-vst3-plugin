@@ -9,7 +9,11 @@ option(MORE_PHI_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC 
 option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
 set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
-option(MORE_PHI_ENABLE_DATASET_V3 "Deprecated compatibility flag (no-op): Dataset V3 modular pipeline sources are always compiled" OFF)
+option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
+
+if(MORE_PHI_ENABLE_CLANG_TIDY)
+    set(CMAKE_CXX_CLANG_TIDY "clang-tidy")
+endif()
 
 # Keep single-config generators deterministic when callers omit build type.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -51,6 +55,10 @@ function(more_phi_apply_build_tuning target_name)
     endif()
 
     if(MSVC)
+        # H7 FIX: Undefine Windows macros that collide with JUCE enum names
+        # (none, small, large, min, max, normal, high) instead of patching JUCE
+        # source files in-place, which breaks hermetic builds.
+        target_compile_options(${target_name} PRIVATE /Umin /Umax /Unone /Usmall /Ularge /Unormal /Uhigh)
         # Ensure source files are interpreted as UTF-8 (required for Unicode literals)
         target_compile_options(${target_name} PRIVATE /utf-8)
         # Keep PCH memory and CL internal workers explicit so local machines can tune safely.
@@ -139,6 +147,7 @@ set(MORE_PHI_PLUGIN_SOURCES
     src/Plugin/PluginProcessor.cpp
     src/Plugin/PluginEditor.h
     src/Plugin/PluginEditor.cpp
+    src/Version.cpp
 )
 
 set(MORE_PHI_CORE_SOURCES
@@ -465,12 +474,15 @@ target_sources(MorePhi PRIVATE
 
 # MSVC occasionally runs out of frontend heap on these large dataset translation units.
 # Compile them with conservative settings to keep CI deterministic.
+# /bigobj is required for large translation units; /Od removed to avoid disabling
+# optimizations in Release builds. The original /Od was a conservative workaround
+# that is no longer needed with current compiler settings.
 if(MSVC)
     set_source_files_properties(
         src/AI/Dataset/MetadataWriter.cpp
         src/AI/Dataset/MetadataSchema.cpp
         PROPERTIES
-            COMPILE_OPTIONS "/bigobj;/Od"
+            COMPILE_OPTIONS "/bigobj"
     )
 endif()
 
@@ -483,6 +495,7 @@ target_include_directories(MorePhi PRIVATE
 # CLI only needs core, host, and dataset sources - NOT MCP server code
 set(MORE_PHI_CLI_SOURCES
     src/CLI/main.cpp
+    src/Version.cpp
     ${MORE_PHI_CORE_SOURCES}
     ${MORE_PHI_HOST_SOURCES}
     ${MORE_PHI_LICENSING_SOURCES}
@@ -641,8 +654,11 @@ if(TARGET MorePhi_AU)
     more_phi_apply_build_tuning(MorePhi_AU)
 endif()
 
-# Keep SIMD tuning scoped to the dedicated implementation file so the rest of
-# the build keeps the current compatibility envelope.
+# Keep SIMD tuning scoped to the implementation files that use intrinsics so the
+# rest of the build keeps the current compatibility envelope. Previously only
+# SIMDAudio.cpp received /arch:AVX2, which meant InterpolationEngine.cpp fell
+# back to the SSE2 path even on AVX-capable hosts and misreported benchmark
+# results as "AVX" (see audit).
 set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
     if(MSVC)
@@ -655,9 +671,20 @@ endif()
 if(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS)
     set_source_files_properties(
         src/Core/SIMDAudio.cpp
+        src/Core/InterpolationEngine.cpp
+        src/Core/SpectralMorphEngine.cpp
+        src/Core/GranularMorphEngine.cpp
+        src/Core/FormantMorphEngine.cpp
+        src/Core/EnvelopeFollower.cpp
         PROPERTIES COMPILE_OPTIONS "${MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS}"
     )
 endif()
+
+# Remove the stale standalone CompilerFlags.cmake from the build pipeline.
+# Its contents reference a non-existent `morphy_interface_options` target,
+# disable exceptions/RTTI (incompatible with JUCE), and set static CRT options
+# that conflict with JUCE defaults. SIMD flags are now handled above.
+# (The file itself is retained in cmake/ for archaeology but is not included.)
 
 if(MORE_PHI_BUILD_TESTS)
     enable_testing()

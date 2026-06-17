@@ -21,6 +21,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "../Mocks/MockV2Interfaces.h"
+#include "Core/GranularMorphEngine.h"
 
 #include <vector>
 #include <array>
@@ -730,4 +731,71 @@ TEST_CASE("GrainPool: isActive returns false for out-of-range indices", "[granul
     REQUIRE_FALSE(pool.isActive(-1));
     REQUIRE_FALSE(pool.isActive(GrainPool::MAX_GRAINS));
     REQUIRE_FALSE(pool.isActive(9999));
+}
+
+// =============================================================================
+//  Production GranularMorphEngine Tests (H14 fix)
+// =============================================================================
+
+TEST_CASE("GranularMorphEngine (production): prepare and processBlock with sine wave", "[granular][production]")
+{
+    more_phi::GranularMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(true);
+    engine.setGrainSize(50.0f);
+    engine.setGrainDensity(20.0f);
+
+    juce::AudioBuffer<float> bufA(2, 512);
+    juce::AudioBuffer<float> bufB(2, 512);
+    bufA.clear();
+    bufB.clear();
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        float* dataA = bufA.getWritePointer(ch);
+        float* dataB = bufB.getWritePointer(ch);
+        for (int i = 0; i < 512; ++i)
+        {
+            dataA[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
+            dataB[i] = std::sin(2.0f * 3.14159265358979f * 880.0f * static_cast<float>(i) / 44100.0f);
+        }
+    }
+
+    engine.processBlock(bufA, bufB, 0.5f);
+
+    for (int ch = 0; ch < bufA.getNumChannels(); ++ch)
+    {
+        const float* data = bufA.getReadPointer(ch);
+        bool hasNonZero = false;
+        for (int i = 0; i < bufA.getNumSamples(); ++i)
+        {
+            REQUIRE(std::isfinite(data[i]));
+            if (std::abs(data[i]) > 1e-6f) hasNonZero = true;
+        }
+        REQUIRE(hasNonZero);
+    }
+}
+
+TEST_CASE("GranularMorphEngine (production): inactive engine leaves buffer unchanged", "[granular][production]")
+{
+    more_phi::GranularMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(false);
+
+    juce::AudioBuffer<float> bufA(1, 256);
+    juce::AudioBuffer<float> bufB(1, 256);
+    bufA.clear();
+    bufB.clear();
+
+    float* dataA = bufA.getWritePointer(0);
+    for (int i = 0; i < 256; ++i)
+        dataA[i] = 0.5f;
+
+    engine.processBlock(bufA, bufB, 0.3f);
+
+    const float* out = bufA.getReadPointer(0);
+    for (int i = 0; i < 256; ++i)
+    {
+        REQUIRE(out[i] == Catch::Approx(0.5f).margin(1e-6f));
+    }
 }

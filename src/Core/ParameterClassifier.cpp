@@ -65,7 +65,12 @@ void ParameterClassifier::analyzeParameters(const IParameterBridge& host)
         if (meta.type == ParameterType::Binary)
             meta.stepCount = 2;
         else if (meta.type == ParameterType::Discrete || meta.type == ParameterType::Enumeration)
-            meta.stepCount = 1;
+        {
+            // FIX C5: Query real step count from host. Fallback to 1 (not 0) so
+            // DiscreteParameterHandler::valueToStep() always has a valid step range.
+            const int steps = host.getNumSteps(static_cast<int>(i));
+            meta.stepCount = (steps > 0) ? static_cast<uint16_t>(steps) : 1;
+        }
 
         // Sanity protection detection
         if (lowerName.contains("volume") ||
@@ -96,8 +101,20 @@ ParameterType ParameterClassifier::classifyParameter(int index, const IParameter
     
     // First: name-based heuristics
     ParameterType nameType = detectTypeFromName(name.toRawUTF8());
+    
+    // M-9 FIX: Override fragile name-based heuristics when host provides clear metadata
     if (nameType != ParameterType::Unknown)
+    {
+        if (host.isDiscrete(index))
+        {
+            const int steps = host.getParameterNumSteps(index);
+            if (steps == 2)
+                return ParameterType::Binary;
+            if (steps > 2)
+                return ParameterType::Discrete;
+        }
         return nameType;
+    }
     
     // Second: behavior-based detection
     return detectTypeFromBehavior(index, host);
@@ -504,7 +521,7 @@ float ParameterClassifier::calculateImportance(const ParameterMetadata& meta) co
         const auto now = static_cast<int64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         const auto age = static_cast<int64_t>(now - meta.lastModified);
         // Higher score for recent modifications (decay over time)
-        const float recencyBonus = 0.2f * std::exp(-static_cast<double>(age) / 3600000000000.0f); // 1 hour half-life
+        const float recencyBonus = 0.2f * std::exp(-static_cast<float>(age) / 3600000000000.0f); // 1 hour half-life
         score += recencyBonus;
     }
     
@@ -636,6 +653,10 @@ void ParameterClassifier::deserialize(const uint8_t* data, size_t size)
         std::memcpy(&metadata_[i], metaData + i * sizeof(ParameterMetadata), 
                    sizeof(ParameterMetadata));
     }
+
+    // H12 FIX: Zero out stale metadata beyond the deserialized count.
+    for (uint32_t i = count; i < MAX_PARAMS; ++i)
+        metadata_[i] = ParameterMetadata{};
 }
 
 } // namespace more_phi

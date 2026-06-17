@@ -58,12 +58,6 @@ static juce::String toJString(const json& j)
     return juce::String(j.dump());
 }
 
-static AutomationRuntime& automationRuntime()
-{
-    static AutomationRuntime runtime;
-    return runtime;
-}
-
 static json parseToolResponse(const juce::String& response)
 {
     try
@@ -325,9 +319,9 @@ static json buildApprovalPredictedDiff(const juce::String& method,
 static juce::String dispatchWithAutomationTransaction(const juce::String& method,
                                                        const juce::var& params,
                                                        MorePhiProcessor& p,
+                                                       AutomationRuntime& runtime,
                                                        const std::function<juce::String()>& executor)
 {
-    auto& runtime = automationRuntime();
     json paramsJson = juceVarToJson(params);
     if (!paramsJson.is_object())
         paramsJson = json::object();
@@ -626,9 +620,9 @@ static json predictionCandidate(const char* toolName,
 
 static json buildWorkflowPrediction(const juce::var& params,
                                     MorePhiProcessor& p,
-                                    const InstanceIdentity& identity)
+                                    const InstanceIdentity& identity,
+                                    AutomationRuntime& runtime)
 {
-    auto& runtime = automationRuntime();
     const auto session = buildSessionContextJson(p, identity);
     const auto requestedWorkflowId = params.getProperty("workflow_run_id",
                                     params.getProperty("workflowRunId", "")).toString();
@@ -884,14 +878,14 @@ static bool restoreMorePhiControlsFromState(const json& state, MorePhiProcessor&
     return true;
 }
 
-static json rollbackAutomationTransaction(const juce::var& params, MorePhiProcessor& p)
+static json rollbackAutomationTransaction(const juce::var& params, MorePhiProcessor& p, AutomationRuntime& runtime)
 {
     const auto transactionId = params.getProperty("transaction_id",
                                params.getProperty("transactionId", "")).toString();
     if (transactionId.isEmpty())
         return json{{"success", false}, {"error", "missing_transaction_id"}};
 
-    auto transaction = automationRuntime().ledger().find(transactionId);
+    auto transaction = runtime.ledger().find(transactionId);
     if (!transaction.has_value())
         return json{{"success", false}, {"error", "transaction_not_found"}, {"transaction_id", transactionId.toStdString()}};
 
@@ -905,7 +899,14 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
         const auto valuesJson = plan.value("values", json::array());
         std::vector<MorePhiProcessor::ParamCommand> commands;
         commands.reserve(valuesJson.size());
-        for (size_t i = 0; i < valuesJson.size(); ++i)
+        // MCP-CONTROL-04: bound the rollback to the project's parameter ceiling
+        // (MAX_PARAMETERS=2048). A tampered/oversized ledger could otherwise queue
+        // commands for non-existent param indices, and enqueueParameterBatch
+        // rejects the ENTIRE batch if any index >= MAX_PARAMETERS — breaking the
+        // whole rollback. (writeParameter still drops any index beyond the live
+        // hosted-plugin count, so this is robustness, not memory-safety.)
+        constexpr int kMaxRollbackParamIndex = 2047;
+        for (size_t i = 0; i < valuesJson.size() && static_cast<int>(i) <= kMaxRollbackParamIndex; ++i)
         {
             if (!valuesJson[i].is_number())
                 continue;
@@ -1016,10 +1017,9 @@ static WorkflowRun workflowRunFromParams(const juce::var& params, MorePhiProcess
 static juce::String handleControlPlaneTool(const juce::String& method,
                                            const juce::var& params,
                                            MorePhiProcessor& p,
-                                           const InstanceIdentity& identity)
+                                           const InstanceIdentity& identity,
+                                           AutomationRuntime& runtime)
 {
-    auto& runtime = automationRuntime();
-
     if (method == "automation.history")
     {
         const auto workflowRunId = params.getProperty("workflow_run_id",
@@ -1042,7 +1042,7 @@ static juce::String handleControlPlaneTool(const juce::String& method,
     }
 
     if (method == "automation.rollback")
-        return dispatchWithAutomationTransaction(method, params, p, [&]() { return toJString(rollbackAutomationTransaction(params, p)); });
+        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return toJString(rollbackAutomationTransaction(params, p, runtime)); });
 
     if (method == "automation.diff_preview")
         return toJString(buildDiffPreview(params, p));
@@ -1142,7 +1142,7 @@ static juce::String handleControlPlaneTool(const juce::String& method,
         const auto id = params.getProperty("workflow_run_id",
                         params.getProperty("workflowRunId", "")).toString();
         const auto run = runtime.workflows().executeRun(id,
-            [&p, &identity](const WorkflowRun& workflow, const WorkflowStep& step) -> json
+            [&p, &identity, &runtime](const WorkflowRun& workflow, const WorkflowStep& step) -> json
             {
                 const auto toolName = step.toolName.trim();
                 if (toolName.isEmpty())
@@ -1153,7 +1153,7 @@ static juce::String handleControlPlaneTool(const juce::String& method,
                 auto stepParams = step.params.is_object() ? step.params : json::object();
                 stepParams["workflow_run_id"] = workflow.id.toStdString();
                 stepParams["workflow_step_id"] = step.id.toStdString();
-                return parseToolResponse(MCPToolHandler::handle(toolName, jsonToJuceVar(stepParams), p, identity));
+                return parseToolResponse(MCPToolHandler::handle(toolName, jsonToJuceVar(stepParams), p, identity, runtime));
             });
         runtime.events().publish(IntegrationEvent{{}, "workflow", "workflow.executed", run.id, {}, toJson(run), juce::Time::getCurrentTime()});
         return toJString(json{
@@ -1163,7 +1163,7 @@ static juce::String handleControlPlaneTool(const juce::String& method,
     }
 
     if (method == "workflow.predict_next")
-        return toJString(buildWorkflowPrediction(params, p, identity));
+        return toJString(buildWorkflowPrediction(params, p, identity, runtime));
 
     if (method == "workflow.cancel")
     {
@@ -1682,6 +1682,8 @@ public:
     juce::String getParameterDisplayValue(int index) const override { return juce::String(getParameterNormalized(index)); }
     float getParameterDefault(int) const override { return 0.5f; }
     juce::StringArray getParameterValueStrings(int) const override { return {}; }
+    juce::String getParameterStableID(int index) const override { return "selftest_" + juce::String(index); }
+    int getParameterNumSteps(int) const override { return 0; }
 
     std::vector<float> values;
     int applyCount = 0;
@@ -2006,10 +2008,15 @@ static json progressToJson(const OfflineBatchProgress& progress)
     };
 }
 
-static std::shared_ptr<RenderJobRecord> findRenderJob(const juce::String& jobId)
+static std::string makeInstancePrefixedKey(const juce::String& instanceId, const juce::String& id)
+{
+    return (instanceId + ":" + id).toStdString();
+}
+
+static std::shared_ptr<RenderJobRecord> findRenderJob(const juce::String& instanceId, const juce::String& jobId)
 {
     const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
-    const auto it = gRenderJobs.find(jobId.toStdString());
+    const auto it = gRenderJobs.find(makeInstancePrefixedKey(instanceId, jobId));
     return it != gRenderJobs.end() ? it->second : nullptr;
 }
 
@@ -2552,37 +2559,49 @@ juce::String MCPToolHandler::handle(const juce::String& method,
                                      MorePhiProcessor& p,
                                      const InstanceIdentity& identity)
 {
+    // Fallback overload: create a temporary runtime for read-only operations.
+    // Write operations that need a persistent ledger should use the 5-arg overload.
+    AutomationRuntime fallback;
+    return handle(method, params, p, identity, fallback);
+}
+
+juce::String MCPToolHandler::handle(const juce::String& method,
+                                     const juce::var& params,
+                                     MorePhiProcessor& p,
+                                     const InstanceIdentity& identity,
+                                     AutomationRuntime& runtime)
+{
     if (method == "get_plugin_info")      return getPluginInfo(p);
     if (method == "list_parameters")      return listParameters(params, p);
     if (method == "get_parameter")        return getParameter(params, p);
-    if (method == "set_parameter")        return dispatchWithAutomationTransaction(method, params, p, [&]() { return setParameter(params, p); });
-    if (method == "set_parameters_batch") return dispatchWithAutomationTransaction(method, params, p, [&]() { return setParametersBatch(params, p); });
-    if (method == "capture_snapshot")     return dispatchWithAutomationTransaction(method, params, p, [&]() { return captureSnapshot(params, p); });
-    if (method == "recall_snapshot")      return dispatchWithAutomationTransaction(method, params, p, [&]() { return recallSnapshot(params, p); });
-    if (method == "set_morph_position")   return dispatchWithAutomationTransaction(method, params, p, [&]() { return setMorphPosition(params, p); });
+    if (method == "set_parameter")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
+    if (method == "set_parameters_batch") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
+    if (method == "capture_snapshot")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureSnapshot(params, p); });
+    if (method == "recall_snapshot")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return recallSnapshot(params, p); });
+    if (method == "set_morph_position")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorphPosition(params, p); });
     if (method == "get_morph_state")      return getMorphState(p);
     if (method == "run_self_test")        return runSelfTest(params, p);
     if (method == "more_phi.parameters")     return listMorePhiParameters(p);
     if (method == "more_phi.get_parameter")  return getMorePhiParameter(params, p);
-    if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, [&]() { return setMorePhiParameter(params, p); });
-    if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, [&]() { return setMorePhiParameters(params, p); });
+    if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameter(params, p); });
+    if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameters(params, p); });
     if (method == "ozone.audit_parameters") return auditOzoneParameters(params, p);
     if (method == "izotope_ipc_attach")   return izotopeIpcAttach(params, p);
     if (method == "izotope_ipc_detach")   return izotopeIpcDetach(p);
     if (method == "izotope_ipc_status")   return izotopeIpcStatus(p);
     if (method == "izotope_ipc_snapshot") return izotopeIpcSnapshot(params, p);
-    if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, [&]() { return izotopeIpcDump(params, p); });
-    if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, [&]() { return izotopeIpcCapture(params, p); });
-    if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, [&]() { return ozoneRunAssistantIpc(params, p); });
+    if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcDump(params, p); });
+    if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcCapture(params, p); });
+    if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return ozoneRunAssistantIpc(params, p); });
 
     // MCP workflow aliases from the hosted mastering integration plan
     if (method == "hosted_plugin.scan")          return scanHostedPlugin(params, p);
-    if (method == "hosted_plugin.load")          return dispatchWithAutomationTransaction(method, params, p, [&]() { return loadHostedPlugin(params, p); });
+    if (method == "hosted_plugin.load")          return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return loadHostedPlugin(params, p); });
     if (method == "hosted_plugin.info")          return getPluginInfo(p);
     if (method == "hosted_plugin.parameters")    return listParameters(params, p);
-    if (method == "hosted_plugin.set_parameter") return dispatchWithAutomationTransaction(method, params, p, [&]() { return setParameter(params, p); });
-    if (method == "hosted_plugin.set_parameters")return dispatchWithAutomationTransaction(method, params, p, [&]() { return setParametersBatch(params, p); });
-    if (method == "hosted_plugin.capture_state") return dispatchWithAutomationTransaction(method, params, p, [&]() { return captureHostedState(params, p); });
+    if (method == "hosted_plugin.set_parameter") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
+    if (method == "hosted_plugin.set_parameters")return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
+    if (method == "hosted_plugin.capture_state") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureHostedState(params, p); });
     if (method == "diagnose_parameter_pipeline") return diagnoseParameterPipeline(params, p);
     if (method == "analysis.get_summary")        return getAnalysisSummary(p);
     if (method == "analysis.get_spectrum")       return getSpectrumAnalysis(params, p);
@@ -2590,21 +2609,21 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (method == "analysis.capture_window")     return captureAnalysisWindow(params, p);
     if (method == "analysis.compare_render")     return compareAnalysis(params, p);
     if (method == "mastering.plan_preview")      return previewMasteringPlan(params, p);
-    if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, [&]() { return applyMasteringPlan(params, p); });
-    if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, [&]() { return renderMasteringBatch(params, p); });
-    if (method == "mastering.render_status")     return getMasteringRenderStatus(params);
-    if (method == "mastering.select_candidate")  return dispatchWithAutomationTransaction(method, params, p, [&]() { return selectMasteringCandidate(params, p); });
+    if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
+    if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return renderMasteringBatch(params, p, identity); });
+    if (method == "mastering.render_status")     return getMasteringRenderStatus(params, identity.instanceId);
+    if (method == "mastering.select_candidate")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return selectMasteringCandidate(params, p, identity); });
     if (method == "plugin_profile.audit_parameters") return auditPluginProfile(p);
     if (method == "plugin_profile.describe_semantics") return describePluginSemantics(p);
-    if (method == "plugin_profile.apply_safe_action") return dispatchWithAutomationTransaction(method, params, p, [&]() { return applySafePluginAction(params, p); });
-    if (method == "plugin_profile.restore_safe_snapshot") return dispatchWithAutomationTransaction(method, params, p, [&]() { return restoreSafePluginSnapshot(params, p); });
+    if (method == "plugin_profile.apply_safe_action") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applySafePluginAction(params, p, identity); });
+    if (method == "plugin_profile.restore_safe_snapshot") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return restoreSafePluginSnapshot(params, p, identity); });
     if (method == "plugin_profile.get")          return getPluginProfile(params, p);
-    if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, [&]() { return savePluginProfile(params, p); });
+    if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return savePluginProfile(params, p); });
     if (method == "plugin_profile.describe_semantic_map" || method == "describe_plugin_semantic_map")
         return describePluginSemanticMap(params, p);
 
     if (method == "sync.apply_envelope")
-        return dispatchWithAutomationTransaction(method, params, p, [&]() { return handleControlPlaneTool(method, params, p, identity); });
+        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
 
     if (method == "workflow.submit" || method == "workflow.execute" || method == "workflow.cancel"
         || method == "memory.remember" || method == "memory.record_outcome"
@@ -2612,8 +2631,8 @@ juce::String MCPToolHandler::handle(const juce::String& method,
         || method == "permission.set_autonomy" || method == "permission.approve"
         || method == "permission.reject")
     {
-        return dispatchWithAutomationTransaction(method, params, p,
-            [&]() { return handleControlPlaneTool(method, params, p, identity); });
+        return dispatchWithAutomationTransaction(method, params, p, runtime,
+            [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
     }
 
     if (method.startsWith("automation.") || method.startsWith("workflow.")
@@ -2621,10 +2640,10 @@ juce::String MCPToolHandler::handle(const juce::String& method,
         || method.startsWith("events.") || method.startsWith("sync.")
         || method.startsWith("memory.") || method == "plugin_adapter.describe_capabilities"
         || method == "plugin_adapter.plan_action")
-        return handleControlPlaneTool(method, params, p, identity);
+        return handleControlPlaneTool(method, params, p, identity, runtime);
 
     if (method == "plugin_adapter.apply_action")
-        return dispatchWithAutomationTransaction(method, params, p, [&]() { return applySafePluginAction(params, p); });
+        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applySafePluginAction(params, p, identity); });
 
     // Extended AI Tools
     if (method == "analyze_parameters")             return MCPToolsExtended::analyzeParameters(params, p, p.getParameterClassifier());
@@ -2664,7 +2683,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
 
     // Ozone mastering tools
     if (method == "get_mastering_state")  return getMasteringState(p);
-    if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, [&]() { return applyMasteringPlan(params, p); });
+    if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
 
     // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
     if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
@@ -4257,7 +4276,7 @@ juce::String MCPToolHandler::previewMasteringPlan(const juce::var& params, MoreP
     return toJString(result);
 }
 
-juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     const int candidateCount = juce::jlimit(1, 8, static_cast<int>(params.getProperty("candidate_count", 3)));
     const bool dryRun = params.getProperty("dry_run", true);
@@ -4291,7 +4310,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
 
             {
                 const std::lock_guard<std::mutex> guard(gDryRunCandidatesMutex);
-                gDryRunCandidates[candidateId.toStdString()] = {
+                gDryRunCandidates[makeInstancePrefixedKey(identity.instanceId, candidateId)] = {
                     candidateId, plan, score, measuredInputs, rulesApplied
                 };
                 capGlobalCache(gDryRunCandidates, kMaxDryRunCandidateCache);  // MCP-FILES-04
@@ -4357,7 +4376,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
 
     {
         const std::lock_guard<std::mutex> guard(gRenderJobsMutex);
-        gRenderJobs[jobId.toStdString()] = job;
+        gRenderJobs[makeInstancePrefixedKey(identity.instanceId, jobId)] = job;
         capGlobalCache(gRenderJobs, kMaxRenderJobCache);  // MCP-FILES-04
     }
 
@@ -4503,20 +4522,20 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
     });
 }
 
-juce::String MCPToolHandler::getMasteringRenderStatus(const juce::var& params)
+juce::String MCPToolHandler::getMasteringRenderStatus(const juce::var& params, const juce::String& instanceId)
 {
     const auto jobId = params.getProperty("job_id", "").toString();
     if (jobId.isEmpty())
         return toJString(json{{"success", false}, {"error", "missing_job_id"}});
 
-    const auto job = findRenderJob(jobId);
+    const auto job = findRenderJob(instanceId, jobId);
     if (job == nullptr)
         return toJString(json{{"success", false}, {"error", "job_not_found"}});
 
     return toJString(renderJobToJson(*job));
 }
 
-juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     const auto candidateId = params.getProperty("candidate_id", "").toString();
     if (candidateId.isEmpty())
@@ -4526,7 +4545,7 @@ juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, M
         std::optional<DryRunCandidateRecord> dryRunCandidate;
         {
             const std::lock_guard<std::mutex> guard(gDryRunCandidatesMutex);
-            const auto it = gDryRunCandidates.find(candidateId.toStdString());
+            const auto it = gDryRunCandidates.find(makeInstancePrefixedKey(identity.instanceId, candidateId));
             if (it != gDryRunCandidates.end())
                 dryRunCandidate = it->second;
         }
@@ -4553,7 +4572,7 @@ juce::String MCPToolHandler::selectMasteringCandidate(const juce::var& params, M
     if (separator > 0)
     {
         const auto jobId = candidateId.substring(0, separator);
-        const auto job = findRenderJob(jobId);
+        const auto job = findRenderJob(identity.instanceId, jobId);
         if (job == nullptr)
             return toJString(json{{"success", false}, {"error", "job_not_found"}});
 
@@ -4608,7 +4627,7 @@ juce::String MCPToolHandler::describePluginSemantics(MorePhiProcessor& p)
     return PluginProfileDB::buildAuditJson(p.getHostManager(), p.getParameterBridge());
 }
 
-juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     auto& bridge = p.getParameterBridge();
     const auto descriptors = bridge.getParameterDescriptors();
@@ -4696,7 +4715,7 @@ juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, More
 
     {
         std::lock_guard<std::mutex> lock(gSafeActionSnapshotsMutex);
-        gSafeActionSnapshots[snapshotId.toStdString()] = std::move(record);
+        gSafeActionSnapshots[makeInstancePrefixedKey(identity.instanceId, snapshotId)] = std::move(record);
         capGlobalCache(gSafeActionSnapshots, kMaxSafeActionSnapshotCache);  // MCP-FILES-04
     }
 
@@ -4715,7 +4734,7 @@ juce::String MCPToolHandler::applySafePluginAction(const juce::var& params, More
     });
 }
 
-juce::String MCPToolHandler::restoreSafePluginSnapshot(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::restoreSafePluginSnapshot(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     const auto snapshotId = params.getProperty("snapshot_id", params.getProperty("snapshotId", "")).toString();
     if (snapshotId.isEmpty())
@@ -4730,7 +4749,7 @@ juce::String MCPToolHandler::restoreSafePluginSnapshot(const juce::var& params, 
     SafeActionSnapshotRecord record;
     {
         std::lock_guard<std::mutex> lock(gSafeActionSnapshotsMutex);
-        const auto it = gSafeActionSnapshots.find(snapshotId.toStdString());
+        const auto it = gSafeActionSnapshots.find(makeInstancePrefixedKey(identity.instanceId, snapshotId));
         if (it == gSafeActionSnapshots.end())
             return toJString(json{{"success", false}, {"error", "snapshot_not_found"}, {"snapshot_id", snapshotId.toStdString()}});
         record = it->second;

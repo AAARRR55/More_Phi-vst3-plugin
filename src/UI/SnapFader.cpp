@@ -19,6 +19,7 @@ void SnapFader::paint(juce::Graphics& g)
     float trackTop = bounds.getY() + 10;
     float trackBot = bounds.getBottom() - 10;
     float trackH = trackBot - trackTop;
+    if (trackH <= 0.0f) trackH = 1.0f;
 
     // Background
     g.setColour(juce::Colour(0xff0d1b2a));

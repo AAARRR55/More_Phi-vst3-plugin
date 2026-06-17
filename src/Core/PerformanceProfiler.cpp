@@ -33,6 +33,19 @@ PerformanceProfiler::Timer PerformanceProfiler::createTimer(const std::string& n
     return Timer(*this, name);
 }
 
+void PerformanceProfiler::prepare()
+{
+    const juce::SpinLock::ScopedLockType lock(statsSpinLock_);
+    stats_.reserve(64);
+    stats_.max_load_factor(0.7f);
+}
+
+void PerformanceProfiler::registerSection(const std::string& name)
+{
+    const juce::SpinLock::ScopedLockType lock(statsSpinLock_);
+    stats_[name]; // inserts default-constructed ProfileStats (message thread only)
+}
+
 void PerformanceProfiler::recordTime(const std::string& name, double timeMs)
 {
     // C-2 FIX: Use SpinLock with tryEnter so the audio thread never blocks.
@@ -77,7 +90,14 @@ void PerformanceProfiler::reset(const std::string& name)
 
 void PerformanceProfiler::updateStats(const std::string& name, double timeMs)
 {
-    auto& stat = stats_[name];
+    // C16 FIX: never use operator[] on the audio thread — it allocates on first
+    // insert. Use find() so we only update pre-registered sections.
+    auto it = stats_.find(name);
+    jassert(it != stats_.end()); // section must be registered from the message thread
+    if (it == stats_.end())
+        return;
+
+    auto& stat = it->second;
 
     if (stat.callCount == 0)
     {

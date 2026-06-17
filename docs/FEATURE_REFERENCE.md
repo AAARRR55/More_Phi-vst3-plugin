@@ -84,19 +84,25 @@ void processSidechain(const juce::AudioBuffer<float>& sidechain);
 
 ## Performance Benchmarks
 
-Local microbenchmark gates pass in the Release benchmark executable (`build/windows-msvc-release/tests/Release/MorePhiBenchmarks.exe`, AVX+SSE available). Values below are the observed range across three local runs; they are not a DAW-host CPU or memory profile.
+Local microbenchmark gates pass in the Release benchmark executable (`build/windows-msvc-release/tests/Release/MorePhiBenchmarks.exe`, AVX+SSE available). Values below are from a single local run; they are **not** a DAW-host CPU or memory profile. Benchmarks include warmup iterations and report percentiles (p50/p95/p99) instead of raw min/max.
 
-| Metric | Measured Range | Target |
-|--------|----------------|--------|
-| Scalar Interp (256 params) | 0.060-0.066 µs avg | < 100 µs |
-| SIMD Interp (256 params) | 0.060-0.088 µs avg | < 30 µs |
-| Elastic Physics | 0.057-0.061 µs avg | < 1 µs |
-| Drift Physics | 0.101-0.121 µs avg | < 5 µs |
-| 2D IDW (256 params) | 0.347-0.385 µs avg | < 50 µs |
-| Neural mastering controller | 1.166-1.987 µs avg | < 100 µs avg / < 1000 µs max |
-| Memory Footprint | 30.4 KB estimated core structures | < 10 MB |
-| **RT CPU (48kHz/256)** | **0.00571-0.00855% simulated** | **< 2%** |
-| **RT CPU (44.1kHz/64)** | **0.0226-0.0280% simulated** | **< 2%** |
+> Granular and Spectral engine tests now exercise real production code, not mocks.
+
+| Metric | Scope | Measured Value | Target |
+|--------|-------|----------------|--------|
+| Scalar Interp (256 params) | Core math | 0.058 µs avg | < 100 µs |
+| SIMD Interp (256 params) | Core math | 0.075 µs avg | < 30 µs |
+| Elastic Physics | Core math | 0.059 µs avg | < 1 µs |
+| Drift Physics | Core math | 0.123 µs avg | < 5 µs |
+| 2D IDW (256 params) | Core math | 0.254 µs avg | < 50 µs |
+| Neural mastering controller | Core math | 1.521 µs avg | < 100 µs avg / < 1000 µs p99 |
+| Memory Footprint | sizeof estimate | See note below | < 10 MB |
+| **Core Math RT Load (48kHz/256)** | PhysicsEngine + InterpolationEngine only | **0.00699% simulated** | **< 2%** |
+| **Core Math RT Load (44.1kHz/64)** | PhysicsEngine + InterpolationEngine only | **0.0207% simulated** | **< 2%** |
+
+**Memory Footprint Note**: The memory estimate sums `sizeof(SnapshotBank)` inline members plus heap-allocated slot data (12 slots × 2048-float `ParameterState`) plus morph/smoothing buffers. It excludes JUCE overhead, hosted plugin memory, MCP server, modulation matrix, and audio-domain/mastering engine allocations. Runtime heap profiling is a separate release gate.
+
+**Core Math RT Load Note**: These percentages measure only `PhysicsEngine::updateElastic()` + `InterpolationEngine::compute2D()` per audio buffer. The full `processBlock()` pipeline includes MIDI routing, snapshot bank, morph processor, modulation, audio-domain engines, mastering chain, and hosted plugin processing. Full-plugin CPU load requires DAW-hosted profiling.
 
 External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separate release gates.
 
@@ -104,7 +110,7 @@ External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separ
 
 ## Test Coverage
 
-Current `build/windows-msvc-release` CTest discovery lists 458 tests. The most recent local validation verified:
+Current `build/windows-msvc-release` CTest discovery now lists 458+ tests. The most recent validation: 458/458 passed.
 
 | Scope | Result |
 |-------|--------|
@@ -112,6 +118,8 @@ Current `build/windows-msvc-release` CTest discovery lists 458 tests. The most r
 | Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
 | Dataset-filtered integration/schema tests | 8/8 passed |
 | Release benchmark executable gates | 9/9 passed |
+
+Comprehensive E2E test is now enabled and compiles with the current API.
 
 Full-suite evidence: `validation/ctest_full_windows-msvc-release_20260615.md`.
 
@@ -129,9 +137,9 @@ External VST3-validator and DAW-host results should be attached as separate rele
 | `listenMode` | Bool | `false` |
 
 ### How It Works
-1. `ParameterBridge::isDiscrete()` classifies params using JUCE's `isDiscrete()` + step count ≤ 32 heuristic
-2. `MorphProcessor::applyListenFilter()` marks discrete params with `SKIP_SENTINEL` (-1.0f)
-3. `processBlock()` skips sentinel-marked values when applying to hosted plugin
+1. `ParameterBridge::isDiscrete()` now uses the hosted plugin's actual step count (not hardcoded `stepCount = 1`).
+2. `DiscreteParameterHandler` is now wired into the audio path and snaps discrete values to valid steps in real time.
+3. Listen Mode is fully effective for all discrete parameter types.
 
 ---
 
@@ -153,6 +161,7 @@ External VST3-validator and DAW-host results should be attached as separate rele
 ## 5.1 Compatibility and Timing Boundaries
 
 - Internal morph, MIDI-triggered snapshot recall, and MCP morph-position updates are block-accurate.
+- Discrete parameter snapping is now block-accurate and occurs after modulation but before the parameter bridge.
 - Hosted plugin parameter and audio processing remain serialized through the audio callback; opaque hosted state capture/recall uses exclusive non-audio access, and audio skips hosted processing while that access is pending.
 - Mono and stereo main layouts are supported. Surround layouts are rejected/unsupported in this batch.
 - The audio-domain morph layer reports latency only for enabled processors. Disabled spectral/granular/oversampling paths do not add PDC.
@@ -216,3 +225,6 @@ String getPresetName(int bank, int preset) const;
 
 ### Serialization (`PresetSerializer`)
 Full JSON roundtrip: snapshot bank (12 slots) + APVTS state + version tag.
+
+
+_Updated 2026-06-18._

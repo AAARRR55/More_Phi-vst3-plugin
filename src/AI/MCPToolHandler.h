@@ -11,10 +11,19 @@ namespace more_phi {
 
 class MorePhiProcessor;
 struct InstanceIdentity;
+class AutomationRuntime;
 
 class MCPToolHandler
 {
 public:
+    static juce::String handle(const juce::String& method,
+                               const juce::var& params,
+                               MorePhiProcessor& processor,
+                               const InstanceIdentity& identity,
+                               AutomationRuntime& runtime);
+
+    /** Convenience overload for callers without a runtime reference.
+     *  Creates a temporary runtime for read-only operations. */
     static juce::String handle(const juce::String& method,
                                const juce::var& params,
                                MorePhiProcessor& processor,
@@ -92,13 +101,13 @@ private:
     static juce::String captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p);
     static juce::String compareAnalysis(const juce::var& params, MorePhiProcessor& p);
     static juce::String previewMasteringPlan(const juce::var& params, MorePhiProcessor& p);
-    static juce::String renderMasteringBatch(const juce::var& params, MorePhiProcessor& p);
-    static juce::String getMasteringRenderStatus(const juce::var& params);
-    static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p);
+    static juce::String renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
+    static juce::String getMasteringRenderStatus(const juce::var& params, const juce::String& instanceId);
+    static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
     static juce::String auditPluginProfile(MorePhiProcessor& p);
     static juce::String describePluginSemantics(MorePhiProcessor& p);
-    static juce::String applySafePluginAction(const juce::var& params, MorePhiProcessor& p);
-    static juce::String restoreSafePluginSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String applySafePluginAction(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
+    static juce::String restoreSafePluginSnapshot(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
     static juce::String getPluginProfile(const juce::var& params, MorePhiProcessor& p);
     static juce::String savePluginProfile(const juce::var& params, MorePhiProcessor& p);
     static juce::String describePluginSemanticMap(const juce::var& params, MorePhiProcessor& p);

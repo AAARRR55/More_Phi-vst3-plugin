@@ -18,7 +18,6 @@
  */
 #include "ModulationEngine.h"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <stdexcept>
 
@@ -303,7 +302,7 @@ void ModulationEngine::setStepCount(int seqIndex, int count)
 LFO& ModulationEngine::getLFO(int index)
 {
     // Assert in debug builds for immediate feedback; throw for release safety
-    assert(index >= 0 && index < NUM_LFOS && "LFO index out of range");
+    jassert(index >= 0 && index < NUM_LFOS && "LFO index out of range");
     if (index < 0 || index >= NUM_LFOS)
         throw std::out_of_range("ModulationEngine::getLFO — index out of range");
     return lfos_[static_cast<size_t>(index)];
@@ -311,7 +310,7 @@ LFO& ModulationEngine::getLFO(int index)
 
 EnvelopeFollower& ModulationEngine::getEnvelope(int index)
 {
-    assert(index >= 0 && index < NUM_ENVELOPES && "Envelope index out of range");
+    jassert(index >= 0 && index < NUM_ENVELOPES && "Envelope index out of range");
     if (index < 0 || index >= NUM_ENVELOPES)
         throw std::out_of_range("ModulationEngine::getEnvelope — index out of range");
     return envelopes_[static_cast<size_t>(index)];
@@ -319,7 +318,7 @@ EnvelopeFollower& ModulationEngine::getEnvelope(int index)
 
 StepSequencer& ModulationEngine::getStepSequencer(int index)
 {
-    assert(index >= 0 && index < NUM_STEP_SEQS && "StepSequencer index out of range");
+    jassert(index >= 0 && index < NUM_STEP_SEQS && "StepSequencer index out of range");
     if (index < 0 || index >= NUM_STEP_SEQS)
         throw std::out_of_range("ModulationEngine::getStepSequencer — index out of range");
     return stepSequencers_[static_cast<size_t>(index)];

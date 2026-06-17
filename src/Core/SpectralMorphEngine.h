@@ -168,8 +168,8 @@ private:
     /** JUCE FFT engine. Replaced on each prepare() if fftSize changes. */
     std::unique_ptr<juce::dsp::FFT> fft_;
 
-    /** Transient detector (magnitude from ch 0 drives the decision). */
-    TransientDetector transientDetector_;
+    /** Per-channel transient detectors (preserves stereo coherence). */
+    std::array<TransientDetector, kMaxChannels> transientDetectors_;
 
     // ── Parameters ────────────────────────────────────────────────────────
 

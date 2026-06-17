@@ -14,6 +14,16 @@ void MIDIRouter::prepare(int /*expectedMidiEventsPerBlock*/)
     // Note: The storage arrays are already allocated, no dynamic allocation here
 }
 
+void MIDIRouter::prepare(double sampleRate, int blockSize)
+{
+    // H4 FIX: Compute per-block one-pole coefficients from time constants.
+    const float dt = static_cast<float>(blockSize) / static_cast<float>(sampleRate);
+    const float attackTime  = 0.001f;  // 1 ms
+    const float releaseTime = 0.010f;  // 10 ms
+    scAttackCoeff_  = 1.0f - std::exp(-dt / attackTime);
+    scReleaseCoeff_ = 1.0f - std::exp(-dt / releaseTime);
+}
+
 void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& filtered)
 {
     // Clear output buffer (no allocation - just marks it empty)
@@ -23,7 +33,7 @@ void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& fil
     preallocatedStorage_.count = 0;
 
     // First pass: Collect non-consumed events in pre-allocated storage
-    for (const auto metadata : midi)
+    for (const auto& metadata : midi)
     {
         const auto msg = metadata.getMessage();
         bool consumed = false;
@@ -50,13 +60,16 @@ void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& fil
 
             if (note >= trigBase && note < trigBase + SnapshotBank::NUM_SLOTS)
             {
+                // FIX C19: Consume both note-ONs and note-OFFs for trigger-range
+                // notes so they don't leak to the hosted plugin.
+                consumed = true;
+
                 if (msg.isNoteOn() && msg.getVelocity() > 0)
                 {
                     const int slot = note - trigBase;
                     auto cb = snapshotCb_.load(std::memory_order_acquire);
                     if (cb) cb(slot, snapshotCtx_.load(std::memory_order_acquire));
                 }
-                consumed = true;  // Consume BOTH note-on and note-off
             }
         }
         else if (msg.isController())
@@ -121,7 +134,10 @@ void MIDIRouter::processSidechain(const juce::AudioBuffer<float>& sidechain)
     // H-7 FIX: One-pole envelope follower for smooth sidechain triggering.
     // Without ballistics, instantaneous RMS causes erratic triggering on transients.
     const float coeff = rms > sidechainEnvelope_ ? scAttackCoeff_ : scReleaseCoeff_;
-    sidechainEnvelope_ += coeff * (rms - sidechainEnvelope_);
+    if (coeff <= 0.0f)
+        sidechainEnvelope_ = rms;  // prepare() not called yet — fall back to instantaneous RMS
+    else
+        sidechainEnvelope_ += coeff * (rms - sidechainEnvelope_);
 
     // Edge detection: trigger on rising edge (gate was closed, now above threshold)
     const float threshold = sidechainThreshold_.load(std::memory_order_relaxed);

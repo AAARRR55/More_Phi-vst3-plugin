@@ -1,5 +1,7 @@
 # More-Phi Technical Documentation
 
+> Updated 2026-06-18.
+
 More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control.
 
 > Screenshot placeholder: `[Screenshot: More-Phi main interface with MorphPad, plugin browser, tab bar, and AI status panel]`
@@ -59,7 +61,7 @@ MorePhiProcessor
 |---|---|---|
 | Audio thread | `MorePhiProcessor::processBlock()` | No allocation, no blocking, no locks, no I/O. Drains command queues and processes audio. |
 | Message thread | JUCE UI, timers, plugin loading, editor windows | Owns UI interactions and safe deferred hosted-plugin operations. |
-| MCP threads | `MCPServer`, `MCPToolHandler` | Handles JSON-RPC I/O and queues parameter edits back to the processor. |
+| MCP threads | `MCPServer`, `MCPToolHandler` | Handles JSON-RPC I/O and queues parameter edits back to the processor. MCP threads are now instance-isolated. `AutomationRuntime` is per-instance, cache keys are prefixed with `instanceId + ':'`, and `InstanceRegistry` evicts zombies after TTL expiry. |
 | Background workers | Dataset, rendering, scan, and validation jobs | Run long-lived work outside the audio callback. |
 | Standalone MCP process | `MorePhiMcpServer` | Separate stdio MCP server for standalone workflows. |
 
@@ -88,6 +90,7 @@ Key primitives:
 - APVTS atomics for DAW-automatable parameters.
 - Double-buffered modulation route publishing.
 - Hosted plugin exclusive access via `PluginHostManager`.
+- `PerformanceProfiler` uses a pre-allocated circular buffer with atomic index — no allocations on audio thread.
 
 ## Installation and Build
 
@@ -170,6 +173,7 @@ Common CMake options:
 | `MORE_PHI_ENABLE_SANITIZERS` | `OFF` | Enables ASAN/UBSAN where supported. |
 | `MORE_PHI_SAFE_BUILD_MODE` | `ON` | Uses conservative Windows linker/build settings. |
 | `MORE_PHI_ENABLE_LTO` | `OFF` | Enables release LTO for CI/release use. |
+| `MORE_PHI_ENABLE_DATASET_V3` | `OFF` (deprecated/no-op) | Dataset V3 sources are always compiled. |
 
 ## Codebase Structure
 
@@ -212,6 +216,8 @@ More-Phi exposes an embedded local JSON-RPC MCP server. The active port and bear
 | Host | `127.0.0.1` |
 | Port | Per instance, displayed in the UI |
 | Auth | Bearer token from the AI status panel |
+| Security | Auth tokens are compared in constant time to prevent timing attacks. |
+| Idle timeout | Idle connections are closed after 30 seconds. |
 
 ### Tool Call Shape
 
@@ -397,6 +403,10 @@ Possible guardrail errors:
 3. Use atomics or queues for UI-to-audio handoff.
 4. Add unit tests for pure computation.
 5. Add DAW/manual QA notes for UI or host behavior.
+
+### AI Assistant Access
+
+`getAIAssistant()` returns `AIAssistant*` (nullable), not `AIAssistant&`. Callers must null-check before dereferencing.
 
 ### Run Tests
 

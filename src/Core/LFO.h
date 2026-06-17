@@ -42,9 +42,9 @@ public:
     /**
      * Return the value computed in the last process() call without advancing.
      * Safe to call from any thread after process() has returned.
-     * noexcept: Trivial float read.
+     * noexcept: Trivial atomic float read.
      */
-    float getCurrentValue() const noexcept { return currentValue_; }
+    float getCurrentValue() const noexcept { return currentValue_.load(std::memory_order_relaxed); }
 
     // ── Parameter setters (message thread) ────────────────────────────────────
 
@@ -85,7 +85,7 @@ private:
     float       smoothRand_  = 0.0f;       // smoothed random target (Random shape)
     float       randTarget_  = 0.0f;       // next random target
 
-    float       currentValue_= 0.0f;       // last computed output
+    std::atomic<float> currentValue_{ 0.0f }; // last computed output (audio writes, UI reads)
 
     // ── PRNG (xorshift32, lock-free, audio-thread safe) ───────────────────────
 

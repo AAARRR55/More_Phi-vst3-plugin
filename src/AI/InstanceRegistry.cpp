@@ -68,9 +68,30 @@ int InstanceRegistry::getActiveCount() const
     return static_cast<int>(instances_.size());
 }
 
-int InstanceRegistry::findAvailablePort() const
+int InstanceRegistry::findAvailablePort()
 {
     // Must be called with mutex_ held
+    const int64_t now = juce::Time::currentTimeMillis();
+    constexpr int64_t TTL_MS = 5 * 60 * 1000;
+
+    // C14 FIX: Evict zombie instances older than 5 minutes whose port is no longer in use.
+    for (auto it = instances_.begin(); it != instances_.end(); )
+    {
+        if (now - it->second.createdAt > TTL_MS)
+        {
+            juce::StreamingSocket probe;
+            if (probe.createListener(it->second.port, "127.0.0.1"))
+            {
+                probe.close();
+                DBG("InstanceRegistry: evicted zombie instance [" + it->second.morphCode
+                    + "] from port " + juce::String(it->second.port));
+                it = instances_.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
+
     const auto isRegisteredPortInUse = [this](int candidatePort)
     {
         for (const auto& [id, identity] : instances_)
@@ -85,7 +106,7 @@ int InstanceRegistry::findAvailablePort() const
 
     for (int port = BASE_PORT; port < BASE_PORT + MAX_INSTANCES; ++port)
     {
-        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
+        if (!isRegisteredPortInUse(port))
             return port;
     }
 
@@ -93,28 +114,18 @@ int InstanceRegistry::findAvailablePort() const
     for (int port = BASE_PORT + MAX_INSTANCES;
          port < BASE_PORT + MAX_INSTANCES + 256; ++port)
     {
-        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
+        if (!isRegisteredPortInUse(port))
             return port;
     }
 
     // Last resort: search IANA dynamic/private port range.
     for (int port = 49152; port <= 65535; ++port)
     {
-        if (!isRegisteredPortInUse(port) && isPortAvailable(port))
+        if (!isRegisteredPortInUse(port))
             return port;
     }
 
     return -1;
-}
-
-bool InstanceRegistry::isPortAvailable(int port) const
-{
-    juce::StreamingSocket loopbackProbe;
-    if (!loopbackProbe.createListener(port, "127.0.0.1"))
-        return false;
-
-    loopbackProbe.close();
-    return true;
 }
 
 } // namespace more_phi

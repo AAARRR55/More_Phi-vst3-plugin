@@ -28,28 +28,42 @@ static constexpr float kMaxSensitivity=  10.0f;
 
 void EnvelopeFollower::prepare(double sampleRate) noexcept
 {
+    prepare(sampleRate, 0);
+}
+
+void EnvelopeFollower::prepare(double sampleRate, int blockSize) noexcept
+{
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
+    blockSize_.store(blockSize, std::memory_order_relaxed);
     recomputeCoefficients();
     reset();
 }
 
 void EnvelopeFollower::reset() noexcept
 {
-    envelope_ = 0.0f;
+    envelope_.store(0.0f, std::memory_order_relaxed);
 }
 
 // ── Parameter setters ─────────────────────────────────────────────────────────
 
 void EnvelopeFollower::setAttack(float ms) noexcept
 {
-    attackMs_    = std::clamp(ms, kMinAttackMs, kMaxAttackMs);
-    attackCoeff_.store(computeCoeff(attackMs_), std::memory_order_relaxed);
+    attackMs_ = std::clamp(ms, kMinAttackMs, kMaxAttackMs);
+    const float c = computeCoeff(attackMs_);
+    attackCoeff_.store(c, std::memory_order_relaxed);
+    const int bs = blockSize_.load(std::memory_order_relaxed);
+    if (bs > 0)
+        attackCoeffPerBlock_.store(std::pow(c, static_cast<float>(bs)), std::memory_order_relaxed);
 }
 
 void EnvelopeFollower::setRelease(float ms) noexcept
 {
-    releaseMs_    = std::clamp(ms, kMinReleaseMs, kMaxReleaseMs);
-    releaseCoeff_.store(computeCoeff(releaseMs_), std::memory_order_relaxed);
+    releaseMs_ = std::clamp(ms, kMinReleaseMs, kMaxReleaseMs);
+    const float c = computeCoeff(releaseMs_);
+    releaseCoeff_.store(c, std::memory_order_relaxed);
+    const int bs = blockSize_.load(std::memory_order_relaxed);
+    if (bs > 0)
+        releaseCoeffPerBlock_.store(std::pow(c, static_cast<float>(bs)), std::memory_order_relaxed);
 }
 
 void EnvelopeFollower::setSensitivity(float gain) noexcept
@@ -71,16 +85,24 @@ float EnvelopeFollower::computeCoeff(float ms) const noexcept
 
 void EnvelopeFollower::recomputeCoefficients() noexcept
 {
-    attackCoeff_.store(computeCoeff(attackMs_), std::memory_order_relaxed);
-    releaseCoeff_.store(computeCoeff(releaseMs_), std::memory_order_relaxed);
+    const float attackC  = computeCoeff(attackMs_);
+    const float releaseC = computeCoeff(releaseMs_);
+    attackCoeff_.store(attackC, std::memory_order_relaxed);
+    releaseCoeff_.store(releaseC, std::memory_order_relaxed);
+    if (blockSize_ > 0)
+    {
+        attackCoeffPerBlock_.store(std::pow(attackC,  static_cast<float>(blockSize_)), std::memory_order_relaxed);
+        releaseCoeffPerBlock_.store(std::pow(releaseC, static_cast<float>(blockSize_)), std::memory_order_relaxed);
+    }
 }
 
 // ── Process ───────────────────────────────────────────────────────────────────
 
 float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
 {
+    float env = envelope_.load(std::memory_order_relaxed);
     if (numSamples <= 0 || audioData == nullptr)
-        return envelope_;
+        return env;
 
     // Compute per-block RMS
     float sumSq = 0.0f;
@@ -94,18 +116,28 @@ float EnvelopeFollower::process(const float* audioData, int numSamples) noexcept
     const float level = std::clamp(rms * sens, 0.0f, 1.0f);
 
     // One-pole filter with asymmetric attack/release.
-    // MOD-3 FIX: attackCoeff_/releaseCoeff_ are per-SAMPLE coefficients, but we
-    // apply a single update per BLOCK. Raise the coefficient to numSamples so the
-    // effective time constant matches the configured ms — previously it tracked
-    // blockSize× too fast (a 10 ms attack became ~0.02 ms at 512 samples/48 kHz).
+    // C15 FIX: avoid std::pow on the audio thread. Per-block coefficients are
+    // pre-computed in prepare()/setAttack()/setRelease(). If numSamples differs
+    // from the prepared block size, fall back to exp/log (still faster than pow).
     const float attackC  = attackCoeff_.load(std::memory_order_relaxed);
     const float releaseC = releaseCoeff_.load(std::memory_order_relaxed);
-    const float baseCoeff = (level > envelope_) ? attackC : releaseC;
-    const float coeff = std::pow(baseCoeff, static_cast<float>(numSamples));
-    envelope_ = envelope_ * coeff + level * (1.0f - coeff);
-    envelope_ = std::clamp(envelope_, 0.0f, 1.0f);
+    const float baseCoeff = (level > env) ? attackC : releaseC;
 
-    return envelope_;
+    float coeff;
+    if (numSamples == blockSize_ && blockSize_ > 0)
+    {
+        coeff = (level > env) ? attackCoeffPerBlock_.load(std::memory_order_relaxed)
+                              : releaseCoeffPerBlock_.load(std::memory_order_relaxed);
+    }
+    else
+    {
+        coeff = std::exp(static_cast<float>(numSamples) * std::log(baseCoeff));
+    }
+    env = env * coeff + level * (1.0f - coeff);
+    env = std::clamp(env, 0.0f, 1.0f);
+
+    envelope_.store(env, std::memory_order_relaxed);
+    return env;
 }
 
 } // namespace more_phi

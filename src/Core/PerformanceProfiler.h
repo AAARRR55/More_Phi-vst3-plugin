@@ -56,6 +56,18 @@ public:
     PerformanceProfiler& operator=(PerformanceProfiler&&) = default;
 
     /**
+     * Pre-allocate profiling buckets and set max load factor.
+     * Call from the message thread before audio starts.
+     */
+    void prepare();
+
+    /**
+     * Register a section name so the audio thread can record it without
+     * allocating. Call from the message thread before audio starts.
+     */
+    void registerSection(const std::string& name);
+
+    /**
      * Create an RAII timer for the given operation name.
      */
     Timer createTimer(const std::string& name);

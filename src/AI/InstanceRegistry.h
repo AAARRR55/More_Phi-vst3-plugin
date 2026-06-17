@@ -47,8 +47,7 @@ private:
     InstanceRegistry(const InstanceRegistry&) = delete;
     InstanceRegistry& operator=(const InstanceRegistry&) = delete;
 
-    int findAvailablePort() const;
-    bool isPortAvailable(int port) const;
+    int findAvailablePort();
 
     mutable std::mutex mutex_;
     std::map<juce::String, InstanceIdentity> instances_;

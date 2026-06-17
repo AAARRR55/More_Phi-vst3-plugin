@@ -13,11 +13,13 @@ class HostedPluginWindow : public juce::DocumentWindow
 {
 public:
     HostedPluginWindow(juce::AudioPluginInstance* plugin,
-                       std::function<void()> onClose = nullptr)
+                       std::function<void()> onClose = nullptr,
+                       std::function<void()> releasePluginCallback = nullptr)
         : DocumentWindow(plugin ? plugin->getName() : "Plugin",
                          juce::Colour(0xff1a1a2e),
                          DocumentWindow::allButtons),
-          closeCallback_(std::move(onClose))
+          closeCallback_(std::move(onClose)),
+          releasePluginCallback_(std::move(releasePluginCallback))
     {
         if (plugin)
         {
@@ -40,6 +42,15 @@ public:
         centreWithSize(getWidth(), getHeight());
     }
 
+    ~HostedPluginWindow() override
+    {
+        if (releasePluginCallback_ && !releaseCalled_)
+        {
+            releaseCalled_ = true;
+            releasePluginCallback_();
+        }
+    }
+
     void closeButtonPressed() override
     {
         if (closeCallback_)
@@ -50,6 +61,8 @@ public:
 
 private:
     std::function<void()> closeCallback_;
+    std::function<void()> releasePluginCallback_;
+    bool releaseCalled_ = false;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HostedPluginWindow)
 };
 

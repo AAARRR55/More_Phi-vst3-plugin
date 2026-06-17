@@ -12,9 +12,21 @@ namespace {
 
 juce::String envString(const char* key)
 {
+#if defined(_WIN32)
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, key) == 0 && value != nullptr)
+    {
+        juce::String result(value);
+        std::free(value);
+        return result.trim();
+    }
+    return {};
+#else
     if (const auto* value = std::getenv(key))
         return juce::String(value).trim();
     return {};
+#endif
 }
 
 juce::String cleanBaseUrl(juce::String url)
@@ -152,7 +164,7 @@ LicenseApiConfig HttpActivationClient::configFromEnvironment()
     LicenseApiConfig config;
     config.baseUrl = envString("LICENSE_API_BASE_URL");
     if (config.baseUrl.isEmpty())
-        config.baseUrl = "http://localhost:8001";
+        config.baseUrl = "http://localhost:4000";
 
     config.publicClientToken = envString("MOREPHI_PUBLIC_CLIENT_TOKEN");
     if (config.publicClientToken.isEmpty())

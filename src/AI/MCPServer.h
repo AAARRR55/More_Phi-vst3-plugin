@@ -8,6 +8,7 @@
 
 #include <juce_core/juce_core.h>
 #include "InstanceIdentity.h"
+#include "AutomationControlPlane.h"
 #include <atomic>
 
 namespace more_phi {
@@ -26,11 +27,13 @@ public:
 
         void run() override;
         void signalExit();
+        bool startedSuccessfully() const noexcept { return startedSuccessfully_; }
 
     private:
         MCPServer& owner_;
         std::unique_ptr<juce::StreamingSocket> socket_;
         bool authenticated_ = false;
+        bool startedSuccessfully_ = false;
     };
 
     explicit MCPServer(MorePhiProcessor& processor);
@@ -56,6 +59,9 @@ public:
 
     /** Legacy accessor — returns identity's bearer token. */
     const juce::String& getAuthToken() const { return identity_.bearerToken; }
+
+    /** Access the instance-scoped automation runtime (C13 fix). */
+    AutomationRuntime& getAutomationRuntime() noexcept { return automationRuntime_; }
 
 private:
     void run() override;
@@ -87,6 +93,8 @@ private:
 
     juce::OwnedArray<ConnectionThread> activeConnections_;
     mutable juce::CriticalSection connectionsLock_;
+
+    AutomationRuntime automationRuntime_;  // C13: instance-scoped runtime
 };
 
 } // namespace more_phi

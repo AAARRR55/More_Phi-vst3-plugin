@@ -4,8 +4,8 @@
  */
 #include "DiscreteParameterHandler.h"
 #include "ParameterState.h"
+#include <juce_core/juce_core.h>
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <sstream>
 
@@ -62,7 +62,10 @@ void DiscreteParameterHandler::processDiscreteParameters(
     // Do NOT resize on the audio thread — callers must pre-size outputValues
     // to at least interpolatedValues.size() before calling this function.
     // outputScratch_ is pre-allocated in initialize() to MAX_PARAMETERS.
-    if (outputValues.size() < interpolatedValues.size()) { assert(false); return; }
+    if (outputValues.size() < interpolatedValues.size()) {
+        jassert(false);
+        outputValues.resize(interpolatedValues.size(), 0.0f); // safe fallback
+    }
 
     for (uint32_t i = 0; i < count; ++i)
     {

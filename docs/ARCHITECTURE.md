@@ -2,6 +2,7 @@
 
 **Date:** 2026-03-04
 **Version:** 3.3.0
+_Updated 2026-06-18 to reflect production-readiness fixes._
 **Type:** Desktop Audio Plugin (VST3/AU)
 **Pattern:** Layered plugin architecture with strict thread-domain separation
 
@@ -58,6 +59,7 @@ Three thread domains with strict boundaries:
 - **Entry:** `MorePhiProcessor::processBlock()`
 - **Classes:** `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` (read side), `MIDIRouter`, `ModulationEngine`, `SpectralMorphEngine`, `GranularMorphEngine`
 - **Contract:** All methods `noexcept`, zero allocations after `prepare()`, no locks, no I/O
+- **ThreadPool:** `ThreadPool::workerThread()` uses `ActiveTaskGuard` RAII to guarantee `activeTasks_` is decremented even if the task throws. The `enqueue()` lambda no longer decrements the counter.
 - **Data flow:** Drains `LockFreeQueue` → processes MIDI → computes morph → applies to hosted plugin via `ParameterBridge`
 
 ### Message Thread
@@ -69,17 +71,19 @@ Three thread domains with strict boundaries:
 - **Entry:** `MCPServer::run()` (TCP accept loop)
 - **Classes:** `MCPServer`, `MCPToolHandler`, `MCPToolsExtended`
 - **Contract:** JSON-RPC I/O. Enqueues parameter changes to audio thread via `LockFreeQueue`. Reads snapshot data via seqlock.
+- **Security:** Instance-scoped `AutomationRuntime` (no global static). Cache keys prefixed with `instanceId + ":"`. Constant-time token comparison using `volatile uint8_t diff`. 30-second idle timeout on connections. TTL-based zombie eviction in `InstanceRegistry`.
 
 ### Concurrency Primitives
 
 | Primitive | Location | Purpose |
 |-----------|----------|----------|
-| Seqlock | `SnapshotBank` | Lock-free audio reads with retry; UI/MCP writes via SpinLock |
+| Seqlock | `SnapshotBank` | Lock-free audio reads with retry; UI/MCP writes via SpinLock. `paramNames_` and `stateChunks_` are read under their respective SpinLocks (`writeLock_` and `chunksLock_`) **before** the seqlock read of the primary payload |
 | SPSC LockFreeQueue | `MorePhiProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio |
 | Double-buffer | `ModulationMatrix` | Atomic route publish with mirror-copy |
 | `std::atomic<bool>` | `GranularMorphEngine::active_` | Thread-safe enable/disable |
 | `std::atomic<int>` | `ModulationMatrix::readIndex_` | Buffer swap index |
 | `memory_order_relaxed` atomics | Various | Morph position, physics mode, toggle flags |
+| Security primitives | `MCPServer` / `InstanceRegistry` | Instance-scoped runtime, constant-time token compare, idle timeouts, TTL eviction |
 
 ## Processing Pipeline
 
@@ -108,6 +112,8 @@ Three thread domains with strict boundaries:
                     │  6. HostManager.processBlock(buffer, midi)    │
                     └──────────────────────────────────────────────┘
 ```
+
+**Step 3c** — `DiscreteParameterHandler` snaps discrete/binary parameters to valid steps during morphing, preventing invalid intermediate values.
 
 ### Mastering-chain routing (important clarification)
 
@@ -153,15 +159,16 @@ sonic voicing and plan-context latency remain unverified (neither is a defect).
 4. **Hosted plugin state** — opaque VST3/AU state chunk (binary blob)
 5. **Modulation routes** — XML via `ModulationMatrix::toXml()`
 
-Plugin reload on state restore uses Timer-based deferred loading with retry logic (max 10 attempts) to handle DAW threading constraints.
+Plugin reload on state restore uses Timer-based deferred loading with retry logic (max 10 attempts) to handle DAW threading constraints. `setStateInformation()` uses an atomic `pendingStateRestore_` flag instead of blocking `callFunctionOnMessageThread`.
 
 ## Key Subsystem Details
 
 ### SnapshotBank (Seqlock Pattern)
 - 12 slots, each holding a `ParameterState` (fixed `std::array<float, 2048>`)
 - Heap-allocated slot array (~384 KB) to avoid stack overflow
-- Audio thread reads via seqlock (retry on torn read)
+- Audio thread reads via seqlock (retry on torn read). `paramNames_` and `stateChunks_` are read under their respective SpinLocks (`writeLock_` and `chunksLock_`) **before** the seqlock read of the primary payload
 - UI/MCP writes serialize via SpinLock + sequence counter increment
+- `toXml()` reads `name`/`count` under lock first, then seqlock-protected values, with retry on `seq1 != seq2`
 
 ### Physics Modes
 - **Direct:** Raw cursor position → interpolation (no physics)
@@ -196,7 +203,7 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 - **Unit tests** (Catch2): Core engines, physics, genetics, sidechain, SIMD, spectral, granular, modulation
 - **Integration tests**: Plugin lifecycle (load/unload/state), MCP server tool invocations
 - **Legacy tests**: incompatible Morphy-era tests are documented in `tests/LEGACY_TESTS.md` and excluded from active targets
-- **Performance benchmarks**: CPU usage, audio processing throughput
+- **Performance benchmarks**: CPU usage, audio processing throughput. `PerformanceProfiler` uses a pre-allocated circular buffer (`std::array<Sample, 1024>`) with atomic write index — no heap allocation on the audio thread
 - **DAW test matrix**: Manual test docs for Ableton, FL Studio, Logic, Reaper
 - **Automated scripts**: Audio quality, real-time safety, VST3 validator (pluginval strictness 5)
 - **Sanitizers**: ASAN + UBSAN via Clang on Linux CI
@@ -217,7 +224,8 @@ Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 ## Platform Notes
 
 - Windows: `/STACK:4194304` (4 MB) for FL Studio plugin-in-plugin hosting
-- `cmake/PatchJuceForMSVC.cmake` patches JUCE headers conflicting with Windows macros
+- `src/Version.cpp` is the sole translation unit for `__DATE__`/`__TIME__` to prevent incremental build churn
+- Windows macro conflicts are resolved via `/U` compiler flags (not file mutation), making the build hermetic
 - AU format only on macOS; Windows builds VST3 only
 - macOS deployment target: 11.0 (Big Sur)
 - macOS builds Universal Binary (x86_64 + arm64)

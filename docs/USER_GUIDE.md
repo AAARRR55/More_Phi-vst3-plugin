@@ -180,6 +180,8 @@ Use **Direct** when you need precise, immediate control.
 2. Drag the MorphPad or Snap Fader.
 3. The cursor follows your motion immediately.
 
+> Direct mode now includes a small amount of smoothing to prevent zipper noise on fast morphs. The cursor still follows your motion immediately, but parameter transitions are gently softened.
+
 ### Elastic Mode
 
 Use **Elastic** for smooth motion with a spring-like feel.
@@ -208,7 +210,7 @@ The breeding panel creates new material from existing snapshots.
 
 1. Capture at least two snapshots.
 2. Click **Breed**.
-3. More-Phi chooses two occupied snapshots, blends their values, applies the result, and stores it in the next empty slot.
+3. More-Phi chooses two occupied snapshots, blends their continuous values, applies discrete parameter snapping, and stores the result in the next empty slot.
 4. Listen to the result and decide whether to keep designing from it.
 
 ### Mutate a Snapshot
@@ -264,6 +266,8 @@ More-Phi includes a local MCP server for AI clients and external tools.
 1. Configure the client to connect to localhost at the displayed port.
 2. Provide the copied bearer token during initialization.
 3. Use tool calls for plugin info, snapshots, morphing, analysis, or semantic safe actions.
+
+> MCP connections are instance-isolated and use constant-time token verification. Idle connections close automatically after 30 seconds.
 
 ### Understand Analysis and Mastering Output
 
@@ -364,6 +368,9 @@ If nothing changes when you morph:
 
 1. Confirm a hosted plugin is loaded.
 2. Capture at least two snapshots.
-3. Confirm the hosted plugin has continuous parameters.
+3. Confirm the hosted plugin has continuous or discrete parameters. Discrete parameters (toggles, dropdowns) now snap correctly during morphing when Listen Mode is enabled.
 4. Disable Bypass.
 5. Check that audio or MIDI is reaching the track.
+
+
+_Updated 2026-06-18._

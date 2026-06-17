@@ -101,6 +101,12 @@ void MorphPad::timerCallback()
             x = ((posA.x * (1.0f - t) + posB.x * t) + 1.0f) * 0.5f;
             y = ((posA.y * (1.0f - t) + posB.y * t) + 1.0f) * 0.5f;
         }
+        else if (numOccupied == 1)
+        {
+            auto& pos = positions[occupiedSlots[0]];
+            x = (pos.x + 1.0f) * 0.5f;
+            y = (pos.y + 1.0f) * 0.5f;
+        }
         else
         {
             x = 0.5f;
@@ -266,31 +272,20 @@ void MorphPad::paint(juce::Graphics& g)
     }
 
     // ── Cursor position ────────────────────────────────────────────────────────
-    // In Direct mode (0): use raw XY input for immediate responsiveness.
-    // In Fader mode (1): derive position from faderPos along snapshot positions.
-    // In physics modes (Elastic=2, Drift=3): use physics-processed output.
+    // Source determines the target; physics only modifies XY-pad targets in the
+    // audio thread. Therefore the UI must check the source first so Fader mode
+    // is displayed correctly even when a physics mode is active.
+    //   MorphSource: 0 = 2D Pad, 1 = Fader
+    //   MorphMode:   0 = Direct, 1 = Elastic, 2 = Drift
     float cx, cy;
     int physMode = proc_.getPhysicsMode();
     int morphSrc = proc_.getMorphSource();
 
-    if (physMode >= 2)
+    if (morphSrc == 1)
     {
-        // Physics modes: show processed output as main cursor
-        float procX = morph.getProcessedX();
-        float procY = morph.getProcessedY();
-        cx = centre.x + procX * radius;
-        cy = centre.y + procY * radius;
-
-        // Also show raw input as faint guide dot
-        float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
-        float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
-        float guideR = radius * 0.02f;
-        g.setColour(padGuide().withAlpha(0.4f));
-        g.fillEllipse(rawCx - guideR, rawCy - guideR, guideR * 2, guideR * 2);
-    }
-    else if (morphSrc == 1)
-    {
-        // Fader mode: interpolate cursor along occupied snapshot clock positions
+        // Fader mode: interpolate cursor along occupied snapshot clock positions.
+        // This branch must take precedence over physics so the cursor is not
+        // misplaced when Fader source and Drift/Elastic physics are combined.
         float faderPos = proc_.getFaderPos();
 
         // Collect occupied slot indices (reuse 'bank' from snapshot dots above)
@@ -327,6 +322,21 @@ void MorphPad::paint(juce::Graphics& g)
             cx = centre.x;
             cy = centre.y;
         }
+    }
+    else if (physMode >= 1)
+    {
+        // Elastic (1) and Drift (2) physics modes use processed output.
+        float procX = morph.getProcessedX();
+        float procY = morph.getProcessedY();
+        cx = centre.x + procX * radius;
+        cy = centre.y + procY * radius;
+
+        // Also show raw input as faint guide dot
+        float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
+        float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
+        float guideR = radius * 0.02f;
+        g.setColour(padGuide().withAlpha(0.4f));
+        g.fillEllipse(rawCx - guideR, rawCy - guideR, guideR * 2, guideR * 2);
     }
     else
     {
