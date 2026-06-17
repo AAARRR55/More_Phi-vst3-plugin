@@ -1,6 +1,7 @@
 # AI Agent + Ozone Track Assistant Integration via MCP
 
 **Technical Implementation Guide** — More-Phi v3.3.0+
+> Updated 2026-06-18.
 
 This guide details the architectural workflow for integrating an AI agent with iZotope Ozone 11's internal Track Assistant capabilities through More-Phi's embedded Model Context Protocol (MCP) server.
 
@@ -71,11 +72,12 @@ This guide details the architectural workflow for integrating an AI agent with i
 | Component | Role | Thread Domain |
 |-----------|------|---------------|
 | **AI Agent (MCP Client)** | Natural language understanding, tool selection, response formatting | External process |
-| **MCPServer** | JSON-RPC 2.0 TCP listener, auth validation, rate limiting, tool dispatch | MCP thread (`MorePhi-MCP`) |
-| **ConnectionThread** | Per-client socket handling, request parsing, response serialization | MCP thread (per-client) |
+| **MCPServer** | JSON-RPC 2.0 TCP listener, auth validation, rate limiting, tool dispatch, instance isolation, idle timeout, constant-time auth | MCP thread (`MorePhi-MCP`) |
+| **ConnectionThread** | Per-client socket handling, request parsing, response serialization, 30-second idle timeout, socket cleanup | MCP thread (per-client) |
 | **MCPToolHandler** | Core tool dispatch (12 tools + 8 hosted plugin aliases) | MCP thread |
 | **MCPToolsExtended** | AI tools (Learn Mode, token optimization, morph compatibility, dataset generation) | MCP thread |
 | **MCPEQTool** | EQ Assistant tools (natural language EQ control via AIAssistant) | MCP thread |
+| **InstanceRegistry** | Multi-instance port management, zombie eviction after TTL expiry | Singleton |
 | **OzoneParameterMap** | Static parameter index table mapping Ozone 11 parameters (EQ bands, dynamics, imager, maximizer) | Message thread |
 | **OzonePlanApplicator** | Translates `MultiEffectPlan` into Ozone parameter changes via `enqueueParameterSet()` | Message thread |
 | **ChainPlanExecutor** | 5-step heuristic rule planner: dynamics → spectral → stereo → loudness → stage control | Background thread (ThreadPool) |
@@ -751,6 +753,8 @@ MAX_INSTANCES = 64
 // 4. Return -1 if no port available (max instances reached)
 ```
 
+**TTL-based zombie eviction**: `InstanceRegistry` evicts stale entries after TTL expiry to prevent port leaks from crashed or ungracefully terminated instances.
+
 ### 4.3 Bearer Token Authentication Flow
 
 **Step 1: Client sends `initialize` request**
@@ -795,6 +799,8 @@ bool MCPServer::validateAuth(const juce::var& params) {
     return result == 0;
 }
 ```
+
+> **Implementation note**: This loop is length-independent and uses `volatile` to prevent compiler optimization. Do not replace with `memcmp` or string equality — both leak timing information.
 
 **Step 3: Server responds with identity**
 
@@ -882,6 +888,7 @@ if (!processor_.getTokenOptimizer().tryConsumeRequestSlot())
 | Max request size | 256 KB |
 | Non-local connections | Rejected immediately |
 | Connection timeout | 500ms for socket readiness |
+| Idle timeout | 30 seconds (connections closed after inactivity) |
 | Error recovery | Auto-retry on bind (3 attempts), consecutive error tracking |
 
 ### 4.6 Per-Instance Auth Isolation
@@ -1665,7 +1672,12 @@ ozone_client.initialize()
 | Per-instance auth isolation | ✅ Unique tokens, ports, instance IDs |
 | No external port exposure | ✅ Firewall rule recommended |
 
-### 6.11 Testing Strategy
+### 6.11 Security Best Practices
+
+- **Cache key isolation**: Cache keys must include the instance ID to prevent cross-instance contamination.
+- **Constant-time auth**: Token comparison must be constant-time; do not use `memcmp` or `==` on strings.
+
+### 6.12 Testing Strategy
 
 **Unit tests** exist at `tests/Unit/TestOzoneIntegration.cpp`:
 

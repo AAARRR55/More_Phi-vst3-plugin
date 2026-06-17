@@ -84,7 +84,7 @@ cmake --build build --config RelWithDebInfo
 | `MORE_PHI_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
 
 ```bash
-cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON
 ```
 
 ### Build Artifacts
@@ -116,6 +116,7 @@ morephi/
 │   ├── Plugin/             # Audio processor and editor
 │   │   ├── PluginProcessor.h/cpp
 │   │   └── PluginEditor.h/cpp
+│   ├── Version.cpp         # Build-time version strings
 │   ├── Core/               # Audio engine components
 │   │   ├── ParameterState.h
 │   │   ├── SnapshotBank.h/cpp
@@ -293,6 +294,10 @@ void processBlock(AudioBuffer<float>& buffer, MidiBuffer& midi)
 }
 ```
 
+**Additional rules:**
+- Mark audio-thread functions `noexcept` wherever exceptions are impossible.
+- Never use `jassert` in the audio thread; `jassertfalse` is acceptable only in debug builds.
+
 ### Thread Communication
 
 ```cpp
@@ -353,6 +358,7 @@ void processBlock(...)
 **MCP connection refused:**
 - Check if port 30001 is in use: `netstat -an | grep 30001`
 - Verify firewall settings
+- Verify the instance has not been evicted (idle timeout / zombie cleanup)
 
 ### IDE Setup
 
@@ -378,20 +384,17 @@ void processBlock(...)
 
 ```bash
 # Build tests
-cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
 cmake --build build --parallel 2
 
 # Run all wired tests
 ctest --test-dir build --output-on-failure
 
-# Optional: validate compatibility-flag permutations (V3 is always compiled)
-cmake -B build-v3 -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=ON
-cmake --build build-v3 --parallel 2
-ctest --test-dir build-v3 --output-on-failure
-
 # Run benchmarks
 ./build/tests/More-PhiBenchmarks
 ```
+
+> **Note:** `TestGranularEngine.cpp` and `TestSpectralEngine.cpp` now exercise real production code rather than mocks. `TestComprehensiveE2E.cpp` is enabled in the default test suite.
 
 ### Unit Test Pattern
 
@@ -425,6 +428,7 @@ Located in `tests/Performance/BenchmarkSuite.cpp`:
 - Scalar vs SIMD interpolation
 - Physics update timing
 - Full realtime simulation
+- Deterministic RNG: uses `std::mt19937` instead of `rand()` for reproducible random data
 
 ---
 
@@ -499,3 +503,7 @@ Refs: #issue-number
 - [Audio Plugin Developer Guide](https://steinbergmedia.github.io/vst3_dev_portal/pages/)
 - [Real-Time Audio Programming](https://www.rossbencina.com/code/real-time-audio-programming-101-time-waits-for-nothing)
 - [MCP Specification](https://modelcontextprotocol.io/)
+
+---
+
+*Updated 2026-06-18.*

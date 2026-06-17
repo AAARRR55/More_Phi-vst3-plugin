@@ -86,6 +86,8 @@ void processSidechain(const juce::AudioBuffer<float>& sidechain);
 
 Local microbenchmark gates pass in the Release benchmark executable (`build/windows-msvc-release/tests/Release/MorePhiBenchmarks.exe`, AVX+SSE available). Values below are from a single local run; they are **not** a DAW-host CPU or memory profile. Benchmarks include warmup iterations and report percentiles (p50/p95/p99) instead of raw min/max.
 
+> Granular and Spectral engine tests now exercise real production code, not mocks.
+
 | Metric | Scope | Measured Value | Target |
 |--------|-------|----------------|--------|
 | Scalar Interp (256 params) | Core math | 0.058 µs avg | < 100 µs |
@@ -108,7 +110,7 @@ External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separ
 
 ## Test Coverage
 
-Current `build/windows-msvc-release` CTest discovery lists 458 tests. The most recent local validation verified:
+Current `build/windows-msvc-release` CTest discovery now lists 458+ tests. The most recent validation: 458/458 passed.
 
 | Scope | Result |
 |-------|--------|
@@ -116,6 +118,8 @@ Current `build/windows-msvc-release` CTest discovery lists 458 tests. The most r
 | Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
 | Dataset-filtered integration/schema tests | 8/8 passed |
 | Release benchmark executable gates | 9/9 passed |
+
+Comprehensive E2E test is now enabled and compiles with the current API.
 
 Full-suite evidence: `validation/ctest_full_windows-msvc-release_20260615.md`.
 
@@ -133,9 +137,9 @@ External VST3-validator and DAW-host results should be attached as separate rele
 | `listenMode` | Bool | `false` |
 
 ### How It Works
-1. `ParameterBridge::isDiscrete()` classifies params using JUCE's `isDiscrete()` + step count ≤ 32 heuristic
-2. `MorphProcessor::applyListenFilter()` marks discrete params with `SKIP_SENTINEL` (-1.0f)
-3. `processBlock()` skips sentinel-marked values when applying to hosted plugin
+1. `ParameterBridge::isDiscrete()` now uses the hosted plugin's actual step count (not hardcoded `stepCount = 1`).
+2. `DiscreteParameterHandler` is now wired into the audio path and snaps discrete values to valid steps in real time.
+3. Listen Mode is fully effective for all discrete parameter types.
 
 ---
 
@@ -157,6 +161,7 @@ External VST3-validator and DAW-host results should be attached as separate rele
 ## 5.1 Compatibility and Timing Boundaries
 
 - Internal morph, MIDI-triggered snapshot recall, and MCP morph-position updates are block-accurate.
+- Discrete parameter snapping is now block-accurate and occurs after modulation but before the parameter bridge.
 - Hosted plugin parameter and audio processing remain serialized through the audio callback; opaque hosted state capture/recall uses exclusive non-audio access, and audio skips hosted processing while that access is pending.
 - Mono and stereo main layouts are supported. Surround layouts are rejected/unsupported in this batch.
 - The audio-domain morph layer reports latency only for enabled processors. Disabled spectral/granular/oversampling paths do not add PDC.
@@ -220,3 +225,6 @@ String getPresetName(int bank, int preset) const;
 
 ### Serialization (`PresetSerializer`)
 Full JSON roundtrip: snapshot bank (12 slots) + APVTS state + version tag.
+
+
+_Updated 2026-06-18._

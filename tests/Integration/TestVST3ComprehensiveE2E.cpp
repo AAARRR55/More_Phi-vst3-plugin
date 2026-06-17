@@ -1176,7 +1176,7 @@ TEST_CASE("E2E: VST3 plugin identifies correctly", "[e2e][vst3][compliance][iden
     MorePhiProcessor processor;
 
     REQUIRE(juce::String(processor.getName()) == juce::String("MorePhi"));
-    REQUIRE(processor.producesMidiOutput() == false);
+    REQUIRE(processor.producesMidi() == false);
     REQUIRE(processor.acceptsMidi() == true);
 }
 
@@ -1220,16 +1220,16 @@ TEST_CASE("E2E: Audio thread operations are lock-free and allocation-free", "[e2
 
 TEST_CASE("E2E: LockFreeQueue handles concurrent push/pop correctly", "[e2e][vst3][threading][queue]")
 {
-    LockFreeQueue<ParamCommand, 8192> queue;
+    LockFreeQueue<MorePhiProcessor::ParamCommand, 8192> queue;
 
     // Push commands
     for (int i = 0; i < 1000; ++i)
     {
-        ParamCommand cmd;
+        MorePhiProcessor::ParamCommand cmd;
         cmd.paramIndex = i % MAX_PARAMETERS;
         cmd.value = static_cast<float>(i) / 1000.0f;
         cmd.isStateMarker = false;
-        cmd.source = ParameterEditSource::UI;
+        cmd.source = MorePhiProcessor::ParameterEditSource::UI;
         cmd.holdAgainstMorph = false;
         REQUIRE(queue.push(cmd));
     }
@@ -1237,7 +1237,7 @@ TEST_CASE("E2E: LockFreeQueue handles concurrent push/pop correctly", "[e2e][vst
     // Pop commands
     for (int i = 0; i < 1000; ++i)
     {
-        ParamCommand cmd;
+        MorePhiProcessor::ParamCommand cmd;
         REQUIRE(queue.pop(cmd));
         REQUIRE(cmd.paramIndex == i % MAX_PARAMETERS);
     }

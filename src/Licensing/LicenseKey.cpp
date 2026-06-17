@@ -79,7 +79,7 @@ uint8_t LicenseKey::checksumIndex(juce::StringRef normalizedWithoutChecksum)
             continue;
 
         crc ^= static_cast<uint8_t>(c & 0xff);
-        for (int i = 0; i < 8; ++i)
+        for (int bit = 0; bit < 8; ++bit)
             crc = (crc >> 1u) ^ (0xEDB88320u & static_cast<uint32_t>(-(static_cast<int>(crc & 1u))));
     }
 
