@@ -124,6 +124,17 @@ else()
     set(MORE_PHI_PLUGIN_FORMATS VST3)
 endif()
 
+# ── Embedded Fonts (BinaryData) ───────────────────────────────────────────────
+# Bundle the landing-page brand typefaces so the GUI renders identically on every
+# machine (Syncopate = wordmark/section labels, Outfit = body/value text).
+juce_add_binary_data(MorePhiFonts
+    SOURCES
+        assets/fonts/Syncopate-Bold.ttf
+        assets/fonts/Syncopate-Regular.ttf
+        assets/fonts/Outfit-Regular.ttf
+        assets/fonts/Outfit-SemiBold.ttf
+)
+
 # ── Plugin Target ─────────────────────────────────────────────────────────────
 juce_add_plugin(MorePhi
     COMPANY_NAME            "MorePhi"
@@ -603,6 +614,7 @@ endif()
 # ── JUCE Modules ──────────────────────────────────────────────────────────────
 target_link_libraries(MorePhi
     PRIVATE
+        MorePhiFonts
         juce::juce_audio_basics
         juce::juce_audio_formats
         juce::juce_audio_plugin_client
