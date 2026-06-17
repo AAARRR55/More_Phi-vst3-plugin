@@ -152,7 +152,7 @@ LicenseApiConfig HttpActivationClient::configFromEnvironment()
     LicenseApiConfig config;
     config.baseUrl = envString("LICENSE_API_BASE_URL");
     if (config.baseUrl.isEmpty())
-        config.baseUrl = "http://localhost:8001";
+        config.baseUrl = "http://localhost:4000";
 
     config.publicClientToken = envString("MOREPHI_PUBLIC_CLIENT_TOKEN");
     if (config.publicClientToken.isEmpty())

@@ -70,7 +70,7 @@ export const LicenseService = {
           select: { id: true, fingerprintHash: true, activatedAt: true },
         },
         product: {
-          select: { slug: true, name: true, version: true },
+          select: { slug: true, name: true, version: true, downloadUrl: true },
         },
       },
       orderBy: { createdAt: "desc" },

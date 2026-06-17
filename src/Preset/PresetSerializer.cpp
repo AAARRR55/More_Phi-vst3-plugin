@@ -26,13 +26,14 @@ juce::var PresetSerializer::serialize(const SnapshotBank& bank,
     auto snapshots = juce::Array<juce::var>();
 
     // Read snapshot data through the seqlock
-    bank.tryReadLocked([&](const std::array<ParameterState, SnapshotBank::NUM_SLOTS>& slots)
+    if (!bank.tryReadLocked([&](const std::array<ParameterState, SnapshotBank::NUM_SLOTS>& slots)
     {
         for (int s = 0; s < SnapshotBank::NUM_SLOTS; ++s)
         {
             auto* slotObj = new juce::DynamicObject();
             slotObj->setProperty("occupied", slots[s].occupied);
             slotObj->setProperty("paramCount", slots[s].parameterCount);
+            slotObj->setProperty("name", juce::String(slots[s].name));
 
             if (slots[s].occupied && slots[s].parameterCount > 0)
             {
@@ -42,9 +43,19 @@ juce::var PresetSerializer::serialize(const SnapshotBank& bank,
                 slotObj->setProperty("values", values);
             }
 
+            // FIX C6: Persist per-slot opaque state chunk for Full recall mode.
+            juce::MemoryBlock chunk;
+            if (bank.copyStateChunk(s, chunk) && chunk.getSize() > 0)
+                slotObj->setProperty("stateChunk", chunk.toBase64Encoding());
+
             snapshots.add(juce::var(slotObj));
         }
-    });
+    }))
+    {
+        juce::Logger::writeToLog("PresetSerializer::serialize — tryReadLocked failed");
+        delete root;
+        return juce::var{};
+    }
 
     root->setProperty("snapshots", snapshots);
 
@@ -138,6 +149,25 @@ bool PresetSerializer::deserialize(const juce::var& json,
                 values.push_back(static_cast<float>(static_cast<double>((*valArr)[i])));
 
             bank.captureValues(s, values);
+
+            // FIX C6: Restore per-slot opaque state chunk (Kontakt/wavetable synths).
+            juce::String stateBase64 = slotVar.getProperty("stateChunk", {}).toString();
+            if (stateBase64.isNotEmpty())
+            {
+                juce::MemoryBlock chunk;
+                if (chunk.fromBase64Encoding(stateBase64))
+                    bank.captureStateChunk(s, chunk);
+            }
+
+            // Restore parameter names for VST3-H1 remapping.
+            auto* nameArr = slotVar.getProperty("names", {}).getArray();
+            if (nameArr != nullptr)
+            {
+                juce::StringArray names;
+                for (int i = 0; i < nameArr->size(); ++i)
+                    names.add((*nameArr)[i].toString());
+                bank.captureValuesWithNames(s, values.data(), static_cast<int>(values.size()), names);
+            }
         }
     }
 
@@ -159,7 +189,10 @@ bool PresetSerializer::deserialize(const juce::var& json,
         juce::MemoryBlock hostedState;
         const auto hostedStateVar = json.getProperty("hostedPluginState", juce::var{});
         if (hostedStateVar.isString())
-            hostedState.fromBase64Encoding(hostedStateVar.toString());
+        {
+            if (!hostedState.fromBase64Encoding(hostedStateVar.toString()))
+                hostedState.reset(); // H11 FIX: clear on base64 decode failure
+        }
 
         if (pluginReady && hostedState.getSize() > 0)
         {

@@ -43,20 +43,23 @@ function randomAmbiguityStrippedChar(): string {
   const byte = randomBytes(1)[0];
   return AMBIGUITY_STRIPPED_ALPHABET[byte % AMBIGUITY_STRIPPED_ALPHABET.length];
 }
-
 export function generateLicenseKey(): string {
-  const bodyLength = 16;
+  const bodyLength = 20; // 5 groups of 4 characters
   let body = "";
   for (let i = 0; i < bodyLength; i++) {
     body += randomAmbiguityStrippedChar();
   }
 
-  const checksumIndex = crc32Mod32(body);
-  const checksum = CROCKFORD_ALPHABET[checksumIndex];
   const chunks = [];
   for (let i = 0; i < body.length; i += 4) {
     chunks.push(body.slice(i, i + 4));
   }
+
+  // The plugin computes the checksum over the compact alphanumeric string
+  // (prefix + body, no separators).
+  const compact = `${env.LICENSE_KEY_PREFIX}${body}`;
+  const checksumIndex = crc32Mod32(compact);
+  const checksum = CROCKFORD_ALPHABET[checksumIndex];
 
   return `${env.LICENSE_KEY_PREFIX}-${chunks.join("-")}-${checksum}`;
 }
@@ -75,10 +78,11 @@ export function isValidLicenseKeyFormat(key: string): boolean {
   const prefix = env.LICENSE_KEY_PREFIX;
   if (!normalized.startsWith(prefix)) return false;
   const bodyWithChecksum = normalized.slice(prefix.length);
-  if (bodyWithChecksum.length % 4 !== 1) return false; // groups of 4 + 1 checksum char
+  // MPH1: 20 body chars (5 groups of 4) + 1 checksum char
+  if (bodyWithChecksum.length !== 21) return false;
   const checksumChar = bodyWithChecksum.slice(-1);
-  const body = bodyWithChecksum.slice(0, -1);
-  const expectedIndex = crc32Mod32(body);
+  const compact = normalized.slice(0, -1);
+  const expectedIndex = crc32Mod32(compact);
   return CROCKFORD_ALPHABET[expectedIndex] === checksumChar;
 }
 
@@ -95,6 +99,8 @@ function canonicalJson(value: unknown): Buffer {
   };
   return Buffer.from(JSON.stringify(value, replacer), "utf8");
 }
+
+export const PRODUCT_PUBLIC_ID = "more-phi-vst3";
 
 export interface LicenseCertificate {
   schema: string;
@@ -124,13 +130,26 @@ export interface SignedActivationCertificate {
 export function signActivationCertificate(
   certificate: LicenseCertificate
 ): SignedActivationCertificate {
+  const payloadBytes = canonicalJson(certificate);
+  const certificatePayload = payloadBytes.toString("base64url").replace(/=+$/, "");
+
+  // Development bypass: the plugin trusts the hardcoded "dev-key" / "dev-signature" pair.
+  // The signature value itself must be valid base64url so the plugin can decode it before
+  // comparing against the trusted development signature string.
+  if (env.LICENSE_SIGNING_KEY_ID === "dev-key") {
+    return {
+      certificatePayload,
+      signature: Buffer.from("dev-signature").toString("base64url").replace(/=+$/, ""),
+      publicKeyId: "dev-key",
+    };
+  }
+
   const privateKeyPem = env.licenseSigningPrivateKey;
   const privateKey = createPrivateKey(privateKeyPem);
-  const payloadBytes = canonicalJson(certificate);
   const signature = sign(null, payloadBytes, privateKey);
 
   return {
-    certificatePayload: payloadBytes.toString("base64url").replace(/=+$/, ""),
+    certificatePayload,
     signature: signature.toString("base64url").replace(/=+$/, ""),
     publicKeyId: env.LICENSE_SIGNING_KEY_ID,
   };

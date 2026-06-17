@@ -6,10 +6,15 @@
 
 #include "Host/IPluginHostManager.h"
 #include "AI/InstanceIdentity.h"
+
+#ifdef MORE_PHI_USE_GMOCK
 #include <gmock/gmock.h>
+#endif
 
 namespace more_phi {
 namespace mocks {
+
+#ifdef MORE_PHI_USE_GMOCK
 
 /**
  * Mock implementation of IPluginHostManager for testing.
@@ -64,6 +69,8 @@ public:
     MOCK_METHOD(const InstanceIdentity&, getIdentity, (), (const, override));
     MOCK_METHOD(const juce::String&, getAuthToken, (), (const, override));
 };
+
+#endif // MORE_PHI_USE_GMOCK
 
 /**
  * Simple stub implementation for basic tests that don't need full mocking.

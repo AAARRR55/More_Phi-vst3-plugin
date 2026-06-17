@@ -938,6 +938,7 @@ LLMChatClient::parseAnthropicResponse(int statusCode, const juce::String& body)
 
 static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
                                           const InstanceIdentity& identity,
+                                          AutomationRuntime& runtime,
                                           const juce::String& apiToolName,
                                           const juce::String& argumentsJson);
 
@@ -947,6 +948,7 @@ juce::String LLMChatClient::executeTool(const juce::String& name,
     // Single in-process dispatch path (also used as the MCP-session fallback).
     return dispatchToolInProcess(processor_,
                                  processor_.getInstanceIdentity(),
+                                 automationRuntime_,
                                  name,
                                  argumentsJson);
 }
@@ -958,6 +960,7 @@ juce::String LLMChatClient::executeTool(const juce::String& name,
 // of the TCP transport state.
 static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
                                           const InstanceIdentity& identity,
+                                          AutomationRuntime& runtime,
                                           const juce::String& apiToolName,
                                           const juce::String& argumentsJson)
 {
@@ -976,7 +979,7 @@ static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
 
     try
     {
-        return MCPToolHandler::handle(dispatchName, params, processor, identity);
+        return MCPToolHandler::handle(dispatchName, params, processor, identity, runtime);
     }
     catch (const std::exception& e)
     {
@@ -991,11 +994,12 @@ static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
 static juce::String executeToolThroughMcp(LocalMcpClientSession* mcpSession,
                                           MorePhiProcessor& processor,
                                           const InstanceIdentity& identity,
+                                          AutomationRuntime& runtime,
                                           const juce::String& apiToolName,
                                           const juce::String& argumentsJson)
 {
     if (mcpSession == nullptr)
-        return dispatchToolInProcess(processor, identity, apiToolName, argumentsJson);
+        return dispatchToolInProcess(processor, identity, runtime, apiToolName, argumentsJson);
 
     const auto dispatchName = juce::String(resolveApiToolNameToMcpName(apiToolName.toStdString()));
     if (dispatchName.isEmpty())
@@ -1206,6 +1210,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
                 const auto result = executeToolThroughMcp(mcpSession.get(),
                                                           processor_,
                                                           processor_.getInstanceIdentity(),
+                                                          automationRuntime_,
                                                           tc.name,
                                                           tc.argumentsJson);
                 messages.push_back({

@@ -3,6 +3,7 @@
  * SIMD-optimized interpolation for real-time audio safety.
  */
 #include "InterpolationEngine.h"
+#include <cmath>
 
 // Platform detection for SIMD — x86/x64 only (not ARM/Apple Silicon)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -88,6 +89,17 @@ bool InterpolationEngine::hasSSESupport()
     return hasSSE;
 #else
     return false;
+#endif
+}
+
+const char* InterpolationEngine::getCompiledSIMDPath() noexcept
+{
+#if defined(MORE_PHI_USE_AVX)
+    return "AVX2";
+#elif defined(MORE_PHI_USE_SSE)
+    return "SSE2";
+#else
+    return "Scalar";
 #endif
 }
 
@@ -231,9 +243,17 @@ void InterpolationEngine::compute1D(float faderPos,
                                      const SnapshotBank& bank,
                                      std::vector<float>& output) noexcept
 {
+    // FIX C7: NaN guard — NaN faderPos would otherwise produce UB in jlimit/index math.
+    if (!std::isfinite(faderPos))
+    {
+        std::fill(output.begin(), output.end(), 0.5f);
+        return;
+    }
+
     computeWithRetry(bank, output, "InterpolationEngine::compute1D",
         [&output, faderPos](const auto& slots)
         {
+            std::fill(output.begin(), output.end(), 0.5f);
             std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlots{};
             int occupiedCount = 0;
 
@@ -285,6 +305,13 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                                      const SnapshotBank& bank,
                                      std::vector<float>& output) noexcept
 {
+    // FIX C8: NaN guard — NaN cursor coordinates would poison all IDW weights.
+    if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
+    {
+        std::fill(output.begin(), output.end(), 0.5f);
+        return;
+    }
+
     const auto positions = getClockPositions();
 
     computeWithRetry(bank, output, "InterpolationEngine::compute2D",

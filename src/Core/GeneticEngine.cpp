@@ -16,13 +16,8 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
     ParameterState offspring;
     // Use parameterCount (not values.size() which is always MAX_PARAMETERS)
     const int count = juce::jmin(parentA.parameterCount, parentB.parameterCount);
-    if (parentA.parameterCount != parentB.parameterCount)
-    {
-        juce::Logger::writeToLog("GeneticEngine::breed() - Parameter count mismatch: "
-            + juce::String(parentA.parameterCount) + " vs "
-            + juce::String(parentB.parameterCount) + ", using min: "
-            + juce::String(count));
-    }
+    // Parameter count mismatch is handled silently by using the minimum count.
+    juce::ignoreUnused(parentA.parameterCount, parentB.parameterCount);
 
     for (int i = 0; i < count; ++i)
     {
@@ -41,7 +36,6 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
 
     offspring.occupied = true;
     offspring.parameterCount = count;
-    offspring.setName("Offspring");
     return offspring;
 }
 

@@ -2,7 +2,7 @@
 
 This matrix cross-references workflow claims in `docs/USER_GUIDE.md` against the current GUI, backend, automation, MIDI, MCP, audio, preset, and test surfaces. Status values are limited to: `Pass`, `Mismatch`, `Missing`, `Needs automated test`, and `Needs manual host verification`.
 
-Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `24/24`, the full Release Ninja suite passes `375/375`, and the local VST3 validator wrapper records the missing external validator in `docs/validation/vst3_validator_result_20260517.json`. `tests/CMakeLists.txt` now registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
+Last refreshed: `2026-06-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `27/27`, the full Release suite passes `474/474`, `pluginval` strictness-5 has passed (`validation/pluginval_strictness5.txt`, 2026-06-16), and the local VST3 validator wrapper records the missing Steinberg `vst3_validator` when it is not on `PATH`. `tests/CMakeLists.txt` registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
 
 ## Summary
 
@@ -61,6 +61,21 @@ Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs
 | Advanced Walkthroughs | Mastering preview with AI assistance | MCP/AI client | analyzers, mastering tools, semantic actions | `tests/Unit/TestMCPServerUnit.cpp:347`, `tests/Unit/TestMCPServerUnit.cpp:390`, `tests/Unit/TestAIRegressions.cpp:321` | Needs automated test | Backend tests cover analysis/mastering pieces; real mastering workflow requires hosted plugin/audio and AI client. |
 | Best Practices | Prefer semantic tools over raw parameter writes | External AI workflow | semantic MCP guardrails | `tests/Unit/TestAIRegressions.cpp:272`, `tests/Unit/TestAIRegressions.cpp:294`, `tests/Unit/TestAIRegressions.cpp:321` | Pass | Semantic guardrail coverage exists. |
 | Troubleshooting | Nothing changes when morphing | Hosted plugin, snapshots, bypass/audio routing | host manager, snapshot bank, bypass/output gain | `tests/Integration/TestVST3AudioSignalAccuracy.cpp:93`, `tests/Integration/TestVST3AudioSignalAccuracy.cpp:142` | Needs manual host verification | Real no-sound/no-change debugging depends on DAW routing and hosted plugin parameters. |
+
+## Traceability Totals
+
+Recomputed from the detailed workflow rows above:
+
+| Status | Count |
+|---|---:|
+| Pass | 9 |
+| Mismatch | 4 |
+| Needs automated test | 21 |
+| Needs manual host verification | 20 |
+| Missing | 0 |
+| **Total traced workflows** | **54** |
+
+The summary table at the top of this matrix aggregates high-level areas; the detailed-row totals above provide the workflow-level coverage count.
 
 ## Guide-Specific Risk Register
 

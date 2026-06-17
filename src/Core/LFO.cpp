@@ -29,7 +29,7 @@ void LFO::reset() noexcept
     shValue_      = 0.0f;
     smoothRand_   = 0.0f;
     randTarget_   = 0.0f;
-    currentValue_ = 0.0f;
+    currentValue_.store(0.0f, std::memory_order_relaxed);
     rngState_     = 0x12345678u; // reset to deterministic seed
 }
 
@@ -114,7 +114,7 @@ float LFO::process(float dt) noexcept
 {
     if (dt <= 0.0f)
     {
-        currentValue_ = 0.0f;
+        currentValue_.store(0.0f, std::memory_order_relaxed);
         return 0.0f;
     }
 
@@ -124,10 +124,10 @@ float LFO::process(float dt) noexcept
     prevPhase_           = phase_;
     phase_              += increment;
 
-    // Wrap phase into [0, 1)
-    const bool wrapped = (phase_ >= 1.0f);
-    if (wrapped)
-        phase_ = std::fmod(phase_, 1.0f);
+    // FIX C11: Detect multiple wraps so S&H/Random update correctly at large block sizes.
+    const int wrapCount = static_cast<int>(std::floor(phase_));
+    phase_ = std::fmod(phase_, 1.0f);
+    if (phase_ < 0.0f) phase_ += 1.0f;
 
     // Apply offset for read (do not mutate phase_)
     float readPhase = phase_ + phaseOffset_.load(std::memory_order_relaxed);
@@ -154,8 +154,8 @@ float LFO::process(float dt) noexcept
             break;
 
         case LFOShape::SampleAndHold:
-            // Latch a new random value each time phase wraps
-            if (wrapped)
+            // Latch a new random value each time phase wraps (handles multiple wraps).
+            if (wrapCount > 0)
             {
                 shValue_ = nextRandom() * 2.0f - 1.0f;
             }
@@ -165,8 +165,8 @@ float LFO::process(float dt) noexcept
         case LFOShape::Random:
         {
             // Smoothed continuous random: interpolate toward a new target
-            // each time the phase wraps.
-            if (wrapped)
+            // each time the phase wraps (handles multiple wraps).
+            if (wrapCount > 0)
             {
                 randTarget_ = nextRandom() * 2.0f - 1.0f;
             }
@@ -188,7 +188,7 @@ float LFO::process(float dt) noexcept
     }
 
     output        = std::clamp(output, -1.0f, 1.0f);
-    currentValue_ = output;
+    currentValue_.store(output, std::memory_order_relaxed);
     return output;
 }
 

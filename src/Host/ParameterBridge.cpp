@@ -88,7 +88,7 @@ Ret ParameterBridge::withPlugin(IPluginHostManager& host, PluginHostManager* cac
     }
 }
 
-int ParameterBridge::getParameterCount() const
+int ParameterBridge::getParameterCount() const noexcept
 {
     if (!testDescriptors_.empty())
         return static_cast<int>(testDescriptors_.size());
@@ -100,7 +100,7 @@ int ParameterBridge::getParameterCount() const
     });
 }
 
-float ParameterBridge::getParameterNormalized(int index) const
+float ParameterBridge::getParameterNormalized(int index) const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "getParameterNormalized", 0.0f,
         [index](juce::AudioPluginInstance& plugin) -> float
@@ -111,7 +111,7 @@ float ParameterBridge::getParameterNormalized(int index) const
     });
 }
 
-void ParameterBridge::setParameterNormalized(int index, float value)
+void ParameterBridge::setParameterNormalized(int index, float value) noexcept
 {
     withPlugin(host_, cachedConcreteHost_, "setParameterNormalized", 0,
         [this, index, value](juce::AudioPluginInstance& plugin) -> int
@@ -154,12 +154,12 @@ juce::String ParameterBridge::getParameterName(int index) const
     });
 }
 
-void ParameterBridge::applyParameterState(const std::vector<float>& values)
+void ParameterBridge::applyParameterState(const std::vector<float>& values) noexcept
 {
     applyParameterState(values.data(), static_cast<int>(values.size()));
 }
 
-void ParameterBridge::applyParameterState(const float* values, int count)
+void ParameterBridge::applyParameterState(const float* values, int count) noexcept
 {
     if (!values || count <= 0) return;
 
@@ -189,7 +189,13 @@ void ParameterBridge::applyParameterState(const float* values, int count)
             if (throttled)
                 continue;
 
-            params[i]->setValue(clamped);
+            // FIX C3: Per-parameter try/catch so one misbehaving hosted parameter
+            // does not abort the entire snapshot recall batch.
+            try {
+                params[i]->setValue(clamped);
+            } catch (...) {
+                continue;
+            }
 
             if (hasThrottleLock)
                 throttleStates_[static_cast<size_t>(i)] = {clamped, now};
@@ -199,8 +205,13 @@ void ParameterBridge::applyParameterState(const float* values, int count)
     });
 }
 
-std::vector<float> ParameterBridge::captureParameterState() const
+std::vector<float> ParameterBridge::captureParameterState() const noexcept
 {
+    // H10 FIX: Message-thread only — touches hosted plugin parameters
+    jassert(juce::MessageManager::getInstanceWithoutCreating() == nullptr
+            || juce::MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread());
+    auto* currentThread = juce::Thread::getCurrentThread();
+    jassert(currentThread == nullptr || !currentThread->isRealtimeThread());
     return withPlugin(host_, cachedConcreteHost_, "captureParameterState", std::vector<float>{},
         [](juce::AudioPluginInstance& plugin) -> std::vector<float>
     {
@@ -212,7 +223,7 @@ std::vector<float> ParameterBridge::captureParameterState() const
     });
 }
 
-bool ParameterBridge::isDiscrete(int index) const
+bool ParameterBridge::isDiscrete(int index) const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "isDiscrete", false,
         [index](juce::AudioPluginInstance& plugin) -> bool
@@ -226,7 +237,7 @@ bool ParameterBridge::isDiscrete(int index) const
     });
 }
 
-std::vector<bool> ParameterBridge::getDiscreteMap() const
+std::vector<bool> ParameterBridge::getDiscreteMap() const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "getDiscreteMap", std::vector<bool>{},
         [](juce::AudioPluginInstance& plugin) -> std::vector<bool>
@@ -331,7 +342,7 @@ juce::String ParameterBridge::getParameterDisplayValueAtNormalized(int index, fl
     });
 }
 
-float ParameterBridge::getParameterDefault(int index) const
+float ParameterBridge::getParameterDefault(int index) const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "getParameterDefault", -1.0f,
         [index](juce::AudioPluginInstance& plugin) -> float
@@ -364,7 +375,7 @@ juce::String ParameterBridge::getParameterStableID(int index) const
     });
 }
 
-int ParameterBridge::getParameterNumSteps(int index) const
+int ParameterBridge::getParameterNumSteps(int index) const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "getParameterNumSteps", 0,
         [index](juce::AudioPluginInstance& plugin) -> int
@@ -375,7 +386,7 @@ int ParameterBridge::getParameterNumSteps(int index) const
     });
 }
 
-bool ParameterBridge::isBoolean(int index) const
+bool ParameterBridge::isBoolean(int index) const noexcept
 {
     return withPlugin(host_, cachedConcreteHost_, "isBoolean", false,
         [index](juce::AudioPluginInstance& plugin) -> bool
@@ -407,6 +418,9 @@ ParameterBridge::ParameterDescriptor ParameterBridge::getParameterDescriptor(int
 
 std::vector<ParameterBridge::ParameterDescriptor> ParameterBridge::getParameterDescriptors() const
 {
+    // H10 FIX: Message-thread only — touches hosted plugin parameters
+    jassert(juce::MessageManager::getInstanceWithoutCreating() == nullptr
+            || juce::MessageManager::getInstanceWithoutCreating()->isThisTheMessageThread());
     if (!testDescriptors_.empty())
         return testDescriptors_;
 

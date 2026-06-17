@@ -12,6 +12,8 @@ namespace more_phi {
  *
  * Provides thread-safe acquisition and release of AudioBuffer<float> instances.
  * Buffers are cleared before being returned to ensure clean state.
+ *
+ * NOT audio-thread safe — use only from message/background threads.
  */
 class AudioBufferPool
 {

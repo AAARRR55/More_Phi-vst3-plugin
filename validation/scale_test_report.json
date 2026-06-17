@@ -1,20 +1,20 @@
 {
   "testName": "scale_test_smoke",
-  "timestamp": "2026-06-15 09:18:17",
+  "timestamp": "2026-06-15 17:16:44",
   "success": true,
   "scope": "smoke",
   "productionScale": false,
   "featureSource": "placeholder_schema_values_not_measured_extractor_output",
   "config": {
     "targetSamples": 5,
-    "sampleRate": 48000,
-    "duration": 5.0,
+    "sampleRate": 44100,
+    "duration": 10.0,
     "chainType": "Mastering"
   },
   "results": {
     "samplesGenerated": 5,
-    "elapsedSeconds": 12.398290395736694,
-    "samplesPerHour": 1451.8130665974338
+    "elapsedSeconds": 11.806498050689697,
+    "samplesPerHour": 1524.5841673559162
   },
   "criteria": {
     "samplesTarget": 5,

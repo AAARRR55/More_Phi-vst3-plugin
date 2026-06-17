@@ -45,27 +45,27 @@ public:
 
     explicit ParameterBridge(IPluginHostManager& host);
 
-    int getParameterCount() const override;
-    float getParameterNormalized(int index) const override;
-    void setParameterNormalized(int index, float value) override;
+    int getParameterCount() const noexcept override;
+    float getParameterNormalized(int index) const noexcept override;
+    void setParameterNormalized(int index, float value) noexcept override;
     juce::String getParameterName(int index) const override;
 
-    void applyParameterState(const float* values, int count) override;
-    void applyParameterState(const std::vector<float>& values) override;
+    void applyParameterState(const float* values, int count) noexcept override;
+    void applyParameterState(const std::vector<float>& values) noexcept override;
 
-    std::vector<float> captureParameterState() const override;
+    std::vector<float> captureParameterState() const noexcept override;
 
-    bool isDiscrete(int index) const override;
-    std::vector<bool> getDiscreteMap() const override;
+    bool isDiscrete(int index) const noexcept override;
+    std::vector<bool> getDiscreteMap() const noexcept override;
 
-    juce::String getParameterLabel(int index) const;
-    juce::String getParameterDisplayValue(int index) const;
+    juce::String getParameterLabel(int index) const override;
+    juce::String getParameterDisplayValue(int index) const override;
     juce::String getParameterDisplayValueAtNormalized(int index, float normalizedValue) const;
-    float getParameterDefault(int index) const;
-    juce::StringArray getParameterValueStrings(int index) const;
-    juce::String getParameterStableID(int index) const;
-    int getParameterNumSteps(int index) const;
-    bool isBoolean(int index) const;
+    float getParameterDefault(int index) const noexcept override;
+    juce::StringArray getParameterValueStrings(int index) const override;
+    juce::String getParameterStableID(int index) const override;
+    int getParameterNumSteps(int index) const noexcept override;
+    bool isBoolean(int index) const noexcept;
     ParameterDescriptor getParameterDescriptor(int index) const;
     std::vector<ParameterDescriptor> getParameterDescriptors() const;
 

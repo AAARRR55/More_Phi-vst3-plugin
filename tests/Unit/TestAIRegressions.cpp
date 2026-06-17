@@ -638,23 +638,23 @@ TEST_CASE("MCP EQ preview and reject route through assistant preview state", "[u
 {
     MorePhiProcessor processor;
     processor.prepareToPlay(44100.0, 64);
-    auto& assistant = processor.getAIAssistant();
+    auto* assistant = processor.getAIAssistant();
 
     ParamChange change;
     change.index = 0;
     change.name = "Gain";
     change.currentValue = 0.25f;
     change.newValue = 0.75f;
-    assistant.stagePendingChanges({change});
+    assistant->stagePendingChanges({change});
 
     const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
     REQUIRE(preview.success);
-    REQUIRE(assistant.isPreviewActive());
+    REQUIRE(assistant->isPreviewActive());
 
     const auto reject = MCPEQTool::rejectEQ({}, processor);
     REQUIRE(reject.success);
-    REQUIRE_FALSE(assistant.isPreviewActive());
-    REQUIRE(assistant.getPendingChanges().empty());
+    REQUIRE_FALSE(assistant->isPreviewActive());
+    REQUIRE(assistant->getPendingChanges().empty());
 
     processor.releaseResources();
 }
@@ -663,7 +663,7 @@ TEST_CASE("MCP EQ preview reports command queue saturation", "[unit][ai][mcp][eq
 {
     MorePhiProcessor processor;
     processor.prepareToPlay(44100.0, 64);
-    auto& assistant = processor.getAIAssistant();
+    auto* assistant = processor.getAIAssistant();
 
     while (processor.enqueueParameterSet(0, 0.5f,
                                          MorePhiProcessor::ParameterEditSource::MCP,
@@ -676,7 +676,7 @@ TEST_CASE("MCP EQ preview reports command queue saturation", "[unit][ai][mcp][eq
     change.name = "Gain";
     change.currentValue = 0.25f;
     change.newValue = 0.75f;
-    assistant.stagePendingChanges({change});
+    assistant->stagePendingChanges({change});
 
     const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
     REQUIRE_FALSE(preview.success);

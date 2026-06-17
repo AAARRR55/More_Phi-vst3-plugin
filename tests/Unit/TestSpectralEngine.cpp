@@ -25,6 +25,8 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "../Mocks/MockV2Interfaces.h"
+#include "Core/SpectralMorphEngine.h"
+#include "Core/FormantMorphEngine.h"
 
 #include <vector>
 #include <array>
@@ -813,5 +815,124 @@ TEST_CASE("SpectralMorphEngine: multiple latency configurations are consistent",
         const int expectedLatency = c.fftSize / 2 + c.hopSize;
         INFO("fftSize=" << c.fftSize << " hopSize=" << c.hopSize);
         REQUIRE(engine.getLatencyInSamples() == expectedLatency);
+    }
+}
+
+// =============================================================================
+//  Production SpectralMorphEngine / FormantMorphEngine Tests (H14 fix)
+// =============================================================================
+
+TEST_CASE("SpectralMorphEngine (production): prepare and processBlock with sine wave", "[spectral][production]")
+{
+    more_phi::SpectralMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(true);
+
+    juce::AudioBuffer<float> bufA(2, 512);
+    juce::AudioBuffer<float> bufB(2, 512);
+    bufA.clear();
+    bufB.clear();
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        float* dataA = bufA.getWritePointer(ch);
+        float* dataB = bufB.getWritePointer(ch);
+        for (int i = 0; i < 512; ++i)
+        {
+            dataA[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
+            dataB[i] = std::sin(2.0f * 3.14159265358979f * 880.0f * static_cast<float>(i) / 44100.0f);
+        }
+    }
+
+    engine.processBlock(bufA, bufB, 0.5f);
+
+    for (int ch = 0; ch < bufA.getNumChannels(); ++ch)
+    {
+        const float* data = bufA.getReadPointer(ch);
+        bool hasNonZero = false;
+        for (int i = 0; i < bufA.getNumSamples(); ++i)
+        {
+            REQUIRE(std::isfinite(data[i]));
+            if (std::abs(data[i]) > 1e-6f) hasNonZero = true;
+        }
+        REQUIRE(hasNonZero);
+    }
+}
+
+TEST_CASE("SpectralMorphEngine (production): inactive engine leaves buffer unchanged", "[spectral][production]")
+{
+    more_phi::SpectralMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(false);
+
+    juce::AudioBuffer<float> bufA(1, 256);
+    juce::AudioBuffer<float> bufB(1, 256);
+    bufA.clear();
+    bufB.clear();
+
+    float* dataA = bufA.getWritePointer(0);
+    for (int i = 0; i < 256; ++i)
+        dataA[i] = 0.7f;
+
+    engine.processBlock(bufA, bufB, 0.5f);
+
+    const float* out = bufA.getReadPointer(0);
+    for (int i = 0; i < 256; ++i)
+    {
+        REQUIRE(out[i] == Catch::Approx(0.7f).margin(1e-6f));
+    }
+}
+
+TEST_CASE("FormantMorphEngine (production): prepare and processBlock with sine wave", "[spectral][formant][production]")
+{
+    more_phi::FormantMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(true);
+    engine.setPreservationAmount(0.5f);
+
+    juce::AudioBuffer<float> buffer(2, 512);
+    buffer.clear();
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        float* data = buffer.getWritePointer(ch);
+        for (int i = 0; i < 512; ++i)
+            data[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * static_cast<float>(i) / 44100.0f);
+    }
+
+    engine.processBlock(buffer);
+
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        const float* data = buffer.getReadPointer(ch);
+        bool hasNonZero = false;
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            REQUIRE(std::isfinite(data[i]));
+            if (std::abs(data[i]) > 1e-6f) hasNonZero = true;
+        }
+        REQUIRE(hasNonZero);
+    }
+}
+
+TEST_CASE("FormantMorphEngine (production): inactive engine leaves buffer unchanged", "[spectral][formant][production]")
+{
+    more_phi::FormantMorphEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setActive(false);
+
+    juce::AudioBuffer<float> buffer(1, 256);
+    buffer.clear();
+
+    float* data = buffer.getWritePointer(0);
+    for (int i = 0; i < 256; ++i)
+        data[i] = 0.3f;
+
+    engine.processBlock(buffer);
+
+    const float* out = buffer.getReadPointer(0);
+    for (int i = 0; i < 256; ++i)
+    {
+        REQUIRE(out[i] == Catch::Approx(0.3f).margin(1e-6f));
     }
 }

@@ -3,7 +3,9 @@
  * MESSAGE THREAD ONLY. */
 #include "PresetSerializerV2.h"
 #include "PresetLibrary.h"  // generateUUID
+#include "Core/SnapshotBank.h"
 #include <juce_core/juce_core.h>
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <sstream>
 #include <iomanip>
 #include <ctime>
@@ -47,7 +49,7 @@ std::string PresetSerializerV2::toIso8601(int64_t unixSeconds)
 
 // ── toJson ───────────────────────────────────────────────────────────────────
 
-nlohmann::json PresetSerializerV2::toJson(const PresetEntry& preset)
+nlohmann::json PresetSerializerV2::toJson(const PresetEntry& preset, SnapshotBank* bank)
 {
     nlohmann::json j;
 
@@ -88,6 +90,42 @@ nlohmann::json PresetSerializerV2::toJson(const PresetEntry& preset)
         catch (const nlohmann::json::exception&)
         {
             // jsonData is malformed — omit inner sections rather than crash.
+        }
+    }
+
+    // If no prior snapshot data exists and a live bank is provided, serialize it.
+    if (bank != nullptr && !j.contains("snapshots"))
+    {
+        nlohmann::json occupiedArr = nlohmann::json::array();
+        nlohmann::json snapData = nlohmann::json::object();
+
+        if (bank->tryReadLocked([&](const std::array<ParameterState, SnapshotBank::NUM_SLOTS>& slots)
+        {
+            for (int s = 0; s < SnapshotBank::NUM_SLOTS; ++s)
+            {
+                nlohmann::json slotObj;
+                slotObj["index"] = s;
+                slotObj["occupied"] = slots[s].occupied;
+                slotObj["paramCount"] = slots[s].parameterCount;
+
+                if (slots[s].occupied && slots[s].parameterCount > 0)
+                {
+                    nlohmann::json vals = nlohmann::json::array();
+                    for (int i = 0; i < slots[s].parameterCount; ++i)
+                        vals.push_back(static_cast<double>(slots[s].values[i]));
+                    slotObj["values"] = vals;
+                    occupiedArr.push_back(s);
+                }
+
+                snapData[std::to_string(s)] = slotObj;
+            }
+        }))
+        {
+            j["snapshots"] = {
+                {"count", 12},
+                {"occupied", occupiedArr},
+                {"data", snapData}
+            };
         }
     }
 
@@ -296,16 +334,18 @@ bool PresetSerializerV2::validate(const nlohmann::json& j, std::string& errorMes
 
 // ── migrateFromV1 ────────────────────────────────────────────────────────────
 
-bool PresetSerializerV2::migrateFromV1(const juce::XmlElement& v1Xml,
+bool PresetSerializerV2::migrateFromV1(const juce::var& v1Json,
                                        PresetEntry& outPreset)
 {
-    // V1 format: <PRESET version="1" name="..."> with children for apvts and snapshots.
-    if (!v1Xml.hasAttribute("version")) return false;
-    if (v1Xml.getIntAttribute("version") != 1) return false;
+    // V1 format: JSON object produced by PresetSerializer::serialize()
+    if (!v1Json.isObject()) return false;
+
+    auto version = v1Json.getProperty("version", 0);
+    if (static_cast<int>(version) != 1) return false;
 
     PresetEntry p;
     p.id   = PresetLibrary::generateUUID();
-    p.name = v1Xml.getStringAttribute("name", "Migrated Preset").toStdString();
+    p.name = v1Json.getProperty("name", "Migrated Preset").toString().toStdString();
 
     // Use current time for both timestamps since V1 had no timestamps.
     auto now = std::chrono::system_clock::now();
@@ -315,71 +355,91 @@ bool PresetSerializerV2::migrateFromV1(const juce::XmlElement& v1Xml,
 
     p.morphSnapVersion = "1.0.0";  // Unknown original version — mark as 1.x.
 
-    // Build a minimal V2 JSON from the V1 XML, preserving what we can.
+    // Build a minimal V2 JSON from the V1 data, preserving what we can.
     nlohmann::json j = toJson(p);   // Gives us the default skeleton.
 
     // Preserve the APVTS state string in the output JSON under "apvts" so it
     // can be restored verbatim when the preset is loaded.
-    juce::String apvtsStr = v1Xml.getStringAttribute("apvts", "");
+    juce::String apvtsStr = v1Json.getProperty("apvts", {}).toString();
     if (apvtsStr.isNotEmpty())
     {
         j["apvts"] = apvtsStr.toStdString();
         p.description = "Migrated from V1 preset.";
     }
 
-    // Parse the V1 SNAPSHOT_BANK XML child element and convert snapshot values
-    // into the V2 JSON format.
-    //
-    // V1 format:
-    //   <SNAPSHOT_BANK>
-    //     <SNAPSHOT index="0" occupied="1" paramCount="N">
-    //       <VALUE v="0.5"/>
-    //       ...
-    //     </SNAPSHOT>
-    //   </SNAPSHOT_BANK>
-    auto* snapshotBankEl = v1Xml.getChildByName("SNAPSHOT_BANK");
-    if (snapshotBankEl != nullptr)
+    // Parse the V1 snapshots array and convert into the V2 JSON format.
+    auto* snapArr = v1Json.getProperty("snapshots", {}).getArray();
+    if (snapArr != nullptr)
     {
         nlohmann::json occupiedArr = nlohmann::json::array();
         nlohmann::json snapData    = nlohmann::json::object();
 
-        for (auto* snapEl = snapshotBankEl->getFirstChildElement();
-             snapEl != nullptr;
-             snapEl = snapEl->getNextElement())
+        for (int s = 0; s < juce::jmin(static_cast<int>(snapArr->size()), 12); ++s)
         {
-            if (!snapEl->hasTagName("SNAPSHOT")) continue;
+            const auto& slotVar = (*snapArr)[s];
+            if (!slotVar.isObject()) continue;
 
-            int idx = snapEl->getIntAttribute("index", -1);
-            if (idx < 0 || idx >= 12) continue;  // NUM_SLOTS == 12
-
-            bool occupied    = snapEl->getBoolAttribute("occupied", false);
-            int  paramCount  = snapEl->getIntAttribute("paramCount", 0);
+            bool occupied   = slotVar.getProperty("occupied", false);
+            int  paramCount = slotVar.getProperty("paramCount", 0);
+            juce::String slotName = slotVar.getProperty("name", {}).toString();
 
             nlohmann::json slotObj;
-            slotObj["index"]      = idx;
+            slotObj["index"]      = s;
             slotObj["occupied"]   = occupied;
             slotObj["paramCount"] = paramCount;
+            if (slotName.isNotEmpty())
+                slotObj["name"] = slotName.toStdString();
 
             if (occupied && paramCount > 0)
             {
-                nlohmann::json vals = nlohmann::json::array();
-                for (auto* valEl = snapEl->getFirstChildElement();
-                     valEl != nullptr;
-                     valEl = valEl->getNextElement())
+                auto* valArr = slotVar.getProperty("values", {}).getArray();
+                if (valArr != nullptr)
                 {
-                    if (valEl->hasTagName("VALUE"))
-                        vals.push_back(valEl->getDoubleAttribute("v", 0.0));
+                    nlohmann::json vals = nlohmann::json::array();
+                    for (int i = 0; i < juce::jmin(paramCount, static_cast<int>(valArr->size())); ++i)
+                        vals.push_back(static_cast<double>((*valArr)[i]));
+                    slotObj["values"] = vals;
                 }
-                slotObj["values"] = vals;
-                occupiedArr.push_back(idx);
+                occupiedArr.push_back(s);
             }
 
-            snapData[std::to_string(idx)] = slotObj;
+            // FIX C4: Preserve per-slot opaque state chunk from V1 (Kontakt/wavetable synths).
+            juce::String stateBase64 = slotVar.getProperty("stateChunk", {}).toString();
+            if (stateBase64.isNotEmpty())
+                slotObj["stateChunk"] = stateBase64.toStdString();
+
+            snapData[std::to_string(s)] = slotObj;
         }
 
         j["snapshots"]["count"]    = 12;
         j["snapshots"]["occupied"] = occupiedArr;
         j["snapshots"]["data"]     = snapData;
+    }
+
+    // Migrate hosted plugin info if present (V1 stored it as an XML string).
+    juce::String hostedPluginXml = v1Json.getProperty("hostedPlugin", {}).toString();
+    if (hostedPluginXml.isNotEmpty())
+    {
+        if (auto xml = juce::parseXML(hostedPluginXml))
+        {
+            juce::PluginDescription desc;
+            if (desc.loadFromXml(*xml))
+            {
+                j["hostedPlugin"] = {
+                    {"name",         desc.name.toStdString()},
+                    {"manufacturer", desc.manufacturerName.toStdString()},
+                    {"format",       desc.pluginFormatName.toStdString()},
+                    {"uid",          desc.fileOrIdentifier.toStdString()}
+                };
+            }
+        }
+    }
+
+    // Migrate hosted plugin state if present.
+    juce::String hostedPluginState = v1Json.getProperty("hostedPluginState", {}).toString();
+    if (hostedPluginState.isNotEmpty())
+    {
+        j["hostedPluginState"] = hostedPluginState.toStdString();
     }
 
     // Re-build final JSON with updated description.

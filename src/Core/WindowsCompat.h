@@ -63,13 +63,9 @@
 #undef CONST
 #endif
 
-#ifdef CALLBACK
-#undef CALLBACK
-#endif
-
-#ifdef WINAPI
-#undef WINAPI
-#endif
+// H7 FIX: Do NOT undefine CALLBACK and WINAPI — they are calling-convention
+// macros, not value macros, and undefining them causes ABI/link mismatches.
+// JUCE enum conflicts are handled by PatchJuceForMSVC.cmake instead.
 
 // Ensure WIN32_LEAN_AND_MEAN and NOMINMAX are set for any late Windows.h includes
 #ifndef WIN32_LEAN_AND_MEAN

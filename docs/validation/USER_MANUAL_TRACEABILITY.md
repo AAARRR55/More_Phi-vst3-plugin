@@ -2,7 +2,7 @@
 
 This matrix cross-references `docs/USER_MANUAL.md` against the current GUI, backend, automation, MIDI, MCP, and test surfaces. Guide workflow coverage for `docs/USER_GUIDE.md` is tracked separately in `docs/validation/USER_GUIDE_TRACEABILITY.md`. Status values are limited to: `Pass`, `Mismatch`, `Missing`, `Needs automated test`, and `Needs manual host verification`.
 
-Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `24/24`, the full Release Ninja suite passes `375/375`, and the local VST3 validator wrapper records the missing external validator in `docs/validation/vst3_validator_result_20260517.json`. `tests/CMakeLists.txt` now registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
+Last refreshed: `2026-06-17`. Current validation evidence is summarized in `docs/validation/USER_MANUAL_E2E_AUDIT_REPORT.md`; the focused manual/VST3 suite passes `27/27`, the full Release suite passes `474/474`, `pluginval` strictness-5 has passed (`validation/pluginval_strictness5.txt`, 2026-06-16), and the local VST3 validator wrapper records the missing Steinberg `vst3_validator` when it is not on `PATH`. `tests/CMakeLists.txt` registers optional `validation` CTest entries when `vst3_validator` or `pluginval` is installed.
 
 ## Summary
 
@@ -162,7 +162,7 @@ Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs
 | `morphX` | `src/Plugin/PluginProcessor.cpp:598` | Partial | Needs automated test | Host automation and runtime sync. |
 | `morphY` | `src/Plugin/PluginProcessor.cpp:600` | Partial | Needs automated test | Host automation and runtime sync. |
 | `morphFader` / implementation `faderPos` | `src/Plugin/PluginProcessor.cpp:602` | `tests/Integration/TestUserManualFeatureSurface.cpp:90` | Mismatch | Manual lists `morphFader`; APVTS ID is `faderPos`. |
-| `morphSource` | processor internal atomic | `tests/Integration/TestUserManualFeatureSurface.cpp:90` | Mismatch | Manual lists choice/internal; not APVTS-visible in inspected parameter list. |
+| `morphSource` | `src/Plugin/PluginProcessor.cpp:788` | `tests/Integration/TestUserManualFeatureSurface.cpp:193` | Mismatch | Manual labels it as "Choice/internal"; it is actually registered as an APVTS `AudioParameterChoice` and is host-visible. Wording should be clarified. |
 | `sanityEnabled` | `src/Plugin/PluginProcessor.cpp:633` | Partial | Needs automated test | Runtime protection path. |
 | `listenMode` | `src/Plugin/PluginProcessor.cpp:649` | `tests/Integration/TestVST3ParameterAutomation.cpp:120` | Pass | Runtime sync is covered. |
 | `linkMode` | `src/Plugin/PluginProcessor.cpp:667` | `tests/Integration/TestVST3ParameterAutomation.cpp:120` | Pass | Runtime sync is covered. |
@@ -190,14 +190,30 @@ Last refreshed: `2026-05-17`. Current validation evidence is summarized in `docs
 | LLM validation fails | LLM settings validator | `LLMSettings*` | LLM tests | Needs automated test | Existing settings tests reusable. |
 | Safe action restore fails | Semantic MCP rollback | `MCPToolHandler`, `SemanticPluginProfile` | AI regression tests | Needs automated test | Include recent semantic tests in audit. |
 
+## Traceability Totals
+
+Recomputed from the detailed rows above:
+
+| Status | Count |
+|---|---:|
+| Pass | 26 |
+| Mismatch | 13 |
+| Needs automated test | 57 |
+| Needs manual host verification | 18 |
+| Missing | 0 |
+| **Total traced items** | **114** |
+
+The summary table at the top of this matrix aggregates high-level areas; the detailed-row totals above provide the item-level coverage count.
+
 ## Prioritized Risk Register
 
 | Priority | Finding | Status | Recommended validation |
 |---|---|---|---|
 | P0 | No active automated-validation blocker remains in the executed focused, regression, VST3 build, and full-suite checks. | Pass | Keep this status green by rerunning focused and full suites after future feature/doc changes. |
-| P0 | External VST3 standards validation has not run locally because no validator tool is available. | Needs manual host verification | Install `vst3_validator` or `pluginval` in CI/release validation and rerun `tests/scripts/run_vst3_validator.py`; the current wrapper artifact records `VST3 validator not found`. |
+| P0 | Steinberg `vst3_validator` has not run locally because it is not on `PATH`. `pluginval` strictness-5 has passed (`validation/pluginval_strictness5.txt`, 2026-06-16). | Needs manual host verification | Install `vst3_validator` in CI/release validation and rerun `tests/scripts/run_vst3_validator.py`; keep `pluginval` strictness-5 in the release pipeline. |
 | P1 | `sidechainThreshold` is documented as dB while router stores linear RMS `[0,1]` after processor conversion. | Mismatch | Keep tests for conversion/threshold behavior and clarify documentation wording. |
 | P1 | Manual lists `morphFader`, while APVTS uses `faderPos`. | Mismatch | Report and decide doc alias vs implementation rename later. |
+| P1 | Manual classifies `morphSource` as "Choice/internal"; it is registered as an APVTS `AudioParameterChoice` and is host-visible. | Mismatch | Clarify manual wording to reflect host-visible automation parameter. |
 | P1 | Macro knobs are documented as assignable, but current implementation maps first 8 hosted parameters. | Mismatch | Report; do not fix in validation pass. |
 | P1 | Presets manual describes banked 16x128 behavior; visible tab uses preset library/search workflow. | Mismatch | Report and trace both `PresetLibrary` and `MetaPresetManager`. |
 | P2 | GUI-only visuals such as movement trail, labels, clipboard token copy, hosted plugin editor, real DAW automation lanes, and audible hosted-plugin recall/morph behavior need manual QA. | Needs manual host verification | Include in release/manual-host QA checklist. |

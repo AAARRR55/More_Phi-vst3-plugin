@@ -4,6 +4,8 @@
 
 namespace more_phi {
 
+// M-7 FIX: Macro knobs are currently hardcoded to the first 8 hosted parameters (0–7).
+// TODO: Implement user-configurable mapping so any parameter can be assigned to any knob.
 MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
 {
     for (int i = 0; i < 8; ++i)

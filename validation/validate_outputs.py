@@ -197,6 +197,46 @@ class OutputValidator:
                 f"Expected >={self.expected_feature_dims} features, got {actual_feature_dims}"
             ))
 
+            # Semantic validation: check that feature values are in plausible ranges.
+            # Placeholder values (all zeros or hardcoded constants) will fail these checks,
+            # ensuring only real FeatureExtractor output passes semantic validation.
+            range_issues = []
+
+            # MFCC: real MFCC values are typically in [-50, 50] and non-uniform
+            if all(v == 0.0 for v in mfcc):
+                range_issues.append("mfcc: all zeros (placeholder)")
+            elif all(v == mfcc[0] for v in mfcc):
+                range_issues.append("mfcc: all identical (placeholder)")
+
+            # Chroma: real chroma values are in [0, 1] and non-uniform
+            if all(v == 0.0 for v in chroma):
+                range_issues.append("chroma: all zeros (placeholder)")
+            elif all(v == chroma[0] for v in chroma):
+                range_issues.append("chroma: all identical (placeholder)")
+
+            # Spectral centroid should be > 0 Hz for non-silent audio
+            centroid = spectral.get('spectralCentroid', 0.0)
+            if centroid <= 0.0:
+                range_issues.append(f"spectralCentroid: {centroid} (should be > 0 Hz)")
+
+            # LUFS should be in [-70, 0] for realistic audio
+            lufs = perceptual.get('lufs', 0.0)
+            if lufs > 0.0 or lufs < -70.0:
+                range_issues.append(f"lufs: {lufs} (should be in [-70, 0])")
+
+            # RMS energy in dB should be negative for audio below 0 dBFS
+            rms_db = temporal.get('rmsEnergy', 0.0)
+            if rms_db > 0.0:
+                range_issues.append(f"rmsEnergy: {rms_db} dB (should be <= 0 for sub-unity RMS)")
+
+            is_semantic_valid = len(range_issues) == 0
+            checks.append(ValidationResult(
+                "feature_values_semantic",
+                is_semantic_valid,
+                "All values in plausible ranges" if is_semantic_valid
+                else f"Placeholder/invalid values detected: {'; '.join(range_issues)}"
+            ))
+
         except json.JSONDecodeError as e:
             checks.append(ValidationResult(
                 "features_json_valid", False, str(e)
@@ -279,7 +319,27 @@ def validate_dataset(dataset_dir: Path, max_samples: int = None) -> dict:
     Returns:
         Validation report dictionary
     """
-    validator = OutputValidator()
+    # Try to load expected values from config file
+    config_path = dataset_dir.parent / 'scale_test_config.json'
+    expected_sr = 48000
+    expected_dur = 5.0
+    expected_ch = 2
+
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+                expected_sr = cfg.get('sampleRate', expected_sr)
+                expected_dur = cfg.get('fullDuration', expected_dur)
+                expected_ch = cfg.get('numChannels', expected_ch)
+        except Exception as e:
+            print(f"Warning: Could not read config {config_path}: {e}")
+
+    validator = OutputValidator(
+        expected_sample_rate=expected_sr,
+        expected_duration=expected_dur,
+        expected_channels=expected_ch
+    )
 
     # Find all sample directories
     sample_dirs = sorted([

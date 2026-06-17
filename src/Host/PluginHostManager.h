@@ -13,6 +13,9 @@
 #include "IPluginHostManager.h"
 #include <atomic>
 #include <array>
+#include <memory>
+#include <vector>
+#include <functional>
 
 namespace more_phi {
 
@@ -27,8 +30,8 @@ public:
     void releaseResources() override;
     bool loadPlugin(const juce::PluginDescription& desc) override;
     void unloadPlugin() override;
-    bool hasPlugin() const override { return hostedPluginPtr_.load(std::memory_order_acquire) != nullptr; }
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override;
+    bool hasPlugin() const noexcept override { return hostedPluginPtr_.load(std::memory_order_acquire) != nullptr; }
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept override;
 
     /**
      * Forward the owning DAW playhead to the hosted plugin.
@@ -63,7 +66,14 @@ public:
         return exclusivePluginUseRequested_.load(std::memory_order_acquire);
     }
     
+    /** C3 FIX: Set a callback that will be invoked (async on message thread) when the plugin is unloaded.
+     *  Used by the editor to close any open hosted plugin window before the instance is destroyed. */
+    void setWindowCloseCallback(std::function<void()> cb) { windowCloseCallback_ = std::move(cb); }
+    
     const juce::PluginDescription* getLastDescription() const override;
+
+    // Parameter metadata (delegates to hosted plugin)
+    int getNumSteps(int index) const noexcept override;
 
     /** Number of processing exceptions since last successful load. */
     int getExceptionCount() const { return exceptionCount_.load(std::memory_order_relaxed); }
@@ -72,8 +82,16 @@ public:
     juce::KnownPluginList& getKnownPlugins() override { return knownPlugins; }
     void scanPluginFolders() override;
 
-    /** Get the last loaded plugin description — available even after unload for recovery. */
-    const juce::PluginDescription& getLastDescriptionRef() const { return lastDescription; }
+    /** Get the last loaded plugin description — available even after unload for recovery.
+     *  Returns a reference to the immutable snapshot published at load time, so it is
+     *  safe to read from any thread. If no snapshot exists yet, falls back to the
+     *  mutable lastDescription member (only safe when no load is in progress). */
+    const juce::PluginDescription& getLastDescriptionRef() const
+    {
+        if (auto* snap = descriptionSnapshot_.load(std::memory_order_acquire))
+            return *snap;
+        return lastDescription;
+    }
 
     /**
      * Robust plugin discovery with multi-stage fallback.
@@ -112,10 +130,13 @@ private:
 
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
+    mutable juce::SpinLock knownPluginsLock_;  // M14 FIX: guards knownPlugins
     std::unique_ptr<juce::AudioPluginInstance> hostedPlugin;
     std::atomic<juce::AudioPluginInstance*> hostedPluginPtr_{nullptr};
     juce::PluginDescription lastDescription;
-    mutable juce::SpinLock  descLock_;    // guards lastDescription
+    mutable juce::SpinLock  descLock_;    // guards lastDescription and descriptionHistory_
+    std::vector<std::unique_ptr<juce::PluginDescription>> descriptionHistory_;
+    std::atomic<juce::PluginDescription*> descriptionSnapshot_{nullptr};
 
     // Number of active short-lived plugin users (audio thread processing and
     // parameter-bridge operations). unloadPlugin() waits for this to reach 0
@@ -123,9 +144,9 @@ private:
     std::atomic<uint32_t> activePluginUsers_{0};
     std::atomic<bool> exclusivePluginUseRequested_{false};
 
-    // Counts consecutive processBlock exceptions; reset on successful load.
-    // When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is suspended (NOT unloaded).
-    std::atomic<int> exceptionCount_{0};
+    // C12 FIX: Use unsigned to prevent signed-overflow UB. Cap at MAX+1 to avoid
+    // wrap-around which would falsely reset the suspension counter.
+    std::atomic<uint32_t> exceptionCount_{0};
 
     // When true, plugin is suspended (audio bypassed) but NOT destroyed.
     // Recovery is attempted automatically when processBlock succeeds.
@@ -147,15 +168,26 @@ private:
     std::atomic<int> exceptionLogCursor_{0};
     std::array<std::atomic<const char*>, MAX_EXCEPTION_LOG_ENTRIES> exceptionLog_{};
     std::atomic<juce::AudioPlayHead*> playHead_{nullptr};
+    juce::AudioPlayHead* lastPlayHeadSent_ = nullptr;  // H9 FIX: cache to avoid per-block setPlayHead
 
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;
     int currentNumChannels = 2;
     bool hasPreparedConfiguration_ = false;
+    std::atomic<bool> preparing_{false};  // H11 FIX: prevents prepare/processBlock race on wideBuffer_
 
     // Pre-allocated wide buffer to avoid audio-thread heap allocation when the
     // hosted plugin requires more channels than the incoming buffer provides.
     juce::AudioBuffer<float> wideBuffer_;
+
+    // Smooth gain factor to prevent clicks during preset recalls / bypass switches
+    float currentGain_{1.0f};
+
+    // H12 FIX: Deduplicated exception-handling grace-period logic
+    bool applyExceptionGracePeriod(juce::AudioBuffer<float>& buffer) noexcept;
+
+    // C3 FIX: Callback invoked when plugin is unloaded so editor can close UI windows
+    std::function<void()> windowCloseCallback_;
 };
 
 } // namespace more_phi

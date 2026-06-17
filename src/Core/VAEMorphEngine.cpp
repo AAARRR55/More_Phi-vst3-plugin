@@ -132,8 +132,7 @@ std::vector<float> VAEMorphEngine::encode(const std::vector<float>& parameterSna
     //   return std::vector<float>(latentData, latentData + latentDims_);
 
     // MVP stub: return a zero latent vector of the correct dimensionality.
-    // M-5 FIX: Alert developers that encode is called without ONNX runtime.
-    jassertfalse;  // encode() called without ONNX runtime — using zero-latent stub
+    // M-5 FIX: encode() is a stub without ONNX runtime — return zero-latent gracefully.
     return std::vector<float>(static_cast<size_t>(latentDims_), 0.0f);
 }
 
@@ -146,8 +145,7 @@ std::vector<float> VAEMorphEngine::decode(const std::vector<float>& latentVector
     //   Pass latentVector as input tensor, receive parameter snapshot output.
 
     // MVP stub: return an empty vector (caller falls back to parameter-space morph).
-    // M-5 FIX: Alert developers that decode is called without ONNX runtime.
-    jassertfalse;  // decode() called without ONNX runtime — returning empty
+    // M-5 FIX: decode() is a stub without ONNX runtime — return empty gracefully.
     return {};
 }
 

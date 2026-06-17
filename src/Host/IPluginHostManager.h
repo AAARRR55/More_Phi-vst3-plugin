@@ -28,7 +28,7 @@ public:
     virtual bool hasPlugin() const = 0;
     
     // Audio processing
-    virtual void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) = 0;
+    virtual void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept = 0;
     
     // Access
     virtual juce::AudioPluginInstance* getPlugin() = 0;
@@ -39,6 +39,9 @@ public:
     virtual juce::AudioPluginFormatManager& getFormatManager() = 0;
     virtual juce::KnownPluginList& getKnownPlugins() = 0;
     virtual void scanPluginFolders() = 0;
+    
+    // Parameter metadata (0 = continuous)
+    virtual int getNumSteps(int index) const { return 0; }
 };
 
 /**
@@ -68,6 +71,9 @@ public:
     virtual juce::String getParameterDisplayValue(int index) const = 0;
     virtual float getParameterDefault(int index) const = 0;
     virtual juce::StringArray getParameterValueStrings(int index) const = 0;
+    virtual juce::String getParameterStableID(int index) const = 0;
+    virtual int getParameterNumSteps(int index) const = 0;
+    virtual int getNumSteps(int index) const { return getParameterNumSteps(index); }
 };
 
 /**

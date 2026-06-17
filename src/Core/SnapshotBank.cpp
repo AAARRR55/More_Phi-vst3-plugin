@@ -28,17 +28,20 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     const int count = bridge.getParameterCount();
     if (count == 0) return;
 
+    // FIX C5: thread_local scratch buffer — no shared state across UI/MCP/audio threads.
+    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
+
     // Use pre-allocated scratch buffer - NO ALLOCATION
     const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
                        ? preparedParamCount_.load(std::memory_order_relaxed)
                        : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit);
-    captureScratch_.fill(0.0f);
+    captureScratch.fill(0.0f);
     for (int i = 0; i < safeCount; ++i)
-        captureScratch_[static_cast<size_t>(i)] = bridge.getParameterNormalized(i);
+        captureScratch[static_cast<size_t>(i)] = bridge.getParameterNormalized(i);
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch_.data(), safeCount);
+    (*slots_)[slot].capture(captureScratch.data(), safeCount);
 
     // Capture parameter names for forward compatibility (VST3-H1)
     paramNames_[slot].clear();
@@ -51,15 +54,18 @@ void SnapshotBank::captureValues(int slot, const std::vector<float>& values)
     if (slot < 0 || slot >= NUM_SLOTS) return;
     if (values.empty()) return;
 
+    // FIX C5: thread_local scratch buffer.
+    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
+
     const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
                        ? preparedParamCount_.load(std::memory_order_relaxed)
                        : MAX_PARAMETERS;
     const int safeCount = juce::jmin(static_cast<int>(values.size()), limit);
-    captureScratch_.fill(0.0f);
-    std::copy_n(values.begin(), static_cast<size_t>(safeCount), captureScratch_.begin());
+    captureScratch.fill(0.0f);
+    std::copy_n(values.begin(), static_cast<size_t>(safeCount), captureScratch.begin());
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch_.data(), safeCount);
+    (*slots_)[slot].capture(captureScratch.data(), safeCount);
 }
 
 void SnapshotBank::captureValuesWithNames(int slot,
@@ -70,16 +76,19 @@ void SnapshotBank::captureValuesWithNames(int slot,
     if (slot < 0 || slot >= NUM_SLOTS) return;
     if (values == nullptr || count <= 0) return;
 
+    // FIX C5: thread_local scratch buffer.
+    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
+
     const int limit = (preparedParamCount_.load(std::memory_order_acquire) > 0)
                        ? preparedParamCount_.load(std::memory_order_relaxed)
                        : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit, MAX_PARAMETERS);
 
-    captureScratch_.fill(0.0f);
-    std::copy_n(values, static_cast<size_t>(safeCount), captureScratch_.begin());
+    captureScratch.fill(0.0f);
+    std::copy_n(values, static_cast<size_t>(safeCount), captureScratch.begin());
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch_.data(), safeCount);
+    (*slots_)[slot].capture(captureScratch.data(), safeCount);
     paramNames_[slot].clear();
     for (int i = 0; i < safeCount && i < names.size(); ++i)
         paramNames_[slot].add(names[i]);
@@ -91,12 +100,15 @@ void SnapshotBank::recall(int slot, IParameterBridge& bridge) const
 
     int parameterCount = 0;
 
+    // FIX C5: thread_local scratch buffer.
+    thread_local std::array<float, MAX_PARAMETERS> recallScratch;
+
     // Use pre-allocated scratch buffer instead of stack-local array (8 KB)
-    if (!copySlotValues(slot, recallScratch_.data(), parameterCount))
+    if (!copySlotValues(slot, recallScratch.data(), parameterCount))
         return;
 
     if (parameterCount > 0)
-        bridge.applyParameterState(recallScratch_.data(), parameterCount);
+        bridge.applyParameterState(recallScratch.data(), parameterCount);
 }
 
 void SnapshotBank::recallFast(int slot, IParameterBridge& bridge) const
@@ -107,19 +119,36 @@ void SnapshotBank::recallFast(int slot, IParameterBridge& bridge) const
 
     int parameterCount = 0;
 
-    if (!copySlotValues(slot, recallScratch_.data(), parameterCount))
+    // FIX C5: thread_local scratch buffer.
+    thread_local std::array<float, MAX_PARAMETERS> recallScratch;
+
+    if (!copySlotValues(slot, recallScratch.data(), parameterCount))
         return;
 
     if (parameterCount > 0)
-        bridge.applyParameterState(recallScratch_.data(), parameterCount);
+        bridge.applyParameterState(recallScratch.data(), parameterCount);
 }
 
-void SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin)
+bool SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin)
 {
-    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return false;
 
     juce::MemoryBlock chunk;
-    plugin->getStateInformation(chunk);
+    try
+    {
+        plugin->getStateInformation(chunk);
+    }
+    catch (const std::exception& e)
+    {
+        juce::Logger::writeToLog("SnapshotBank::captureStateChunk — getStateInformation failed: "
+            + juce::String(e.what()));
+        return false;
+    }
+    catch (...)
+    {
+        juce::Logger::writeToLog("SnapshotBank::captureStateChunk — getStateInformation failed: unknown exception");
+        return false;
+    }
 
     // CRITICAL (Finding 4): Protect stateChunks_ write with chunksLock_.
     WriteScope write(*this);
@@ -127,6 +156,7 @@ void SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin
         const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
         stateChunks_[static_cast<size_t>(slot)] = std::move(chunk);
     }
+    return true;
 }
 
 void SnapshotBank::captureStateChunk(int slot, const juce::MemoryBlock& chunk)
@@ -139,9 +169,9 @@ void SnapshotBank::captureStateChunk(int slot, const juce::MemoryBlock& chunk)
     }
 }
 
-void SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const
+bool SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin) const
 {
-    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return false;
 
     // CRITICAL (Finding 4): Protect stateChunks_ read with seqlock.
     // Use tryReadLocked pattern for lock-free read with retry on concurrent write.
@@ -154,12 +184,29 @@ void SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin)
     }
 
     if (hasChunk && chunkCopy.getSize() > 0)
-        plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
+    {
+        try
+        {
+            plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
+        }
+        catch (const std::exception& e)
+        {
+            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: "
+                + juce::String(e.what()));
+            return false;
+        }
+        catch (...)
+        {
+            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+            return false;
+        }
+    }
+    return true;
 }
 
-void SnapshotBank::recallStateChunk(int slot, juce::AudioProcessor* plugin) const
+bool SnapshotBank::recallStateChunk(int slot, juce::AudioProcessor* plugin) const
 {
-    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return;
+    if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return false;
 
     // CRITICAL (Finding 4): Protect stateChunks_ read with seqlock.
     // Use tryReadLocked pattern for lock-free read with retry on concurrent write.
@@ -172,7 +219,24 @@ void SnapshotBank::recallStateChunk(int slot, juce::AudioProcessor* plugin) cons
     }
 
     if (hasChunk && chunkCopy.getSize() > 0)
-        plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
+    {
+        try
+        {
+            plugin->setStateInformation(chunkCopy.getData(), static_cast<int>(chunkCopy.getSize()));
+        }
+        catch (const std::exception& e)
+        {
+            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: "
+                + juce::String(e.what()));
+            return false;
+        }
+        catch (...)
+        {
+            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+            return false;
+        }
+    }
+    return true;
 }
 
 bool SnapshotBank::isOccupied(int slot) const noexcept

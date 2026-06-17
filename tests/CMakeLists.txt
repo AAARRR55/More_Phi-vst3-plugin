@@ -18,9 +18,6 @@ endif()
 
 # ── Unit test executable ────────────────────────────────────────────────────────
 # Legacy Morphy-era tests under tests/src are intentionally excluded.
-option(MORE_PHI_BUILD_COMPREHENSIVE_E2E
-       "Build the generated comprehensive VST3 E2E suite. Off by default because it tracks experimental APIs."
-       OFF)
 
 add_executable(MorePhiTests
     Unit/test_more_phi_unit.cpp
@@ -45,6 +42,7 @@ add_executable(MorePhiTests
     Integration/TestVST3ParameterAutomation.cpp
     Integration/TestVST3MidiAndSidechain.cpp
     Integration/TestVST3AudioSignalAccuracy.cpp
+    Integration/TestVST3ComprehensiveE2E.cpp
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
@@ -81,10 +79,6 @@ add_executable(MorePhiTests
     Unit/TestStereoFieldAnalyzer.cpp
     Unit/TestLicensing.cpp
 )
-
-if(MORE_PHI_BUILD_COMPREHENSIVE_E2E)
-    target_sources(MorePhiTests PRIVATE Integration/TestVST3ComprehensiveE2E.cpp)
-endif()
 
 # Link the compiled plugin objects in (shared) so the test binary has access
 # to ParameterState, LockFreeQueue, InterpolationEngine, SnapshotBank
@@ -180,6 +174,10 @@ if(MORE_PHI_BUILD_BENCHMARKS)
         juce::juce_core
         juce::juce_audio_processors
     )
+
+    if(WIN32)
+        target_link_libraries(MorePhiBenchmarks PRIVATE Psapi)
+    endif()
 
     target_include_directories(MorePhiBenchmarks PRIVATE
         ${CMAKE_SOURCE_DIR}/src

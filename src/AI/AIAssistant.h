@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "AutomationControlPlane.h"
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -78,6 +79,7 @@ private:
     bool previewActive_ = false;
     juce::String lastWorkflowRunId_;
     juce::String lastRollbackTransactionId_;
+    mutable AutomationRuntime automationRuntime_;
 };
 
 } // namespace more_phi

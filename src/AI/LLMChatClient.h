@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "AutomationControlPlane.h"
 #include "LLMConnectionValidator.h" // ILLMHttpClient, LLMHttpRequest/Response
 #include "LLMSettings.h"
 
@@ -124,6 +125,7 @@ private:
 
     MorePhiProcessor&               processor_;
     std::shared_ptr<ILLMHttpClient> httpClient_;
+    mutable AutomationRuntime       automationRuntime_;
 
     static constexpr int kMaxToolIterations  = 8;
     static constexpr int kMaxTokens          = 4096;

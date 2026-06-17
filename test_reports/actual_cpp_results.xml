@@ -1,0 +1,478 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="MorePhiTests.exe" errors="0" failures="0" skipped="0" tests="81049" hostname="tbd" time="7.363" timestamp="2026-06-17T01:44:22Z">
+    <properties>
+      <property name="random-seed" value="1282527045"/>
+    </properties>
+    <testcase classname="MorePhiTests.exe.global" name="MorePhi test harness is available" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateElastic: position converges toward target" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateElastic: starts from rest with zero velocity" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateElastic: slow preset converges slower than medium" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateElastic: is noexcept" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateElastic: sample-rate independent (H-2)" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::perlin: output is bounded within [-1.5, 1.5] for varied inputs" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::perlin: identical inputs produce identical output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::perlin: nearby inputs produce nearby outputs (smooth)" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::perlin: is noexcept" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateDrift: Free mode produces non-zero output for non-zero time" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateDrift: Locked mode stays near anchor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PhysicsEngine::updateDrift: is noexcept" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::breed: crossoverRatio=0 produces result approx parentA" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::breed: crossoverRatio=1 produces result approx parentB" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::breed: output is clamped to [0, 1]" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::smartRandomize: only modifies learned parameters" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::smartRandomize: amount=0 makes no changes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::smartRandomize: empty learned set makes no changes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::breed: SanityMode protects danger params" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::smartRandomize: SanityMode protects danger params" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GeneticEngine::breed: SanityMode disabled has no effect" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="BrickwallLimiter: honors dBTP ceiling against inter-sample peaks (B-1)" time="0.009" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix: concurrent mutation + apply stays consistent (MODULATION-1)" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: silent buffer does not trigger" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: loud buffer fires trigger exactly once" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: sustained loud does not re-trigger" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: loud-silent-loud triggers on second rising edge" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: round-robin cycles through 12 slots" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: disabled does not fire triggers" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Sidechain: threshold accessor round-trips" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x1 factor reports zero latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x2 factor reports positive latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x4 FIR factor latency is greater than x2" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: IIR mode has lower or equal latency than FIR at same factor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: reset() does not change latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: reprepare with different block size is safe" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x1 upsample returns a block of the same size" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x4 upsample block has 4x the samples" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: x2 and x4 produce finite downsampled output" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="BrickwallLimiter reports true peak separately from gain reduction" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LUFSMeter gates digital silence" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TruePeakEstimator reports silence explicitly" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LUFSMeter reports finite output for a known sine fixture" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LUFSMeter throttled recompute still yields valid integrated/LRA on long sessions (LUFS-7)" time="0.018" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TruePeakEstimator reports finite bounded output for a known sine fixture" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AutoMasteringEngine publishes live analyzer snapshots" time="0.051" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HarmonicExciter oversampled saturation stays bounded when enabled (ENHANCERS-1)" time="0.009" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AutoMasteringEngine applies only validated neural mastering plans" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor processBlock feeds local mastering analysis tap" time="0.052" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: CPU overhead factor increases with factor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorphProcessor: prepares successfully at all supported sample rates" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OversamplingWrapper: prepares correctly at all supported sample rates" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorphProcessor: produces consistent output across varying block sizes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Latency: oversampling latency increases monotonically with factor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Latency: x1 bypass introduces exactly 0 samples of latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Smoothing: converges to target without DC bias when input is zero" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Audio quality: upsample+downsample SNR > 80 dB for 1 kHz sine at x4 FIR" time="0.025" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Audio quality: x1 bypass has perfect SNR (exact pass-through)" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="InterpolationEngine: interpolateBatch_SIMD matches scalar for all boundary t values" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="InterpolationEngine: interpolateBatch_SIMD handles non-multiple-of-8 sizes correctly" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorphProcessor: with no occupied slots, output remains unchanged" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Denormal guard: ScopedNoDenormals compiles and is available" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: zero on construction" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: total = sum of all components" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: negative inputs are clamped to zero" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: updating one component recalculates total" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: FFT window latency matches fftSize/2 formula" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LatencyManager: mode switch to bypass resets oversampling latency to 0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Audio quality: no aliasing above Nyquist after x4 oversampling" time="0.011" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="InterpolationEngine: 1D compute output is monotonic between snapshots" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="InterpolationEngine: 1D compute returns exact snapshot values at endpoints" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Snapshot Suite: captures 12 slots, recalls by checksum, morphs adjacent slots, and handles empties" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorphProcessor: higher smoothing rate converges more slowly" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorphProcessor: smoothing rate 0.0 means instant convergence" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SemanticPluginProfile classifies EQ and limiter controls" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SemanticPluginProfile semantic IDs ignore display values" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SemanticPluginProfile disambiguates duplicate semantic IDs" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ParameterBridge getParameterDescriptor uses test descriptors" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ParameterBridge display value samples test descriptors with clamping" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP tool list exposes semantic profile tools" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP plugin profile audit includes semantic controls" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP safe action rejects locked controls" time="0.005" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP safe normalized action queues safe control and returns snapshot" time="0.021" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP safe action rejects when parameter edits are pending" time="0.019" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP restores safe action snapshot through parameter queue" time="0.053" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP safe action snapshot restore rejects changed parameter layout" time="0.046" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ParameterClassifier token estimation/optimization paths do not deadlock" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TokenOptimizer compression bounds and rate-limit bookkeeping are safe" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP morph compatibility returns computed non-placeholder output" time="0.006" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor external edit hold persists until morph position moves" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor snapshot recall marker clears external edit holds" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor parameter command queue reports full" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_parameter reports queue_full when resolved edit cannot be queued" time="0.036" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_parameters_batch reports partial queue_full accounting" time="0.037" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP optimized set reports queue_full when resolved edit cannot be queued" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP EQ preview and reject route through assistant preview state" time="0.005" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP EQ preview reports command queue saturation" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP optimized set reports when no parameter edits were queued" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_parameter reports rejected edits when no parameter resolves" time="0.029" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_parameters_batch reports all-rejected batches honestly" time="0.029" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_morph_position survives the following APVTS processBlock sync" time="0.032" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP tool list includes diagnose_parameter_pipeline" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline reports blocked stages when no plugin loaded" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline reports healthy stages with test descriptors" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline reports queue health under load" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline param_index reports per-parameter state" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline param_index reports nonexistent for out-of-range" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="diagnose_parameter_pipeline reports live edit holds when active" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set_parameter flush reports pluginUnavailable when no hosted plugin" time="0.029" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VAE stub loadModel is non-crashing and reports stub backend" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM provider definitions are exactly the approved providers" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Known providers have fixed base URLs and OpenAI Compatible is editable" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Default LLM settings have no active provider" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Provider activation requires a successful validation status" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Status labels match toolbar and modal vocabulary" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM settings store round-trips provider credentials, models, and status" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM settings store omits custom base URLs for fixed providers" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Unvalidated LLM provider settings do not replace the active provider" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Missing LLM settings config loads defaults and clears the active provider" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Malformed LLM settings config reports a read error and resets defaults" time="0.010" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Unknown LLM active provider keys are ignored during load" time="0.006" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Validator builds provider-specific model fetch requests" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Validator rejects missing API key and invalid compatible base URL" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Validator parses OpenAI-style and Anthropic-style model lists" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Validator reports auth failure and malformed model responses" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Validator parses test prompt responses and requires OK" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM chat client exposes API-safe runtime MCP tool names with full tool access" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM chat client exposes hosted and More-Phi edit tools to Anthropic" time="0.009" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM chat client system prompt encodes underscore naming and confirmation list" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat panel handles MCP tool inventory questions locally" time="0.005" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI assistant plans local morph language as a WorkflowRun DAG" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI assistant executes local natural language through workflow transactions" time="0.154" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP memory.update_outcome_feedback updates automatic workflow outcome" time="0.272" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI assistant records feedback for the last local workflow outcome" time="0.306" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI assistant records corrective feedback for an overdone local workflow" time="0.497" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat panel formats workflow timeline previews and feedback" time="0.624" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat panel formats pending approval queue entries" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI assistant reports when there is no local workflow to receive feedback" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat panel detects local workflow prompts before cloud chat" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat panel formats raw WinHTTP timeout errors" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="parseOpenAIResponse extracts NVIDIA inline tool-call tokens" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="parseOpenAIResponse extracts multiple NVIDIA inline tool calls" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="parseOpenAIResponse prefers structured tool_calls over inline tokens" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Tool name resolution is consistent across repeated calls (cached map)" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Chat-filtered tool surface is smaller than full surface (OpenAI)" time="0.010" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Chat-filtered tool surface is smaller than full surface (Anthropic)" time="0.013" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Conversation history trimming preserves system message and caps size" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Conversation history trimming is a no-op for small histories" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM settings dialog exposes exactly the approved provider names" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LLM settings dialog only allows OpenAI Compatible base URL edits" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OfflineBatchRenderer keeps FabFilter trap params out of randomized renders" time="0.021" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AudioBufferPool provides reusable buffers" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SIMD audio operations are faster than scalar" time="0.010" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="CPU capability detection" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Scalar addition operations" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Vector multiplication operations" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Vector addition operations" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Peak detection operations" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="RMS calculation operations" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="RMS calculation with sine wave" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Edge cases/Empty array" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Edge cases/Single sample" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Edge cases/Odd number of samples" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PerformanceProfiler measures execution time" time="0.011" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor: construction and destruction do not crash" time="0.004" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor: processBlock with live audio preserves buffer integrity" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor: state save/restore round-trip preserves APVTS values" time="0.008" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor: all new APVTS parameters exist" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Processor: supports stereo in/out layout" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP initialize rejects missing bearer token" time="0.112" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP initialize succeeds with instance auth token" time="0.093" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP tools/list and tools/call wrappers work with legacy handlers" time="0.109" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP tools/call can edit More-Phi runtime parameters" time="0.174" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP mastering render job can be started, polled, and selected" time="0.485" status="run">
+      <system-err>
+[WARNING] No plugin host available — all renders will be dry passthrough!
+  Check that the --plugin path points to a valid .vst3 file.
+      </system-err>
+    </testcase>
+    <testcase classname="MorePhiTests.exe.global" name="MCP set/get morph state uses authenticated flow and public accessors" time="0.171" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP rate limit is enforced through token optimizer bookkeeping" time="0.110" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="DatasetGeneratorV2: initialization succeeds" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="DatasetGeneratorV2: parameter sampling works" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="DatasetGeneratorV3: configuration accepted" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="DatasetGeneratorV3: can use V2 parameter sets" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="FeatureExtractor: full extraction pipeline" time="0.117" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface exposes implementation-backed automation parameters" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User guide feature surface exposes implementation-backed workflow controls" time="0.016" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface records documented automation ID drift" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface exposes Engine tab APVTS parameters" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface includes the documented five editor tabs" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface can construct and resize the editor headlessly" time="0.017" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface mode selector updates APVTS and processor state" time="0.011" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="User manual feature surface mode selector syncs from automation" time="0.188" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="AI chat tab uses expanded screen real estate" time="0.007" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Chat display scrolls with keyboard and wheel input" time="0.006" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Snap fader auto-refresh detects assistant-driven morph changes" time="0.008" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 parameter automation exposes documented parameters to the host" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 parameter automation updates representative APVTS values" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 parameter automation syncs APVTS values into runtime state" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 parameter automation applies output gain during processing" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 parameter automation bypass remains transparent with no hosted plugin" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 smart randomize parameter is exposed as automatable but has no processor trigger path" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 MIDI handling maps documented C3-B3 notes to snapshot slots" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 MIDI handling consumes trigger note-offs and passes out-of-range notes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 MIDI handling maps CC1 to morph fader value" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 MIDI handling updates processor fader path from CC1" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 sidechain bus and APVTS state are available to the processor" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 sidechain trigger opens on rising threshold edge and advances slots" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy keeps processed samples finite" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy preserves silence with no hosted plugin" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy applies output gain at 0 dB and nonzero gains" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy bypass is bit-transparent without hosted plugin" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy is deterministic under neutral settings" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy preserves stereo consistency for identical input" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 audio signal accuracy preserves invalid neural plan state" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 neural mastering plan transitions keep signal bounded and mono-compatible" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: sine outputs [-1, 1] range" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: triangle is symmetric" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: triangle is symmetric/positive peak roughly mirrors negative peak" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: saw ramps from -1 to 1" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: saw ramps from -1 to 1/saw output is monotonically increasing within a cycle" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: square is binary plus-or-minus 1" time="0.010" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: sample-and-hold latches on phase wrap" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: rate of 1 Hz completes cycle in 1 second" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="LFO waveform generation: tempo sync calculates correct rate from BPM" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="EnvelopeFollower tracking: silent input produces zero output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="EnvelopeFollower tracking: loud input produces high output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="EnvelopeFollower tracking: attack time controls rise speed" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="EnvelopeFollower tracking: release time controls decay speed" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="EnvelopeFollower tracking: sensitivity scales output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StepSequencer sequencing: forward direction cycles through steps" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StepSequencer sequencing: backward direction reverses" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StepSequencer sequencing: ping-pong reverses at boundaries" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StepSequencer sequencing: step count limits range" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StepSequencer sequencing: smoothing interpolates between steps" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: empty matrix passes output unchanged" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: single route modulates target param" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: depth controls modulation amount" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: negative depth inverts modulation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: disabled route has no effect" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: remove route stops modulation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: max 128 routes enforced" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix routing: out-of-range dest param ignored safely" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationEngine integration: processBlock with no routes is identity" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationEngine integration: LFO routed to param oscillates output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationEngine integration: macro knob scales modulation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationEngine integration: MIDI velocity modulates target" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationEngine integration: serialization round-trip preserves routes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationState: MAX_ROUTES is 128" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationState: default construction has zero active routes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModRoute: default construction is unassigned and disabled" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModSourceId: NUM_SOURCES equals number of enum members" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix: clearAllRoutes resets to zero routes" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ModulationMatrix: output is always clamped to [0, 1]" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TransientDetector: steady signal returns unmodified alpha" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TransientDetector: transient onset snaps alpha toward hard switch" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TransientDetector: release decays transient mix back to zero" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TransientDetector: reset clears state" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine lifecycle: prepare allocates all buffers" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine lifecycle: reset clears state without deallocation" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine lifecycle: latency equals fftSize/2 + hopSize" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine lifecycle: inactive engine passes audio unchanged" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine processing: alpha=0 outputs source A" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine processing: alpha=1 outputs source B" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine processing: alpha=0.5 interpolates magnitudes" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine processing: output energy is bounded (no blowup)" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine processing: DC offset remains near zero" time="0.039" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="FormantMorphEngine: inactive engine passes audio unchanged" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="FormantMorphEngine: formant preservation maintains spectral envelope" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="FormantMorphEngine: preservation amount scales effect" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="FormantMorphEngine: preservation amount is clamped to [0, 1]" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine: setActive/isActive round-trips" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SpectralMorphEngine: multiple latency configurations are consistent" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: all grains initially inactive" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: activate returns valid index" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: pool returns -1 when exhausted (128 grains)" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: deactivate frees slot for reuse" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: forEachActive visits only active grains" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: deactivate out-of-range index is safe" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: envelope is Hann-shaped at boundaries" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: envelope is Hann-shaped at boundaries/Hann window is symmetric about 0.5" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: envelope is Hann-shaped at boundaries/Hann window is non-negative everywhere" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool management: reset clears all active grains" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: inactive engine passes audio unchanged" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: alpha=0 produces only source A grains" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: alpha=1 produces only source B grains" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: grain density controls output activity" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: grain size affects temporal resolution" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GranularMorphEngine processing: output stays within reasonable amplitude bounds" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: weight (1,0,0) outputs parameter buffer only" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: weight (0,1,0) outputs spectral buffer only" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: weight (0,0,1) outputs granular buffer only" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: equal weights produces weighted average" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: blendTwo with alpha=0 outputs bufA" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: blendTwo with alpha=1 outputs bufB" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: blendTwo with alpha=0.5 produces linear midpoint" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: equal-power: sqrt weighting at crossfade midpoint" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: equal-power preserves total energy at crossfade midpoint" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: equal-power alpha=0 is all bufA, alpha=1 is all bufB" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HybridBlend: blendTwo is monotonic between alpha=0 and alpha=1" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="GrainPool: isActive returns false for out-of-range indices" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetEntry validation: empty id is invalid" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetEntry validation: empty name is invalid" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetEntry validation: valid entry passes validation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetEntry validation: both id and name required" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: serialize then deserialize preserves all fields" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: tags are preserved" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: hosted plugin info is preserved" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: invalid JSON returns false" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: missing required fields returns false" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: schema version is 2.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetSerializerV2 round-trip: wrong schema version fails deserialization" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: save creates entry in library" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: load retrieves saved preset" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: update modifies existing preset" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: remove deletes preset from library" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: exists returns true for saved preset" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: exists returns false for unknown id" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: getPresetCount tracks library size" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: save invalid entry fails" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary CRUD: update non-existent preset fails" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: text query matches name" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: text query matches author" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: text query is case-insensitive" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: tag filter requires all specified tags" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: plugin filter restricts results" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: min rating filters low-rated presets" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: sort by name alphabetizes results" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: sort by date newest puts recent first" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: maxResults limits output" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary search: empty query returns all presets" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary import/export: export creates valid JSON file" time="0.012" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary import/export: import reads exported file" time="0.009" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary import/export: import from directory finds all JSON files" time="0.014" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PresetLibrary import/export: import from non-existent directory returns 0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="UUID generation: generated UUIDs are unique" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="UUID generation: UUID format is valid v4" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="UUID generation: UUID has correct character count" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="UUID generation: UUID has dashes at correct positions" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 audio domain bypass: audioDomainEnabled=false behaves like V1" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 audio domain bypass: audioDomainEnabled=false behaves like V1/no additional latency in bypass mode" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 audio domain bypass: no Plugin B loaded skips audio-domain path" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 audio domain bypass: audioDomainEnabled=true with Plugin B adds spectral latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 modulation in pipeline: modulation engine runs after morph processor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 modulation in pipeline: modulation output is clamped to [0,1]" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 modulation in pipeline: modulation with zero sources has no effect" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 modulation in pipeline: multiple routes accumulate correctly" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: total latency sums all components" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: oversampling x1 adds zero latency" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: spectral engine latency is fftSize/2 + hopSize" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: latency increases with oversampling factor" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: LatencyManager recomputes on component update" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 latency reporting: negative latency values are clamped to zero" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 pipeline: MorphProcessor output is valid input for modulation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 pipeline: modulation does not propagate changes between parameter slots" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 pipeline: process() is noexcept at V1 layer" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="V2 pipeline: V2 config with all features disabled is equivalent to V1" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PluginHostManager exclusive state guard clears when no plugin is loaded" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MIDI routing audit placeholder compiles" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Concurrency audit placeholder compiles" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="SnapshotBank state chunks are copied, persisted, and cleared with their slot" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Stress edge-case audit placeholder compiles" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="End-to-end signal path audit placeholder compiles" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP server audit placeholder compiles" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP tools/list exposes standard and mastering workflow tools" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP More-Phi runtime parameter tools list, read, and write APVTS controls" time="0.080" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP More-Phi runtime batch tool reports partial rejection" time="0.078" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP control-plane namespaces expose context, permissions, memory, and transaction history" time="0.272" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP workflow.submit executes steps through permissioned transactions" time="0.699" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP PermissionPolicy blocks high-impact hosted plugin load with approval request" time="0.128" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP permission approval decisions are auditable" time="0.315" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP approval requests include predicted diffs for reversible controls" time="0.460" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="VST3 MCP handler exposes IPC assistant status and write gate" time="0.032" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP Ozone audit discovers and applies hosted parameter map" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP semantic map describes hosted parameters as safe LLM controls" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP semantic map alias validates current plugin id and empty parameter state" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP analysis tools expose spectrum and stereo field snapshots" time="0.051" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP analysis summary reports deterministic methodology and model status" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP capture window reports no samples before analysis tap has data" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP capture window returns accumulated rolling meter statistics" time="0.008" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MCP dry-run mastering candidates can be selected and applied" time="0.179" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="Rendered mastering candidate score is based on render sanity metrics" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="TrackAssistantStore persists local track records" time="0.026" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PermissionKernel enforces autonomy risk boundaries" time="0.028" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="PermissionKernel persists autonomy and approval queue state" time="0.047" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ActionLedger records auditable AutomationTransaction entries" time="0.003" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="WorkflowOrchestrator creates and completes durable WorkflowRun scaffolds" time="0.186" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="WorkflowOrchestrator persists submitted DAGs and executes dependencies" time="0.114" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="WorkflowOrchestrator rejects invalid workflow graphs" time="0.018" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="WorkflowOrchestrator records Diagnose-Revise-Retry attempts" time="0.100" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="IntegrationEventBus preserves ordering within bounded history" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MemoryStore supports CRUD and scoped lexical retrieval" time="0.005" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MemoryStore updates ActionOutcome feedback without duplicating records" time="0.039" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MemoryStore returns ActionOutcome evidence as advisory intent context" time="0.015" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeGain boundary values/Min gain maps to 0.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeGain boundary values/Max gain maps to 1.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeGain boundary values/Zero gain maps to 0.5" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeGain boundary values/Custom range: -6 to +6 dB, midpoint = 0.5" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeGain boundary values/Result is clamped to [0, 1] for out-of-range input" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeFreq boundary values/20 Hz (min) maps to 0.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeFreq boundary values/20 000 Hz (max) maps to 1.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeFreq boundary values/Midpoint on log scale is ~632 Hz (geometric mean of 20–20k)" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeThreshold boundary values/-60 dBFS maps to 0.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeThreshold boundary values/0 dBFS maps to 1.0" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::normalizeThreshold boundary values/-30 dBFS maps to 0.5" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Exact match — full product name" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Partial match — standard edition" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Case-insensitive match" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Neutron 5 does NOT match" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Ozone 10 does NOT match" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap::isOzone11 name detection/Empty string does NOT match" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="OzoneParameterMap all-minus-one map is a safe no-op" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ChainPlanExecutor calls registered OzonePlanApplicator on executePlan" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ChainPlanExecutor calls registered OzonePlanApplicator on executePlan/Plan is valid" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ChainPlanExecutor calls registered OzonePlanApplicator on executePlan/Applicator was called exactly once" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ChainPlanExecutor calls registered OzonePlanApplicator on executePlan/Applicator received the same plan" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="ChainPlanExecutor calls registered OzonePlanApplicator on executePlan/Clearing the applicator stops calls" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety rejects malformed candidates/schema mismatch is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety rejects malformed candidates/NaN target is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety rejects malformed candidates/Inf delta is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety rejects malformed candidates/out-of-range targets are rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety rejects malformed candidates/empty editable masks are illegal" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/low confidence falls back to review-only" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/abstain falls back to deterministic baseline" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/review-only candidates are not accepted for application" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/stale plans hold the last safe plan" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/unsupported layouts are rejected without changing last-safe state" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety handles confidence and runtime gating/audio callback runtime is prohibited" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/max delta projection preserves an accepted bounded plan" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/high-risk controls are blocked by mask policy" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/last safe hold preserves the prior plan when available" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/deterministic baseline fallback is observable" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/transparent bypass fallback is observable" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/explicit reject fallback does not update last-safe state" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringSafety projects bounded plans and selects fallback modes/valid plans update last-safe state" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates provenance license split and reference quality/complete approved dataset item is valid" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates provenance license split and reference quality/missing provenance is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates provenance license split and reference quality/unresolved license is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates provenance license split and reference quality/unreviewed reference quality is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates provenance license split and reference quality/unsupported material is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema enforces split isolation" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates disabled model-card metadata fixtures/disabled metadata-only PoC can be structurally valid without enabling runtime inference" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates disabled model-card metadata fixtures/audio callback inference is rejected in metadata" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringDatasetSchema validates disabled model-card metadata fixtures/missing supported layout is rejected" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringController uses deterministic no-model baseline" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="NeuralMasteringController applies validated plans outside the audio callback" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MorePhiProcessor processBlock does not invoke neural mastering planner or model" time="0.002" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MeterWindowAccumulator reports empty windows explicitly" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="MeterWindowAccumulator computes rolling percentile statistics" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="RealtimeSpectrumAnalyzer publishes an empty snapshot after reset" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="RealtimeSpectrumAnalyzer estimates a sine wave centroid" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="RealtimeSpectrumAnalyzer downmixes stereo before analysis" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StereoFieldAnalyzer publishes an empty snapshot after reset" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StereoFieldAnalyzer reports positive left-right correlation" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StereoFieldAnalyzer reports mono content as zero width" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StereoFieldAnalyzer preserves side polarity in correlation" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="StereoFieldAnalyzer exposes side-heavy content through M/S ratio" time="0.001" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="License key parser normalizes and verifies checksum" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="License key parser rejects checksum mismatch" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="License key parser accepts purchasing backend MPHI keys" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="License verifier validates trusted development certificate" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="License verifier rejects machine mismatch" time="0.000" status="run"/>
+    <testcase classname="MorePhiTests.exe.global" name="HTTP activation client reports missing configuration without network" time="0.000" status="run"/>
+    <system-out/>
+    <system-err>
+[WARNING] No plugin host available — all renders will be dry passthrough!
+  Check that the --plugin path points to a valid .vst3 file.
+    </system-err>
+  </testsuite>
+</testsuites>

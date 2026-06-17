@@ -40,9 +40,9 @@
  *   Output:
  *     All active grains are summed into a mono mix buffer, which is then
  *     copied into every channel of the output (bufA).
- *     The result is NOT normalised by grain count — density + amplitude
- *     together determine the final level.  Callers should apply a makeup
- *     gain proportional to 1/sqrt(density) if needed.
+ *     The result IS normalised by grain count (H5 FIX) — amplitude is
+ *     divided by sqrt(activeCount * 0.5 + 1) to prevent buildup at high
+ *     density.  No external makeup gain is required.
  */
 #include "GranularMorphEngine.h"
 
@@ -201,6 +201,15 @@ void GranularMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
     std::fill(mixBuffer_.begin(), mixBuffer_.begin() + usedSamples, 0.0f);
 
     renderGrains(mixBuffer_.data(), usedSamples);
+
+    // H5 FIX: Normalize grain cloud amplitude to prevent buildup at high density.
+    const int activeCount = pool_.getActiveCount();
+    if (activeCount > 0)
+    {
+        const float norm = 1.0f / std::sqrt(static_cast<float>(activeCount) * 0.5f + 1.0f);
+        for (int i = 0; i < usedSamples; ++i)
+            mixBuffer_[static_cast<size_t>(i)] *= norm;
+    }
 
     // --- 4. Add mono mix into all output channels of bufA ------------------
     // H-11 FIX: Use additive mixing (+=) instead of overwrite (=) so that

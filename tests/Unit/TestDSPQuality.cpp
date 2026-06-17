@@ -227,14 +227,12 @@ TEST_CASE("LatencyManager: mode switch to bypass resets oversampling latency to 
 //  Aliasing detection — swept-sine test
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("Audio quality: no aliasing above Nyquist after x4 oversampling", "[aliasing][snr]")
+TEST_CASE("Audio quality: linear round-trip has no near-Nyquist leakage after x4 FIR", "[aliasing][snr]")
 {
-    // Generate a 20 kHz sine at 48 kHz sample rate (just below Nyquist at 24 kHz).
-    // After x4 oversampling + identity processing + downsample, there must be
-    // no significant energy in frequencies above 22 kHz — the alias range.
-    //
-    // Practical test: measure energy in [22000, 24000] Hz band before and
-    // after the oversampling round-trip. The ratio must be < -60 dB.
+    // NOTE: This is a linear round-trip test. A pure near-Nyquist sine cannot
+    // generate aliasing in a linear system, so this primarily validates filter
+    // passband ripple and stopband leakage, not true aliasing suppression under
+    // nonlinear distortion. See the nonlinear aliasing test below for the latter.
 
     constexpr float SR     = 48000.0f;
     constexpr int   N      = 4096;
@@ -245,14 +243,12 @@ TEST_CASE("Audio quality: no aliasing above Nyquist after x4 oversampling", "[al
     os.setFilterType(AAFilterType::FIR);
     os.prepare(N, 1, static_cast<double>(SR));
 
-    // Generate a continuous sine across several blocks
     constexpr int kTotalBlocks = 4;
     std::vector<float> continuousSine(static_cast<size_t>(N * kTotalBlocks));
     for (size_t i = 0; i < continuousSine.size(); ++i)
         continuousSine[i] = std::sin(2.0f * 3.14159265358979f * freqHz
                                      * static_cast<float>(i) / SR);
 
-    // Process all blocks to let the FIR filter fully settle
     std::vector<float> allOutput(static_cast<size_t>(N * kTotalBlocks));
     for (int b = 0; b < kTotalBlocks; ++b)
     {
@@ -268,22 +264,98 @@ TEST_CASE("Audio quality: no aliasing above Nyquist after x4 oversampling", "[al
                      allOutput.begin() + b * N);
     }
 
-    // Measure on the last block (filter fully settled)
     std::vector<float> lastBlock(allOutput.begin() + (kTotalBlocks - 1) * N,
                                   allOutput.end());
 
-    // Measure fundamental peak (band around freqHz ± 1000 Hz)
     float fundamental = peakMagnitudeInBand(lastBlock, SR, freqHz - 1000.0f, freqHz + 1000.0f);
-
-    // Measure alias band (22 kHz - 24 kHz)
     float aliasBand = peakMagnitudeInBand(lastBlock, SR, 22000.0f, 24000.0f);
 
     if (fundamental > 0.0f && aliasBand > 0.0f)
     {
         float ratio_dB = 20.0f * std::log10(aliasBand / fundamental);
-        INFO("Alias suppression: " << -ratio_dB << " dB");
-        // Require at least 50 dB alias suppression (practical for near-Nyquist tones)
+        INFO("Stopband leakage: " << -ratio_dB << " dB");
         REQUIRE(ratio_dB < -50.0f);
+    }
+}
+
+TEST_CASE("Audio quality: nonlinear distortion does not alias into baseband after x4 oversampling", "[aliasing][snr]")
+{
+    // Real aliasing test: drive a 15 kHz sine through a hard clipper inside the
+    // x4 oversampled domain. Clipping generates harmonics at 30 kHz, 45 kHz, ...
+    // The anti-aliasing filter must remove everything above Nyquist (24 kHz)
+    // before downsampling, so the baseband output should contain only the
+    // original 15 kHz tone (plus acceptable filter ripple).
+
+    constexpr float SR     = 48000.0f;
+    constexpr int   N      = 4096;
+    constexpr float freqHz = 15000.0f;
+    constexpr float clipLevel = 0.5f;
+
+    OversamplingWrapper os;
+    os.setFactor(OversamplingFactor::x4);
+    os.setFilterType(AAFilterType::FIR);
+    os.prepare(N, 1, static_cast<double>(SR));
+
+    constexpr int kTotalBlocks = 6;
+    std::vector<float> continuousSine(static_cast<size_t>(N * kTotalBlocks));
+    for (size_t i = 0; i < continuousSine.size(); ++i)
+        continuousSine[i] = 0.9f * std::sin(2.0f * 3.14159265358979f * freqHz
+                                           * static_cast<float>(i) / SR);
+
+    std::vector<float> allOutput(static_cast<size_t>(N * kTotalBlocks));
+    for (int b = 0; b < kTotalBlocks; ++b)
+    {
+        std::vector<float> blockBuf(continuousSine.begin() + b * N,
+                                    continuousSine.begin() + (b + 1) * N);
+        float* ptr = blockBuf.data();
+        juce::dsp::AudioBlock<float> block(&ptr, 1, static_cast<size_t>(N));
+
+        auto osBlock = os.upsample(block);
+
+        // Apply nonlinear distortion in the oversampled domain
+        auto* data = osBlock.getChannelPointer(0);
+        for (size_t i = 0; i < osBlock.getNumSamples(); ++i)
+        {
+            float s = data[i];
+            if (s > clipLevel)       s = clipLevel;
+            else if (s < -clipLevel) s = -clipLevel;
+            data[i] = s;
+        }
+
+        os.downsample(block);
+        std::copy_n(blockBuf.begin(), static_cast<size_t>(N),
+                     allOutput.begin() + b * N);
+    }
+
+    std::vector<float> lastBlock(allOutput.begin() + (kTotalBlocks - 1) * N,
+                                  allOutput.end());
+
+    // Fundamental at 15 kHz
+    float fundamental = peakMagnitudeInBand(lastBlock, SR, 14000.0f, 16000.0f);
+
+    // Aliased harmonics folded into baseband: 30 kHz -> 18 kHz, 45 kHz -> 3 kHz, etc.
+    float aliasLow  = peakMagnitudeInBand(lastBlock, SR, 1000.0f, 5000.0f);   // e.g. 3 kHz alias
+    float aliasMid  = peakMagnitudeInBand(lastBlock, SR, 17000.0f, 19000.0f); // e.g. 18 kHz alias
+
+    INFO("Fundamental magnitude = " << fundamental);
+    INFO("Alias magnitude [1-5 kHz] = " << aliasLow);
+    INFO("Alias magnitude [17-19 kHz] = " << aliasMid);
+
+    REQUIRE(fundamental > 0.0f);
+    if (aliasLow > 0.0f)
+    {
+        float ratioLow = 20.0f * std::log10(aliasLow / fundamental);
+        INFO("Low-band alias ratio = " << ratioLow << " dB");
+        // Hard-clipping generates strong odd harmonics; -35 dB is a practical
+        // floor for this stress test. Tighter suppression can be validated with
+        // softer saturation or higher oversampling factors.
+        REQUIRE(ratioLow < -35.0f);
+    }
+    if (aliasMid > 0.0f)
+    {
+        float ratioMid = 20.0f * std::log10(aliasMid / fundamental);
+        INFO("Mid-band alias ratio = " << ratioMid << " dB");
+        REQUIRE(ratioMid < -40.0f);
     }
 }
 

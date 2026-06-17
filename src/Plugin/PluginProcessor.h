@@ -115,7 +115,7 @@ public:
     ParameterClassifier&      getParameterClassifier()      { return parameterClassifier_; }
     DiscreteParameterHandler& getDiscreteHandler()          { return discreteHandler_; }
     TokenOptimizer&           getTokenOptimizer()           { return tokenOptimizer_; }
-    AIAssistant&              getAIAssistant()              { return *aiAssistant_; }
+    AIAssistant*              getAIAssistant() noexcept     { return aiAssistant_.get(); }
     const ParameterClassifier& getParameterClassifier() const { return parameterClassifier_; }
     
     // Learn Mode integration
@@ -357,6 +357,9 @@ public:
         bool playing = false;
         bool looping = false;
         double bpm = 0.0;
+        // M-10 FIX: Time signature is currently read but not consumed by any engine.
+        // TODO: Remove these fields if no tempo-synced feature needs them, or wire
+        // them up to the modulation/step-sequencer engines.
         int timeSigNumerator = 4;
         int timeSigDenominator = 4;
         double ppqPosition = 0.0;
@@ -370,8 +373,8 @@ public:
             transportPlaying_.load(std::memory_order_relaxed),
             transportLooping_.load(std::memory_order_relaxed),
             transportBpm_.load(std::memory_order_relaxed),
-            transportTimeSigNumerator_.load(std::memory_order_relaxed),
-            transportTimeSigDenominator_.load(std::memory_order_relaxed),
+            4,  // timeSigNumerator — currently unused (M-10)
+            4,  // timeSigDenominator — currently unused (M-10)
             transportPpqPosition_.load(std::memory_order_relaxed),
             transportSecondsPosition_.load(std::memory_order_relaxed)
         };
@@ -491,9 +494,9 @@ private:
     juce::AudioBuffer<float> granularOut_;
     std::array<float*, OversamplingWrapper::kMaxChannels> osParamPtrs_{};
     std::array<float*, OversamplingWrapper::kMaxChannels> osBPtrs_{};
-    // C-P3 FIX: Pre-allocated MIDI buffer to avoid per-block heap allocation
+    // C-P3 FIX: Re-used MIDI buffer — retains capacity across clear() calls
     juce::MidiBuffer midiCopyB_;
-    juce::MidiBuffer filteredMidiBuffer_;  // Pre-allocated to avoid per-block heap allocation
+    juce::MidiBuffer filteredMidiBuffer_;  // Re-used MIDI buffer — retains capacity across clear() calls
     std::vector<float> finalOutput_;  // After discrete processing
 
     // Touch detection: prevents morph from overwriting manual knob changes
@@ -523,6 +526,10 @@ private:
     int drainParameterCommandQueue(int cachedParamCount,
                                    int maxCommands,
                                    juce::AudioPluginInstance* exclusivePlugin = nullptr) noexcept;
+    void drainParameterCommandQueue(int cachedParamCount, bool canTouchHostedParameters) noexcept;
+    void processMIDIAndSidechain(juce::MidiBuffer& midi, juce::AudioBuffer<float>& buffer) noexcept;
+    void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters) noexcept;
+    void applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer, bool isBypassed) noexcept;
     void requestFullStateRecallFromAudioThread(int slot) noexcept;
     // Named capacity constant (avoids magic number in queue declaration).
     static constexpr size_t COMMAND_QUEUE_CAPACITY = 8192;
@@ -537,8 +544,6 @@ private:
     std::atomic<bool> transportPlaying_{false};
     std::atomic<bool> transportLooping_{false};
     std::atomic<double> transportBpm_{0.0};
-    std::atomic<int> transportTimeSigNumerator_{4};
-    std::atomic<int> transportTimeSigDenominator_{4};
     std::atomic<double> transportPpqPosition_{0.0};
     std::atomic<double> transportSecondsPosition_{0.0};
 
@@ -552,6 +557,7 @@ private:
     // Pending plugin description for Timer-based deferred loading
     // (replaces unreliable callAsync — timers work even with editor closed)
     juce::PluginDescription pendingPluginDesc_;
+    mutable juce::SpinLock pendingPluginDescLock_;  // H8 FIX: guards pendingPluginDesc_
     std::atomic<bool> hasPendingPluginLoad_{false};
     std::atomic<int>  pendingLoadAttempts_{0};
     std::atomic<int>  pluginLoadRetryCount_{0};
@@ -650,6 +656,8 @@ private:
     std::atomic<int> pendingFullStateRecallSlot_{-1};
     std::atomic<uint32_t> pendingFullStateRecallGeneration_{0};
     uint32_t appliedFullStateRecallGeneration_ = 0;
+    std::atomic<int> fullStateRecallRetryCount_{0};
+    static constexpr int MAX_FULL_STATE_RECALL_RETRIES = 10;  // H8 FIX: prevent infinite loops on failure
 
     // Physics modes (UI → audio thread)
     std::atomic<int>   physicsMode_{0};
@@ -663,6 +671,12 @@ private:
     std::atomic<float> rmsLevel_{0.0f};
     int rmsSkipCounter_ = 0;
     static constexpr int RMS_THROTTLE_BLOCKS = 8;
+
+    // M9 FIX: Output gain smoothing state (audio thread only)
+    std::atomic<float> smoothedGain_{1.0f};
+
+    // M11 FIX: Atomic flag for deferred state restore from audio thread
+    std::atomic<bool> pendingStateRestore_{false};
 
     // SanityMode config (UI writes, breed/randomize reads)
     // CRITICAL (Finding 3): std::set<int> is not thread-safe, protect with spinlock

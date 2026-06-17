@@ -4,8 +4,8 @@
  * and automatic error recovery.
  *
  * JSON responses are built with nlohmann::json for correctness and safety.
- * The incoming request is still parsed via juce::JSON::parse so that params
- * can flow to MCPToolHandler as juce::var without further changes to that API.
+ * Incoming requests are parsed with nlohmann::json (M-1 FIX); params are
+ * converted back to juce::var so they can flow to MCPToolHandler unchanged.
  */
 #include "MCPServer.h"
 #include "MCPToolHandler.h"
@@ -16,6 +16,15 @@
 namespace more_phi {
 
 using json = nlohmann::json;
+
+static bool constantTimeEqual(const char* a, const char* b, size_t len)
+{
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < len; ++i)
+        diff |= static_cast<uint8_t>(a[i] ^ b[i]);
+    return diff == 0;
+}
+
 
 MCPServer::MCPServer(MorePhiProcessor& processor)
     : juce::Thread("MorePhi-MCP"), processor_(processor)
@@ -54,7 +63,8 @@ void MCPServer::recordStartupFailure(const juce::String& details)
 MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingSocket* socket)
     : Thread("MCP-Connection"), owner_(owner), socket_(socket)
 {
-    startThread();
+    startedSuccessfully_ = startThread();
+    owner_.connectedClients_++;
 }
 
 MCPServer::ConnectionThread::~ConnectionThread()
@@ -68,6 +78,7 @@ MCPServer::ConnectionThread::~ConnectionThread()
         if (socket_) socket_->close();
         stopThread(100);  // Brief final wait
     }
+    owner_.connectedClients_--;
 }
 
 void MCPServer::ConnectionThread::signalExit()
@@ -78,13 +89,14 @@ void MCPServer::ConnectionThread::signalExit()
 
 void MCPServer::ConnectionThread::run()
 {
-    owner_.connectedClients_++;
     juce::String buffer;
     char chunk[4096];
     bool writeError = false;
     int readErrors = 0;
     constexpr int MAX_READ_ERRORS = 3;
     constexpr int MAX_REQUEST_BYTES = 256 * 1024;
+    constexpr int IDLE_TIMEOUT_MS = 30000;
+    int64_t lastActivityMs = juce::Time::currentTimeMillis();
 
     while (!threadShouldExit() && !writeError)
     {
@@ -100,6 +112,11 @@ void MCPServer::ConnectionThread::run()
             if (ready == 0)
             {
                 readErrors = 0;
+                if (juce::Time::currentTimeMillis() - lastActivityMs > IDLE_TIMEOUT_MS)
+                {
+                    owner_.logError("connection", "Idle timeout exceeded; closing connection");
+                    break;
+                }
                 continue;
             }
 
@@ -112,6 +129,7 @@ void MCPServer::ConnectionThread::run()
             }
 
             readErrors = 0;
+            lastActivityMs = juce::Time::currentTimeMillis();
             chunk[bytesRead] = '\0';
             buffer += juce::String::fromUTF8(chunk, bytesRead);
 
@@ -138,10 +156,14 @@ void MCPServer::ConnectionThread::run()
                 }
                 else
                 {
-                    auto testParse = juce::JSON::parse(buffer);
-                    if (testParse.isVoid()) break;
-                    message = buffer.trim();
-                    buffer.clear();
+                    try {
+                        auto testParse = json::parse(buffer.toStdString());
+                        juce::ignoreUnused(testParse);
+                        message = buffer.trim();
+                        buffer.clear();
+                    } catch (...) {
+                        break;
+                    }
                 }
 
                 if (message.isEmpty()) continue;
@@ -153,6 +175,9 @@ void MCPServer::ConnectionThread::run()
                     owner_.logError("request", juce::String("Exception processing request: ") + e.what());
                     response = juce::String(json{{"jsonrpc","2.0"},{"error",{{"code",-32603},{"message","Internal error"}}},{"id",nullptr}}.dump());
                 }
+
+                if (response.isEmpty())
+                    continue; // C-15 FIX: notification — no response required
 
                 response += "\n";
                 {
@@ -167,6 +192,7 @@ void MCPServer::ConnectionThread::run()
                     }
                 }
 
+                lastActivityMs = juce::Time::currentTimeMillis();
                 if (threadShouldExit()) break;
             }
         }
@@ -179,11 +205,16 @@ void MCPServer::ConnectionThread::run()
                 {"id", nullptr}
             }.dump()) + "\n";
             if (socket_ != nullptr && socket_->isConnected())
-                socket_->write(response.toRawUTF8(), static_cast<int>(response.getNumBytesAsUTF8()));
+            {
+                try {
+                    socket_->write(response.toRawUTF8(), static_cast<int>(response.getNumBytesAsUTF8()));
+                } catch (...) {
+                    // M-3 FIX: swallow write errors to prevent nested exceptions
+                }
+            }
             break;
         }
     }
-    owner_.connectedClients_--;
 }
 
 void MCPServer::stopServer()
@@ -269,7 +300,16 @@ void MCPServer::run()
                             "Rejected: max connections reached (" + juce::String(MAX_CONNECTIONS) + ")");
                         continue;
                     }
-                    activeConnections_.add(new ConnectionThread(*this, client));
+
+                    // H-14 FIX: Check connection thread started successfully before adding
+                    auto* conn = new ConnectionThread(*this, client);
+                    if (!conn->startedSuccessfully())
+                    {
+                        delete conn;
+                        logError("connection", "Failed to start connection thread");
+                        continue;
+                    }
+                    activeConnections_.add(conn);
                     consecutiveErrors = 0;
                 }
             }
@@ -286,31 +326,100 @@ void MCPServer::run()
 
 bool MCPServer::createServerListener()
 {
-    return serverSocket_.createListener(port_, "127.0.0.1");
+    // H-16 FIX: Remove TOCTOU probe; retry binding directly with next candidate.
+    for (int attempt = 0; attempt < MAX_BIND_ATTEMPTS; ++attempt)
+    {
+        if (serverSocket_.createListener(port_, "127.0.0.1"))
+            return true;
+
+        ++port_;
+        if (identity_.port > 0)
+            identity_.port = port_;
+    }
+    return false;
 }
 
 juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& authenticated)
 {
-    // Parse incoming request with JUCE so params flow to MCPToolHandler as juce::var
-    auto parsed = juce::JSON::parse(jsonRequest);
-    if (parsed.isVoid())
-    {
+    // M-1 FIX: Standardize on nlohmann::json for all incoming request parsing.
+    json parsed;
+    try {
+        parsed = json::parse(jsonRequest.toStdString());
+    } catch (const json::parse_error&) {
         return juce::String(
             json{{"jsonrpc","2.0"},{"error",{{"code",-32700},{"message","Parse error"}}},{"id",nullptr}}.dump());
     }
 
-    auto method = parsed.getProperty("method", "").toString();
-    auto params = parsed.getProperty("params", juce::var());
-    auto idVar  = parsed.getProperty("id",     juce::var());
-
-    // Convert juce::var id to nlohmann::json (int | string | null)
-    json reqId = nullptr;
-    if (!idVar.isVoid())
+    // H-13 FIX: JSON-RPC batch request support.
+    if (parsed.is_array())
     {
-        if (idVar.isInt() || idVar.isInt64())
-            reqId = static_cast<int64_t>((juce::int64)idVar);
-        else if (idVar.isString())
-            reqId = idVar.toString().toStdString();
+        json batchResponses = json::array();
+        for (const auto& item : parsed)
+        {
+            if (!item.is_object())
+            {
+                batchResponses.push_back({{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Invalid Request"}}},{"id",nullptr}});
+                continue;
+            }
+            juce::String itemStr = juce::String(item.dump());
+            juce::String resp = processRequest(itemStr, authenticated);
+            if (resp.isNotEmpty())
+            {
+                try {
+                    batchResponses.push_back(json::parse(resp.toStdString()));
+                } catch (...) {
+                    // ignore invalid response
+                }
+            }
+        }
+        if (batchResponses.empty())
+            return {};
+        return juce::String(batchResponses.dump());
+    }
+
+    if (!parsed.is_object())
+    {
+        return juce::String(
+            json{{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Invalid Request"}}},{"id",nullptr}}.dump());
+    }
+
+    juce::String method = parsed.contains("method") && parsed["method"].is_string()
+                          ? juce::String(parsed["method"].get<std::string>())
+                          : juce::String{};
+
+    // Convert params to juce::var for existing tool handler API
+    juce::var params;
+    if (parsed.contains("params"))
+    {
+        try {
+            params = juce::JSON::parse(juce::String(parsed["params"].dump()));
+        } catch (...) {
+            params = juce::var();
+        }
+    }
+
+    // Convert id to nlohmann::json
+    json reqId = nullptr;
+    if (parsed.contains("id"))
+    {
+        if (parsed["id"].is_number_integer())
+            reqId = parsed["id"].get<int64_t>();
+        else if (parsed["id"].is_string())
+            reqId = parsed["id"].get<std::string>();
+        // else remains null
+    }
+
+    // C-15 FIX: Suppress JSON-RPC notification responses.
+    if (reqId.is_null())
+    {
+        return {};
+    }
+
+    // M-2 FIX: Validate jsonrpc version field.
+    if (!parsed.contains("jsonrpc") || !parsed["jsonrpc"].is_string() || parsed["jsonrpc"] != "2.0")
+    {
+        return juce::String(
+            json{{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Invalid Request"}}},{"id",reqId}}.dump());
     }
 
     // Helper: build a JSON-RPC error response with type-safe escaping
@@ -347,12 +456,14 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
             return juce::String(initResponse + "\n" + initNotification);
         }
 
-        return errResponse(-32600, "Unauthorized: invalid bearer_token");
+        // L-6 FIX: Use custom error code for auth failures.
+        return errResponse(-32001, "Unauthorized: invalid bearer_token");
     }
 
     // ── All other methods require authentication ───────────────────────────────
     if (!authenticated)
-        return errResponse(-32600, "Unauthorized: call initialize with bearer_token first");
+        // L-6 FIX: Use custom error code for auth failures.
+        return errResponse(-32001, "Unauthorized: call initialize with bearer_token first");
 
     // Consume a rate-limit slot for each authenticated MCP tool request.
     if (!processor_.getTokenOptimizer().tryConsumeRequestSlot())
@@ -453,27 +564,14 @@ bool MCPServer::validateAuth(const juce::var& params)
         auto token = params.getProperty("bearer_token", "").toString();
         if (token.isEmpty()) return false;
 
-        const std::string candidate = token.toStdString();
-        const std::string expected  = identity_.bearerToken.toStdString();
+        const juce::String candidateToken = token;
+        const juce::String expectedToken = identity_.bearerToken;
 
-        // M-11 FIX: Constant-time comparison — always compare to the longer of
-        // the two strings so timing doesn't leak the expected token length.
-        // If lengths differ, xor the extra bytes with a non-zero constant so
-        // the loop always runs the same number of iterations for a given expected length.
-        const size_t compareLen = std::max(candidate.size(), expected.size());
+        // C-14 FIX: Fixed-length constant-time comparison to prevent timing attacks.
+        if (candidateToken.length() != expectedToken.length())
+            return false;
 
-        volatile uint8_t diff = 0;
-        for (size_t i = 0; i < compareLen; ++i)
-        {
-            const uint8_t c = (i < candidate.size()) ? static_cast<uint8_t>(candidate[i]) : 0xFF;
-            const uint8_t e = (i < expected.size())  ? static_cast<uint8_t>(expected[i])  : 0xFF;
-            diff = static_cast<uint8_t>(diff | (c ^ e));
-        }
-
-        // Explicit volatile read prevents the compiler from forwarding
-        // the last written value without a load.
-        const volatile uint8_t result = diff;
-        return result == 0;
+        return constantTimeEqual(candidateToken.toRawUTF8(), expectedToken.toRawUTF8(), static_cast<size_t>(expectedToken.length()));
     }
     catch (...)
     {
@@ -484,7 +582,7 @@ bool MCPServer::validateAuth(const juce::var& params)
 
 juce::String MCPServer::dispatchTool(const juce::String& method, const juce::var& params)
 {
-    return MCPToolHandler::handle(method, params, processor_, identity_);
+    return MCPToolHandler::handle(method, params, processor_, identity_, automationRuntime_);
 }
 
 void MCPServer::logError(const juce::String& context, const juce::String& details)

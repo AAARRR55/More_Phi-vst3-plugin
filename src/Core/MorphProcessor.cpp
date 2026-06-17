@@ -31,8 +31,8 @@ void MorphProcessor::prepare(int maxParamCount)
     // C-3 FIX: Reset all physics state so stale values from a previous
     // sample rate / block size don't cause large initial displacement.
     elasticState_ = ElasticState{};
-    processedX_ = 0.5f;
-    processedY_ = 0.5f;
+    processedX_.store(0.5f, std::memory_order_relaxed);
+    processedY_.store(0.5f, std::memory_order_relaxed);
     driftTime_ = 0.0f;
 
     prepared_ = true;
@@ -59,12 +59,13 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
     {
         InterpolationEngine::compute1D(faderPos, bank_, output);
         // Store fader position as "processed" for trail
-        processedX_ = faderPos;
-        processedY_ = 0.0f;
+        processedX_.store(faderPos, std::memory_order_relaxed);
+        processedY_.store(0.0f, std::memory_order_relaxed);
     }
 
     // 2) Apply per-parameter smoothing (SIMD optimized)
-    applySmoothing(output);
+    if (mode != MorphMode::Direct)
+        applySmoothing(output);
 
     // 3) Apply Listen Mode filter — mark discrete params as "skip"
     applyListenFilter(output);
@@ -76,8 +77,8 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
         trailTimer_ -= TRAIL_INTERVAL;
         // Map back to [0,1] for UI
         trail_[trailHead_] = {
-            (processedX_ + 1.0f) * 0.5f,
-            (processedY_ + 1.0f) * 0.5f
+            (processedX_.load(std::memory_order_relaxed) + 1.0f) * 0.5f,
+            (processedY_.load(std::memory_order_relaxed) + 1.0f) * 0.5f
         };
         trailHead_.store((trailHead_.load(std::memory_order_relaxed) + 1) % TRAIL_SIZE,
                          std::memory_order_relaxed);
@@ -85,38 +86,43 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
 }
 
 void MorphProcessor::updatePhysics(float targetX, float targetY,
-                                     MorphMode mode, float dt)
+                                     MorphMode mode, float dt) noexcept
 {
     switch (mode)
     {
         case MorphMode::Direct:
-            processedX_ = targetX;
-            processedY_ = targetY;
+            processedX_.store(targetX, std::memory_order_relaxed);
+            processedY_.store(targetY, std::memory_order_relaxed);
             break;
 
         case MorphMode::Elastic:
             PhysicsEngine::updateElastic(elasticState_, targetX, targetY,
                                           static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)), dt);
-            processedX_ = std::clamp(elasticState_.x, -1.0f, 1.0f);
-            processedY_ = std::clamp(elasticState_.y, -1.0f, 1.0f);
+            processedX_.store(std::clamp(elasticState_.x, -1.0f, 1.0f), std::memory_order_relaxed);
+            processedY_.store(std::clamp(elasticState_.y, -1.0f, 1.0f), std::memory_order_relaxed);
             break;
 
         case MorphMode::Drift:
+        {
             driftTime_ += dt;
-            PhysicsEngine::updateDrift(processedX_, processedY_,
+            if (driftTime_ > 256.0f) driftTime_ -= 256.0f;
+            float px = processedX_.load(std::memory_order_relaxed);
+            float py = processedY_.load(std::memory_order_relaxed);
+            PhysicsEngine::updateDrift(px, py,
                                         driftTime_,
                                         driftSpeed_.load(std::memory_order_relaxed),
                                         driftDistance_.load(std::memory_order_relaxed),
                                         driftChaos_.load(std::memory_order_relaxed),
                                         static_cast<DriftMode>(driftMode_.load(std::memory_order_relaxed)),
                                         targetX, targetY, 0.5f);
-            processedX_ = std::clamp(processedX_, -1.0f, 1.0f);
-            processedY_ = std::clamp(processedY_, -1.0f, 1.0f);
+            processedX_.store(std::clamp(px, -1.0f, 1.0f), std::memory_order_relaxed);
+            processedY_.store(std::clamp(py, -1.0f, 1.0f), std::memory_order_relaxed);
             break;
+        }
     }
 }
 
-void MorphProcessor::applySmoothing(std::vector<float>& output)
+void MorphProcessor::applySmoothing(std::vector<float>& output) noexcept
 {
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());

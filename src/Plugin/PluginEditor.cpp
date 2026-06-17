@@ -383,17 +383,30 @@ void more_phi::MorePhiEditor::openPluginWindow()
 
     if (hostedWindow_) return;  // Already open
 
-    auto* plugin = processor.getHostManager().getPlugin();
+    auto* plugin = processor.getHostManager().acquirePluginForUse();
     if (!plugin) return;
 
     juce::Component::SafePointer<MorePhiEditor> safeThis(this);
+    processor.getHostManager().setWindowCloseCallback([safeThis]() {
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis) safeThis->closePluginWindow();
+        });
+    });
+
     hostedWindow_ = std::make_unique<HostedPluginWindow>(
         plugin,
-        [safeThis]() { if (safeThis) safeThis->closePluginWindow(); }  // on-close callback
+        [safeThis, this]() {
+            processor.getHostManager().releasePluginFromUse();
+            if (safeThis) safeThis->closePluginWindow();
+        }  // on-close callback
     );
 }
 
 void more_phi::MorePhiEditor::closePluginWindow()
 {
-    hostedWindow_.reset();
+    if (hostedWindow_)
+    {
+        processor.getHostManager().setWindowCloseCallback(nullptr);
+        hostedWindow_.reset();
+    }
 }

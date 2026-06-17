@@ -24,14 +24,19 @@ void PhysicsEngine::updateElastic(ElasticState& s,
     // double-compensated: scaling k and c by s scales BOTH the natural frequency
     // and the damping ratio by sqrt(s), making the spring faster and less bouncy
     // at higher sample rates (a 96 kHz project felt different from 44.1 kHz).
-    float stiffness, damping;
+    float stiffness, dampingRatio;
     switch (preset)
     {
-        case ElasticPreset::Slow:   stiffness = 0.5f; damping = 0.3f; break;
-        case ElasticPreset::Medium: stiffness = 2.0f; damping = 0.7f; break;
-        case ElasticPreset::Heavy:  stiffness = 8.0f; damping = 0.95f; break;
-        default:                    stiffness = 2.0f; damping = 0.7f; break;
+        case ElasticPreset::Slow:   stiffness = 0.5f; dampingRatio = 0.35f; break;
+        case ElasticPreset::Medium: stiffness = 2.0f; dampingRatio = 0.60f; break;
+        // H-3 FIX: Heavy preset was marginally overdamped (ζ≈1.02); numerical
+        // errors from the half-step damping factor could push it back into
+        // underdamped ringing. Raise ζ well above 1 so the Heavy spring is
+        // unambiguously overdamped and settles without oscillation.
+        case ElasticPreset::Heavy:  stiffness = 8.0f; dampingRatio = 1.5f; break;
+        default:                    stiffness = 2.0f; dampingRatio = 0.60f; break;
     }
+    const float damping = 2.0f * dampingRatio * std::sqrt(stiffness);
 
     // C-D1 FIX: Adaptive sub-stepping for stability with large dt
     const float maxStableDt = 1.0f / (2.0f * std::sqrt(std::max(stiffness, 0.01f)));
@@ -40,15 +45,19 @@ void PhysicsEngine::updateElastic(ElasticState& s,
 
     for (int step = 0; step < numSteps; ++step)
     {
-        // Recompute force each sub-step based on current position (not stale)
-        const float fx = stiffness * (targetX - s.x) - damping * s.vx;
-        const float fy = stiffness * (targetY - s.y) - damping * s.vy;
-
-        // Semi-implicit Euler: update velocity first, then use NEW velocity for position
-        s.vx += fx * subDt;
-        s.vy += fy * subDt;
-        s.x  += s.vx * subDt;
-        s.y  += s.vy * subDt;
+        // H-3 FIX: Fully implicit velocity damping.  The previous half-step
+        // factor (1 / (1 + c·dt/2)) weakens the damping enough that the Heavy
+        // preset could still ring.  Treating the velocity damping term as
+        // fully implicit (1 / (1 + c·dt)) guarantees the spring dissipates
+        // energy monotonically on every sub-step; no energy is injected.
+        const float dampingFactor = 1.0f / (1.0f + damping * subDt);
+        s.vx = (s.vx + stiffness * (targetX - s.x) * subDt) * dampingFactor;
+        s.vy = (s.vy + stiffness * (targetY - s.y) * subDt) * dampingFactor;
+        constexpr float kMaxVelocity = 10.0f;
+        s.vx = std::clamp(s.vx, -kMaxVelocity, kMaxVelocity);
+        s.vy = std::clamp(s.vy, -kMaxVelocity, kMaxVelocity);
+        s.x += s.vx * subDt;
+        s.y += s.vy * subDt;
     }
 
     // Saturate velocity to prevent NaN/Inf from large dt (e.g. audio engine pause/resume)
@@ -103,18 +112,23 @@ static const int perm[512] = {
 
 float PhysicsEngine::grad(int hash, float x, float y) noexcept
 {
-    const int h = hash & 3;
-    const float u = h < 2 ? x : y;
-    const float v = h < 2 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+    // C8 FIX: Use 8 gradient directions (classic 2D Perlin) instead of only 4
+    // diagonal vectors.  The old hash & 3 produced only 4 gradients, creating
+    // visible directional bias in the drift noise.
+    const int h = hash & 7;
+    const float u = h < 4 ? x : y;
+    const float v = h < 4 ? y : x;
+    return ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
 }
 
 float PhysicsEngine::perlin(float x, float y) noexcept
 {
     // Cache floor values — each was previously computed twice (once for int cast,
     // once for fractional part). Now computed once per coordinate.
-    const float fx = std::floor(x);
-    const float fy = std::floor(y);
+    const float wx = std::fmod(x, 256.0f);
+    const float wy = std::fmod(y, 256.0f);
+    const float fx = std::floor(wx);
+    const float fy = std::floor(wy);
     const int xi = static_cast<int>(fx) & 255;
     const int yi = static_cast<int>(fy) & 255;
     const float xf = x - fx;
@@ -156,9 +170,11 @@ void PhysicsEngine::updateDrift(float& outX, float& outY,
 {
     // M-7 FIX: Limit to 4 octaves max. Beyond 4, high-frequency octaves alias
     // at typical audio rates (the Perlin gradient becomes undersampled).
+    const float safeSpeed = std::max(speed, 0.0f);
+    const float safeDistance = std::max(distance, 0.0f);
     const int octaves = std::clamp(static_cast<int>(chaos * 4.0f) + 1, 1, 4);
-    const float nx = perlinOctaves(time * speed, 0.5f, octaves) * distance;
-    const float ny = perlinOctaves(0.5f, time * speed, octaves) * distance;
+    const float nx = perlinOctaves(time * safeSpeed, 0.5f, octaves) * safeDistance;
+    const float ny = perlinOctaves(0.5f, time * safeSpeed, octaves) * safeDistance;
 
     switch (mode)
     {
@@ -174,9 +190,12 @@ void PhysicsEngine::updateDrift(float& outX, float& outY,
 
         case DriftMode::Orbit:
         {
-            const float angle = time * speed;
-            outX = anchorX + std::cos(angle) * distance + nx * 0.2f;
-            outY = anchorY + std::sin(angle) * distance + ny * 0.2f;
+            const float kTwoPi = 6.283185307f;
+            float angle = time * safeSpeed;
+            angle = std::fmod(angle, kTwoPi);
+            if (angle < 0.0f) angle += kTwoPi;
+            outX = anchorX + std::cos(angle) * safeDistance + nx * 0.2f;
+            outY = anchorY + std::sin(angle) * safeDistance + ny * 0.2f;
             break;
         }
     }

@@ -3,7 +3,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../../db/client.js";
 import { ActivationService } from "../../services/ActivationService.js";
-import { licenseKeyHash, createCertificate, signActivationCertificate } from "../../lib/crypto.js";
+import { licenseKeyHash, createCertificate, signActivationCertificate, PRODUCT_PUBLIC_ID } from "../../lib/crypto.js";
 import { validate } from "../../lib/validate.js";
 import { ApiError, ErrorCode } from "../../lib/errors.js";
 import { env } from "../../config/env.js";
@@ -64,7 +64,7 @@ export async function licenseRoutes(app: FastifyInstance) {
       const certificate = createCertificate(
         license.id,
         activation.id,
-        license.productId,
+        PRODUCT_PUBLIC_ID,
         hash
       );
       const signed = signActivationCertificate(certificate);
@@ -102,7 +102,7 @@ export async function licenseRoutes(app: FastifyInstance) {
       const certificate = createCertificate(
         activation.licenseId,
         activation.id,
-        activation.license.productId,
+        PRODUCT_PUBLIC_ID,
         hash
       );
       const signed = signActivationCertificate(certificate);

@@ -48,6 +48,10 @@ public:
     static bool hasAVXSupport();
     static bool hasSSESupport();
 
+    // Reports which SIMD path was compiled into this translation unit
+    // (independent of runtime CPU capabilities).
+    static const char* getCompiledSIMDPath() noexcept;
+
 private:
     static constexpr float kEpsilon = 1e-6f;
     static constexpr float kIDWPower = 2.0f;

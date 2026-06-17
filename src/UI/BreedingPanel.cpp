@@ -4,6 +4,7 @@
 #include "BreedingPanel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/SnapshotBank.h"
+#include "Core/GeneticEngine.h"
 #include "UI/Bindings/ParameterBinding.h"
 #include <array>
 #include <vector>
@@ -78,11 +79,25 @@ void BreedingPanel::breedSnapshots()
         return;
     }
 
-    const float alpha = 0.2f + random_.nextFloat() * 0.6f;
-    std::vector<float> blended(static_cast<size_t>(count), 0.0f);
+    // FIX C17: Route breeding through GeneticEngine so SanityConfig protects
+    // volume/bypass/output parameters from mutation.
+    ParameterState stateA, stateB;
+    stateA.parameterCount = count;
+    stateB.parameterCount = count;
     for (int i = 0; i < count; ++i)
-        blended[static_cast<size_t>(i)] = a[static_cast<size_t>(i)] * (1.0f - alpha)
-                                        + b[static_cast<size_t>(i)] * alpha;
+    {
+        stateA.values[static_cast<size_t>(i)] = a[static_cast<size_t>(i)];
+        stateB.values[static_cast<size_t>(i)] = b[static_cast<size_t>(i)];
+    }
+    stateA.occupied = true;
+    stateB.occupied = true;
+
+    const float alpha = 0.2f + random_.nextFloat() * 0.6f;
+    auto offspring = GeneticEngine::breed(stateA, stateB, alpha, 0.0f, random_, proc_.getSanityConfig());
+
+    std::vector<float> blended(static_cast<size_t>(offspring.parameterCount), 0.0f);
+    for (int i = 0; i < offspring.parameterCount; ++i)
+        blended[static_cast<size_t>(i)] = offspring.values[static_cast<size_t>(i)];
 
     const int queued = proc_.enqueueParameterState(blended);
     if (queued != count)
@@ -119,11 +134,24 @@ void BreedingPanel::mutateSnapshot()
         return;
     }
 
-    for (auto& value : mutated)
+    ParameterState state;
+    state.capture(mutated.data(), static_cast<int>(mutated.size()));
+
+    const float amount = 0.06f;
+    const auto sanity = proc_.getSanityConfig();
+
+    // H-6 FIX: Only mutate learned (exposed) parameters; fallback to all if none exposed
+    const auto exposed = proc_.getParameterClassifier().getExposedParameterIndices();
+    std::unordered_set<int> learnedParams(exposed.begin(), exposed.end());
+    if (learnedParams.empty())
     {
-        const float delta = (random_.nextFloat() - 0.5f) * 0.12f;
-        value = juce::jlimit(0.0f, 1.0f, value + delta);
+        for (int i = 0; i < state.parameterCount; ++i)
+            learnedParams.insert(i);
     }
+
+    GeneticEngine::smartRandomize(state, amount, learnedParams, random_, sanity);
+
+    mutated.assign(state.values.begin(), state.values.begin() + state.parameterCount);
 
     const int queued = proc_.enqueueParameterState(mutated);
     if (queued != static_cast<int>(mutated.size()))

@@ -14,6 +14,16 @@ void MIDIRouter::prepare(int /*expectedMidiEventsPerBlock*/)
     // Note: The storage arrays are already allocated, no dynamic allocation here
 }
 
+void MIDIRouter::prepare(double sampleRate, int blockSize)
+{
+    // H4 FIX: Compute per-block one-pole coefficients from time constants.
+    const float dt = static_cast<float>(blockSize) / static_cast<float>(sampleRate);
+    const float attackTime  = 0.001f;  // 1 ms
+    const float releaseTime = 0.010f;  // 10 ms
+    scAttackCoeff_  = 1.0f - std::exp(-dt / attackTime);
+    scReleaseCoeff_ = 1.0f - std::exp(-dt / releaseTime);
+}
+
 void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& filtered)
 {
     // Clear output buffer (no allocation - just marks it empty)
@@ -23,7 +33,7 @@ void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& fil
     preallocatedStorage_.count = 0;
 
     // First pass: Collect non-consumed events in pre-allocated storage
-    for (const auto metadata : midi)
+    for (const auto& metadata : midi)
     {
         const auto msg = metadata.getMessage();
         bool consumed = false;
@@ -55,8 +65,9 @@ void MIDIRouter::processMidi(const juce::MidiBuffer& midi, juce::MidiBuffer& fil
                     const int slot = note - trigBase;
                     auto cb = snapshotCb_.load(std::memory_order_acquire);
                     if (cb) cb(slot, snapshotCtx_.load(std::memory_order_acquire));
+                    consumed = true;  // FIX C19: Only consume note-ONs
                 }
-                consumed = true;  // Consume BOTH note-on and note-off
+                // note-OFFs pass through to the hosted plugin
             }
         }
         else if (msg.isController())

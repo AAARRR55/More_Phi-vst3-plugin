@@ -15,6 +15,7 @@ import { authRoutes } from "./routes/v1/auth.routes.js";
 import { checkoutRoutes } from "./routes/v1/checkout.routes.js";
 import { stripeWebhookRoutes } from "./routes/v1/webhooks.stripe.routes.js";
 import { licenseRoutes } from "./routes/v1/licenses.routes.js";
+import { pluginLicenseRoutes } from "./routes/v1/plugin-licenses.routes.js";
 import { meRoutes } from "./routes/v1/me.routes.js";
 import { healthRoutes } from "./routes/v1/health.routes.js";
 
@@ -31,6 +32,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     { parseAs: "buffer" },
     (req: FastifyRequest, body: Buffer, done: (err: Error | null, body?: unknown) => void) => {
       req.rawBody = body;
+      if (body.length === 0) {
+        done(null, undefined);
+        return;
+      }
       try {
         const parsed: unknown = JSON.parse(body.toString("utf8"));
         done(null, parsed);
@@ -59,6 +64,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(registerAuth);
 
   await app.register(healthRoutes, { prefix: "/health" });
+  await app.register(pluginLicenseRoutes, { prefix: "/api/plugin/licenses" });
   await app.register(productRoutes, { prefix: "/v1/products" });
   await app.register(customerRoutes, { prefix: "/v1/customers" });
   await app.register(authRoutes, { prefix: "/v1/auth" });

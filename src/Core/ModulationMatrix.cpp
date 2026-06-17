@@ -101,9 +101,13 @@ void ModulationMatrix::apply(
         const float srcValue = sourceValues[static_cast<size_t>(srcIdx)];
         const float delta    = srcValue * r.depth;
 
-        output[static_cast<size_t>(r.destParamIndex)] =
-            std::clamp(output[static_cast<size_t>(r.destParamIndex)] + delta, 0.0f, 1.0f);
+        output[static_cast<size_t>(r.destParamIndex)] += delta;
     }
+
+    // H3 FIX: Clamp once per destination after all routes have been accumulated.
+    // This prevents order-dependent saturation when multiple routes target the same parameter.
+    for (int i = 0; i < paramCount; ++i)
+        output[static_cast<size_t>(i)] = std::clamp(output[i], 0.0f, 1.0f);
 }
 
 // ── Route management helpers (message thread) ─────────────────────────────────

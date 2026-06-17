@@ -46,11 +46,20 @@ void ThreadPool::workerThread() {
         }
 
         // Execute task outside of lock
-        try {
-            task();
-        } catch (...) {
-            // Task exceptions are propagated through std::future
-            // No need to handle here - just continue processing
+        {
+            // C1 FIX: RAII guard ensures activeTasks_ is decremented even if task throws.
+            struct ActiveTaskGuard {
+                std::atomic<size_t>& counter;
+                explicit ActiveTaskGuard(std::atomic<size_t>& c) : counter(c) {}
+                ~ActiveTaskGuard() { counter.fetch_sub(1, std::memory_order_acq_rel); }
+            } guard(activeTasks_);
+
+            try {
+                task();
+            } catch (...) {
+                // Task exceptions are propagated through std::future
+                // No need to handle here - just continue processing
+            }
         }
     }
 }
@@ -71,8 +80,14 @@ void ThreadPool::shutdown() {
     {
         std::unique_lock<std::mutex> lock(queueMutex_);
 
-        // Set stop flag
+        // FIX C20: Set stop flag and discard pending tasks so workers don't
+        // process them after shutdown. Each discarded task had already
+        // incremented activeTasks_, so decrement to keep the counter balanced.
         stop_.store(true);
+        const size_t discarded = tasks_.size();
+        std::queue<std::function<void()>> empty;
+        std::swap(tasks_, empty);
+        activeTasks_.fetch_sub(discarded);
     }
 
     // Wake up all worker threads
