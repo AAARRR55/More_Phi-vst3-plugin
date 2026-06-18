@@ -874,11 +874,8 @@ TEST_CASE("MCP analysis summary reports deterministic methodology and model stat
     REQUIRE(summary["analysis_metadata"]["algorithm_ids"]["loudness"].get<std::string>() == "lightweight_bs1770_style_rolling_estimate");
     REQUIRE(summary["analysis_metadata"]["algorithm_ids"]["true_peak"].get<std::string>() == "4x_polyphase_fir_estimate");
     REQUIRE(summary["model_status"]["genre_classifier_loaded"].get<bool>() == false);
-    REQUIRE(summary["model_status"]["neural_compressor_loaded"].get<bool>() == false);
     REQUIRE(summary["model_status"]["genre_classifier_status"].get<std::string>() == "default_fallback");
-    REQUIRE(summary["model_status"]["neural_compressor_status"].get<std::string>() == "heuristic_fallback");
     REQUIRE(summary["model_status"]["genre_classifier_inference"].get<std::string>() == "unavailable");
-    REQUIRE(summary["model_status"]["neural_compressor_inference"].get<std::string>() == "unavailable");
     REQUIRE(summary["warnings"].is_array());
     REQUIRE(jsonArrayContainsString(
         summary["warnings"],

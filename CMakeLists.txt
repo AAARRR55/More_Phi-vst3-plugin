@@ -246,8 +246,6 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/LoudnessNormalizer.h
     src/Core/LoudnessNormalizer.cpp
     src/Core/MonoCompatibilityChecker.h
-    src/Core/NeuralCompressor.h
-    src/Core/NeuralCompressor.cpp
     src/Core/AutoMasteringEngine.h
     src/Core/AutoMasteringEngine.cpp
     ${MORE_PHI_NEURAL_MASTERING_SOURCES}
