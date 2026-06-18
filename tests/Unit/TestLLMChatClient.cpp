@@ -620,6 +620,210 @@ TEST_CASE("parseOpenAIResponse prefers structured tool_calls over inline tokens"
     CHECK(tcs[0]["id"].get<std::string>() == "real_tc_1");
 }
 
+// ── Content-shape / reasoning-model robustness tests ─────────────────────────
+// NVIDIA NIM and other OpenAI-compatible backends can return "content" as an
+// array of text blocks, as null (reasoning models whose budget went to
+// reasoning_content), or leave the answer in "reasoning_content". The parser
+// must surface these instead of silently producing an empty reply (which the
+// UI renders as the unhelpful "(empty response)").
+
+TEST_CASE("parseOpenAIResponse extracts content as an array of text blocks", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nlohmann::json::array({
+                           {{"type", "text"}, {"text", "Analysis: the audio peaks at -3dB."}}
+                       })}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    CHECK(result["text"].get<std::string>() == "Analysis: the audio peaks at -3dB.");
+}
+
+TEST_CASE("parseOpenAIResponse falls back to reasoning_content when content is null", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nullptr},
+                       {"reasoning_content", "Step 1: gain is high. Final: reduce gain."}}},
+         {"finish_reason", "stop"}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    const auto text = result["text"].get<std::string>();
+    CHECK(text.find("reduce gain") != std::string::npos);
+}
+
+TEST_CASE("parseOpenAIResponse falls back to reasoning_content given as an array", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nullptr},
+                       {"reasoning_content", nlohmann::json::array({
+                           {{"type", "text"}, {"text", "think"}},
+                           {{"type", "text"}, {"text", " answer"}}
+                       })}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    CHECK(result["text"].get<std::string>() == "think answer");
+}
+
+TEST_CASE("parseOpenAIResponse reports token-budget exhaustion via finish_reason=length", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"}, {"content", nullptr}}},
+         {"finish_reason", "length"}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    const auto err = result["error"].get<std::string>();
+    CHECK(result["text"].get<std::string>().empty());
+    CHECK(err.find("truncated") != std::string::npos);
+    CHECK(err.find("token budget") != std::string::npos);
+    CHECK(err.find("max_tokens") != std::string::npos);
+}
+
+TEST_CASE("parseOpenAIResponse reports guidance for a genuinely empty stop reply", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"}, {"content", nullptr}}},
+         {"finish_reason", "stop"}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    const auto err = result["error"].get<std::string>();
+    CHECK(err.find("no visible content") != std::string::npos);
+    CHECK(err.find("reasoning model") != std::string::npos);
+}
+
+TEST_CASE("parseOpenAIResponse does not misclassify tool-token text inside reasoning_content", "[unit][ai][llm][chat][nvidia]")
+{
+    // A reasoning dump that merely mentions a tool-call literal must NOT become a
+    // phantom tool call (ordering guard between inline-token detection and the
+    // reasoning_content fallback).
+    const juce::String reasoning = "I should call <|tool_call_begin|>functions fake:99"
+                                   "<|tool_call_argument_begin|>{}<|tool_call_end|> but I won't.";
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nullptr},
+                       {"reasoning_content", std::string(reasoning.toRawUTF8())}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    REQUIRE(result["tool_calls"].is_array());
+    CHECK(result["tool_calls"].size() == 0);
+    CHECK(result["text"].get<std::string>() == reasoning.toStdString());
+}
+
+TEST_CASE("parseOpenAIResponse tolerates malformed content arrays without throwing", "[unit][ai][llm][chat][nvidia]")
+{
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nlohmann::json::array({
+                           123, true, nullptr,
+                           nlohmann::json::object({{"type", "image_url"}}),
+                           nlohmann::json::object({{"text", 456}}),
+                           nlohmann::json::object({{"type", "text"}, {"text", "ok"}})
+                       })}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    CHECK(result["text"].get<std::string>() == "ok");
+}
+
+TEST_CASE("parseOpenAIResponse parses inline tool tokens when content is an array", "[unit][ai][llm][chat][nvidia]")
+{
+    // Twin-bug guard: inline tool tokens carried inside a content array must
+    // still be parsed (the inline-token fallback previously re-read content via
+    // is_string() and missed them entirely).
+    const std::string contentText =
+        std::string("Setting param.")
+        + "<|tool_calls_section_begin|>"
+        + "<|tool_call_begin|>functions set_parameter:1"
+        + "<|tool_call_argument_begin|>"
+        + R"({"name":"Gain","value":1.0})"
+        + "<|tool_call_end|>"
+        + "<|tool_calls_section_end|>";
+
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content", nlohmann::json::array({
+                           {{"type", "text"}, {"text", contentText}}
+                       })}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    const auto& tcs = result["tool_calls"];
+    REQUIRE(tcs.is_array());
+    REQUIRE(tcs.size() == 1);
+    CHECK(tcs[0]["name"].get<std::string>() == "set_parameter");
+    CHECK(result["text"].get<std::string>().find("Setting param") != std::string::npos);
+}
+
+TEST_CASE("parseOpenAIResponse keeps empty-text tool-call turns as a clean success", "[unit][ai][llm][chat][nvidia]")
+{
+    // Regression guard: the empty-response diagnostic must be gated on BOTH no
+    // text AND no tool calls, so a turn that carries tool calls but no preamble
+    // text stays a clean success.
+    nlohmann::json body;
+    body["choices"] = nlohmann::json::array({
+        {{"message", {{"role", "assistant"},
+                       {"content",
+                           "<|tool_calls_section_begin|>"
+                           "<|tool_call_begin|>functions set_parameters_batch:2"
+                           "<|tool_call_argument_begin|>"
+                           R"({"parameters":[{"name":"Gain","value":0.6}]})"
+                           "<|tool_call_end|>"
+                           "<|tool_calls_section_end|>"}}}}
+    });
+
+    const auto result = nlohmann::json::parse(
+        LLMChatClient::parseOpenAIResponseForTest(200, juce::String(body.dump())).toStdString());
+
+    CHECK(result["error"].get<std::string>().empty());
+    REQUIRE(result["tool_calls"].is_array());
+    REQUIRE(result["tool_calls"].size() == 1);
+}
+
+TEST_CASE("LLMChatClient raises max_tokens budget for reasoning models", "[unit][ai][llm][chat]")
+{
+    CHECK(LLMChatClient::maxTokensFor("deepseek-ai/deepseek-r1") >= 16384);
+    CHECK(LLMChatClient::maxTokensFor("nvidia/llama-3.1-nemotron-70b-instruct") >= 16384);
+    CHECK(LLMChatClient::maxTokensFor("gpt-4o") == 4096);
+    CHECK(LLMChatClient::maxTokensFor("meta/llama-3.1-70b-instruct") == 4096);
+}
+
 // ── Latency optimization tests ──────────────────────────────────────────────
 
 TEST_CASE("Tool name resolution is consistent across repeated calls (cached map)", "[unit][ai][llm][chat][latency]")
