@@ -1228,7 +1228,6 @@ juce::String more_phi::MCPToolsExtended::generateDatasetV2(
         config.steadyStateDuration = static_cast<float>(params.getProperty("steady_state_duration", 5.0));
         config.chainType = parseChainType(params.getProperty("chain_type", "mastering").toString());
         config.outputFormat = parseOutputFormat(params.getProperty("output_format", "wav32").toString());
-        config.useAugmentation = static_cast<bool>(params.getProperty("use_augmentation", true));
         config.enableValidation = static_cast<bool>(params.getProperty("enable_validation", true));
         config.numParallelThreads = static_cast<int>(params.getProperty("parallel_threads", 4));
         config.randomSeed = static_cast<unsigned int>(static_cast<int>(params.getProperty("seed", 42)));
