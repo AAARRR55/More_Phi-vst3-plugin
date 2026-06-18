@@ -1,0 +1,6 @@
+mcp>=1.0.0
+jsonschema>=4.0
+pydantic>=2.0
+pywin32>=306; platform_system=="Windows"
+pytest>=8.0
+pytest-asyncio>=0.23

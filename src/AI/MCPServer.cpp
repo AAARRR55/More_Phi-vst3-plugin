@@ -70,14 +70,10 @@ MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingS
 MCPServer::ConnectionThread::~ConnectionThread()
 {
     signalExit();
-    // m-4 FIX: Reduce timeout from 1000ms to 500ms, and force socket close
-    // if the thread doesn't exit to avoid blocking plugin unload.
-    if (!stopThread(500))
-    {
-        // Force socket close to unblock any pending read
-        if (socket_) socket_->close();
-        stopThread(100);  // Brief final wait
-    }
+    // Wait indefinitely to ensure the thread is completely dead before subclass
+    // variables are destroyed. Since signalExit() closes the socket, the thread
+    // will unblock and exit immediately.
+    stopThread(-1);
     owner_.connectedClients_--;
 }
 
@@ -230,10 +226,10 @@ void MCPServer::stopServer()
             conn->signalExit();
     }
 
-    // H-8 FIX: Reduced from 3000ms to 500ms. If called from message thread
-    // during plugin shutdown, a 3s block freezes the host. Force-close the
-    // socket above already unblocks any blocking accept() call.
-    stopThread(500);
+    // Wait indefinitely to ensure the listener thread has completely exited.
+    // Since serverSocket_.close() unblocks waitForNextConnection(), the thread
+    // will exit immediately.
+    stopThread(-1);
 
     // Final cleanup of remaining connections
     const juce::ScopedLock lock(connectionsLock_);

@@ -506,6 +506,24 @@ private:
     juce::MidiBuffer filteredMidiBuffer_;  // Re-used MIDI buffer — retains capacity across clear() calls
     std::vector<float> finalOutput_;  // After discrete processing
 
+    // PERF-C2: Cached snapshot of current hosted plugin parameter values.
+    // Filled once per block via batch getValue() calls, then used for touch
+    // detection instead of per-parameter getParameterNormalized() virtual
+    // dispatch. Pre-allocated in prepareToPlay. Audio thread only.
+    std::vector<float> currentParamSnapshot_;
+
+    // PERF-C3: Previous morph position for early-exit when static.
+    // In Direct mode, if position is unchanged for STABLE_THRESHOLD blocks,
+    // the interpolation output is identical and we skip recomputation + parameter
+    // writes entirely. Reset on any position change or mode switch.
+    float prevMorphX_ = -1.0f;
+    float prevMorphY_ = -1.0f;
+    float prevFaderPos_ = -1.0f;
+    int prevPhysicsMode_ = -1;
+    int prevMorphSource_ = -1;
+    int morphStableBlocks_ = 0;
+    static constexpr int MORPH_STABLE_THRESHOLD = 2; // Skip after N identical blocks
+
     // Touch detection: prevents morph from overwriting manual knob changes
     // CRITICAL: These vectors are accessed from both audio thread (read/write in processBlock)
     // and message thread (write in recallSnapshotQueued). Use spinlock for synchronization.
@@ -545,6 +563,8 @@ private:
     double currentSampleRate = 44100.0;
     int    currentBlockSize  = 512;
     std::atomic<bool> prepared{false};
+    std::atomic<bool> shuttingDown_{false};
+    std::atomic<int> audioThreadActive_{0};
 
     // Audio thread writes host playhead data; MCP/UI read snapshots only.
     std::atomic<bool> transportAvailable_{false};
@@ -635,6 +655,8 @@ private:
         std::atomic<float>* outputGain = nullptr;
         std::atomic<float>* driftOutputX = nullptr;
         std::atomic<float>* driftOutputY = nullptr;
+        std::atomic<float>* coarseParameterWrites = nullptr;
+        std::atomic<float>* disableTouchDetection = nullptr;
     };
     RawParameters rawParams_{};
 
@@ -673,6 +695,14 @@ private:
     std::atomic<float> driftDistance_{0.4f};
     std::atomic<float> driftChaos_{0.5f};
     std::atomic<float> smoothingRate_{0.95f};
+
+    // PERF-OPT opt-in flags (default OFF — preserve current validated behavior).
+    // Coarse Parameter Writes: raise the apply-loop write deadband (1e-5 -> 5e-4)
+    // so fewer setValue() calls fire during slow morphs.
+    // Disable Touch Detect: skip the per-block batch getValue() read and the
+    // touch/hold/cooldown bookkeeping (pure morph output application).
+    std::atomic<bool> coarseParameterWrites_{false};
+    std::atomic<bool> disableTouchDetection_{false};
 
     // Audio analysis (audio thread → UI)
     std::atomic<float> rmsLevel_{0.0f};

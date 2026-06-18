@@ -65,7 +65,7 @@ juce::AudioPluginInstance* PluginHostManager::beginExclusivePluginUse(int timeou
             return nullptr;
         }
 
-        juce::Thread::yield();
+        juce::Thread::sleep(1);
     }
 
     auto* plugin = hostedPluginPtr_.load(std::memory_order_acquire);
@@ -305,7 +305,7 @@ void PluginHostManager::unloadPlugin()
                 DBG("PluginHostManager::unloadPlugin — timeout waiting for audio thread lease");
                 break;
             }
-            juce::Thread::yield();
+            juce::Thread::sleep(1);
         }
 
         try

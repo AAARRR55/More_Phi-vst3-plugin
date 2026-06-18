@@ -35,15 +35,22 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit);
     captureScratch.fill(0.0f);
-    for (int i = 0; i < safeCount; ++i)
-        captureScratch[static_cast<size_t>(i)] = bridge.getParameterNormalized(i);
+
+    // PERF-C1+BATCH: Read parameter values AND names via single plugin
+    // acquisitions (captureAllNormalized / captureAllNames) instead of one
+    // acquirePluginForUse cycle per parameter. For a 2048-param plugin this
+    // cuts ~4096 atomic lock cycles to 2 per capture — the contention the
+    // PERF-C1 comment blamed for FL Studio stalls. Both reads stay OUTSIDE
+    // the WriteScope (do not regress the seqlock-writer hold-time invariant).
+    bridge.captureAllNormalized(captureScratch.data(), safeCount);
+
+    juce::StringArray namesCapture;
+    bridge.captureAllNames(namesCapture, safeCount);
 
     WriteScope write(*this);
     (*slots_)[slot].capture(captureScratch.data(), safeCount);
 
-    paramNames_[slot].clear();
-    for (int i = 0; i < safeCount; ++i)
-        paramNames_[slot].add(bridge.getParameterName(i));
+    paramNames_[slot] = std::move(namesCapture);
 }
 
 void SnapshotBank::captureValues(int slot, const std::vector<float>& values)
@@ -81,11 +88,16 @@ void SnapshotBank::captureValuesWithNames(int slot,
     captureScratch.fill(0.0f);
     std::copy_n(values, static_cast<size_t>(safeCount), captureScratch.begin());
 
+    // PERF-C1: Prepare names before WriteScope — StringArray::add/clear can
+    // heap-allocate, and the names input is already available outside the lock.
+    juce::StringArray namesCapture;
+    namesCapture.ensureStorageAllocated(safeCount);
+    for (int i = 0; i < safeCount && i < names.size(); ++i)
+        namesCapture.add(names[i]);
+
     WriteScope write(*this);
     (*slots_)[slot].capture(captureScratch.data(), safeCount);
-    paramNames_[slot].clear();
-    for (int i = 0; i < safeCount && i < names.size(); ++i)
-        paramNames_[slot].add(names[i]);
+    paramNames_[slot] = std::move(namesCapture);
 }
 
 void SnapshotBank::recall(int slot, IParameterBridge& bridge) const

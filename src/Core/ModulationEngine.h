@@ -115,6 +115,11 @@ public:
     int  getAssignedRouteCount() const override;
     const ModRoute& getRoute(int routeId) const override;
 
+    /** Audio-thread safe: true if any modulation routes are currently published.
+     *  Use on the audio thread instead of getAssignedRouteCount(), which reads
+     *  the message-thread write buffer and is not safe to call from processBlock. */
+    bool hasActiveRoutes() const noexcept { return matrix_.hasPublishedRoutes(); }
+
     // ── Route property modification (forwarded to matrix) ────────────────────
     void setRouteDepth(int routeId, float depth);
     void setRouteEnabled(int routeId, bool enabled);

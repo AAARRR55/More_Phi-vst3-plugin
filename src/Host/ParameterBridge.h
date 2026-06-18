@@ -47,13 +47,17 @@ public:
 
     int getParameterCount() const noexcept override;
     float getParameterNormalized(int index) const noexcept override;
+    float getParameterNormalized(juce::AudioPluginInstance& plugin, int index) const noexcept;
     void setParameterNormalized(int index, float value) noexcept override;
+    void setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value) noexcept;
     juce::String getParameterName(int index) const override;
 
     void applyParameterState(const float* values, int count) noexcept override;
     void applyParameterState(const std::vector<float>& values) noexcept override;
 
     std::vector<float> captureParameterState() const noexcept override;
+    void captureAllNormalized(float* outValues, int count) const noexcept override;
+    void captureAllNames(juce::StringArray& outNames, int count) const override;
 
     bool isDiscrete(int index) const noexcept override;
     std::vector<bool> getDiscreteMap() const noexcept override;
