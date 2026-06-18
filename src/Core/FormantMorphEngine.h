@@ -121,6 +121,11 @@ private:
         // Circular input accumulation buffer (length = fftSize)
         std::vector<float> inputBuffer;
 
+        // FIX 2.3 / Fix 5-prep: Linearisation scratch for de-rotating the
+        // circular input buffer before FFT. Without this the cepstral analysis
+        // runs on time-scrambled samples whenever writePos has wrapped.
+        std::vector<float> linBuffer;
+
         // Overlap-add output buffer (length = fftSize + max(hopSize, maxBlockSize))
         std::vector<float> outputBuffer;
 
@@ -144,6 +149,10 @@ private:
 
         int writePos = 0;
         int hopCount = 0;
+
+        // FIX 2.3: Per-frame overlap-add write head (advances by hopSize_ per
+        // frame; decremented by the per-block drain amount).
+        int outWritePos = 0;
 
         bool hasSourceEnvelope = false;
     };

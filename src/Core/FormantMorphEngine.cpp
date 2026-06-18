@@ -69,11 +69,15 @@ void FormantMorphEngine::prepare(double sampleRate, int maxBlockSize)
     window_.resize(static_cast<size_t>(fftSize_));
     computeHannWindow();
 
-    const int outBufLen = fftSize_ + std::max(hopSize_, maxBlockSize);
+    // FIX 2.3: Same output-buffer sizing rationale as SpectralMorphEngine —
+    // must hold every frame written within a block at increasing offsets.
+    const int maxHopsPerBlock = (maxBlockSize / hopSize_) + 2;
+    const int outBufLen = fftSize_ + std::max(hopSize_, maxBlockSize) + maxHopsPerBlock * hopSize_;
 
     for (auto& ch : channels_)
     {
         ch.inputBuffer.assign(static_cast<size_t>(fftSize_), 0.0f);
+        ch.linBuffer.assign(static_cast<size_t>(fftSize_), 0.0f);   // Fix 5-prep
         ch.outputBuffer.assign(static_cast<size_t>(outBufLen), 0.0f);
         ch.sourceEnvelope.assign(static_cast<size_t>(numBins_), 1.0f);
         ch.cepstrumBuffer.assign(static_cast<size_t>(fftSize_), 0.0f);
@@ -85,6 +89,7 @@ void FormantMorphEngine::prepare(double sampleRate, int maxBlockSize)
 
         ch.writePos          = 0;
         ch.hopCount          = 0;
+        ch.outWritePos       = 0;   // FIX 2.3
         ch.hasSourceEnvelope = false;
     }
 }
@@ -96,6 +101,7 @@ void FormantMorphEngine::reset() noexcept
     for (auto& ch : channels_)
     {
         std::fill(ch.inputBuffer.begin(),    ch.inputBuffer.end(),    0.0f);
+        std::fill(ch.linBuffer.begin(),      ch.linBuffer.end(),      0.0f);   // Fix 5-prep
         std::fill(ch.outputBuffer.begin(),   ch.outputBuffer.end(),   0.0f);
         std::fill(ch.sourceEnvelope.begin(), ch.sourceEnvelope.end(), 1.0f);
         std::fill(ch.cepstrumBuffer.begin(), ch.cepstrumBuffer.end(), 0.0f);
@@ -106,6 +112,7 @@ void FormantMorphEngine::reset() noexcept
         std::fill(ch.specImag.begin(),       ch.specImag.end(),       0.0f);
         ch.writePos          = 0;
         ch.hopCount          = 0;
+        ch.outWritePos       = 0;   // FIX 2.3
         ch.hasSourceEnvelope = false;
     }
 }
@@ -234,6 +241,10 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
         }
         std::fill(ch.outputBuffer.begin() + remaining,
                   ch.outputBuffer.end(), 0.0f);
+
+        // FIX 2.3: Advance the overlap-add write head with the drain.
+        ch.outWritePos -= drainLen;
+        if (ch.outWritePos < 0) ch.outWritePos = 0;
     }
 }
 
@@ -241,8 +252,26 @@ void FormantMorphEngine::processBlock(juce::AudioBuffer<float>& buffer) noexcept
 
 void FormantMorphEngine::processFrame(ChannelState& ch, float amount) noexcept
 {
-    // 1. Forward FFT of current frame
-    forwardFFT(ch.inputBuffer.data(),
+    // Fix 5-prep: De-rotate the circular input buffer into a linear frame
+    // before FFT. The oldest sample is at writePos; the buffer wraps at
+    // fftSize_. Without this step the cepstral analysis runs on time-
+    // scrambled samples whenever writePos has wrapped past 0, producing a
+    // garbage spectral envelope. Mirrors SpectralMorphEngine::processFrame.
+    float* lin = ch.linBuffer.data();
+    {
+        const int tail = fftSize_ - ch.writePos;  // [writePos .. fftSize-1]
+        const int head = ch.writePos;             // [0 .. writePos-1]
+        std::memcpy(lin,
+                    ch.inputBuffer.data() + ch.writePos,
+                    static_cast<size_t>(tail) * sizeof(float));
+        if (head > 0)
+            std::memcpy(lin + tail,
+                        ch.inputBuffer.data(),
+                        static_cast<size_t>(head) * sizeof(float));
+    }
+
+    // 1. Forward FFT of current (linearised) frame
+    forwardFFT(lin,
                ch.specReal.data(), ch.specImag.data(),
                ch.fftScratch.data());
 
@@ -271,20 +300,29 @@ void FormantMorphEngine::processFrame(ChannelState& ch, float amount) noexcept
                ch.ifftOut.data(),
                ch.fftScratch.data());
 
-    // 6. Overlap-add into output buffer
-    for (int n = 0; n < fftSize_; ++n)
-        ch.outputBuffer[static_cast<size_t>(n)] += ch.ifftOut[n];
+    // 6. Overlap-add into output buffer at the advancing write head.
+    //    FIX 2.3: add at ch.outWritePos (advances by hopSize_ per frame) so
+    //    consecutive frames overlap by the correct amount and Hann² COLA holds.
+    const int outBufLen = static_cast<int>(ch.outputBuffer.size());
+    const int addLen    = std::min(fftSize_, outBufLen - ch.outWritePos);
+    for (int n = 0; n < addLen; ++n)
+        ch.outputBuffer[static_cast<size_t>(ch.outWritePos + n)] += ch.ifftOut[n];
+    ch.outWritePos += hopSize_;
 }
 
 // ─── computeHannWindow() ─────────────────────────────────────────────────────
 
 void FormantMorphEngine::computeHannWindow() noexcept
 {
+    // Fix 5-prep: Periodic Hann (N denominator, not N-1) — required for perfect
+    // reconstruction (COLA) at 75% overlap with the analysis × synthesis = Hann²
+    // OLA normalization assumed by inverseFFT's ×2 scale. The symmetric form
+    // (N-1) breaks COLA. Matches SpectralMorphEngine::computeHannWindow.
     const float N = static_cast<float>(fftSize_);
     for (int n = 0; n < fftSize_; ++n)
     {
         window_[static_cast<size_t>(n)] =
-            0.5f * (1.0f - std::cos(kFmTwoPi * static_cast<float>(n) / (N - 1.0f)));
+            0.5f * (1.0f - std::cos(kFmTwoPi * static_cast<float>(n) / N));
     }
 }
 

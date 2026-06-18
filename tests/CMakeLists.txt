@@ -73,13 +73,14 @@ add_executable(MorePhiTests
     Unit/TestOzoneIntegration.cpp
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
-    Unit/TestNeuralMasteringDatasetSchema.cpp
     Unit/TestNeuralMasteringController.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
     Unit/TestLicensing.cpp
+    # Spec optimization extensions (heartbeat, scoped cache invalidation, adaptive rate limit)
+    Unit/TestSpecOptimizations.cpp
 )
 
 # Python stdio MCP server integration test. Only compiled once the C++ IPC

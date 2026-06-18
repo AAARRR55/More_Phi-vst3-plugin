@@ -198,11 +198,8 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/FormantMorphEngine.h
     src/Core/FormantMorphEngine.cpp
     src/Core/ModulationTypes.h
-    src/Core/IModulationEngine.h
     src/Core/ModulationEngine.h
     src/Core/ModulationEngine.cpp
-    src/Core/ISpectralMorphEngine.h
-    src/Core/IGranularMorphEngine.h
     src/Core/LFO.h
     src/Core/LFO.cpp
     src/Core/EnvelopeFollower.h
@@ -213,8 +210,6 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/ModulationMatrix.cpp
     src/Core/OversamplingWrapper.h
     src/Core/LatencyManager.h
-    src/Core/VAEMorphEngine.h
-    src/Core/VAEMorphEngine.cpp
 )
 
 # ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
@@ -222,8 +217,6 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/Core/NeuralMasteringTypes.h
     src/Core/NeuralMasteringSafetyPolicy.h
     src/Core/NeuralMasteringSafetyPolicy.cpp
-    src/Core/NeuralMasteringPlanSmoother.h
-    src/Core/NeuralMasteringPlanSmoother.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
@@ -261,8 +254,6 @@ set(MORE_PHI_MASTERING_SOURCES
 )
 
 set(MORE_PHI_HOST_SOURCES
-    src/Host/PluginScanner.h
-    src/Host/PluginScanner.cpp
     src/Host/IPluginHostManager.h
     src/Host/PluginHostManager.h
     src/Host/PluginHostManager.cpp
@@ -309,13 +300,10 @@ set(MORE_PHI_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/DatasetOrganizer.cpp
     src/AI/Dataset/DatasetGeneratorV2.h
     src/AI/Dataset/DatasetGeneratorV2.cpp
-    src/AI/Dataset/DatasetConfig.h
     src/AI/Dataset/OfflineBatchRenderer.h
     src/AI/Dataset/OfflineBatchRenderer.cpp
     src/AI/Dataset/ParameterSafetyConfig.h
     src/AI/Dataset/ParameterSafetyConfig.cpp
-    src/AI/Dataset/NeuralMasteringDatasetSchema.h
-    src/AI/Dataset/NeuralMasteringDatasetSchema.cpp
     src/AI/Dataset/NeuralMasteringFeatureExtractor.h
     src/AI/Dataset/NeuralMasteringFeatureExtractor.cpp
 )
@@ -336,8 +324,6 @@ set(MORE_PHI_AI_SOURCES
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
-    src/AI/LLMProvider.h
-    src/AI/LLMProvider.cpp
     src/AI/LLMSettings.h
     src/AI/LLMSettings.cpp
     src/AI/LLMSettingsStore.h
@@ -362,10 +348,6 @@ set(MORE_PHI_AI_SOURCES
     src/AI/NeuralMasteringController.cpp
     src/AI/AutomationControlPlane.h
     src/AI/AutomationControlPlane.cpp
-    src/AI/StyleEncoder.h
-    src/AI/StyleEncoder.cpp
-    src/AI/ParameterContextBuilder.h
-    src/AI/ParameterContextBuilder.cpp
     src/AI/PluginProfileDB.h
     src/AI/PluginProfileDB.cpp
     src/AI/SemanticPluginProfile.h
@@ -374,10 +356,6 @@ set(MORE_PHI_AI_SOURCES
     src/AI/PluginSemanticMapper.cpp
     src/AI/TrackAssistantStore.h
     src/AI/TrackAssistantStore.cpp
-    src/AI/OSKeychain.h
-    src/AI/OSKeychain.cpp
-    src/AI/MCPEQTool.h
-    src/AI/MCPEQTool.cpp
     src/AI/MCPServer.h
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
@@ -413,8 +391,6 @@ set(MORE_PHI_MIDI_SOURCES
 )
 
 set(MORE_PHI_PRESET_SOURCES
-    src/Preset/MetaPresetManager.h
-    src/Preset/MetaPresetManager.cpp
     src/Preset/PresetSerializer.h
     src/Preset/PresetSerializer.cpp
     src/Preset/PresetEntry.h
@@ -422,8 +398,6 @@ set(MORE_PHI_PRESET_SOURCES
     src/Preset/PresetSerializerV2.cpp
     src/Preset/PresetLibrary.h
     src/Preset/PresetLibrary.cpp
-    src/Preset/CloudSyncClient.h
-    src/Preset/CloudSyncClient.cpp
 )
 
 set(MORE_PHI_UI_SOURCES

@@ -11,7 +11,6 @@
 #include "InstanceRegistry.h"
 #include "Plugin/PluginProcessor.h"
 #include "MCPToolsExtended.h"
-#include "MCPEQTool.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
 #include "Core/DiscreteParameterHandler.h"
@@ -437,7 +436,7 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
     transaction.result = parseToolResponse(rawResponse);
     transaction.success = transaction.result.is_object() && transaction.result.value("success", false);
     if (transaction.success)
-        MCPToolHandler::invalidateToolResultCache();
+        MCPToolHandler::invalidateToolResultCacheForTool(method);
     transaction.errorCode = extractErrorCode(transaction.result);
     transaction.measurements = buildTransactionMeasurements(transaction.beforeState, transaction.afterState);
     transaction.measurements["latency_ms"] = latencyMs;
@@ -1138,8 +1137,18 @@ static juce::String handleControlPlaneTool(const juce::String& method,
         const auto level = autonomyLevelFromString(params.getProperty("level",
                          params.getProperty("autonomy_level", "assist")).toString());
         runtime.permissions().setAutonomyLevel(level);
-        runtime.events().publish(IntegrationEvent{{}, "permission", "autonomy.changed", {}, {}, json{{"level", toString(level).toStdString()}}, juce::Time::getCurrentTime()});
-        return toJString(json{{"success", true}, {"autonomy_level", toString(level).toStdString()}});
+        // Adaptive rate limiting (spec §6.5): scale the per-minute request
+        // limit with the autonomy level so Manual/Assist are throttled harder
+        // while an approved Autopilot workflow can push changes faster.
+        switch (level)
+        {
+            case AutonomyLevel::Manual:   p.getTokenOptimizer().setAutonomyRateMultiplier(0.5f); break;
+            case AutonomyLevel::Assist:   p.getTokenOptimizer().setAutonomyRateMultiplier(1.0f); break;
+            case AutonomyLevel::CoPilot:  p.getTokenOptimizer().setAutonomyRateMultiplier(1.5f); break;
+            case AutonomyLevel::Autopilot:p.getTokenOptimizer().setAutonomyRateMultiplier(2.0f); break;
+        }
+        runtime.events().publish(IntegrationEvent{{}, "permission", "autonomy.changed", {}, {}, json{{"level", toString(level).toStdString()}, {"rate_limit_multiplier", p.getTokenOptimizer().getAutonomyRateMultiplier()}}, juce::Time::getCurrentTime()});
+        return toJString(json{{"success", true}, {"autonomy_level", toString(level).toStdString()}, {"effective_rate_limit", p.getTokenOptimizer().getEffectiveRateLimit()}});
     }
 
     if (method == "permission.list_approvals")
@@ -1887,6 +1896,7 @@ static json parseSchema(const char* schemaText)
 }
 
 static const ToolDefinition kCoreTools[] = {
+    {"heartbeat", "Liveness probe. Requires authentication but does NOT consume a rate-limit slot, so an idle client can keep the connection alive without starving tool traffic. Returns server time, uptime, queue depth, connected clients, and health.", R"({"type":"object","properties":{"client_clock_ms":{"type":"integer","description":"Optional client-side epoch millis for RTT estimation."}}})"},
     {"get_plugin_info", "Return More-Phi and hosted plugin identity information.", R"({"type":"object","properties":{}})"},
     {"list_parameters", "List hosted plugin parameters with stable IDs and normalized values.", R"({"type":"object","properties":{}})"},
     {"get_parameter", "Read a hosted plugin parameter by stableId, index, or exact name.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
@@ -2744,6 +2754,59 @@ void MCPToolHandler::invalidateToolResultCache()
     toolResultCache().invalidateAll();
 }
 
+void MCPToolHandler::invalidateToolResultCacheForTool(const juce::String& toolName)
+{
+    // Map the write tool to the cache scopes it dirties (spec §6.2).
+    // A parameter write invalidates parameter-describing reads and the morph
+    // snapshot state; it does NOT invalidate analysis meters (which reflect
+    // audio, not parameter layout) or the semantic profile (parameter
+    // classification). Recall/capture additionally invalidates morph.
+    using Scope = ToolResultCache::Scope;
+
+    if (toolName == "set_parameter" || toolName == "set_parameters_batch"
+        || toolName == "set_parameters_optimized"
+        || toolName == "hosted_plugin.set_parameter"
+        || toolName == "hosted_plugin.set_parameters"
+        || toolName == "more_phi.set_parameter"
+        || toolName == "more_phi.set_parameters"
+        || toolName == "apply_mastering_plan" || toolName == "mastering.apply_plan"
+        || toolName == "plugin_profile.apply_safe_action"
+        || toolName == "mastering.select_candidate")
+    {
+        toolResultCache().invalidateScopes({Scope::Parameters, Scope::Morph});
+        return;
+    }
+
+    if (toolName == "recall_snapshot" || toolName == "capture_snapshot"
+        || toolName == "hosted_plugin.capture_state"
+        || toolName == "plugin_profile.restore_safe_snapshot"
+        || toolName == "automation.rollback"
+        || toolName == "set_morph_position")
+    {
+        // Snapshot/recall/morph changes can alter every observable, including
+        // the analysis window, so evict the dirty observable scopes together.
+        toolResultCache().invalidateScopes({Scope::Parameters, Scope::Morph, Scope::Analysis});
+        return;
+    }
+
+    // Control-plane writes (memory, permission, workflow, context, events,
+    // sync) mutate the Control scope's read tools (automation.history,
+    // memory.list_outcomes, permission.list_approvals, workflow.list, etc.)
+    // and so must evict that scope. approval/autonomy changes also touch the
+    // automation ledger, so evict Control for all of them.
+    if (toolName.startsWith("memory.") || toolName.startsWith("permission.")
+        || toolName.startsWith("workflow.") || toolName.startsWith("context.")
+        || toolName.startsWith("events.") || toolName.startsWith("sync.")
+        || toolName.startsWith("automation."))
+    {
+        toolResultCache().invalidateScopes({Scope::Control});
+        return;
+    }
+
+    // Unrecognised write tool: conservative eviction of the observable scopes.
+    toolResultCache().invalidateScopes({Scope::Parameters, Scope::Morph, Scope::Analysis});
+}
+
 bool MCPToolHandler::isCacheableTool(const juce::String& method)
 {
     static const std::set<juce::String, std::less<>> cacheable = {
@@ -3011,16 +3074,6 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
     else if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
     else if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
-
-    // EQ Assistant Tools (Natural Language EQ Control)
-    else if (method == "eq_adjust")                      return MCPEQTool::adjustEQ(params, p, p.getAIAssistant()).jsonResult;
-    else if (method == "eq_preview")                     result = MCPEQTool::previewEQ(params, p, p.getAIAssistant()).jsonResult;
-    else if (method == "eq_apply")                       return MCPEQTool::applyEQ(params, p).jsonResult;
-    else if (method == "eq_reject")                      return MCPEQTool::rejectEQ(params, p).jsonResult;
-    else if (method == "eq_context")                     result = MCPEQTool::getContext(params, p).jsonResult;
-    else if (method == "eq_reset_context")               return MCPEQTool::resetContext(params, p).jsonResult;
-    else if (method == "eq_validate")                    result = MCPEQTool::validateEQ(params, p).jsonResult;
-    else if (method == "eq_suggest")                     result = MCPEQTool::suggestEQ(params, p, p.getAIAssistant()).jsonResult;
 
     // Multi-instance tools
     else if (method == "get_instance_info")    result = getInstanceInfo(identity);

@@ -461,6 +461,23 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
         // L-6 FIX: Use custom error code for auth failures.
         return errResponse(-32001, "Unauthorized: call initialize with bearer_token first");
 
+    // Heartbeat is a liveness probe (spec §4.4): it requires authentication but
+    // does NOT consume a rate-limit slot, so an idle client can keep the
+    // connection alive without starving real tool traffic. It returns the cheap
+    // health fields already tracked by the server.
+    if (method == "heartbeat")
+    {
+        json result = {
+            {"server_time_ms",   juce::Time::currentTimeMillis()},
+            {"uptime_ms",        uptimeMs()},
+            {"queue_depth_approx", static_cast<int64_t>(
+                processor_.getPendingParameterCommandCountApprox())},
+            {"connected_clients",  connectedClients_.load()},
+            {"healthy",            healthy_.load() ? true : false}
+        };
+        return juce::String(json{{"jsonrpc","2.0"},{"result",result},{"id",reqId}}.dump());
+    }
+
     // Consume a rate-limit slot for each authenticated MCP tool request.
     if (!processor_.getTokenOptimizer().tryConsumeRequestSlot())
         return errResponse(-32000, "Rate limit exceeded");

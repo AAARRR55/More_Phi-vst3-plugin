@@ -7,11 +7,9 @@
 
 #include "AI/MCPToolsExtended.h"
 #include "AI/MCPToolHandler.h"
-#include "AI/MCPEQTool.h"
 #include "AI/SemanticPluginProfile.h"
 #include "AI/TokenOptimizer.h"
 #include "Core/ParameterClassifier.h"
-#include "Core/VAEMorphEngine.h"
 #include "Host/IPluginHostManager.h"
 #include "Plugin/PluginProcessor.h"
 
@@ -641,57 +639,6 @@ TEST_CASE("MCP optimized set reports queue_full when resolved edit cannot be que
     REQUIRE(static_cast<int>(parsedVar.getProperty("rejected_count", -1)) == 0);
 }
 
-TEST_CASE("MCP EQ preview and reject route through assistant preview state", "[unit][ai][mcp][eq]")
-{
-    MorePhiProcessor processor;
-    processor.prepareToPlay(44100.0, 64);
-    auto* assistant = processor.getAIAssistant();
-
-    ParamChange change;
-    change.index = 0;
-    change.name = "Gain";
-    change.currentValue = 0.25f;
-    change.newValue = 0.75f;
-    assistant->stagePendingChanges({change});
-
-    const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
-    REQUIRE(preview.success);
-    REQUIRE(assistant->isPreviewActive());
-
-    const auto reject = MCPEQTool::rejectEQ({}, processor);
-    REQUIRE(reject.success);
-    REQUIRE_FALSE(assistant->isPreviewActive());
-    REQUIRE(assistant->getPendingChanges().empty());
-
-    processor.releaseResources();
-}
-
-TEST_CASE("MCP EQ preview reports command queue saturation", "[unit][ai][mcp][eq]")
-{
-    MorePhiProcessor processor;
-    processor.prepareToPlay(44100.0, 64);
-    auto* assistant = processor.getAIAssistant();
-
-    while (processor.enqueueParameterSet(0, 0.5f,
-                                         MorePhiProcessor::ParameterEditSource::MCP,
-                                         true))
-    {
-    }
-
-    ParamChange change;
-    change.index = 0;
-    change.name = "Gain";
-    change.currentValue = 0.25f;
-    change.newValue = 0.75f;
-    assistant->stagePendingChanges({change});
-
-    const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
-    REQUIRE_FALSE(preview.success);
-    REQUIRE(preview.message.containsIgnoreCase("queue"));
-
-    processor.releaseResources();
-}
-
 TEST_CASE("MCP optimized set reports when no parameter edits were queued", "[unit][ai][mcp]")
 {
     MorePhiProcessor processor;
@@ -963,21 +910,3 @@ TEST_CASE("MCP set_parameter flush reports pluginUnavailable when no hosted plug
     processor.releaseResources();
 }
 
-TEST_CASE("VAE stub loadModel is non-crashing and reports stub backend", "[unit][ai][vae]")
-{
-    VAEMorphEngine engine;
-    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getNonexistentChildFile("morephi_vae_stub", ".onnx");
-    REQUIRE(tempFile.replaceWithText("stub"));
-
-    const bool loaded = engine.loadModel(tempFile);
-    REQUIRE(loaded);
-    REQUIRE(engine.isModelLoaded());
-    REQUIRE(engine.getBackendMode() == VAEMorphEngine::BackendMode::Stub);
-    REQUIRE(engine.getBackendStatus().containsIgnoreCase("stub"));
-
-    const auto latent = engine.encode({0.1f, 0.5f, 0.8f});
-    REQUIRE(latent.size() == static_cast<size_t>(engine.getLatentDimensions()));
-
-    tempFile.deleteFile();
-}

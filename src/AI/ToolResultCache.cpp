@@ -67,6 +67,7 @@ void ToolResultCache::put(const juce::String& toolName,
 {
     const auto key = makeKey(toolName, params, generationToken);
     const auto now = std::chrono::steady_clock::now();
+    const Scope scope = scopeForTool(toolName);
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = index_.find(key);
@@ -76,6 +77,7 @@ void ToolResultCache::put(const juce::String& toolName,
         it->second->result = result;
         it->second->generationToken = generationToken;
         it->second->expiresAt = now + ttl;
+        it->second->scope = scope;
         lru_.splice(lru_.begin(), lru_, it->second);
         return;
     }
@@ -89,7 +91,7 @@ void ToolResultCache::put(const juce::String& toolName,
         ++stats_.evictions;
     }
 
-    lru_.push_front(Entry{key, result, generationToken, now + ttl});
+    lru_.push_front(Entry{key, result, generationToken, now + ttl, scope});
     index_[key] = lru_.begin();
 }
 
@@ -98,6 +100,35 @@ void ToolResultCache::invalidateAll()
     std::lock_guard<std::mutex> lock(mutex_);
     lru_.clear();
     index_.clear();
+}
+
+size_t ToolResultCache::invalidateScopes(const std::vector<Scope>& scopes)
+{
+    if (scopes.empty())
+        return 0;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t evicted = 0;
+    for (auto it = lru_.begin(); it != lru_.end();)
+    {
+        bool match = false;
+        for (const Scope s : scopes)
+        {
+            if (it->scope == s) { match = true; break; }
+        }
+        if (match)
+        {
+            index_.erase(it->key);
+            it = lru_.erase(it);
+            ++evicted;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    stats_.evictions += evicted;
+    return evicted;
 }
 
 void ToolResultCache::prune()
@@ -125,6 +156,33 @@ ToolResultCache::Stats ToolResultCache::getStats() const
     Stats s = stats_;
     s.size = lru_.size();
     return s;
+}
+
+ToolResultCache::Scope ToolResultCache::scopeForTool(const juce::String& toolName)
+{
+    // Order matters: most-specific prefixes first.
+    if (toolName == "get_plugin_info" || toolName == "hosted_plugin.info")
+        return Scope::PluginInfo;
+    if (toolName == "list_parameters" || toolName == "hosted_plugin.parameters"
+        || toolName == "get_parameter" || toolName == "more_phi.parameters"
+        || toolName == "diagnose_parameter_pipeline")
+        return Scope::Parameters;
+    if (toolName == "get_morph_state")
+        return Scope::Morph;
+    if (toolName.startsWith("analysis."))
+        return Scope::Analysis;
+    if (toolName.startsWith("plugin_profile.") || toolName == "describe_plugin_semantic_map")
+        return Scope::Profile;
+    if (toolName == "get_instance_info" || toolName == "list_instances")
+        return Scope::Instance;
+    if (toolName.startsWith("automation.") || toolName.startsWith("permission.")
+        || toolName.startsWith("workflow.") || toolName.startsWith("memory.")
+        || toolName.startsWith("context.") || toolName.startsWith("events.")
+        || toolName.startsWith("sync."))
+        return Scope::Control;
+
+    // Unknown read tool: safe default — a parameter write will evict it.
+    return Scope::Parameters;
 }
 
 } // namespace more_phi

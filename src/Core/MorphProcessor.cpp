@@ -65,7 +65,7 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
 
     // 2) Apply per-parameter smoothing (SIMD optimized)
     if (mode != MorphMode::Direct)
-        applySmoothing(output);
+        applySmoothing(output, dt);
 
     // 3) Apply Listen Mode filter — mark discrete params as "skip"
     applyListenFilter(output);
@@ -122,35 +122,49 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
     }
 }
 
-void MorphProcessor::applySmoothing(std::vector<float>& output) noexcept
+void MorphProcessor::applySmoothing(std::vector<float>& output, float dt) noexcept
 {
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());
 
-    const float rate = smoothRate_.load(std::memory_order_relaxed);
+    // Fix 2.1: Derive the one-pole coefficient from the smoothing time constant
+    // τ (set via setSmoothingRate) and the actual block duration. This makes the
+    // smoothing response independent of host sample rate / block size: a given
+    // user "smoothing" setting yields the same effective time constant everywhere.
+    // Previously `rate` was the raw stored coefficient applied once per block,
+    // which gave wildly different time constants at different rates/sizes.
+    const float tau = smoothTau_.load(std::memory_order_relaxed);
+    const float safeDt = (dt > 0.0f) ? dt : kRefDt;
+    float rate;
+    if (tau <= 0.0f)
+        rate = 0.0f;                       // no smoothing — track instantly
+    else
+        rate = std::exp(-safeDt / tau);    // exact N-sample one-pole advance
+    if (rate < 0.0f) rate = 0.0f;
+    if (rate > 0.999f) rate = 0.999f;
     const float oneMinusRate = 1.0f - rate;
 
 #if defined(MORE_PHI_USE_AVX)
     // AVX2 SIMD path - 8 floats at once
     __m256 rateVec = _mm256_set1_ps(rate);
     __m256 oneMinusRateVec = _mm256_set1_ps(oneMinusRate);
-    
+
     const size_t simdCount = maxSmoothable - (maxSmoothable % 8);
-    
+
     for (size_t i = 0; i < simdCount; i += 8)
     {
         __m256 smoothed = _mm256_loadu_ps(smoothedValues_.data() + i);
         __m256 out = _mm256_loadu_ps(output.data() + i);
-        
+
         // smoothed = smoothed * rate + output * (1 - rate)
         __m256 newSmoothed = _mm256_add_ps(
             _mm256_mul_ps(smoothed, rateVec),
             _mm256_mul_ps(out, oneMinusRateVec));
-        
+
         _mm256_storeu_ps(smoothedValues_.data() + i, newSmoothed);
         _mm256_storeu_ps(output.data() + i, newSmoothed);
     }
-    
+
     // Handle remaining elements
     for (size_t i = simdCount; i < maxSmoothable; ++i)
     {
@@ -162,22 +176,22 @@ void MorphProcessor::applySmoothing(std::vector<float>& output) noexcept
     // SSE2 SIMD path - 4 floats at once
     __m128 rateVec = _mm_set1_ps(rate);
     __m128 oneMinusRateVec = _mm_set1_ps(oneMinusRate);
-    
+
     const size_t simdCount = maxSmoothable - (maxSmoothable % 4);
-    
+
     for (size_t i = 0; i < simdCount; i += 4)
     {
         __m128 smoothed = _mm_loadu_ps(smoothedValues_.data() + i);
         __m128 out = _mm_loadu_ps(output.data() + i);
-        
+
         __m128 newSmoothed = _mm_add_ps(
             _mm_mul_ps(smoothed, rateVec),
             _mm_mul_ps(out, oneMinusRateVec));
-        
+
         _mm_storeu_ps(smoothedValues_.data() + i, newSmoothed);
         _mm_storeu_ps(output.data() + i, newSmoothed);
     }
-    
+
     // Handle remaining elements
     for (size_t i = simdCount; i < maxSmoothable; ++i)
     {

@@ -998,3 +998,233 @@ TEST_CASE("SpectralMorphEngine (production): transient detection is coherent acr
         REQUIRE(left[i] == Catch::Approx(right[i]).margin(1e-6f));
     }
 }
+
+// =============================================================================
+//  Fix 2.3 — OLA reconstruction across block sizes (production engine)
+//  At alpha=0 the phase vocoder must reconstruct stream A with high fidelity
+//  regardless of host block size. Before the fix, block sizes larger than
+//  hopSize (e.g. 1024) caused multiple hops to pile up at output offset 0,
+//  breaking the Hann² COLA condition and corrupting reconstruction.
+// =============================================================================
+
+namespace {
+
+// Generate a continuous sine into bufA; bufB is silence (alpha=0 → reconstruct A).
+// Returns a copy of the continuous A reference for SNR comparison.
+std::vector<float> fillSineAB(juce::AudioBuffer<float>& bufA,
+                              juce::AudioBuffer<float>& bufB,
+                              int startSample, int numSamples,
+                              double sampleRate, double freq)
+{
+    std::vector<float> ref(static_cast<size_t>(startSample + numSamples), 0.0f);
+    for (int ch = 0; ch < bufA.getNumChannels(); ++ch)
+    {
+        float* a = bufA.getWritePointer(ch);
+        float* b = bufB.getWritePointer(ch);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float s = static_cast<float>(std::sin(2.0 * static_cast<double>(kPi) * freq
+                                                      * static_cast<double>(startSample + i) / sampleRate));
+            a[i] = s;
+            b[i] = 0.0f;
+            if (ch == 0) ref[static_cast<size_t>(startSample + i)] = s;
+        }
+    }
+    return ref;
+}
+
+// Compute SNR (dB) of `out` vs reference `ref`, accounting for engine latency.
+// Compares the steady-state region after the latency has elapsed.
+double reconstructionSNR(const std::vector<float>& out,
+                         const std::vector<float>& ref,
+                         int latencySamples)
+{
+    double signalPow = 0.0, errPow = 0.0;
+    int n = 0;
+    const int start = latencySamples;
+    for (size_t i = static_cast<size_t>(start); i < out.size() && i < ref.size(); ++i)
+    {
+        const double s = static_cast<double>(ref[i]);
+        const double e = static_cast<double>(out[i]) - s;
+        signalPow += s * s;
+        errPow += e * e;
+        ++n;
+    }
+    if (n == 0 || signalPow < 1e-12) return -999.0;
+    return 10.0 * std::log10(signalPow / std::max(errPow, 1e-20));
+}
+
+// Phase-agnostic reconstruction quality: ratio (dB) of spectral energy at the
+// tone frequency `freq` to energy in the rest of the band. A phase vocoder at
+// alpha=0 does not preserve absolute phase, so a time-domain diff underestimates
+// quality; instead we verify the tone is reconstructed at its frequency with
+// good in-band SNR. `startSample` skips the engine latency / priming region.
+double toneBandSNR(const std::vector<float>& out, double sampleRate,
+                   double freq, int startSample)
+{
+    const int N = static_cast<int>(out.size()) - startSample;
+    if (N <= 64) return -999.0;
+
+    // Goertzel at the tone frequency.
+    const double k = std::round(freq * N / sampleRate);
+    const double w = 2.0 * kPi * k / N;
+    const double coeff = 2.0 * std::cos(w);
+    double s1 = 0.0, s2 = 0.0;
+    double totalPow = 0.0;
+    for (int i = 0; i < N; ++i)
+    {
+        const double x = static_cast<double>(out[static_cast<size_t>(startSample + i)]);
+        const double s0 = x + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+        totalPow += x * x;
+    }
+    const double tonePow = s1 * s1 + s2 * s2 - coeff * s1 * s2;   // |X[k]|^2
+    const double otherPow = std::max(totalPow - tonePow, 1e-20);
+    if (tonePow < 1e-20) return -999.0;
+    return 10.0 * std::log10(tonePow / otherPow);
+}
+
+} // namespace
+
+TEST_CASE("SpectralMorphEngine (production): OLA reconstruction SNR is block-size independent [Fix 2.3]",
+          "[spectral][production][fix-2.3]")
+{
+    // alpha=0 → output should reconstruct stream A. A phase vocoder is NOT a
+    // transparent passthrough even at alpha=0 (its IF-phase accumulator
+    // introduces an intrinsic phase mismatch), so the absolute SNR is bounded
+    // well below transparency. What the Fix 2.3 OLA write-head guarantees is
+    // that reconstruction quality does NOT DEGRADE when the host delivers
+    // blocks larger than the hop size — i.e. SNR stays consistent across block
+    // sizes. Before the fix, blockSize > hopSize collapsed SNR because multiple
+    // hops piled up at output offset 0, breaking Hann² COLA.
+    const int fftSize = 2048;
+    const int hopSize = 512;
+    const double sampleRate = 44100.0;
+    const double freq = 1000.0;
+
+    const int blockSizes[] = { 128, 512, 768, 1024 };
+    double snrByBlockSize[4] = { -999, -999, -999, -999 };
+
+    for (int bi = 0; bi < 4; ++bi)
+    {
+        const int blockSize = blockSizes[bi];
+
+        more_phi::SpectralMorphEngine engine;
+        engine.setFFTSize(fftSize);
+        engine.prepare(sampleRate, blockSize);
+        engine.setActive(true);
+
+        const int latency = engine.getLatencyInSamples();   // fftSize + hopSize
+        const int totalSamples = latency + blockSize * 8;   // well past latency
+
+        juce::AudioBuffer<float> bufA(1, blockSize);
+        juce::AudioBuffer<float> bufB(1, blockSize);
+        std::vector<float> captured;
+        captured.reserve(static_cast<size_t>(totalSamples));
+
+        int produced = 0;
+        while (produced < totalSamples)
+        {
+            fillSineAB(bufA, bufB, produced, blockSize, sampleRate, freq);
+            engine.processBlock(bufA, bufB, 0.0f);   // alpha=0 → reconstruct A
+            const float* a = bufA.getReadPointer(0);
+            for (int i = 0; i < blockSize; ++i)
+                captured.push_back(a[i]);
+            produced += blockSize;
+        }
+
+        // Phase-agnostic quality: tone-band SNR (1 kHz vs rest-of-band).
+        snrByBlockSize[bi] = toneBandSNR(captured, sampleRate, freq, latency);
+        (void) hopSize;
+    }
+
+    INFO("tone-band SNR by block size: 128->" << snrByBlockSize[0] << "dB, 512->"
+         << snrByBlockSize[1] << "dB, 768->" << snrByBlockSize[2]
+         << "dB, 1024->" << snrByBlockSize[3] << "dB");
+
+    // 1) Every block size must reconstruct the tone above the noise floor — a
+    //    clear positive tone-band SNR proves the signal is reconstructed (not
+    //    scrambled to broadband noise, which is what the pre-fix OLA pile-up
+    //    produced at blockSize > hopSize).
+    for (int bi = 0; bi < 4; ++bi)
+    {
+        INFO("blockSize=" << blockSizes[bi] << " tone-band SNR=" << snrByBlockSize[bi]);
+        REQUIRE(snrByBlockSize[bi] > 10.0);
+    }
+
+    // 2) THE FIX'S GUARANTEE: tone-band SNR must be consistent across block
+    //    sizes. The pre-fix bug collapsed it specifically at blockSize 1024
+    //    (> hopSize 512). Require each to track the small-block baseline.
+    const double baselineSmall = snrByBlockSize[0];   // 128 smp (≤ hop, pre-fix-safe)
+    for (int bi = 0; bi < 4; ++bi)
+    {
+        INFO("blockSize=" << blockSizes[bi] << " SNR=" << snrByBlockSize[bi]
+             << "dB vs baseline " << baselineSmall << "dB (delta "
+             << (snrByBlockSize[bi] - baselineSmall) << ")");
+        REQUIRE(std::abs(snrByBlockSize[bi] - baselineSmall) < 8.0);
+    }
+}
+
+// =============================================================================
+//  Fix 2.3 — FormantMorphEngine: passthrough (amount=0) reconstruction is
+//  block-size independent. At amount=0 the transplant gain is 1.0 everywhere,
+//  so the engine must reconstruct its input after latency.
+// =============================================================================
+
+TEST_CASE("FormantMorphEngine (production): passthrough reconstruction is block-size independent [Fix 2.3]",
+          "[spectral][formant][production][fix-2.3]")
+{
+    const int fftSize = 2048;
+    const double sampleRate = 44100.0;
+    const double freq = 1000.0;
+
+    const int blockSizes[] = { 128, 512, 1024 };
+    double snrByBlockSize[3] = { -1, -1, -1 };
+
+    for (int bi = 0; bi < 3; ++bi)
+    {
+        const int blockSize = blockSizes[bi];
+
+        more_phi::FormantMorphEngine engine;
+        engine.prepare(sampleRate, blockSize);
+        engine.setActive(true);
+        engine.setPreservationAmount(0.0f);   // passthrough
+
+        const int latency = fftSize + (fftSize / 4);
+        const int totalSamples = latency + blockSize * 8;
+
+        juce::AudioBuffer<float> buffer(1, blockSize);
+        std::vector<float> captured;
+        captured.reserve(static_cast<size_t>(totalSamples));
+
+        int produced = 0;
+        while (produced < totalSamples)
+        {
+            float* a = buffer.getWritePointer(0);
+            for (int i = 0; i < blockSize; ++i)
+                a[i] = static_cast<float>(std::sin(2.0 * kPi * freq * static_cast<double>(produced + i) / sampleRate));
+            engine.processBlock(buffer);
+            const float* out = buffer.getReadPointer(0);
+            for (int i = 0; i < blockSize; ++i)
+                captured.push_back(out[i]);
+            produced += blockSize;
+        }
+
+        std::vector<float> trueRef(static_cast<size_t>(totalSamples), 0.0f);
+        for (size_t i = 0; i < trueRef.size(); ++i)
+            trueRef[i] = static_cast<float>(std::sin(2.0 * kPi * freq * static_cast<double>(i) / sampleRate));
+
+        snrByBlockSize[bi] = reconstructionSNR(captured, trueRef, latency);
+    }
+
+    for (int bi = 0; bi < 3; ++bi)
+    {
+        INFO("formant blockSize=" << blockSizes[bi] << " SNR=" << snrByBlockSize[bi] << " dB");
+        REQUIRE(snrByBlockSize[bi] > 20.0);
+    }
+    double best = *std::max_element(snrByBlockSize, snrByBlockSize + 3);
+    double worst = *std::min_element(snrByBlockSize, snrByBlockSize + 3);
+    INFO("formant best=" << best << " worst=" << worst << " spread=" << (best - worst));
+    REQUIRE((best - worst) < 25.0);
+}

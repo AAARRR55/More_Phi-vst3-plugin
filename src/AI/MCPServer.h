@@ -63,6 +63,14 @@ public:
     /** Access the instance-scoped automation runtime (C13 fix). */
     AutomationRuntime& getAutomationRuntime() noexcept { return automationRuntime_; }
 
+    /** Test-only entry point that drives processRequest without a TCP socket
+     *  (used by the heartbeat unit tests). Inline so it adds no production
+     *  call surface. */
+    juce::String processRequestForTesting(const juce::String& jsonRequest, bool& authenticated)
+    {
+        return processRequest(jsonRequest, authenticated);
+    }
+
 private:
     void run() override;
     bool createServerListener();
@@ -75,6 +83,12 @@ private:
     bool attemptRecovery();
     void logError(const juce::String& context, const juce::String& details = {});
 
+    /** Approximate server uptime in milliseconds since construction (for heartbeat). */
+    juce::int64 uptimeMs() const noexcept
+    {
+        return juce::Time::currentTimeMillis() - startTimeMs_.load();
+    }
+
     MorePhiProcessor& processor_;
     juce::StreamingSocket serverSocket_;
     int port_ = 30001;
@@ -82,6 +96,7 @@ private:
     std::atomic<int> connectedClients_{0};
     std::atomic<bool> healthy_{false};
     std::atomic<int> errorCount_{0};
+    std::atomic<juce::int64> startTimeMs_{juce::Time::currentTimeMillis()};
     
     // Recovery configuration
     static constexpr int MAX_CONSECUTIVE_ERRORS = 5;

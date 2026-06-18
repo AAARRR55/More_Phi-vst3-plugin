@@ -331,17 +331,22 @@ bool ParameterBridge::shouldThrottle(int index, float newValue, juce::uint32 now
         if (state.lastValue < 0.0f)
             return false;
 
+        // Note: the dedup window is host-wall-clock based (getMillisecondCounter),
+        // so its effective granularity depends on the host timer resolution; on a
+        // heavily loaded audio thread the 2 ms window can be coarser than intended.
+        // Acceptable for a parameter bridge (sub-sample dedup is not required);
+        // a sample-position-based window would be the stricter alternative.
         const juce::uint32 delta = now - state.lastUpdateTime;
         if (delta >= 2)
             return false;
 
-        if (std::abs(newValue - state.lastValue) > 0.01f)
-            return false;
-
-        if (newValue == state.lastValue)
-            return true;
-
-        return true;
+        // Throttle when the new value is within the deadband of the last write
+        // AND inside the time window. (Previously this branch contained a dead
+        // `if (newValue == state.lastValue) return true;` immediately followed
+        // by an unconditional `return true;` — the predicate collapsed to the
+        // same result but the dead code was misleading. The condition below is
+        // the honest, single expression.)
+        return std::abs(newValue - state.lastValue) <= 0.01f;
     }();
 
     throttleMutex_.exit();

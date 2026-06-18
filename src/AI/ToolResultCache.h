@@ -19,6 +19,21 @@ namespace more_phi {
 class ToolResultCache
 {
 public:
+    /** Invalidation scope. Each cache entry belongs to exactly one scope so a
+     *  write can evict only the scope(s) it actually dirties instead of the
+     *  whole cache (spec §6.2). Ordering matters: the broader scopes are used
+     *  by invalidateAll() only; scoped invalidation targets a single tag. */
+    enum class Scope : uint8_t
+    {
+        Parameters,   ///< list_parameters, get_parameter, hosted_plugin.parameters, more_phi.parameters, diagnose_parameter_pipeline
+        Analysis,     ///< analysis.* (meters/spectrum/stereo field)
+        Morph,        ///< get_morph_state
+        Profile,      ///< plugin_profile.describe_semantics / semantic_map
+        Control,      ///< automation.history/get_transaction, permission.*, workflow.list, memory.*, context.*, events.*
+        Instance,     ///< get_instance_info, list_instances
+        PluginInfo     ///< get_plugin_info, hosted_plugin.info
+    };
+
     explicit ToolResultCache(size_t maxEntries = 64);
 
     /** Look up a cached result. Returns std::nullopt if missing, expired,
@@ -42,6 +57,13 @@ public:
      */
     void invalidateAll();
 
+    /** Invalidate only entries whose scope is in @p scopes. Used by the
+     *  verified-write path so a parameter write evicts parameter-describing
+     *  reads without flushing analysis meters or the semantic profile
+     *  (spec §6.2). No-op if @p scopes is empty. Returns the count evicted.
+     */
+    size_t invalidateScopes(const std::vector<Scope>& scopes);
+
     /** Remove expired entries and enforce the maximum size limit. */
     void prune();
 
@@ -54,6 +76,11 @@ public:
     };
     Stats getStats() const;
 
+    /** Classify a tool name to its invalidation scope (spec §6.2).
+     *  Unknown tools fall back to Scope::Parameters so any unlisted read
+     *  is still evicted by a parameter write (safe by default). */
+    static Scope scopeForTool(const juce::String& toolName);
+
 private:
     struct Entry
     {
@@ -61,6 +88,7 @@ private:
         nlohmann::json result;
         uint64_t generationToken = 0;
         std::chrono::steady_clock::time_point expiresAt;
+        Scope scope = Scope::Parameters;
     };
 
     std::string makeKey(const juce::String& toolName,

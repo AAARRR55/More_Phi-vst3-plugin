@@ -576,3 +576,71 @@ TEST_CASE("MorphProcessor: smoothing rate 0.0 means instant convergence", "[smoo
     for (int p = 0; p < paramCount; ++p)
         REQUIRE(out[p] == Approx(vals[p]).margin(0.01f));
 }
+
+// =============================================================================
+//  Fix 2.1 — Smoothing is sample-rate / block-size independent
+//  The same user "smoothing" setting must yield the same effective time
+//  constant regardless of host config. We drive two processors with the same
+//  smoothing rate over the same total elapsed wall-clock time, but with
+//  different dt values (block size / sample rate). After the same elapsed
+//  time, both must have converged by (essentially) the same amount.
+//
+//  Before the fix, `smoothing` was a raw one-pole coefficient applied once
+//  per block, so the smaller-dt processor ran more updates per second and
+//  converged faster — a silent host-configuration-dependent behavior.
+// =============================================================================
+
+TEST_CASE("MorphProcessor: identical smoothing setting converges identically across dt [Fix 2.1]",
+          "[smoothing][samplerate][fix-2.1]")
+{
+    const int paramCount = 4;
+    const float smoothingRate = 0.9f;   // a mid/heavy smoothing setting
+
+    // Two configs: "small block / low rate" vs "large block / high rate".
+    // Both cover the SAME total wall-clock time (e.g. 100 ms).
+    struct Config { int blockSize; double sampleRate; const char* label; };
+    const Config configs[] = {
+        {  64, 44100.0, "64@44.1k"   },
+        { 512, 44100.0, "512@44.1k"  },   // the reference config
+        { 1024, 96000.0, "1024@96k"  },
+    };
+
+    const double totalSeconds = 0.100;   // 100 ms
+    float finalValue[3] = { -1.0f, -1.0f, -1.0f };
+
+    for (int ci = 0; ci < 3; ++ci)
+    {
+        SnapshotBank bank;
+        bank.prepare(paramCount);
+        bank.captureValues(0, std::vector<float>{ 1.0f, 1.0f, 1.0f, 1.0f });
+
+        MorphProcessor proc(bank);
+        proc.prepare(paramCount);
+        proc.setSmoothingRate(smoothingRate);
+
+        const float dt = static_cast<float>(configs[ci].blockSize) /
+                         static_cast<float>(configs[ci].sampleRate);
+        const int numBlocks = std::max(1, static_cast<int>(std::round(totalSeconds / dt)));
+
+        std::vector<float> out(paramCount, 0.0f);
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            // Direct mode + XYPad at corner (0,0) so interpolation target is
+            // slot 0 = 1.0; the smoothing filter is the only thing delaying
+            // convergence. dt is the only varying factor.
+            proc.process(0.0f, 0.0f, 0.0f, MorphSource::XYPad, MorphMode::Direct, dt, out);
+        }
+
+        finalValue[ci] = out[0];
+    }
+
+    // After the same elapsed wall-clock time, all three configs must have
+    // converged to (essentially) the same value. Tolerance allows for the
+    // one-block quantization in numBlocks rounding.
+    INFO("64@44.1k=" << finalValue[0]
+         << " 512@44.1k=" << finalValue[1]
+         << " 1024@96k=" << finalValue[2]);
+    REQUIRE(std::abs(finalValue[0] - finalValue[1]) < 0.03f);
+    REQUIRE(std::abs(finalValue[1] - finalValue[2]) < 0.03f);
+    REQUIRE(std::abs(finalValue[0] - finalValue[2]) < 0.03f);
+}

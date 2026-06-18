@@ -31,7 +31,6 @@
 #include "Core/GranularMorphEngine.h"
 #include "Core/FormantMorphEngine.h"
 #include "Core/HybridBlend.h"
-#include "Core/VAEMorphEngine.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/LatencyManager.h"
 #include "Core/PerformanceProfiler.h"
@@ -135,7 +134,6 @@ public:
     SpectralMorphEngine&   getSpectralEngine()       { return spectralEngine_; }
     GranularMorphEngine&   getGranularEngine()       { return granularEngine_; }
     FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
-    VAEMorphEngine&        getVAEEngine()             { return vaeEngine_; }
     OversamplingWrapper&   getOversampling()          { return oversampling_; }
     LatencyManager&        getLatencyManager()        { return latencyManager_; }
     PluginHostManager&     getHostManagerB()          { return hostManagerB_; }
@@ -479,7 +477,6 @@ private:
     SpectralMorphEngine spectralEngine_;
     GranularMorphEngine granularEngine_;
     FormantMorphEngine  formantEngine_;
-    VAEMorphEngine      vaeEngine_;
     OversamplingWrapper oversampling_;
     OversamplingWrapper oversamplingB_;
     LatencyManager      latencyManager_;
@@ -493,6 +490,10 @@ private:
     std::atomic<float> hybridParamWeight_{1.0f};
     std::atomic<float> hybridSpectralWeight_{0.0f};
     std::atomic<float> hybridGranularWeight_{0.0f};
+    // Fix 5: tracks whether the formant engine has captured plugin A's
+    // pre-morph spectral envelope as its source this engagement. Cleared on
+    // formant deactivation so a re-engagement re-captures from current audio.
+    bool formantSourceCaptured_ = false;
 
     // Scratch buffers for audio-domain processing (pre-allocated in prepareToPlay)
     juce::AudioBuffer<float> bufferB_;
