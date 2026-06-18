@@ -493,6 +493,10 @@ private:
     std::atomic<float> hybridParamWeight_{1.0f};
     std::atomic<float> hybridSpectralWeight_{0.0f};
     std::atomic<float> hybridGranularWeight_{0.0f};
+    // Fix 5: tracks whether the formant engine has captured plugin A's
+    // pre-morph spectral envelope as its source this engagement. Cleared on
+    // formant deactivation so a re-engagement re-captures from current audio.
+    bool formantSourceCaptured_ = false;
 
     // Scratch buffers for audio-domain processing (pre-allocated in prepareToPlay)
     juce::AudioBuffer<float> bufferB_;

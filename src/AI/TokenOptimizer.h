@@ -187,7 +187,19 @@ public:
     bool tryConsumeRequestSlot();
     void recordRequestTimestamp();
     float getTimeUntilNextRequest() const;  // seconds
-    
+
+    /** Adaptive rate limiting (spec §6.5). The autonomy multiplier scales the
+     *  user-configured baseline rate limit so a human-in-the-loop
+     *  (Manual/Assist) is throttled harder while an approved Autopilot
+     *  workflow can push changes faster. Effective limit =
+     *  max(1, round(baseline * multiplier)). The multiplier is a float so
+     *  callers can pass arbitrary scaling factors; canonical values are
+     *  Manual=0.5, Assist=1.0, CoPilot=1.5, Autopilot=2.0. */
+    void setAutonomyRateMultiplier(float multiplier);
+    float getAutonomyRateMultiplier() const noexcept;
+    /** Effective per-minute request limit after applying the autonomy multiplier. */
+    uint32_t getEffectiveRateLimit() const noexcept;
+
     // Reporting
     std::string generateUsageReport() const;
     std::string generateOptimizationSuggestions() const;
@@ -223,7 +235,8 @@ private:
     std::vector<std::string> contextLines_;
     mutable std::mutex contextMutex_;
     
-    std::atomic<uint32_t> rateLimit_{60};  // Requests per minute
+    std::atomic<uint32_t> rateLimit_{60};  // Baseline requests per minute (autonomy-multiplier not yet applied)
+    std::atomic<float> autonomyMultiplier_{1.0f};  // Scales rateLimit_ per current autonomy level (spec §6.5)
     mutable std::deque<std::chrono::steady_clock::time_point> requestTimestamps_;
     mutable std::mutex rateMutex_;
     

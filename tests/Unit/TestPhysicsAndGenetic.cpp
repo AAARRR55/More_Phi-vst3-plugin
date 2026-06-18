@@ -584,4 +584,122 @@ TEST_CASE("DiscreteParameterHandler: step mapping and rounding correctness", "[d
     REQUIRE(output[0] == Approx(1.0f / 9.0f));
 }
 
+// =============================================================================
+//  Fix 2.6 — Stepwise traversal time is host-config independent
+//  With a nonzero cooldown, the time to traverse N discrete steps must be the
+//  same regardless of host block size / sample rate. Before the fix, cooldown
+//  was a block count, so a small-block host took many more blocks (and thus
+//  much more wall-clock time) to make the same traversal.
+// =============================================================================
+
+namespace {
+
+// Build a single discrete parameter with `steps` steps into `out`.
+void makeDiscreteClassifier(ParameterClassifier& out, int steps)
+{
+    std::vector<uint8_t> payload;
+    payload.push_back(1); // version
+    uint32_t count = 1;
+    payload.insert(payload.end(),
+                   reinterpret_cast<const uint8_t*>(&count),
+                   reinterpret_cast<const uint8_t*>(&count) + sizeof(count));
+    ParameterMetadata meta{};
+    meta.type = ParameterType::Discrete;
+    meta.stepCount = static_cast<uint16_t>(steps);
+    payload.insert(payload.end(),
+                   reinterpret_cast<const uint8_t*>(&meta),
+                   reinterpret_cast<const uint8_t*>(&meta) + sizeof(meta));
+    out.deserialize(payload.data(), payload.size());
+}
+
+// Returns wall-clock seconds to traverse from step 0 to the top step at a
+// given dt (seconds/block) with a given cooldown (frames at the reference rate).
+double stepwiseTraversalSeconds(int steps, float dt, uint32_t cooldownFrames)
+{
+    ParameterClassifier classifier;
+    makeDiscreteClassifier(classifier, steps);
+    DiscreteParameterHandler handler;
+    handler.initialize(classifier);
+    handler.setDefaultStrategy(DiscreteParameterHandler::BlendStrategy::Stepwise);
+    handler.setCooldownFrames(cooldownFrames);
+
+    std::vector<float> input = { 1.0f };   // target = top step
+    std::vector<float> output = { 0.0f };
+
+    const float topStepValue = 1.0f;
+    double elapsed = 0.0;
+    int guard = 0;
+    while (output[0] < topStepValue - 1e-4f && guard < 100000)
+    {
+        handler.processDiscreteParameters(input, output, 0.5f, dt);
+        elapsed += dt;
+        ++guard;
+    }
+    return elapsed;
+}
+
+} // namespace
+
+TEST_CASE("DiscreteParameterHandler: Stepwise traversal time is dt-independent [Fix 2.6]",
+          "[discrete][production][fix-2.6]")
+{
+    const int steps = 10;
+    const uint32_t cooldown = 50;   // ~570 ms at reference rate
+    const float topValue = 1.0f;
+
+    // Two host configs: small block / low rate vs large block / high rate.
+    const float dtSmall = 64.0f / 44100.0f;     // ~1.45 ms/block
+    const float dtLarge = 1024.0f / 96000.0f;   // ~10.67 ms/block
+
+    const double tSmall = stepwiseTraversalSeconds(steps, dtSmall, cooldown);
+    const double tLarge = stepwiseTraversalSeconds(steps, dtLarge, cooldown);
+
+    // Both must reach the top step in (nearly) the same wall-clock time.
+    // Tolerance accounts for one-block quantization per step (9 steps).
+    INFO("traversal time: dtSmall=" << tSmall << "s  dtLarge=" << tLarge << "s");
+    const double tol = (dtSmall + dtLarge) * static_cast<double>(steps);
+    REQUIRE(std::abs(tSmall - tLarge) < tol);
+
+    // And the traversal must actually complete (sanity — not stuck).
+    REQUIRE(tSmall > 0.0);
+    REQUIRE(tLarge > 0.0);
+    (void) topValue;
+}
+
+// =============================================================================
+//  Fix 2.6 — HoldSource strategy gates on a meaningful morph progress.
+//  This exercises the strategy logic directly with synthesized morphAmount
+//  values (the caller in PluginProcessor now passes a correct progress for
+//  both XY-pad and Fader sources). Below the 0.9 threshold the source value
+//  is held; at/above it the value snaps to target.
+// =============================================================================
+
+TEST_CASE("DiscreteParameterHandler: HoldSource holds then snaps at threshold [Fix 2.6]",
+          "[discrete][production][fix-2.6]")
+{
+    ParameterClassifier classifier;
+    makeDiscreteClassifier(classifier, 2);
+    DiscreteParameterHandler handler;
+    handler.initialize(classifier);
+    handler.setDefaultStrategy(DiscreteParameterHandler::BlendStrategy::HoldSource);
+
+    // Seed an initial "source" value of 0.0 on the parameter.
+    handler.forceDiscreteValue(0, 0.0f);
+
+    std::vector<float> input = { 1.0f };   // target = 1.0
+    std::vector<float> output = { 0.0f };
+
+    // morphAmount = 0.5 (cursor mid-way in XY, or fader mid): MUST hold source (0.0).
+    handler.processDiscreteParameters(input, output, 0.5f, 0.01f);
+    REQUIRE(output[0] == Approx(0.0f).margin(1e-6f));
+
+    // Still held at 0.89.
+    handler.processDiscreteParameters(input, output, 0.89f, 0.01f);
+    REQUIRE(output[0] == Approx(0.0f).margin(1e-6f));
+
+    // At 0.9 (cursor reaches a target corner) it snaps to target (1.0).
+    handler.processDiscreteParameters(input, output, 0.9f, 0.01f);
+    REQUIRE(output[0] == Approx(1.0f).margin(1e-6f));
+}
+
 

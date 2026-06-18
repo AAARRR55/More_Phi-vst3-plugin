@@ -1543,9 +1543,23 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                     modulationEngine_.processBlock(finalOutput_, dt);
                 }
 
-                // H1 FIX: Snap discrete parameters to valid steps with hysteresis
+                // H1 FIX: Snap discrete parameters to valid steps with hysteresis.
+                // Fix 2.6: pass a morph progress that is meaningful in BOTH modes
+                // (Fader → faderPos; XY-pad → radial cursor magnitude 0..1) so the
+                // HoldSource/Crossfade strategies behave consistently, and pass the
+                // real block dt so Stepwise traversal time is host-config independent.
                 if (!finalOutput_.empty())
-                    discreteHandler_.processDiscreteParameters(finalOutput_, finalOutput_, fp);
+                {
+                    float discreteMorphAmount = fp;
+                    if (source == MorphSource::XYPad)
+                    {
+                        const float px = morphProcessor.getProcessedX();   // [-1,1]
+                        const float py = morphProcessor.getProcessedY();   // [-1,1]
+                        discreteMorphAmount = std::max(std::abs(px), std::abs(py));
+                    }
+                    discreteHandler_.processDiscreteParameters(
+                        finalOutput_, finalOutput_, discreteMorphAmount, dt);
+                }
             }
 
             // Link Mode: if leader, broadcast current morph position
@@ -1803,10 +1817,25 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
                     if (formantEngine_.isActive())
                     {
                         MORE_PHI_PROFILE(profiler_, "formant_engine");
+                        // Fix 5: Capture plugin A's pre-morph dry output (paramOut_
+                        // is a copy of buffer taken above) as the formant source
+                        // envelope, so formant transplant tracks plugin A's actual
+                        // spectral character instead of freezing on the first
+                        // morphed frame. Captured once per engagement; re-captured
+                        // if formant is toggled off and back on.
+                        if (!formantSourceCaptured_)
+                        {
+                            formantEngine_.captureFormants(paramOut_);
+                            formantSourceCaptured_ = true;
+                        }
                         if (spectralActive)
                             formantEngine_.processBlock(spectralOut_);
                         if (granularActive)
                             formantEngine_.processBlock(granularOut_);
+                    }
+                    else
+                    {
+                        formantSourceCaptured_ = false;
                     }
 
                     MORE_PHI_PROFILE(profiler_, "hybrid_blend");
@@ -1847,10 +1876,21 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
                     if (formantEngine_.isActive())
                     {
                         MORE_PHI_PROFILE(profiler_, "formant_engine");
+                        // Fix 5: capture plugin A's pre-morph oversampled output
+                        // as the formant source envelope (see non-OS branch above).
+                        if (!formantSourceCaptured_)
+                        {
+                            formantEngine_.captureFormants(osABuffer);
+                            formantSourceCaptured_ = true;
+                        }
                         if (spectralActive)
                             formantEngine_.processBlock(spectralOut_);
                         if (granularActive)
                             formantEngine_.processBlock(granularOut_);
+                    }
+                    else
+                    {
+                        formantSourceCaptured_ = false;
                     }
 
                     MORE_PHI_PROFILE(profiler_, "hybrid_blend");

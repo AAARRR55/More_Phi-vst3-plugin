@@ -199,3 +199,26 @@ TEST_CASE("Processor: supports stereo in/out layout", "[integration][buses]")
     REQUIRE(layout.getMainInputChannelSet() == juce::AudioChannelSet::stereo());
     REQUIRE(layout.getMainOutputChannelSet() == juce::AudioChannelSet::stereo());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Snapshot Capture System
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("Processor: captureSnapshotToSlot runtime constraints", "[integration][snapshot]")
+{
+    MorePhiProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+
+    // Slot 11 is reserved for A/B comparison and must always fail
+    REQUIRE_FALSE(processor.captureSnapshotToSlot(11, false));
+
+    // Test out of bounds slot index
+    REQUIRE_FALSE(processor.captureSnapshotToSlot(-1, false));
+    REQUIRE_FALSE(processor.captureSnapshotToSlot(12, false));
+
+    // Valid slot (0) capture should return false because no plugin is loaded
+    REQUIRE_FALSE(processor.captureSnapshotToSlot(0, false));
+    
+    processor.releaseResources();
+}
+

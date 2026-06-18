@@ -410,18 +410,45 @@ void TokenOptimizer::setRateLimit(uint32_t maxRequestsPerMinute)
     rateLimit_.store(std::max(1u, maxRequestsPerMinute));
 }
 
+void TokenOptimizer::setAutonomyRateMultiplier(float multiplier)
+{
+    // Clamp to a sane positive range; 0 is rejected because it would zero the
+    // effective limit and lock the client out entirely.
+    if (multiplier <= 0.0f || !(std::isfinite(multiplier)))
+        multiplier = 1.0f;
+    if (multiplier > 16.0f)
+        multiplier = 16.0f;
+    autonomyMultiplier_.store(multiplier);
+}
+
+float TokenOptimizer::getAutonomyRateMultiplier() const noexcept
+{
+    return autonomyMultiplier_.load();
+}
+
+uint32_t TokenOptimizer::getEffectiveRateLimit() const noexcept
+{
+    const float baseline = static_cast<float>(std::max(1u, rateLimit_.load()));
+    const float scaled = baseline * autonomyMultiplier_.load();
+    if (!(std::isfinite(scaled)) || scaled < 1.0f)
+        return 1u;
+    if (scaled > static_cast<float>(UINT32_MAX))
+        return UINT32_MAX;
+    return static_cast<uint32_t>(std::lround(scaled));
+}
+
 bool TokenOptimizer::canMakeRequest() const
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
     cleanupOldTimestampsLocked();
-    return requestTimestamps_.size() < rateLimit_.load();
+    return requestTimestamps_.size() < getEffectiveRateLimit();
 }
 
 bool TokenOptimizer::tryConsumeRequestSlot()
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
     cleanupOldTimestampsLocked();
-    if (requestTimestamps_.size() >= rateLimit_.load())
+    if (requestTimestamps_.size() >= getEffectiveRateLimit())
         return false;
     requestTimestamps_.push_back(std::chrono::steady_clock::now());
     return true;
@@ -438,17 +465,18 @@ float TokenOptimizer::getTimeUntilNextRequest() const
 {
     std::lock_guard<std::mutex> lock(rateMutex_);
     cleanupOldTimestampsLocked();
-    
-    if (requestTimestamps_.size() < rateLimit_.load())
+
+    const auto effectiveLimit = getEffectiveRateLimit();
+    if (requestTimestamps_.size() < effectiveLimit)
     {
         return 0.0f;
     }
-    
+
     auto now = std::chrono::steady_clock::now();
     auto oldest = requestTimestamps_.front();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - oldest).count();
-    
-    return std::max(0.0f, 60.0f - elapsed);
+
+    return std::max(0.0f, 60.0f - static_cast<float>(elapsed));
 }
 
 std::string TokenOptimizer::generateUsageReport() const

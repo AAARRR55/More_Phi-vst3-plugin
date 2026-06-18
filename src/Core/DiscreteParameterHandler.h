@@ -17,12 +17,17 @@ struct DiscreteParamState
     float currentValue = 0.0f;
     float targetValue = 0.0f;
     bool isSwitching = false;
-    uint32_t switchCooldown = 0;  // Frames until next switch allowed
+    uint32_t switchCooldown = 0;  // Frames until next switch allowed (legacy, HardSwitch)
     bool lastMorphedValue = false;
-    
+
     // For step-based parameters
     int currentStep = 0;
     int targetStep = 0;
+
+    // Fix 2.6: Time-based cooldown (seconds remaining) so Stepwise traversal
+    // time is independent of host block size / sample rate. The legacy
+    // switchCooldown (block count) is still used by HardSwitch for back-compat.
+    float cooldownSeconds = 0.0f;
 };
 
 class DiscreteParameterHandler
@@ -34,15 +39,25 @@ public:
     void initialize(const ParameterClassifier& classifier);
     
     // Process discrete parameters during interpolation
-    // Call this AFTER interpolating continuous parameters
+    // Call this AFTER interpolating continuous parameters.
+    //
+    // dt is the current block duration in seconds (blockSize / sampleRate).
+    // It is used to make Stepwise strategy traversal time-independent of host
+    // config (Fix 2.6). Default value preserves prior call-site behavior.
     void processDiscreteParameters(const std::vector<float>& interpolatedValues,
                                    std::vector<float>& outputValues,
-                                   float morphAmount);  // 0.0 = source, 1.0 = target
-    
+                                   float morphAmount,  // 0.0 = source, 1.0 = target
+                                   float dt = kRefDt);
+
     // Set configuration
     void setSwitchThreshold(float threshold);  // When to switch (default 0.5)
     void setHysteresis(float hysteresis);      // Prevent oscillation (default 0.1)
     void setCooldownFrames(uint32_t frames);   // Minimum frames between switches
+
+    // Reference block config (512 smp @ 44.1 kHz). Used as the dt default so
+    // legacy call sites and the derived cooldown time constant reproduce the
+    // in-box feel exactly.
+    static constexpr float kRefDt = 512.0f / 44100.0f;
     
     // Get the discrete map for current interpolation
     std::vector<bool> getDiscreteMask() const { return discreteMask_; }
@@ -101,8 +116,11 @@ private:
     BlendStrategy defaultStrategy_ = BlendStrategy::HardSwitch;
     float switchThreshold_ = 0.5f;
     float hysteresis_ = 0.1f;
-    uint32_t cooldownFrames_ = 100;  // ~2ms at 48kHz/512 buffer
-    
+    uint32_t cooldownFrames_ = 100;  // ~2ms at 48kHz/512 buffer (legacy, HardSwitch)
+    // Fix 2.6: cooldownSeconds_ derived from cooldownFrames_ × kRefDt so that
+    // the Stepwise strategy's traversal time is host-config independent.
+    float cooldownSeconds_ = 100.0f * kRefDt;
+
     std::atomic<uint32_t> parameterCount_{0};
 
     // H-3 FIX: Per-parameter step count for accurate quantization.
@@ -115,7 +133,8 @@ private:
     std::vector<float> outputScratch_;
 
     // Internal processing
-    float processDiscreteParameter(int index, float interpolatedValue, float morphAmount);
+    float processDiscreteParameter(int index, float interpolatedValue,
+                                   float morphAmount, float dt);
     BlendStrategy getStrategyForParameter(int index) const;
     bool shouldSwitch(int index, float interpolatedValue) const;
     int valueToStep(int index, float value) const;

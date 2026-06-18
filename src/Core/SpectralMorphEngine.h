@@ -155,6 +155,13 @@ private:
 
         int writePos = 0;  // next write position in circular input buffer
         int hopCount = 0;  // samples accumulated since last hop
+
+        // FIX 2.3: Per-frame overlap-add write head. Advances by hopSize_ for
+        // every processed frame so consecutive frames overlap correctly even
+        // when more than one hop fires within a single processBlock() call.
+        // Decremented by the per-block drain amount so the next block's first
+        // frame resumes at the right offset.
+        int outWritePos = 0;
     };
 
     static constexpr int kMaxChannels = 2;

@@ -37,6 +37,13 @@ public:
     /** Invalidate cached read-only tool results, e.g. after plugin load. */
     static void invalidateToolResultCache();
 
+    /** Scoped invalidation after a successful write transaction (spec §6.2).
+     *  Maps @p toolName to the cache scopes it actually dirties (e.g. a
+     *  set_parameter evicts parameter-describing reads but preserves analysis
+     *  meters and the semantic profile). Falls back to a conservative
+     *  parameter+morph+analysis eviction for unrecognised write tools. */
+    static void invalidateToolResultCacheForTool(const juce::String& toolName);
+
     /** Access the async executor for long-running tools. */
     static AsyncToolExecutor& getAsyncToolExecutor();
 

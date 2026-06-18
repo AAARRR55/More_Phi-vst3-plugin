@@ -53,7 +53,8 @@ void DiscreteParameterHandler::initialize(const ParameterClassifier& classifier)
 void DiscreteParameterHandler::processDiscreteParameters(
     const std::vector<float>& interpolatedValues,
     std::vector<float>& outputValues,
-    float morphAmount)
+    float morphAmount,
+    float dt)
 {
     const uint32_t count = std::min(
         static_cast<uint32_t>(interpolatedValues.size()),
@@ -73,7 +74,7 @@ void DiscreteParameterHandler::processDiscreteParameters(
         if (discreteMask_[i])
         {
             outputValues[i] = processDiscreteParameter(
-                static_cast<int>(i), interpolatedValues[i], morphAmount);
+                static_cast<int>(i), interpolatedValues[i], morphAmount, dt);
         }
         else
         {
@@ -89,22 +90,30 @@ void DiscreteParameterHandler::processDiscreteParameters(
 }
 
 float DiscreteParameterHandler::processDiscreteParameter(
-    int index, float interpolatedValue, float morphAmount)
+    int index, float interpolatedValue, float morphAmount, float dt)
 {
     if (index < 0 || index >= static_cast<int>(paramStates_.size()))
         return interpolatedValue;
-    
+
     auto& state = paramStates_[index];
     BlendStrategy strategy = getStrategyForParameter(index);
-    
-    // Decrement cooldown
+
+    // Decrement the legacy block-count cooldown (used by HardSwitch).
     if (state.switchCooldown > 0)
     {
         state.switchCooldown--;
     }
-    
+
+    // Fix 2.6: Decrement the time-based cooldown (used by Stepwise) by the
+    // actual block duration so traversal time is host-config independent.
+    if (state.cooldownSeconds > 0.0f)
+    {
+        state.cooldownSeconds -= dt;
+        if (state.cooldownSeconds < 0.0f) state.cooldownSeconds = 0.0f;
+    }
+
     state.targetValue = interpolatedValue;
-    
+
     switch (strategy)
     {
         case BlendStrategy::HardSwitch:
@@ -112,10 +121,10 @@ float DiscreteParameterHandler::processDiscreteParameter(
             if (state.switchCooldown == 0 && shouldSwitch(index, interpolatedValue))
             {
                 // Apply hysteresis
-                float threshold = state.currentValue > 0.5f ? 
-                    switchThreshold_ - hysteresis_ : 
+                float threshold = state.currentValue > 0.5f ?
+                    switchThreshold_ - hysteresis_ :
                     switchThreshold_ + hysteresis_;
-                
+
                 bool newValue = interpolatedValue >= threshold;
                 if (newValue != (state.currentValue > 0.5f))
                 {
@@ -125,7 +134,7 @@ float DiscreteParameterHandler::processDiscreteParameter(
             }
             break;
         }
-        
+
         case BlendStrategy::Crossfade:
         {
             // Some discrete parameters can be crossfaded (e.g., oscillator mix)
@@ -142,37 +151,43 @@ float DiscreteParameterHandler::processDiscreteParameter(
             }
             break;
         }
-        
+
         case BlendStrategy::Stepwise:
         {
             int newStep = valueToStep(index, interpolatedValue);
-            if (newStep != state.currentStep && state.switchCooldown == 0)
+            // Fix 2.6: gate on the time-based cooldown, not the block count,
+            // so a multi-step traverse takes the same wall-clock time at any
+            // sample rate / block size.
+            if (newStep != state.currentStep && state.cooldownSeconds <= 0.0f)
             {
                 // Determine direction
                 int stepDelta = newStep - state.currentStep;
                 int stepSize = std::abs(stepDelta);
-                
+
                 if (stepSize == 1)
                 {
                     // Single step - go directly
                     state.currentStep = newStep;
                     state.currentValue = stepToValue(index, newStep);
-                    state.switchCooldown = cooldownFrames_ / 2;
+                    state.cooldownSeconds = cooldownSeconds_ * 0.5f;
                 }
                 else
                 {
                     // Multiple steps - move one step toward target
                     state.currentStep += (stepDelta > 0) ? 1 : -1;
                     state.currentValue = stepToValue(index, state.currentStep);
-                    state.switchCooldown = cooldownFrames_;
+                    state.cooldownSeconds = cooldownSeconds_;
                 }
             }
             break;
         }
-        
+
         case BlendStrategy::HoldSource:
         {
-            // Keep source value until we're close to target
+            // Keep source value until we're close to target.
+            // Fix 2.6: morphAmount is now synthesized correctly for both XY-pad
+            // and Fader sources by the caller (PluginProcessor), so this strategy
+            // behaves consistently regardless of morph source.
             if (morphAmount < 0.9f)
             {
                 // Still hold source
@@ -185,7 +200,7 @@ float DiscreteParameterHandler::processDiscreteParameter(
             }
             break;
         }
-        
+
         case BlendStrategy::HoldTarget:
         {
             // Jump to target immediately
@@ -193,7 +208,7 @@ float DiscreteParameterHandler::processDiscreteParameter(
             break;
         }
     }
-    
+
     return state.currentValue;
 }
 
@@ -258,6 +273,10 @@ void DiscreteParameterHandler::setHysteresis(float hysteresis)
 void DiscreteParameterHandler::setCooldownFrames(uint32_t frames)
 {
     cooldownFrames_ = frames;
+    // Fix 2.6: derive the time-based cooldown used by Stepwise so traversal
+    // time is independent of host sample rate / block size. At the reference
+    // block config (kRefDt) this reproduces the legacy per-block rate exactly.
+    cooldownSeconds_ = static_cast<float>(frames) * kRefDt;
 }
 
 void DiscreteParameterHandler::setBlendStrategy(int index, BlendStrategy strategy)

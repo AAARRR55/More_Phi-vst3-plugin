@@ -15,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <cmath>
 
 namespace more_phi {
 
@@ -43,8 +44,21 @@ public:
     void setDriftDistance(float d)  { driftDistance_.store(d, std::memory_order_relaxed); }
     void setDriftChaos(float c)    { driftChaos_.store(c, std::memory_order_relaxed); }
     void setDriftMode(DriftMode m) { driftMode_.store(static_cast<int>(m), std::memory_order_relaxed); }
+
+    // Sets the smoothing "feel". `s` is the legacy [0, 0.999] coefficient value
+    // stored in the APVTS `smoothing` parameter and in presets. Internally we
+    // derive a time constant τ such that, at the reference block config
+    // (512 samples @ 44.1 kHz, dt = kRefDt), the per-block one-pole coefficient
+    // reproduces s exactly — so the in-box feel is bit-identical there.
+    // Everywhere else (different sample rate / block size) the same τ drives
+    // α = exp(-dt/τ), making the smoothing behavior sample-rate independent.
+    //   s <= 0   → τ = 0 → no smoothing (instant tracking)
+    //   s → 1    → τ → ∞ (heavily smoothed)
     void setSmoothingRate(float r) {
-        smoothRate_.store(std::clamp(r, 0.0f, 1.0f), std::memory_order_relaxed);
+        const float s = std::clamp(r, 0.0f, 0.999f);
+        smoothRate_.store(s, std::memory_order_relaxed);
+        const float tau = (s <= 0.0f) ? 0.0f : -kRefDt / std::log(s);
+        smoothTau_.store(tau, std::memory_order_relaxed);
     }
 
     // Listen Mode: when enabled, discrete parameters are excluded from morph output
@@ -84,7 +98,15 @@ public:
 
 private:
     void updatePhysics(float targetX, float targetY, MorphMode mode, float dt) noexcept;
-    void applySmoothing(std::vector<float>& output) noexcept;
+    // Fix 2.1: dt is the block duration in seconds (blockSize / sampleRate).
+    // The one-pole coefficient is derived from the smoothing time constant τ
+    // via α = exp(-dt/τ), making the smoothing behavior independent of host
+    // sample rate and block size.
+    void applySmoothing(std::vector<float>& output, float dt) noexcept;
+
+    // Reference block config used to convert the legacy smoothing coefficient
+    // into a time constant (see setSmoothingRate). 512 samples @ 44.1 kHz.
+    static constexpr float kRefDt = 512.0f / 44100.0f;
 
     SnapshotBank& bank_;
 
@@ -101,8 +123,11 @@ private:
     std::atomic<float> processedX_{ 0.5f };
     std::atomic<float> processedY_{ 0.5f };
 
-    // Smoothing
+    // Smoothing. smoothRate_ is the legacy [0,0.999] coefficient (kept for
+    // API/state compatibility). smoothTau_ is the derived time constant in
+    // seconds used by the actual one-pole filter (Fix 2.1).
     std::atomic<float> smoothRate_{0.95f};
+    std::atomic<float> smoothTau_{0.226f};   // −kRefDt/ln(0.95) ≈ 0.226 s
     std::vector<float> smoothedValues_;
 
     // Trail

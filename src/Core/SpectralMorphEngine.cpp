@@ -103,8 +103,12 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
         ch.inputBufferA.assign(static_cast<size_t>(fftSize_), 0.0f);
         ch.inputBufferB.assign(static_cast<size_t>(fftSize_), 0.0f);
 
-        // Output buffer: fftSize + enough room for one extra block without re-shift
-        const int outLen = fftSize_ + std::max(hopSize_, maxBlockSize);
+        // Output buffer: fftSize + enough room for one extra block without re-shift.
+        // FIX 2.3: Must also hold every frame written within a single block at
+        // increasing offsets (up to ceil(maxBlockSize/hopSize)+1 frames × hopSize_)
+        // plus one full fftSize_ tail, so multi-hop blocks never overflow.
+        const int maxHopsPerBlock = (maxBlockSize / hopSize_) + 2;
+        const int outLen = fftSize_ + std::max(hopSize_, maxBlockSize) + maxHopsPerBlock * hopSize_;
         ch.outputBuffer.assign(static_cast<size_t>(outLen), 0.0f);
 
         ch.fftRealA.assign(static_cast<size_t>(numBins_), 0.0f);
@@ -129,6 +133,7 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
 
         ch.writePos = 0;
         ch.hopCount = 0;
+        ch.outWritePos = 0;   // FIX 2.3: reset overlap-add write head
     }
 
     // Size blockAlphas_ to support the maximum number of hops in a block.
@@ -182,6 +187,7 @@ void SpectralMorphEngine::reset() noexcept
         std::fill(ch.fftScratch.begin(),    ch.fftScratch.end(),    0.0f);
         ch.writePos = 0;
         ch.hopCount = 0;
+        ch.outWritePos = 0;   // FIX 2.3: reset overlap-add write head
     }
     for (auto& det : transientDetectors_)
         det.reset();
@@ -294,6 +300,13 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
         }
         std::fill(ch.outputBuffer.begin() + remaining,
                   ch.outputBuffer.end(), 0.0f);
+
+        // FIX 2.3: Advance the overlap-add write head with the drain so the
+        // next block's first frame resumes at the correct absolute offset.
+        // Clamp at 0 — underflow would mean we drained more than was written,
+        // which can only happen on the priming blocks before steady state.
+        ch.outWritePos -= drainLen;
+        if (ch.outWritePos < 0) ch.outWritePos = 0;
     }
 }
 
@@ -373,13 +386,17 @@ void SpectralMorphEngine::processFrame(ChannelState& ch, float alpha) noexcept
     inverseFFT(ch.fftRealOut.data(), ch.fftImagOut.data(), linBuf, scratch);
 
     // ── 8. Overlap-add into output buffer ─────────────────────────────────────
-    //   We always overlap-add starting at position 0 and shift by hopSize_
-    //   every frame. The output buffer is long enough to hold the in-flight
-    //   overlap tail (fftSize_) plus any unconsumed samples from this block.
+    //   FIX 2.3: Each frame is added at the channel's overlap-add write head,
+    //   which advances by hopSize_ per frame. This is what gives correct 75%
+    //   overlap reconstruction: consecutive windowed frames must be offset by
+    //   exactly hopSize_ so the four overlapping Hann² envelopes sum to the
+    //   COLA constant. Adding every frame at offset 0 (the old behavior) broke
+    //   reconstruction whenever more than one hop fired in a single block.
     const int outBufLen = static_cast<int>(ch.outputBuffer.size());
-    const int addLen    = std::min(fftSize_, outBufLen);
+    const int addLen    = std::min(fftSize_, outBufLen - ch.outWritePos);
     for (int n = 0; n < addLen; ++n)
-        ch.outputBuffer[static_cast<size_t>(n)] += linBuf[n];
+        ch.outputBuffer[static_cast<size_t>(ch.outWritePos + n)] += linBuf[n];
+    ch.outWritePos += hopSize_;
 }
 
 // ─── computeHannWindow() ─────────────────────────────────────────────────────
