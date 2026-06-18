@@ -31,7 +31,6 @@
 #include "Core/GranularMorphEngine.h"
 #include "Core/FormantMorphEngine.h"
 #include "Core/HybridBlend.h"
-#include "Core/VAEMorphEngine.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/LatencyManager.h"
 #include "Core/PerformanceProfiler.h"
@@ -135,7 +134,6 @@ public:
     SpectralMorphEngine&   getSpectralEngine()       { return spectralEngine_; }
     GranularMorphEngine&   getGranularEngine()       { return granularEngine_; }
     FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
-    VAEMorphEngine&        getVAEEngine()             { return vaeEngine_; }
     OversamplingWrapper&   getOversampling()          { return oversampling_; }
     LatencyManager&        getLatencyManager()        { return latencyManager_; }
     PluginHostManager&     getHostManagerB()          { return hostManagerB_; }
@@ -479,7 +477,6 @@ private:
     SpectralMorphEngine spectralEngine_;
     GranularMorphEngine granularEngine_;
     FormantMorphEngine  formantEngine_;
-    VAEMorphEngine      vaeEngine_;
     OversamplingWrapper oversampling_;
     OversamplingWrapper oversamplingB_;
     LatencyManager      latencyManager_;

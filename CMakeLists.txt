@@ -198,7 +198,6 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/FormantMorphEngine.h
     src/Core/FormantMorphEngine.cpp
     src/Core/ModulationTypes.h
-    src/Core/IModulationEngine.h
     src/Core/ModulationEngine.h
     src/Core/ModulationEngine.cpp
     src/Core/LFO.h
@@ -211,8 +210,6 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/ModulationMatrix.cpp
     src/Core/OversamplingWrapper.h
     src/Core/LatencyManager.h
-    src/Core/VAEMorphEngine.h
-    src/Core/VAEMorphEngine.cpp
 )
 
 # ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
@@ -307,8 +304,6 @@ set(MORE_PHI_AI_DATASET_STABLE_SOURCES
     src/AI/Dataset/OfflineBatchRenderer.cpp
     src/AI/Dataset/ParameterSafetyConfig.h
     src/AI/Dataset/ParameterSafetyConfig.cpp
-    src/AI/Dataset/NeuralMasteringDatasetSchema.h
-    src/AI/Dataset/NeuralMasteringDatasetSchema.cpp
     src/AI/Dataset/NeuralMasteringFeatureExtractor.h
     src/AI/Dataset/NeuralMasteringFeatureExtractor.cpp
 )
@@ -398,8 +393,6 @@ set(MORE_PHI_MIDI_SOURCES
 )
 
 set(MORE_PHI_PRESET_SOURCES
-    src/Preset/MetaPresetManager.h
-    src/Preset/MetaPresetManager.cpp
     src/Preset/PresetSerializer.h
     src/Preset/PresetSerializer.cpp
     src/Preset/PresetEntry.h

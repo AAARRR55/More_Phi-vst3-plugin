@@ -73,7 +73,6 @@ add_executable(MorePhiTests
     Unit/TestOzoneIntegration.cpp
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
-    Unit/TestNeuralMasteringDatasetSchema.cpp
     Unit/TestNeuralMasteringController.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp

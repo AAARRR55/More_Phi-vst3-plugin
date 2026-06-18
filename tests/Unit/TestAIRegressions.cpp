@@ -11,7 +11,6 @@
 #include "AI/SemanticPluginProfile.h"
 #include "AI/TokenOptimizer.h"
 #include "Core/ParameterClassifier.h"
-#include "Core/VAEMorphEngine.h"
 #include "Host/IPluginHostManager.h"
 #include "Plugin/PluginProcessor.h"
 
@@ -963,21 +962,3 @@ TEST_CASE("MCP set_parameter flush reports pluginUnavailable when no hosted plug
     processor.releaseResources();
 }
 
-TEST_CASE("VAE stub loadModel is non-crashing and reports stub backend", "[unit][ai][vae]")
-{
-    VAEMorphEngine engine;
-    const auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getNonexistentChildFile("morephi_vae_stub", ".onnx");
-    REQUIRE(tempFile.replaceWithText("stub"));
-
-    const bool loaded = engine.loadModel(tempFile);
-    REQUIRE(loaded);
-    REQUIRE(engine.isModelLoaded());
-    REQUIRE(engine.getBackendMode() == VAEMorphEngine::BackendMode::Stub);
-    REQUIRE(engine.getBackendStatus().containsIgnoreCase("stub"));
-
-    const auto latent = engine.encode({0.1f, 0.5f, 0.8f});
-    REQUIRE(latent.size() == static_cast<size_t>(engine.getLatentDimensions()));
-
-    tempFile.deleteFile();
-}

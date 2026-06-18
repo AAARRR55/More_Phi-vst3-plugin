@@ -4,8 +4,8 @@
  * knobs, step sequencers) and routes their output through the ModulationMatrix
  * to modify the morph parameter vector in real-time.
  *
- * Implements IModulationEngine (see IModulationEngine.h).
  *
+
  * Sits in the processBlock pipeline AFTER MorphProcessor::process():
  *   MorphProcessor::process() → morphOutput[]
  *   ModulationEngine::processBlock(morphOutput, dt)  ← here
@@ -25,7 +25,6 @@
  */
 #pragma once
 
-#include "IModulationEngine.h"
 #include "LFO.h"
 #include "EnvelopeFollower.h"
 #include "StepSequencer.h"
@@ -40,7 +39,7 @@
 
 namespace more_phi {
 
-class ModulationEngine : public IModulationEngine
+class ModulationEngine
 {
 public:
     // ── Compile-time capacities ───────────────────────────────────────────────
@@ -51,7 +50,7 @@ public:
     static constexpr int NUM_STEP_SEQS =  2;
 
     ModulationEngine() = default;
-    ~ModulationEngine() override = default;
+    ~ModulationEngine() = default;
 
     ModulationEngine(const ModulationEngine&)            = delete;
     ModulationEngine& operator=(const ModulationEngine&) = delete;
@@ -63,7 +62,7 @@ public:
      * maximum number of hosted-plugin parameters.
      * Must be called before processBlock(). Not noexcept (called from prepareToPlay).
      */
-    void prepare(double sampleRate, int blockSize) override;
+    void prepare(double sampleRate, int blockSize);
 
     /**
      * Overload that also accepts maxParamCount. The IModulationEngine interface
@@ -73,7 +72,7 @@ public:
     void prepare(double sampleRate, int blockSize, int maxParamCount);
 
     /** Reset all sources, the matrix, and all MIDI / morph-position state. */
-    void reset() noexcept override;
+    void reset() noexcept;
 
     // ── Audio-thread API ──────────────────────────────────────────────────────
 
@@ -83,14 +82,14 @@ public:
      * dt = blockSize / sampleRate.
      * noexcept: All sub-operations are noexcept after prepare().
      */
-    void processBlock(std::vector<float>& morphOutput, float dt) noexcept override;
+    void processBlock(std::vector<float>& morphOutput, float dt) noexcept;
 
     /**
      * Extract MIDI velocity, aftertouch, and mod-wheel from the buffer.
      * Call before processBlock() so MIDI state is current for this block.
      * noexcept: Iterates pre-allocated MidiBuffer, no allocation.
      */
-    void processMIDI(const juce::MidiBuffer& midi) noexcept override;
+    void processMIDI(const juce::MidiBuffer& midi) noexcept;
 
     /**
      * Feed audio for all envelope followers (first channel only).
@@ -109,11 +108,11 @@ public:
 
     // ── Route management (message thread, IModulationEngine) ─────────────────
 
-    int  addRoute(ModSourceId source, int destParamIndex, float depth) override;
-    void removeRoute(int routeId) override;
-    void clearAllRoutes() override;
-    int  getAssignedRouteCount() const override;
-    const ModRoute& getRoute(int routeId) const override;
+    int  addRoute(ModSourceId source, int destParamIndex, float depth);
+    void removeRoute(int routeId);
+    void clearAllRoutes();
+    int  getAssignedRouteCount() const;
+    const ModRoute& getRoute(int routeId) const;
 
     /** Audio-thread safe: true if any modulation routes are currently published.
      *  Use on the audio thread instead of getAssignedRouteCount(), which reads
@@ -126,24 +125,24 @@ public:
 
     // ── Macro knobs (IModulationEngine) ───────────────────────────────────────
 
-    void  setMacro(int index, float value) noexcept override;
-    float getMacro(int index) const noexcept override;
+    void  setMacro(int index, float value) noexcept;
+    float getMacro(int index) const noexcept;
 
     // ── LFO control (IModulationEngine) ───────────────────────────────────────
 
-    void setLFOShape(int lfoIndex, LFOShape shape) override;
-    void setLFORate(int lfoIndex, float hz) override;
-    void setLFOTempoSync(int lfoIndex, bool synced, float bpm) override;
+    void setLFOShape(int lfoIndex, LFOShape shape);
+    void setLFORate(int lfoIndex, float hz);
+    void setLFOTempoSync(int lfoIndex, bool synced, float bpm);
 
     // ── Envelope follower control (IModulationEngine) ─────────────────────────
 
-    void setEnvelopeAttack(int envIndex, float ms) override;
-    void setEnvelopeRelease(int envIndex, float ms) override;
+    void setEnvelopeAttack(int envIndex, float ms);
+    void setEnvelopeRelease(int envIndex, float ms);
 
     // ── Step sequencer control (IModulationEngine) ────────────────────────────
 
-    void setStepValue(int seqIndex, int step, float value) override;
-    void setStepCount(int seqIndex, int count) override;
+    void setStepValue(int seqIndex, int step, float value);
+    void setStepCount(int seqIndex, int count);
 
     // ── Direct source accessors (message thread) ───────────────────────────────
 
@@ -158,8 +157,8 @@ public:
 
     // ── Serialization (IModulationEngine) ─────────────────────────────────────
 
-    std::unique_ptr<juce::XmlElement> toXml() const override;
-    void fromXml(const juce::XmlElement& xml) override;
+    std::unique_ptr<juce::XmlElement> toXml() const;
+    void fromXml(const juce::XmlElement& xml);
 
 private:
     // ── Sub-systems ───────────────────────────────────────────────────────────
