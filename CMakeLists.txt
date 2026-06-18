@@ -277,8 +277,6 @@ set(MORE_PHI_LICENSING_SOURCES
 )
 
 set(MORE_PHI_AI_DATASET_STABLE_SOURCES
-    src/AI/Dataset/DatasetGenerator.h
-    src/AI/Dataset/DatasetGenerator.cpp
     src/AI/Dataset/ParameterSampler.h
     src/AI/Dataset/ParameterSampler.cpp
     src/AI/Dataset/AudioContentLibrary.h

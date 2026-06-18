@@ -7,7 +7,6 @@
 #include "../Core/ParameterClassifier.h"
 #include "../Core/DiscreteParameterHandler.h"
 #include "TokenOptimizer.h"
-#include "Dataset/DatasetGenerator.h"
 #include "Dataset/DatasetGeneratorV2.h"
 #include "Dataset/DatasetGeneratorV3.h"
 #include <nlohmann/json.hpp>
@@ -1129,53 +1128,17 @@ juce::String more_phi::MCPToolsExtended::generateDataset(const juce::var& params
 {
     const auto pipeline = params.getProperty("pipeline", "v3").toString().trim().toLowerCase();
 
-    if (pipeline == "v2")
+    // ponytail: the standalone legacy DatasetGenerator was removed; "legacy" is
+    // now an alias for the V2 pipeline (V3 remains the default).
+    if (pipeline == "v2" || pipeline == "legacy")
         return generateDatasetV2(params, processor);
 
     if (pipeline == "v3")
         return generateDatasetV3(params, processor);
 
-    if (pipeline != "legacy")
-    {
-        nlohmann::json result;
-        result["success"] = false;
-        result["error"] = "Invalid pipeline. Expected one of: legacy, v2, v3.";
-        return juce::String(result.dump());
-    }
-
-    more_phi::GenerationConfig config;
-    
-    // Parse parameters from MCP call
-    config.samplesPerState = static_cast<int>(params.getProperty("samples", 100));
-    config.renderDurationSeconds = static_cast<float>(params.getProperty("duration", 1.0));
-    
-    juce::String outputPath = params.getProperty("output_path", "");
-    if (outputPath.isEmpty())
-        config.outputDirectory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MorePhi_Datasets").getChildFile(processor.getName() + "_" + juce::Time::getCurrentTime().toString(true, true));
-    else
-        config.outputDirectory = juce::File(outputPath);
-
-    juce::String inputPath = params.getProperty("input_audio", "");
-    juce::File inputFile(inputPath);
-
-    config.respectsSanityConfig = static_cast<bool>(params.getProperty("respect_sanity", true));
-    // CRITICAL (Finding 3): Use thread-safe copy method to access SanityConfig from potentially
-    // concurrent MCP thread. The processor's getSanityConfigCopy() is properly protected.
-    config.sanityConfig = processor.getSanityConfigCopy();
-
-    more_phi::DatasetGenerator generator(processor.getHostManager());
-    
-    bool success = generator.generate(config, inputFile);
-
     nlohmann::json result;
-    result["success"] = success;
-    if (success) {
-        result["output_directory"] = config.outputDirectory.getFullPathName().toStdString();
-        result["sample_count"] = config.samplesPerState;
-    } else {
-        result["error"] = "Generation failed. Ensure a plugin is loaded and output path is writable.";
-    }
-
+    result["success"] = false;
+    result["error"] = "Invalid pipeline. Expected one of: legacy, v2, v3.";
     return juce::String(result.dump());
 }
 
