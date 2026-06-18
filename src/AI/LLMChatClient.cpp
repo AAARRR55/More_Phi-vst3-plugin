@@ -34,6 +34,38 @@ bool startsWith(const std::string& value, const char* prefix)
     return value.rfind(prefix, 0) == 0;
 }
 
+// Extract visible text from an OpenAI-compatible message field that may be a
+// plain string, an array of content blocks ({"type":"text","text":"..."} or
+// bare strings), or null/missing. NVIDIA NIM and other backends can return
+// "content" (and "reasoning_content") in any of these shapes — for reasoning
+// models the answer often lives in reasoning_content while content is null.
+// Mirrors the shape already handled by LLMConnectionValidator::extractTextContent
+// so the chat parser tolerates the same responses. Never throws: every element
+// is type-checked before access.
+juce::String extractContentText(const json& content)
+{
+    if (content.is_string())
+        return juce::String(content.get<std::string>());
+
+    if (!content.is_array())
+        return {};
+
+    juce::String text;
+    for (const auto& block : content)
+    {
+        if (block.is_string())
+        {
+            text += juce::String(block.get<std::string>());
+        }
+        else if (block.is_object() && block.contains("text") && block["text"].is_string())
+        {
+            text += juce::String(block["text"].get<std::string>());
+        }
+        // Skip null / number / bool / objects without a string "text".
+    }
+    return text;
+}
+
 std::string sanitizeToolNameForApi(const std::string& name)
 {
     std::string result;
@@ -507,6 +539,23 @@ LLMHttpRequest LLMChatClient::buildHttpRequest(LLMProviderId id,
 
 // ── Request body builders ──────────────────────────────────────────────────
 
+int LLMChatClient::maxTokensFor(const juce::String& model)
+{
+    const auto lower = model.toLowerCase();
+    // Reasoning models emit reasoning_content whose tokens count against the
+    // max_tokens budget; a tight cap makes them exhaust it (content:null) before
+    // producing a final answer. Give them a larger budget. Other models keep the
+    // default cap so providers/models that reject a large max_tokens are
+    // unaffected (a regression the workflow's audit flagged for a global bump).
+    if (lower.contains("deepseek-r1") || lower.contains("nemotron")
+        || lower.contains("qwq") || lower.contains("reasoning")
+        || lower.contains("thinker") || lower.contains("sky-t1"))
+    {
+        return kMaxTokensReasoning;
+    }
+    return kMaxTokens;
+}
+
 juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*ps*/,
                                                     const juce::String& model,
                                                     const std::string& messagesJson,
@@ -516,7 +565,7 @@ juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*
     {
         json body;
         body["model"]      = std::string(model.toRawUTF8());
-        body["max_tokens"] = kMaxTokens;
+        body["max_tokens"] = maxTokensFor(model);
         body["messages"]   = json::parse(messagesJson);
 
         if (!toolsArray.empty())
@@ -544,7 +593,7 @@ juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings&
 
         json body;
         body["model"]      = std::string(model.toRawUTF8());
-        body["max_tokens"] = kMaxTokens;
+        body["max_tokens"] = maxTokensFor(model);
         body["messages"]   = json::parse(anthropicMsgsJson);
 
         if (!systemText.empty())
@@ -595,9 +644,17 @@ LLMChatClient::parseOpenAIResponse(int statusCode, const juce::String& body)
             return {{}, {}, "Missing message in LLM response."};
 
         const auto& message = choice["message"];
-        juce::String textContent;
-        if (message.contains("content") && message["content"].is_string())
-            textContent = juce::String(message["content"].get<std::string>());
+
+        // Extract the message "content", which NVIDIA NIM and other OpenAI-
+        // compatible backends may return as a plain string, an array of text
+        // blocks, or null (e.g. reasoning models whose entire budget went to
+        // reasoning_content). rawContent preserves the full extracted text for
+        // the inline-tool-token fallback below; textContent is the display text
+        // (which the fallback may trim).
+        juce::String rawContent;
+        if (message.contains("content"))
+            rawContent = extractContentText(message["content"]);
+        juce::String textContent = rawContent;
 
         std::vector<ToolCall> toolCalls;
         if (message.contains("tool_calls") && message["tool_calls"].is_array())
@@ -626,8 +683,9 @@ LLMChatClient::parseOpenAIResponse(int statusCode, const juce::String& body)
                 textContent = textContent.substring(0, sectionStart).trim();
 
             int searchFrom = 0;
-            const auto fullText = message.contains("content") && message["content"].is_string()
-                ? juce::String(message["content"].get<std::string>()) : juce::String();
+            // Use the already-extracted content so inline tool tokens carried
+            // inside a content array (a real NIM shape) are parsed too.
+            const auto fullText = rawContent;
 
             while (searchFrom < fullText.length())
             {
@@ -679,6 +737,42 @@ LLMChatClient::parseOpenAIResponse(int statusCode, const juce::String& body)
 
                 searchFrom = tcEnd + 17;
             }
+        }
+
+        // Reasoning-model fallback: NVIDIA reasoning models (DeepSeek-R1,
+        // Nemotron, ...) emit their output in "reasoning_content" and may leave
+        // "content" null when their token budget was spent on reasoning. Only
+        // fall back when there is no visible text AND no tool calls, and run
+        // AFTER the inline-tool-token detection above so a reasoning dump that
+        // merely mentions a tool-call literal is never misclassified as a real
+        // tool call. (The detection above operates on rawContent, the content
+        // field only — never on reasoning_content.)
+        if (toolCalls.empty() && textContent.trim().isEmpty()
+            && message.contains("reasoning_content"))
+        {
+            const auto reasoning = extractContentText(message["reasoning_content"]);
+            if (reasoning.isNotEmpty())
+                textContent = reasoning;
+        }
+
+        // The model returned nothing actionable. Surface a clear, actionable
+        // message instead of a silent empty reply (which the UI renders as the
+        // unhelpful "(empty response)"). Gated on BOTH no text AND no tool calls
+        // so legitimate empty-text tool-call turns stay a clean success. choice
+        // is already validated as an object above, and we are inside the try
+        // block, so reading finish_reason is safe.
+        if (toolCalls.empty() && textContent.trim().isEmpty())
+        {
+            const juce::String finishReason = choice.value("finish_reason", "");
+            if (finishReason == "length")
+            {
+                return {{}, {}, "Response truncated: the model exhausted its token budget during "
+                                 "reasoning (finish_reason=length). Increase max_tokens in LLM "
+                                 "settings or choose a non-reasoning model."};
+            }
+            return {{}, {}, "The model returned no visible content and no tool calls. If using a "
+                             "reasoning model (e.g. DeepSeek-R1/Nemotron), raise max_tokens in "
+                             "LLM settings or switch to a non-reasoning model."};
         }
 
         return {textContent, std::move(toolCalls), {}};

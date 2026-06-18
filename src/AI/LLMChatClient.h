@@ -76,6 +76,12 @@ public:
      *  Exposed for testing the NVIDIA inline-token fallback parser. */
     static juce::String parseOpenAIResponseForTest(int statusCode, const juce::String& body);
 
+    /** Return the max_tokens budget for a given model id. Reasoning models
+     *  (DeepSeek-R1, Nemotron, QwQ, ...) need a larger budget because their
+     *  reasoning tokens count against it; without it they exhaust the budget
+     *  before producing a final answer. Other models keep the default cap. */
+    static int maxTokensFor(const juce::String& model);
+
 private:
     struct ToolCall
     {
@@ -129,6 +135,7 @@ private:
 
     static constexpr int kMaxToolIterations  = 8;
     static constexpr int kMaxTokens          = 4096;
+    static constexpr int kMaxTokensReasoning = 16384; // reasoning models (CoT counts vs budget)
     static constexpr int kTimeoutMs          = 60000;   // default (OpenAI, Anthropic)
     static constexpr int kTimeoutMsNvidia    = 120000;  // NVIDIA NIM cold-start (reduced from 300s)
     static constexpr int kAgentLoopTimeoutMs = 90000;   // overall agent loop budget
