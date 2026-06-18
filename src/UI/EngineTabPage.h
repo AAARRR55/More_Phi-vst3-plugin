@@ -17,6 +17,7 @@ class SpectralControlPanel;
 class GranularControlPanel;
 class HybridBlendPanel;
 class PerformancePanel;
+class DriftControlPanel;
 
 class EngineTabPage : public juce::Component
 {
@@ -35,6 +36,7 @@ private:
     std::unique_ptr<GranularControlPanel> granularPanel_;
     std::unique_ptr<HybridBlendPanel>     blendPanel_;
     std::unique_ptr<PerformancePanel>     perfPanel_;
+    std::unique_ptr<DriftControlPanel>    driftPanel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EngineTabPage)
 };

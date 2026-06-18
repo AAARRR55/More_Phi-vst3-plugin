@@ -9,6 +9,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "UI/Theme/MorePhiTheme.h"
 #include "UI/Bindings/ParameterBinding.h"
+#include "UI/MorePhiLookAndFeel.h"
 
 namespace more_phi {
 
@@ -26,6 +27,7 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     setupToggleButton(activeToggle_, "Spectral");
     activeToggle_.setToggleState(engine.isActive(), juce::dontSendNotification);
     ParameterBinding::bindToggleButton(activeToggle_, apvts, "spectralActive");
+    activeToggle_.onClick = [this] { updateEnabledState(); };  // H5: disable sub-controls when off
 
     // ── FFT size combo ────────────────────────────────────────────────────────
     fftSizeCombo_.addItem("512",  1);
@@ -42,7 +44,7 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
                              border());
 
     fftSizeLabel_.setText("FFT Size", juce::dontSendNotification);
-    fftSizeLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    fftSizeLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     fftSizeLabel_.setColour(juce::Label::textColourId, textDim());
     fftSizeLabel_.setJustificationType(juce::Justification::centredLeft);
 
@@ -63,7 +65,7 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    alphaLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     alphaLabel_.setColour(juce::Label::textColourId, textDim());
     alphaLabel_.setJustificationType(juce::Justification::centred);
 
@@ -84,6 +86,19 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     addAndMakeVisible(alphaLabel_);
     addAndMakeVisible(transientToggle_);
     addAndMakeVisible(formantToggle_);
+
+    updateEnabledState();  // H5: sync sub-control enabled state to the active toggle
+}
+
+void SpectralControlPanel::updateEnabledState()
+{
+    const bool on = activeToggle_.getToggleState();
+    fftSizeCombo_.setEnabled(on);
+    fftSizeLabel_.setEnabled(on);
+    alphaKnob_.setEnabled(on);
+    alphaLabel_.setEnabled(on);
+    transientToggle_.setEnabled(on);
+    formantToggle_.setEnabled(on);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,7 +198,7 @@ void SpectralControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }

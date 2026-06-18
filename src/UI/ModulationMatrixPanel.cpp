@@ -13,6 +13,7 @@
  * message-thread-safe in ModulationEngine.h.
  */
 #include "ModulationMatrixPanel.h"
+#include "MorePhiLookAndFeel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/ModulationTypes.h"
 
@@ -286,7 +287,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 {
     // Label "LFO N"
     label_.setText("LFO " + juce::String(lfoIndex_ + 1), juce::dontSendNotification);
-    label_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
+    label_.setFont(MorePhiLookAndFeel::bodyFont(10.0f, juce::Font::bold));
     label_.setColour(juce::Label::textColourId, colours::headerText);
     label_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(label_);
@@ -320,7 +321,7 @@ LFOPanel::LFOPanel(int lfoIndex, MorePhiProcessor& proc)
 
     // "Hz" unit label
     rateLabel_.setText("Hz", juce::dontSendNotification);
-    rateLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    rateLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     rateLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     rateLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(rateLabel_);
@@ -371,7 +372,7 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
 {
     // ---- Section header: route list ----
     routeListHeader_.setText("Routes", juce::dontSendNotification);
-    routeListHeader_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
+    routeListHeader_.setFont(MorePhiLookAndFeel::bodyFont(10.0f, juce::Font::bold));
     routeListHeader_.setColour(juce::Label::textColourId, colours::headerText);
     routeListHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeListHeader_);
@@ -392,14 +393,14 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
     addAndMakeVisible(clearAllBtn_);
 
     // ---- Route count label ----
-    routeCountLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    routeCountLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     routeCountLabel_.setColour(juce::Label::textColourId, colours::textSecondary);
     routeCountLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeCountLabel_);
 
     // ---- Section header: LFOs ----
     lfoHeader_.setText("LFOs", juce::dontSendNotification);
-    lfoHeader_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::bold)));
+    lfoHeader_.setFont(MorePhiLookAndFeel::bodyFont(10.0f, juce::Font::bold));
     lfoHeader_.setColour(juce::Label::textColourId, colours::headerText);
     lfoHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(lfoHeader_);

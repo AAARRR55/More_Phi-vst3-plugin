@@ -52,6 +52,11 @@ const juce::String& MorePhiLookAndFeel::bodyTypefaceName()
     return g_bodyTypeface;
 }
 
+juce::Font MorePhiLookAndFeel::bodyFont(float size, int style)
+{
+    return juce::Font(juce::FontOptions(bodyTypefaceName(), size, style));
+}
+
 MorePhiLookAndFeel::MorePhiLookAndFeel()
 {
     ensureFontsRegistered();
@@ -85,7 +90,10 @@ MorePhiLookAndFeel::MorePhiLookAndFeel()
 float MorePhiLookAndFeel::getScaledFontSize(float baseSize, float editorWidth, float minSize)
 {
     const float scale = editorWidth / kBaselineWidth;
-    const float clampedScale = juce::jlimit(0.75f, 1.3f, scale);
+    // H6: raised upper clamp from 1.3 to 1.5 so text grows on large/HiDPI canvases
+    // (at 1600px the natural scale is ~1.74; capping at 1.5 keeps fixed-height rows
+    // from clipping while no longer looking undersized).
+    const float clampedScale = juce::jlimit(0.75f, 1.5f, scale);
     return juce::jmax(minSize, baseSize * clampedScale);
 }
 

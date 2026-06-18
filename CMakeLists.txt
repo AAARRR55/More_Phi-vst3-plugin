@@ -459,12 +459,12 @@ set(MORE_PHI_UI_SOURCES
     src/UI/ParameterMapPanel.cpp
     src/UI/BottomControlStrip.h
     src/UI/BottomControlStrip.cpp
-    src/UI/LearnModePanel.h
-    src/UI/LearnModePanel.cpp
     src/UI/V2TabBar.h
     src/UI/V2TabBar.cpp
     src/UI/EngineTabPage.h
     src/UI/EngineTabPage.cpp
+    src/UI/DriftControlPanel.h
+    src/UI/DriftControlPanel.cpp
     src/UI/SpectralControlPanel.h
     src/UI/SpectralControlPanel.cpp
     src/UI/GranularControlPanel.h

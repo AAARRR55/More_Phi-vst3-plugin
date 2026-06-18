@@ -153,7 +153,12 @@ ChatDisplay::ChatDisplay()
     viewport_.setScrollBarThickness(7);
     addAndMakeVisible(viewport_);
 
-    canvas_.messages.push_back({Role::System, "Assistant ready."});
+    canvas_.messages.push_back({Role::System,
+        "More-Phi assistant ready. I can drive morphing, snapshots, modulation "
+        "and mastering, run the Ozone Track Assistant, and generate training "
+        "datasets (MCP tools).\n"
+        "Try: \"what MCP tools do you have\" | \"run snapshot self test\" | "
+        "\"run ozone track assistant\" | \"generate dataset\""});
 }
 
 void ChatDisplay::addMessage(Role role, juce::String text)

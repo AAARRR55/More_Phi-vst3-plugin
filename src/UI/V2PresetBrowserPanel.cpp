@@ -6,6 +6,7 @@
 #include "V2PresetBrowserPanel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Preset/PresetSerializer.h"
+#include "MorePhiLookAndFeel.h"
 
 #include <algorithm>
 #include <numeric>
@@ -78,8 +79,8 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
                                            : juce::String("  " + entry->author);
 
         // Measure name width to position author inline
-        juce::Font boldFont(juce::FontOptions("Inter", 12.5f, juce::Font::bold));
-        juce::Font dimFont (juce::FontOptions("Inter", 11.0f, juce::Font::plain));
+        juce::Font boldFont(juce::FontOptions(MorePhiLookAndFeel::bodyTypefaceName(), 12.5f, juce::Font::bold));
+        juce::Font dimFont (juce::FontOptions(MorePhiLookAndFeel::bodyTypefaceName(), 11.0f, juce::Font::plain));
 
         juce::GlyphArrangement ga;
         ga.addLineOfText(boldFont, nameStr, 0.0f, 0.0f);
@@ -123,7 +124,7 @@ void PresetListModel::paintListBoxItem(int row, juce::Graphics& g,
             joined += entry->tags[i];
         }
 
-        juce::Font tagFont(juce::FontOptions("Inter", 10.0f, juce::Font::plain));
+        juce::Font tagFont(juce::FontOptions(MorePhiLookAndFeel::bodyTypefaceName(), 10.0f, juce::Font::plain));
         g.setFont(tagFont);
         g.setColour(juce::Colour(colTags));
         g.drawText(juce::String(joined),

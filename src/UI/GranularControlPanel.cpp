@@ -9,6 +9,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "UI/Theme/MorePhiTheme.h"
 #include "UI/Bindings/ParameterBinding.h"
+#include "UI/MorePhiLookAndFeel.h"
 
 namespace more_phi {
 
@@ -46,6 +47,7 @@ GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
     activeToggle_.setToggleState(engine.isActive(), juce::dontSendNotification);
     ParameterBinding::bindToggleButton(activeToggle_, apvts, "granularActive");
     addAndMakeVisible(activeToggle_);
+    activeToggle_.onClick = [this] { updateEnabledState(); };  // H5: disable sub-controls when off
 
     // ── Knobs: route through APVTS ─────────────────────────────────────────────
     static constexpr const char* knobParamIds[] = {
@@ -63,7 +65,7 @@ GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
     for (int i = 0; i < 4; ++i)
     {
         knobLabels_[i].setText(kKnobDefs[i].label, juce::dontSendNotification);
-        knobLabels_[i].setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+        knobLabels_[i].setFont(MorePhiLookAndFeel::bodyFont(10.0f));
         knobLabels_[i].setColour(juce::Label::textColourId,
                                   textDim());
         knobLabels_[i].setJustificationType(juce::Justification::centred);
@@ -71,6 +73,17 @@ GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
         addAndMakeVisible(knobs_[i]);
         addAndMakeVisible(knobLabels_[i]);
     }
+
+    updateEnabledState();  // H5: sync sub-control enabled state to the active toggle
+}
+
+void GranularControlPanel::updateEnabledState()
+{
+    const bool on = activeToggle_.getToggleState();
+    for (auto& knob : knobs_)
+        knob.setEnabled(on);
+    for (auto& label : knobLabels_)
+        label.setEnabled(on);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,7 +188,7 @@ void GranularControlPanel::drawSectionLabel(juce::Graphics& g,
                                               const juce::String& text,
                                               juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }

@@ -1,19 +1,18 @@
 /*
  * More-Phi — UI/ParameterMapPanel.h
- * Scrollable panel showing ALL hosted plugin parameters with sliders.
- * Supports learn-mode to whitelist which params are included in morphing.
+ * Scrollable panel showing ALL hosted plugin parameters with sliders
+ * and live value readouts.
  */
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
-#include <set>
 
 namespace more_phi {
 
 class MorePhiProcessor;
 
-// A single parameter row: checkbox + name + slider + value readout
+// A single parameter row: name + slider + value readout
 class ParameterRow : public juce::Component
 {
 public:
@@ -22,12 +21,10 @@ public:
     void refresh();
 
     int getParamIndex() const { return index_; }
-    bool isMorphEnabled() const { return morphToggle_.getToggleState(); }
 
 private:
     int index_;
     MorePhiProcessor& proc_;
-    juce::ToggleButton morphToggle_;
     juce::Label nameLabel_;
     juce::Slider slider_;
     juce::Label valueLabel_;
@@ -43,9 +40,6 @@ public:
     void resized() override;
     void paint(juce::Graphics& g) override;
 
-    // Returns the set of parameter indices enabled for morphing
-    std::set<int> getMorphEnabledParams() const;
-
     // Rebuild rows when plugin changes
     void rebuildForPlugin();
 
@@ -57,8 +51,6 @@ private:
     juce::Component rowContainer_;
     std::vector<std::unique_ptr<ParameterRow>> rows_;
     juce::Label headerLabel_;
-    juce::TextButton selectAllBtn_{"All"};
-    juce::TextButton selectNoneBtn_{"None"};
     int lastParamCount_ = 0;
 };
 
