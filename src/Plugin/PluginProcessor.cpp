@@ -207,6 +207,7 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.driftOutputY = apvts.getRawParameterValue("driftOutputY");
     rawParams_.coarseParameterWrites = apvts.getRawParameterValue("coarseParameterWrites");
     rawParams_.disableTouchDetection = apvts.getRawParameterValue("disableTouchDetection");
+    rawParams_.throttleParamCommits = apvts.getRawParameterValue("throttleParamCommits");
 }
 
 bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
@@ -1030,6 +1031,8 @@ MorePhiProcessor::createParameterLayout()
         juce::ParameterID{"coarseParameterWrites", 1}, "Coarse Param Writes", false));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"disableTouchDetection", 1}, "Disable Touch Detect", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"throttleParamCommits", 1}, "Throttle Param Commits", false));
 
     return { params.begin(), params.end() };
 }
@@ -1270,6 +1273,8 @@ void MorePhiProcessor::syncStateFromAPVTS()
                                  std::memory_order_relaxed);
     disableTouchDetection_.store(readRawBool(rawParams_.disableTouchDetection, false),
                                  std::memory_order_relaxed);
+    throttleParamCommits_.store(readRawBool(rawParams_.throttleParamCommits, false),
+                                std::memory_order_relaxed);
 
     if (audioDomainEnabled != lastLatencyAudioDomainEnabled_
         || spectralActive != lastLatencySpectralActive_
@@ -1487,16 +1492,37 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                 prevFaderPos_ = fp;
                 prevPhysicsMode_ = modeInt;
                 prevMorphSource_ = sourceInt;
-                morphStableBlocks_ = 0;
-            }
-            else
-            {
-                ++morphStableBlocks_;
             }
 
-            const bool canSkipMorph = (mode == MorphMode::Direct)
-                                   && (morphStableBlocks_ > MORPH_STABLE_THRESHOLD)
-                                   && !positionChanged;
+            // PERF-C3+: Extend the steady-state skip to settled Elastic. Stability
+            // is measured by ACTUAL hosted-parameter write activity this block
+            // (anyWriteThisBlock, set in the apply loop below), not just the raw
+            // target. This keeps Elastic's smoothing tail (which keeps writing
+            // after the spring settles) from being frozen mid-ramp, and keeps
+            // Drift — which writes every block — from ever skipping (its output
+            // genuinely changes every block). Direct reaches the skip exactly as
+            // before once output is stable. morphStableBlocks_ is updated after
+            // the apply loop using anyWriteThisBlock.
+            bool anyWriteThisBlock = positionChanged;
+
+            // PERF-OPT: optional throttled commit. Compute the morph every block
+            // but only push setValue updates to the hosted plugin every Nth block,
+            // cutting the hosted-plugin setValue storm during continuous morphing
+            // (e.g. Drift) at the cost of a few-ms parameter latency. Throttled
+            // (non-commit) blocks are treated as "active" so they never feed the
+            // steady-state skip — we can't know the output is stable without
+            // committing it.
+            constexpr int kParamCommitInterval = 4;
+            const bool throttleCommits = throttleParamCommits_.load(std::memory_order_relaxed);
+            const bool commitThisBlock = !throttleCommits || (paramCommitCounter_ == 0);
+            if (throttleCommits)
+                paramCommitCounter_ = (paramCommitCounter_ + 1) % kParamCommitInterval;
+            if (!commitThisBlock)
+                anyWriteThisBlock = true;
+
+            const bool canSkipMorph = (mode == MorphMode::Direct || mode == MorphMode::Elastic)
+                                   && !positionChanged
+                                   && morphStableBlocks_ > MORPH_STABLE_THRESHOLD;
 
             if (!canSkipMorph)
             {
@@ -1550,7 +1576,8 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                         touchStateLock_.exit();
                     }
                 }
-                else if (canTouchHostedParameters && finalOutput_.size() >= static_cast<size_t>(paramCount))
+                else if (commitThisBlock && canTouchHostedParameters
+                         && finalOutput_.size() >= static_cast<size_t>(paramCount))
                 {
                     if (auto* plugin = hostManager.acquirePluginForUse())
                     {
@@ -1592,6 +1619,7 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                                 const float clamped = juce::jlimit(0.0f, 1.0f, morphVal);
                                 try { pluginParams[i]->setValue(clamped); }
                                 catch (...) { continue; }
+                                anyWriteThisBlock = true;
                                 if (hasLock) lastApplied_[idx] = morphVal;
                             }
                             if (hasLock) touchStateLock_.exit();
@@ -1687,6 +1715,7 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                                 const float clamped = juce::jlimit(0.0f, 1.0f, morphVal);
                                 try { pluginParams[i]->setValue(clamped); }
                                 catch (...) { continue; }
+                                anyWriteThisBlock = true;
                             }
                             if (hasTouchLock)
                                 lastApplied_[idx] = morphVal;
@@ -1698,6 +1727,15 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                     }
                 }
             }
+
+            // PERF-C3+: update stability for next block from this block's actual
+            // hosted-parameter write activity. Elastic reaches the skip once
+            // writes stop (spring settled + smoothing converged); Drift writes
+            // every block so it never skips.
+            if (anyWriteThisBlock)
+                morphStableBlocks_ = 0;
+            else
+                ++morphStableBlocks_;
         }
     }
 

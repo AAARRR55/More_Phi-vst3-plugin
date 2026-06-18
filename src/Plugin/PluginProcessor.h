@@ -657,6 +657,7 @@ private:
         std::atomic<float>* driftOutputY = nullptr;
         std::atomic<float>* coarseParameterWrites = nullptr;
         std::atomic<float>* disableTouchDetection = nullptr;
+        std::atomic<float>* throttleParamCommits = nullptr;
     };
     RawParameters rawParams_{};
 
@@ -703,6 +704,11 @@ private:
     // touch/hold/cooldown bookkeeping (pure morph output application).
     std::atomic<bool> coarseParameterWrites_{false};
     std::atomic<bool> disableTouchDetection_{false};
+
+    // Throttle Param Commits: compute morph every block but push setValue to the
+    // hosted plugin only every Nth block (Drift/continuous-morph CPU relief).
+    std::atomic<bool> throttleParamCommits_{false};
+    int paramCommitCounter_{0}; // audio-thread only
 
     // Audio analysis (audio thread → UI)
     std::atomic<float> rmsLevel_{0.0f};
