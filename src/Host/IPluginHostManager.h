@@ -92,26 +92,4 @@ public:
     virtual int getNumSteps(int index) const { return getParameterNumSteps(index); }
 };
 
-/**
- * Interface for MCP server operations.
- * Enables mocking AI integration in tests.
- */
-class IMCPServer
-{
-public:
-    virtual ~IMCPServer() = default;
-    
-    virtual void startServer(int port = 30001) = 0;
-    virtual void stopServer() = 0;
-    
-    virtual bool isRunning() const = 0;
-    virtual int getPort() const = 0;
-    virtual int getConnectedClients() const = 0;
-    virtual bool isHealthy() const = 0;
-    
-    virtual void setIdentity(const struct InstanceIdentity& id) = 0;
-    virtual const struct InstanceIdentity& getIdentity() const = 0;
-    virtual const juce::String& getAuthToken() const = 0;
-};
-
 } // namespace more_phi

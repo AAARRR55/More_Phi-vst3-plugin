@@ -5,7 +5,6 @@
  * MESSAGE THREAD ONLY. */
 #pragma once
 
-#include "Core/WindowsCompat.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Preset/PresetLibrary.h"
 #include "Preset/PresetEntry.h"
