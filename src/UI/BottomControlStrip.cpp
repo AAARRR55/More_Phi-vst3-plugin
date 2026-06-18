@@ -65,6 +65,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
         scEnableAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             processor.getAPVTS(), "sidechainEnabled", sidechainToggle_);
     }
+    sidechainToggle_.onClick = [this] { updateSidechainEnabledState(); };  // H5
 
     thresholdKnob_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     thresholdKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
@@ -77,7 +78,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
             processor.getAPVTS(), "sidechainThreshold", thresholdKnob_);
     }
 
-    thresholdLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    thresholdLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     thresholdLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
     thresholdLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(thresholdLabel_);
@@ -134,7 +135,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
             processor.getAPVTS(), "outputGain", outputGainKnob_);
     }
 
-    outputGainLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    outputGainLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     outputGainLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
     outputGainLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(outputGainLabel_);
@@ -156,6 +157,15 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
         bypassAttach_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
             processor.getAPVTS(), "bypass", bypassBtn_);
     }
+
+    updateSidechainEnabledState();  // H5: sync SC threshold enabled state on construction
+}
+
+void BottomControlStrip::updateSidechainEnabledState()
+{
+    const bool on = sidechainToggle_.getToggleState();
+    thresholdKnob_.setEnabled(on);
+    thresholdLabel_.setEnabled(on);
 }
 
 void BottomControlStrip::paint(juce::Graphics& g)
@@ -183,7 +193,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
                    static_cast<float>(getWidth() - 8), static_cast<float>(midY), 1.0f);
 
         g.setColour(juce::Colour(0x704a5568));
-        g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+        g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
         g.drawText("SAFETY", 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("RECALL", midX + 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("OUTPUT", 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
@@ -203,7 +213,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
                static_cast<float>(divX3), static_cast<float>(getHeight() - 4), 1.0f);
 
     g.setColour(juce::Colour(0x704a5568));
-    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     g.drawText("SAFETY", 10, 3, divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 12, juce::Justification::centredLeft);

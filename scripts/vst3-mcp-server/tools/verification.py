@@ -12,15 +12,36 @@ from typing import Any, Literal
 
 CORRECTIVE_ACTIONS = {
     "TIMEOUT": "Retry with smaller batch or check VST3 host responsiveness.",
-    "PARAM_OUT_RANGE": "Clamp value to [{min}, {max}] and retry.",
+    "PARAM_OUT_RANGE": "Value out of range; supply a value within [{min}, {max}].",
     "PLUGIN_NOT_READY": "Wait for plugin initialization; check IPC pipe connection.",
     "PIPE_BROKEN": "Reconnect IPC bridge: bridge.reconnect() or restart the server.",
     "INVALID_PARAM_ID": "Call list_parameters to refresh the parameter map.",
 }
 
 
-def build_corrective_action(error_code: str, context: dict[str, Any] | None = None) -> str:
-    template = CORRECTIVE_ACTIONS.get(error_code, "Check VST3 host logs for details.")
+def classify_error_code(message: str) -> str:
+    """Map a raw error message (from the C++ host or IPC layer) to a corrective-
+    action code. Substring-based; conservative (returns UNKNOWN if no match)."""
+    text = (message or "").lower()
+    if "timed out" in text or "timeout" in text:
+        return "TIMEOUT"
+    if "no hosted plugin" in text or "plugin not loaded" in text or "pluginunavailable" in text or "not ready" in text:
+        return "PLUGIN_NOT_READY"
+    if "pipe" in text or "broken" in text or "disconnected" in text or "connection" in text:
+        return "PIPE_BROKEN"
+    if "out of range" in text:
+        return "PARAM_OUT_RANGE"
+    if "parameter info" in text or "invalid_param" in text or "param_id" in text:
+        return "INVALID_PARAM_ID"
+    return "UNKNOWN"
+
+
+def build_corrective_action(error_or_code: str, context: dict[str, Any] | None = None) -> str:
+    """Look up a corrective action. If the argument is not itself a known code,
+    treat it as a raw error message and classify it first, so callers that pass
+    the bridge's error_message still get a meaningful remedy."""
+    code = error_or_code if error_or_code in CORRECTIVE_ACTIONS else classify_error_code(error_or_code)
+    template = CORRECTIVE_ACTIONS.get(code, "Check VST3 host logs for details.")
     try:
         return template.format(**(context or {}))
     except (KeyError, ValueError):

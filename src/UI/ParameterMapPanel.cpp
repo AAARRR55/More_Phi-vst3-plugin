@@ -1,6 +1,7 @@
 /* More-Phi — UI/ParameterMapPanel.cpp */
 #include "ParameterMapPanel.h"
 #include "Plugin/PluginProcessor.h"
+#include "MorePhiLookAndFeel.h"
 
 namespace more_phi {
 
@@ -9,14 +10,10 @@ namespace more_phi {
 ParameterRow::ParameterRow(int paramIndex, MorePhiProcessor& proc)
     : index_(paramIndex), proc_(proc)
 {
-    morphToggle_.setToggleState(true, juce::dontSendNotification);
-    morphToggle_.setTooltip("Include in morphing");
-    addAndMakeVisible(morphToggle_);
-
     auto& bridge = proc_.getParameterBridge();
     nameLabel_.setText(bridge.getParameterName(index_), juce::dontSendNotification);
     nameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffeeeef2));
-    nameLabel_.setFont(juce::Font(juce::FontOptions("Inter", 11.0f, juce::Font::plain)));
+    nameLabel_.setFont(MorePhiLookAndFeel::bodyFont(11.0f));
     addAndMakeVisible(nameLabel_);
 
     slider_.setRange(0.0, 1.0, 0.001);
@@ -41,7 +38,7 @@ ParameterRow::ParameterRow(int paramIndex, MorePhiProcessor& proc)
     addAndMakeVisible(slider_);
 
     valueLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
-    valueLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    valueLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     valueLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(valueLabel_);
 
@@ -51,8 +48,6 @@ ParameterRow::ParameterRow(int paramIndex, MorePhiProcessor& proc)
 void ParameterRow::resized()
 {
     auto b = getLocalBounds().reduced(2, 0);
-    morphToggle_.setBounds(b.removeFromLeft(24));
-    b.removeFromLeft(2);
     const int valueW = juce::jlimit(42, 58, b.getWidth() / 5);
     const int nameW = juce::jlimit(84, 170, b.getWidth() / 2);
     nameLabel_.setBounds(b.removeFromLeft(nameW));
@@ -78,31 +73,9 @@ void ParameterRow::refresh()
 ParameterMapPanel::ParameterMapPanel(MorePhiProcessor& proc) : proc_(proc)
 {
     headerLabel_.setText("Parameter Mapping", juce::dontSendNotification);
-    headerLabel_.setFont(juce::Font(juce::FontOptions("Inter", 13.0f, juce::Font::bold)));
+    headerLabel_.setFont(MorePhiLookAndFeel::bodyFont(13.0f, juce::Font::bold));
     headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe5c057));
     addAndMakeVisible(headerLabel_);
-
-    selectAllBtn_.onClick = [this]()
-    {
-        for (auto& row : rows_)
-            row->findChildWithID("morphToggle");
-        // Simple: just iterate and check all
-        for (auto& r : rows_)
-        {
-            if (auto* toggle = dynamic_cast<juce::ToggleButton*>(r->getChildComponent(0)))
-                toggle->setToggleState(true, juce::dontSendNotification);
-        }
-    };
-    selectNoneBtn_.onClick = [this]()
-    {
-        for (auto& r : rows_)
-        {
-            if (auto* toggle = dynamic_cast<juce::ToggleButton*>(r->getChildComponent(0)))
-                toggle->setToggleState(false, juce::dontSendNotification);
-        }
-    };
-    addAndMakeVisible(selectAllBtn_);
-    addAndMakeVisible(selectNoneBtn_);
 
     viewport_.setViewedComponent(&rowContainer_, false);
     viewport_.setScrollBarsShown(true, false);
@@ -115,11 +88,7 @@ void ParameterMapPanel::resized()
 {
     auto b = getLocalBounds();
     auto headerRow = b.removeFromTop(28);
-    const int headerW = juce::jlimit(118, 180, headerRow.getWidth() / 2);
-    headerLabel_.setBounds(headerRow.removeFromLeft(headerW));
-    selectNoneBtn_.setBounds(headerRow.removeFromRight(52));
-    headerRow.removeFromRight(4);
-    selectAllBtn_.setBounds(headerRow.removeFromRight(42));
+    headerLabel_.setBounds(headerRow);
 
     viewport_.setBounds(b);
 
@@ -179,17 +148,6 @@ void ParameterMapPanel::rebuildForPlugin()
     }
 
     resized();
-}
-
-std::set<int> ParameterMapPanel::getMorphEnabledParams() const
-{
-    std::set<int> enabled;
-    for (const auto& row : rows_)
-    {
-        if (row->isMorphEnabled())
-            enabled.insert(row->getParamIndex());
-    }
-    return enabled;
 }
 
 } // namespace more_phi

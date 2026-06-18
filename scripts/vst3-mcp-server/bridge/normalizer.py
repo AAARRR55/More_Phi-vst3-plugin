@@ -93,6 +93,14 @@ def normalize_compressor_threshold(threshold_db: float) -> float:
     return COMP_THRESHOLD_RANGE.to_normalized(threshold_db)
 
 
+def normalize_compressor_attack(attack_ms: float) -> float:
+    return COMP_ATTACK_RANGE.to_normalized(attack_ms)
+
+
+def normalize_compressor_release(release_ms: float) -> float:
+    return COMP_RELEASE_RANGE.to_normalized(release_ms)
+
+
 def normalize_limiter_ceiling_db(ceiling_db: float) -> float:
     return LIMITER_CEILING_RANGE.to_normalized(ceiling_db)
 

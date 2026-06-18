@@ -443,6 +443,7 @@ def get_tool_descriptions() -> list[dict[str, Any]]:
                     "skipped": {"type": "array", "items": {"type": "string"}},
                     "param_diffs": {
                         "type": "array",
+                        "description": "Per-parameter verified before/after in normalized [0,1] (the IPC bridge works in normalized space). Cross-reference param_id with list_parameters for physical units/ranges.",
                         "items": {
                             "type": "object",
                             "properties": {

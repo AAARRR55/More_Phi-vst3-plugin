@@ -146,10 +146,12 @@ async def main() -> None:
                     "corrective_action": "Check VST3 host logs for details.",
                 }
 
-            # Write-through cache for eligible tools.
+            # Write-through cache for eligible tools. Never cache failures -- a
+            # transient IPC error must not poison a TTL-cached read (e.g.
+            # list_parameters) for the full TTL window.
             if ctx.cache.is_write_tool(name):
                 ctx.cache.invalidate()
-            else:
+            elif output.get("status") == "success":
                 ctx.cache.put(name, arguments, output)
 
         return _finalize(output, ctx, request_id, name, arguments, t0)

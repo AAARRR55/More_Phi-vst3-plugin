@@ -25,6 +25,8 @@ from bridge.normalizer import (
     format_q,
     normalize_compressor_ratio,
     normalize_compressor_threshold,
+    normalize_compressor_attack,
+    normalize_compressor_release,
     normalize_frequency_hz,
     normalize_gain_db,
     normalize_limiter_ceiling_db,
@@ -47,20 +49,6 @@ class ToolError(Exception):
 
 def _param_name(band: int, suffix: str) -> str:
     return f"EQ_Band{band + 1}_{suffix}"
-
-
-def _send_set_param(
-    bridge: VST3IPCBridge,
-    param_id: int,
-    normalized: float,
-    registry: ParameterRegistry,
-) -> ResultPacket:
-    """Send SET_PARAM and return result."""
-    cmd = CommandPacket()
-    cmd.header.command_type = CommandType.SET_PARAM
-    cmd.header.param_id = param_id
-    cmd.header.normalized_value = normalized
-    return bridge.send_command(cmd)
 
 
 def _humanize(param_name: str, value: float) -> str:
@@ -242,9 +230,9 @@ async def handle_set_compressor(
     ]
 
     if entries["Compressor_Attack"] is not None:
-        params.append((entries["Compressor_Attack"].param_id, attack_ms / 100.0))
+        params.append((entries["Compressor_Attack"].param_id, normalize_compressor_attack(attack_ms)))
     if entries["Compressor_Release"] is not None:
-        params.append((entries["Compressor_Release"].param_id, release_ms / 1000.0))
+        params.append((entries["Compressor_Release"].param_id, normalize_compressor_release(release_ms)))
 
     t0 = time.perf_counter()
     result = await bridge.batch(params)

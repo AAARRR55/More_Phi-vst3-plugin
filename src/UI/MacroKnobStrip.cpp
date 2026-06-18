@@ -1,17 +1,21 @@
 /* More-Phi — UI/MacroKnobStrip.cpp */
 #include "MacroKnobStrip.h"
 #include "Plugin/PluginProcessor.h"
+#include "MorePhiLookAndFeel.h"
+#include "UI/Theme/MorePhiTheme.h"
 
 namespace more_phi {
 
-// M-7 FIX: Macro knobs are currently hardcoded to the first 8 hosted parameters (0–7).
-// TODO: Implement user-configurable mapping so any parameter can be assigned to any knob.
+// Macro knobs are currently hardcoded to the first 8 hosted parameters (0–7).
+// H7: value readout (TextBoxBelow) + per-knob tooltips added. TODO (still pending,
+//     larger feature): user-configurable mapping so any parameter can be assigned to
+//     any knob — see docs/GUI_QA_REPORT.md (H7).
 MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
 {
     for (int i = 0; i < 8; ++i)
     {
         knobs_[i].setSliderStyle(juce::Slider::RotaryVerticalDrag);
-        knobs_[i].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        knobs_[i].setTextBoxStyle(juce::Slider::TextBoxBelow, false, 44, 12);  // H7: value readout
         knobs_[i].setRange(0.0, 1.0, 0.001);
         knobs_[i].setValue(0.5);
         knobs_[i].onValueChange = [this, i]()
@@ -31,8 +35,8 @@ MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
         };
         addAndMakeVisible(knobs_[i]);
 
-        labels_[i].setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
-        labels_[i].setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+        labels_[i].setFont(MorePhiLookAndFeel::bodyFont(10.0f));
+        labels_[i].setColour(juce::Label::textColourId, Theme::Colours::textDim());
         labels_[i].setJustificationType(juce::Justification::centred);
         labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);
         addAndMakeVisible(labels_[i]);
@@ -55,9 +59,9 @@ void MacroKnobStrip::resized()
 
 void MacroKnobStrip::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff0d0d10));
+    g.setColour(Theme::Colours::surface());
     g.fillRect(getLocalBounds());
-    g.setColour(juce::Colour(0xff0f3460));
+    g.setColour(Theme::Colours::border());
     g.drawLine(0, 0, static_cast<float>(getWidth()), 0, 0.5f);
 }
 
@@ -80,11 +84,14 @@ void MacroKnobStrip::syncKnobsToPlugin()
                                juce::dontSendNotification);
             labels_[i].setText(bridge.getParameterName(i),
                                 juce::dontSendNotification);
+            knobs_[i].setTooltip(bridge.getParameterName(i) +
+                "  (macro " + juce::String(i + 1) + " of 8 - macros map to hosted params 1-8)");
             knobs_[i].setEnabled(true);
         }
         else
         {
             knobs_[i].setEnabled(false);
+            knobs_[i].setTooltip("No hosted parameter assigned to this macro");
             labels_[i].setText("-", juce::dontSendNotification);
         }
     }

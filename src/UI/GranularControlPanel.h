@@ -34,6 +34,7 @@ private:
                    double defaultVal, const juce::String& suffix);
     void drawSectionLabel(juce::Graphics& g, const juce::String& text,
                           juce::Rectangle<int> bounds) const;
+    void updateEnabledState();  // H5: enable/disable sub-controls from the active toggle
 
     // ── Processor reference ──────────────────────────────────────────────────
     MorePhiProcessor& proc_;

@@ -13,6 +13,7 @@
  * syncStateFromAPVTS() bridges APVTS → engine setters on the audio thread.
  */
 #include "HybridBlendPanel.h"
+#include "MorePhiLookAndFeel.h"
 #include "Plugin/PluginProcessor.h"
 #include "Core/OversamplingWrapper.h"
 #include "UI/Theme/MorePhiTheme.h"
@@ -55,7 +56,7 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
                                   border());
 
     oversamplingLabel_.setText("Oversampling", juce::dontSendNotification);
-    oversamplingLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    oversamplingLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     oversamplingLabel_.setColour(juce::Label::textColourId,
                                   textDim());
     oversamplingLabel_.setJustificationType(juce::Justification::centredLeft);
@@ -77,7 +78,7 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     const auto setupSliderLabel = [this](juce::Label& lbl, const juce::String& text)
     {
         lbl.setText(text, juce::dontSendNotification);
-        lbl.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+        lbl.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
         lbl.setColour(juce::Label::textColourId, textDim());
         lbl.setJustificationType(juce::Justification::centred);
     };
@@ -87,7 +88,7 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     setupSliderLabel(granularLabel_, "Granular");
 
     // Blend summary label
-    blendSummaryLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    blendSummaryLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     blendSummaryLabel_.setColour(juce::Label::textColourId,
                                   green());
     blendSummaryLabel_.setJustificationType(juce::Justification::centred);
@@ -110,7 +111,7 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    alphaLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     alphaLabel_.setColour(juce::Label::textColourId, textDim());
     alphaLabel_.setJustificationType(juce::Justification::centred);
 
@@ -366,7 +367,7 @@ void HybridBlendPanel::drawSectionLabel(juce::Graphics& g,
                                          const juce::String& text,
                                          juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(6, 0), juce::Justification::centredLeft);
 }

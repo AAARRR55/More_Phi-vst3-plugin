@@ -5,7 +5,7 @@ Append-only JSONL audit logger for MCP tool calls.
 from __future__ import annotations
 
 import json
-import os
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +21,10 @@ class AuditLogger:
     path: Path = field(default_factory=lambda: DEFAULT_AUDIT_FILE)
 
     def __post_init__(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001 - never crash the server over audit setup
+            print(f"[audit] could not create audit dir {self.path.parent}: {exc}", file=sys.stderr)
 
     def log(
         self,
@@ -42,9 +45,11 @@ class AuditLogger:
         try:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
-        except Exception:
-            # Audit logging must never fail a tool call.
-            pass
+        except Exception as exc:  # noqa: BLE001 - audit logging must never fail a tool call
+            # Surface the failure (to stderr; stdout is reserved for JSON-RPC) but
+            # do not propagate -- a tool call must not fail because the audit log
+            # is unwritable.
+            print(f"[audit] failed to write audit entry: {exc}", file=sys.stderr)
 
 
 def _iso_now() -> str:

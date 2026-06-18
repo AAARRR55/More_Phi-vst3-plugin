@@ -49,6 +49,8 @@ private:
 
     // RecallMode manual wiring (Choice params don't have ButtonAttachment)
     void updateRecallButtons();
+    // H5: enable/disable the SC threshold when the sidechain toggle is off
+    void updateSidechainEnabledState();
 
     // Link Mode toggle
     juce::TextButton linkToggle_{"Link"};

@@ -184,9 +184,35 @@ void PluginBrowserPanel::openPluginEditor()
         return;
     }
 
+    // C2 FIX: acquire a use-lease so the hosted plugin cannot be unloaded while
+    // its native editor window is open. Without this, a state-restore reload,
+    // host teardown, or plugin swap could dangle the editor pointer held by the
+    // window. Mirrors the safe acquire/release pattern in
+    // MorePhiEditor::openPluginWindow. The releasePluginCallback is invoked
+    // exactly once by HostedPluginWindow's destructor (releaseCalled_ guard) so
+    // the lease is released on every destruction path.
+    auto* plugin = host_.acquirePluginForUse();
+    if (plugin == nullptr)
+        return;
+
+    auto safeThis = juce::Component::SafePointer<PluginBrowserPanel>(this);
+
+    // If the plugin is unloaded out-of-band, the host fires this (async, on the
+    // message thread) so we tear the window down before its pointer dangles.
+    host_.setWindowCloseCallback([safeThis]() {
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis != nullptr)
+                safeThis->closePluginEditor();
+        });
+    });
+
     pluginWindow_ = std::make_unique<HostedPluginWindow>(
-        host_.getPlugin(),
-        [this]() { closePluginEditor(); });
+        plugin,
+        [safeThis]() {
+            if (safeThis != nullptr)
+                safeThis->closePluginEditor();
+        },
+        [this]() { host_.releasePluginFromUse(); });
 }
 
 void PluginBrowserPanel::closePluginEditor()

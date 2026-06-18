@@ -105,6 +105,13 @@ public:
     static const juce::String& displayTypefaceName();
     static const juce::String& bodyTypefaceName();
 
+    // Convenience: an Outfit body font at a fixed size, for panel labels drawn
+    // outside the L&F (the previous code asked for "Inter", which is not an
+    // embedded BinaryData font and fell back to a system default). Prefer
+    // makeRoleFont()/makeScaledFont() where the editor width is known so text
+    // scales with the window.
+    static juce::Font bodyFont(float size, int style = juce::Font::plain);
+
 private:
     // Registers the embedded BinaryData fonts with JUCE exactly once.
     static void ensureFontsRegistered();

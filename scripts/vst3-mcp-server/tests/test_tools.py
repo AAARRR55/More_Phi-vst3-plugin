@@ -8,7 +8,12 @@ from typing import Any
 import pytest
 
 from bridge import VST3IPCBridge
-from bridge.normalizer import denormalize_gain_db, normalize_frequency_hz
+from bridge.normalizer import (
+    denormalize_gain_db,
+    normalize_compressor_attack,
+    normalize_compressor_release,
+    normalize_frequency_hz,
+)
 from bridge.packets import CommandPacket, CommandType, ResultPacket, ResultPacketHeader, ResultStatus, parse_batch_payload
 from tools import HANDLERS, ParameterRegistry, get_tool_descriptions
 
@@ -73,6 +78,29 @@ def test_handler_dispatch_exists() -> None:
         "list_parameters",
     }
     assert expected.issubset(HANDLERS.keys())
+
+
+def test_build_corrective_action_classifies_raw_messages() -> None:
+    # Handlers pass the bridge's raw error_message; build_corrective_action must
+    # classify it to a real remedy instead of always returning the generic fallback.
+    from tools.verification import CORRECTIVE_ACTIONS, build_corrective_action
+
+    assert build_corrective_action("no hosted plugin loaded") == CORRECTIVE_ACTIONS["PLUGIN_NOT_READY"]
+    assert build_corrective_action("param_id out of range") == CORRECTIVE_ACTIONS["PARAM_OUT_RANGE"]
+    assert build_corrective_action("VST3 command 5 timed out") == CORRECTIVE_ACTIONS["TIMEOUT"]
+    # An explicit code still resolves directly.
+    assert build_corrective_action("PIPE_BROKEN") == CORRECTIVE_ACTIONS["PIPE_BROKEN"]
+
+
+def test_audit_logger_does_not_raise_on_unwritable_path(tmp_path) -> None:
+    # An unwritable audit path (parent is a file) must not crash the server --
+    # the failure is surfaced to stderr and swallowed.
+    from audit import AuditLogger
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")  # a regular file where a directory is expected
+    logger = AuditLogger(path=blocker / "audit.jsonl")
+    logger.log("req_1", "set_output_gain", {"gain_db": -3.0}, {"status": "success"}, 1.0)
 
 
 @pytest.mark.asyncio
@@ -148,6 +176,51 @@ async def test_reset_to_default_sends_normalized_values(
     # EQ_Band1_Freq (1002) default 1000 Hz must be normalized, not 1000.0.
     freq_value = next(v for pid, v in pairs if pid == 1002)
     assert freq_value == pytest.approx(normalize_frequency_hz(1000.0))
+
+
+@pytest.mark.asyncio
+async def test_set_compressor_uses_range_normalization(
+    bridge: FakeBridge, registry: ParameterRegistry
+) -> None:
+    # attack_ms/release_ms must be range-normalized (0.1-100ms / 10-1000ms), not
+    # divided by a constant (was attack/100, release/1000 -> wrong values).
+    result = await HANDLERS["set_compressor"](
+        bridge,
+        {"ratio": 3.0, "threshold_db": -20.0, "attack_ms": 50.0, "release_ms": 300.0},
+        registry,
+    )
+    assert result["status"] == "success"
+    batch_cmds = [c for c in bridge.commands if c.header.command_type == CommandType.BATCH]
+    pairs = dict(parse_batch_payload(batch_cmds[0].payload))
+    assert pairs[2003] == pytest.approx(normalize_compressor_attack(50.0))
+    assert pairs[2004] == pytest.approx(normalize_compressor_release(300.0))
+
+
+@pytest.mark.asyncio
+async def test_apply_mastering_chain_parses_param_diffs(registry: ParameterRegistry) -> None:
+    # The headline fix: apply_mastering_chain must parse per-param diffs from the
+    # C++ BATCH result payload. FakeBridge returns no payload, so this needs a
+    # DiffBridge that synthesizes a BATCH_DIFF payload.
+    import struct
+
+    class DiffBridge(FakeBridge):
+        async def send_command(self, cmd: CommandPacket, timeout: float | None = None) -> ResultPacket:
+            self.commands.append(cmd)
+            payload = struct.pack("<Idd", 5001, 0.2, 0.8)  # output gain changed
+            return ResultPacket(
+                header=ResultPacketHeader(
+                    command_id=cmd.header.command_id,
+                    status=ResultStatus.SUCCESS,
+                    payload_length=len(payload),
+                ),
+                payload=payload,
+            )
+
+    result = await HANDLERS["apply_mastering_chain"](DiffBridge(), {"output_gain_db": -3.0}, registry)
+    assert result["status"] == "success"
+    assert result["applied_params"] >= 1
+    assert len(result["param_diffs"]) == 1
+    assert result["param_diffs"][0] == {"param_id": 5001, "before": pytest.approx(0.2), "after": pytest.approx(0.8)}
 
 
 @pytest.mark.asyncio

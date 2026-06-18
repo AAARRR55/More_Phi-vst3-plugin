@@ -6,6 +6,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "UI/Theme/MorePhiTheme.h"
 #include "UI/Bindings/ParameterBinding.h"
+#include "UI/MorePhiLookAndFeel.h"
 
 namespace more_phi {
 
@@ -86,7 +87,7 @@ void PerformancePanel::drawSectionLabel(juce::Graphics& g,
                                          const juce::String& text,
                                          juce::Rectangle<int> bounds) const
 {
-    g.setFont(juce::Font(juce::FontOptions("Inter", 10.0f, juce::Font::plain)));
+    g.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
     g.setColour(textDim());
     g.drawText(text, bounds.reduced(8, 0), juce::Justification::centredLeft);
 }

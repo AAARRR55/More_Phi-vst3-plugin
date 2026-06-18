@@ -15,7 +15,7 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     // ── Morph Source buttons: 2D Pad | Fader ────────────────────────────────
     sourceLabel_.setText("Source", juce::dontSendNotification);
     sourceLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
-    sourceLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    sourceLabel_.setFont(MorePhiLookAndFeel::bodyFont(MorePhiLookAndFeel::kMinControlLabel));
     sourceLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(sourceLabel_);
 
@@ -46,7 +46,7 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
 
     modeLabel_.setText("Mode", juce::dontSendNotification);
     modeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
-    modeLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    modeLabel_.setFont(MorePhiLookAndFeel::bodyFont(MorePhiLookAndFeel::kMinControlLabel));
     modeLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(modeLabel_);
 
@@ -88,7 +88,7 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
 
     smoothLabel_.setText("Smooth", juce::dontSendNotification);
     smoothLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
-    smoothLabel_.setFont(juce::Font(juce::FontOptions("Inter", MorePhiLookAndFeel::kMinControlLabel, juce::Font::plain)));
+    smoothLabel_.setFont(MorePhiLookAndFeel::bodyFont(MorePhiLookAndFeel::kMinControlLabel));
     smoothLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(smoothLabel_);
 
