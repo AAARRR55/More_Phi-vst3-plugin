@@ -197,6 +197,33 @@ async def test_set_compressor_uses_range_normalization(
 
 
 @pytest.mark.asyncio
+async def test_apply_mastering_chain_parses_param_diffs(registry: ParameterRegistry) -> None:
+    # The headline fix: apply_mastering_chain must parse per-param diffs from the
+    # C++ BATCH result payload. FakeBridge returns no payload, so this needs a
+    # DiffBridge that synthesizes a BATCH_DIFF payload.
+    import struct
+
+    class DiffBridge(FakeBridge):
+        async def send_command(self, cmd: CommandPacket, timeout: float | None = None) -> ResultPacket:
+            self.commands.append(cmd)
+            payload = struct.pack("<Idd", 5001, 0.2, 0.8)  # output gain changed
+            return ResultPacket(
+                header=ResultPacketHeader(
+                    command_id=cmd.header.command_id,
+                    status=ResultStatus.SUCCESS,
+                    payload_length=len(payload),
+                ),
+                payload=payload,
+            )
+
+    result = await HANDLERS["apply_mastering_chain"](DiffBridge(), {"output_gain_db": -3.0}, registry)
+    assert result["status"] == "success"
+    assert result["applied_params"] >= 1
+    assert len(result["param_diffs"]) == 1
+    assert result["param_diffs"][0] == {"param_id": 5001, "before": pytest.approx(0.2), "after": pytest.approx(0.8)}
+
+
+@pytest.mark.asyncio
 async def test_load_preset_parses_param_diff(registry: ParameterRegistry) -> None:
     import struct
 

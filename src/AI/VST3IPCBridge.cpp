@@ -60,6 +60,18 @@ double clampNormalized(double v) noexcept
     return v;
 }
 
+/// RAII exclusive-plugin-use guard. The IPC bridge runs executeCommand on the
+/// message thread, but hosted-plugin load/unload can run concurrently on the MCP
+/// TCP connection thread, so any raw hosted-plugin pointer we dereference must
+/// be held alive by an exclusive lease (PluginHostManager::unloadPlugin waits on
+/// exclusivePluginUseRequested_ before destroying the instance).
+struct ScopedExclusivePluginUse
+{
+    explicit ScopedExclusivePluginUse(PluginHostManager& h) noexcept : host(h) {}
+    ~ScopedExclusivePluginUse() noexcept { host.endExclusivePluginUse(); }
+    PluginHostManager& host;
+};
+
 #if JUCE_PLUGINHOST_VST3
 std::string convertVstString(const Steinberg::Vst::String128 src) noexcept
 {
@@ -776,6 +788,60 @@ bool VST3IPCBridge::applySetParameter(uint32_t paramId,
                                       std::string& outError)
 {
     auto& hostManager = processor_.getHostManager();
+    const auto clamped = clampNormalized(normalizedValue);
+
+#if JUCE_PLUGINHOST_VST3
+    // VST3 direct path. Acquire exclusive plugin use so a concurrent hosted-plugin
+    // load/unload (which can run on the MCP TCP connection thread) cannot
+    // invalidate this raw plugin pointer mid-edit (use-after-free). The fallback
+    // path below does NOT dereference the plugin pointer directly (it routes
+    // through ParameterBridge's own acquire) and must NOT hold exclusive -- its
+    // flush re-acquires exclusive (non-reentrant).
+    if (auto* exclusivePlugin = hostManager.beginExclusivePluginUse(200))
+    {
+        ScopedExclusivePluginUse guard(hostManager);
+        if (auto* editController = queryEditController(exclusivePlugin))
+        {
+            const auto count = editController->getParameterCount();
+            if (paramId >= static_cast<uint32_t>(count))
+            {
+                outError = "param_id out of range";
+                return false;
+            }
+
+            Steinberg::Vst::ParameterInfo info{};
+            if (editController->getParameterInfo(static_cast<Steinberg::int32>(paramId), info) != Steinberg::kResultOk)
+            {
+                outError = "failed to read parameter info";
+                return false;
+            }
+
+            outBefore = static_cast<double>(editController->getParamNormalized(info.id));
+
+            // IEditController does not expose beginEdit/performEdit/endEdit; those are
+            // part of the host-side IComponentHandler.  setParamNormalized is the
+            // controller API for applying a normalized value.  When the optional
+            // IEditControllerHostEditing extension is present we wrap the edit in the
+            // host-gesture begin/end calls so the plug-in can avoid redundant automation feedback.
+            Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing> hostEditing(editController);
+            if (hostEditing != nullptr)
+                hostEditing->beginEditFromHost(info.id);
+
+            editController->setParamNormalized(info.id, static_cast<Steinberg::Vst::ParamValue>(clamped));
+
+            if (hostEditing != nullptr)
+                hostEditing->endEditFromHost(info.id);
+
+            outAfter = static_cast<double>(editController->getParamNormalized(info.id));
+            return true;
+        }
+    }
+#endif
+
+    // Fallback: queue the edit and flush it synchronously from the message thread.
+    // Only a presence null-check on the raw pointer here; all plugin access goes
+    // through ParameterBridge (which acquires internally), so no exclusive lease
+    // is needed (and must not be held -- flush is non-reentrant on exclusive).
     auto* plugin = hostManager.getPlugin();
     if (plugin == nullptr)
     {
@@ -783,47 +849,6 @@ bool VST3IPCBridge::applySetParameter(uint32_t paramId,
         return false;
     }
 
-    const auto clamped = clampNormalized(normalizedValue);
-
-#if JUCE_PLUGINHOST_VST3
-    if (auto* editController = queryEditController(plugin))
-    {
-        const auto count = editController->getParameterCount();
-        if (paramId >= static_cast<uint32_t>(count))
-        {
-            outError = "param_id out of range";
-            return false;
-        }
-
-        Steinberg::Vst::ParameterInfo info{};
-        if (editController->getParameterInfo(static_cast<Steinberg::int32>(paramId), info) != Steinberg::kResultOk)
-        {
-            outError = "failed to read parameter info";
-            return false;
-        }
-
-        outBefore = static_cast<double>(editController->getParamNormalized(info.id));
-
-        // IEditController does not expose beginEdit/performEdit/endEdit; those are
-        // part of the host-side IComponentHandler.  setParamNormalized is the
-        // controller API for applying a normalized value.  When the optional
-        // IEditControllerHostEditing extension is present we wrap the edit in the
-        // host-gesture begin/end calls so the plug-in can avoid redundant automation feedback.
-        Steinberg::FUnknownPtr<Steinberg::Vst::IEditControllerHostEditing> hostEditing(editController);
-        if (hostEditing != nullptr)
-            hostEditing->beginEditFromHost(info.id);
-
-        editController->setParamNormalized(info.id, static_cast<Steinberg::Vst::ParamValue>(clamped));
-
-        if (hostEditing != nullptr)
-            hostEditing->endEditFromHost(info.id);
-
-        outAfter = static_cast<double>(editController->getParamNormalized(info.id));
-        return true;
-    }
-#endif
-
-    // Fallback: queue the edit and flush it synchronously from the message thread.
     auto& bridge = processor_.getParameterBridge();
     if (paramId >= static_cast<uint32_t>(bridge.getParameterCount()))
     {
@@ -886,13 +911,15 @@ bool VST3IPCBridge::applyBatch(const std::vector<uint8_t>& payload,
 bool VST3IPCBridge::loadPresetFromPayload(const std::vector<uint8_t>& payload,
                                           std::string& outError)
 {
-    auto* plugin = processor_.getHostManager().getPlugin();
+    auto& hostManager = processor_.getHostManager();
+    auto* plugin = hostManager.beginExclusivePluginUse(500);
     if (plugin == nullptr)
     {
         outError = "no hosted plugin loaded";
         return false;
     }
 
+    ScopedExclusivePluginUse guard(hostManager);
     try
     {
         plugin->setStateInformation(payload.data(), static_cast<int>(payload.size()));
@@ -913,13 +940,15 @@ bool VST3IPCBridge::loadPresetFromPayload(const std::vector<uint8_t>& payload,
 bool VST3IPCBridge::captureState(std::vector<uint8_t>& outPayload,
                                  std::string& outError)
 {
-    auto* plugin = processor_.getHostManager().getPlugin();
+    auto& hostManager = processor_.getHostManager();
+    auto* plugin = hostManager.beginExclusivePluginUse(500);
     if (plugin == nullptr)
     {
         outError = "no hosted plugin loaded";
         return false;
     }
 
+    ScopedExclusivePluginUse guard(hostManager);
     try
     {
         juce::MemoryBlock chunk;
