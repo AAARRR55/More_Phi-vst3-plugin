@@ -34,7 +34,7 @@ from bridge.normalizer import (
     normalize_saturation_drive,
     normalize_stereo_width,
 )
-from bridge.packets import CommandPacket, CommandType, ResultPacket, ResultStatus
+from bridge.packets import CommandPacket, CommandType, ResultPacket, ResultStatus, parse_batch_diffs
 from tools.registry import ParameterRegistry
 from tools.verification import VerificationRecord, build_corrective_action
 
@@ -663,6 +663,15 @@ async def handle_apply_mastering_chain(
             (result.error_message if result is not None else "no parameters resolved") or "Batch failed"
         ]
 
+    # Per-parameter verified before/after (normalized) from the C++ BATCH result.
+    param_diffs: list[dict[str, Any]] = []
+    if result is not None and result.is_success and result.payload:
+        try:
+            for pid, before, after in parse_batch_diffs(result.payload):
+                param_diffs.append({"param_id": pid, "before": before, "after": after})
+        except ValueError:
+            param_diffs = []
+
     if failed and not applied:
         status = "failure"
     elif failed or skipped:
@@ -677,6 +686,7 @@ async def handle_apply_mastering_chain(
         "failed_params": failed,
         "skipped_params": len(skipped),
         "skipped": skipped,
+        "param_diffs": param_diffs,
         "failures": failures,
         "execution_time_ms": elapsed_ms,
     }

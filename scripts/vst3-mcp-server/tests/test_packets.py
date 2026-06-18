@@ -7,6 +7,7 @@ import struct
 import pytest
 
 from bridge.packets import (
+    BATCH_DIFF_SIZE,
     BATCH_PAIR_SIZE,
     COMMAND_HEADER_SIZE,
     RESULT_HEADER_SIZE,
@@ -16,6 +17,7 @@ from bridge.packets import (
     ResultPacket,
     ResultPacketHeader,
     ResultStatus,
+    parse_batch_diffs,
     parse_batch_payload,
 )
 
@@ -125,3 +127,25 @@ def test_parse_batch_payload() -> None:
 def test_parse_batch_payload_invalid_length() -> None:
     with pytest.raises(ValueError):
         parse_batch_payload(b"short")
+
+
+def test_batch_diff_size() -> None:
+    # Mirrors C++ VST3IPCBridge::kBatchDiffSize (uint32 + double + double).
+    assert BATCH_DIFF_SIZE == 20
+
+
+def test_parse_batch_diffs_matches_cpp_layout() -> None:
+    # Cross-language contract: must match C++ serializeBatchDiffs (<Idd, 20 bytes).
+    payload = (
+        struct.pack("<Idd", 1001, 0.25, 0.5)
+        + struct.pack("<Idd", 5001, 0.0, 0.75)
+    )
+    diffs = parse_batch_diffs(payload)
+    assert len(diffs) == 2
+    assert diffs[0] == (1001, pytest.approx(0.25), pytest.approx(0.5))
+    assert diffs[1] == (5001, pytest.approx(0.0), pytest.approx(0.75))
+
+
+def test_parse_batch_diffs_invalid_length() -> None:
+    with pytest.raises(ValueError):
+        parse_batch_diffs(b"short")

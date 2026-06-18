@@ -612,10 +612,12 @@ ResultPacket VST3IPCBridge::executeCommand(const CommandPacket& command)
 
         case VST3IPCCommandType::Batch:
         {
+            std::vector<BatchParamDiff> diffs;
             std::string error;
-            if (!applyBatch(command.payload, error))
+            if (!applyBatch(command.payload, diffs, error))
                 return makeErrorResult(commandId, VST3IPCResultStatus::Failure, error);
-            return makeSuccessResult(commandId, 0.0, 0.0);
+            auto diffPayload = serializeBatchDiffs(diffs);
+            return makeSuccessResult(commandId, 0.0, 0.0, std::move(diffPayload));
         }
 
         case VST3IPCCommandType::GetState:
@@ -677,6 +679,40 @@ bool VST3IPCBridge::deserializeResultHeader(const uint8_t* data,
         return false;
     std::memcpy(&out, data, kResultHeaderSize);
     return true;
+}
+
+std::vector<uint8_t> VST3IPCBridge::serializeBatchDiffs(const std::vector<BatchParamDiff>& diffs)
+{
+    std::vector<uint8_t> out;
+    out.reserve(diffs.size() * kBatchDiffSize);
+    uint8_t buf[kBatchDiffSize];
+    for (const auto& d : diffs)
+    {
+        std::memcpy(buf, &d.paramId, sizeof(uint32_t));
+        std::memcpy(buf + sizeof(uint32_t), &d.before, sizeof(double));
+        std::memcpy(buf + sizeof(uint32_t) + sizeof(double), &d.after, sizeof(double));
+        out.insert(out.end(), buf, buf + kBatchDiffSize);
+    }
+    return out;
+}
+
+std::vector<BatchParamDiff> VST3IPCBridge::deserializeBatchDiffs(const uint8_t* data, size_t size)
+{
+    std::vector<BatchParamDiff> out;
+    if (data == nullptr || kBatchDiffSize == 0)
+        return out;
+    const size_t count = size / kBatchDiffSize;
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        BatchParamDiff d;
+        const uint8_t* p = data + i * kBatchDiffSize;
+        std::memcpy(&d.paramId, p, sizeof(uint32_t));
+        std::memcpy(&d.before, p + sizeof(uint32_t), sizeof(double));
+        std::memcpy(&d.after, p + sizeof(uint32_t) + sizeof(double), sizeof(double));
+        out.push_back(d);
+    }
+    return out;
 }
 
 void VST3IPCBridge::sendResult(ResultPacket result)
@@ -792,6 +828,7 @@ bool VST3IPCBridge::applySetParameter(uint32_t paramId,
 }
 
 bool VST3IPCBridge::applyBatch(const std::vector<uint8_t>& payload,
+                               std::vector<BatchParamDiff>& outDiffs,
                                std::string& outError)
 {
     constexpr size_t pairSize = sizeof(uint32_t) + sizeof(double);
@@ -811,6 +848,8 @@ bool VST3IPCBridge::applyBatch(const std::vector<uint8_t>& payload,
         double before = 0.0, after = 0.0;
         if (!applySetParameter(paramId, value, before, after, outError))
             return false;
+
+        outDiffs.push_back({ paramId, before, after });
     }
 
     return true;

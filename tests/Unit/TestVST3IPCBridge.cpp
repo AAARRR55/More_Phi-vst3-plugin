@@ -157,6 +157,24 @@ TEST_CASE("executeCommand returns controlled failure when no plugin is loaded", 
     }
 }
 
+TEST_CASE("BatchParamDiff serializes and deserializes little-endian", "[vst3-ipc]")
+{
+    const std::vector<BatchParamDiff> diffs = { { 1001u, 0.25, 0.50 }, { 5001u, 0.0, 0.75 } };
+    const auto bytes = VST3IPCBridge::serializeBatchDiffs(diffs);
+
+    REQUIRE(VST3IPCBridge::kBatchDiffSize == 20u);
+    REQUIRE(bytes.size() == diffs.size() * VST3IPCBridge::kBatchDiffSize);
+
+    const auto restored = VST3IPCBridge::deserializeBatchDiffs(bytes.data(), bytes.size());
+    REQUIRE(restored.size() == diffs.size());
+    REQUIRE(restored[0].paramId == 1001u);
+    REQUIRE(restored[0].before == Catch::Approx(0.25));
+    REQUIRE(restored[0].after == Catch::Approx(0.50));
+    REQUIRE(restored[1].paramId == 5001u);
+    REQUIRE(restored[1].before == Catch::Approx(0.0));
+    REQUIRE(restored[1].after == Catch::Approx(0.75));
+}
+
 TEST_CASE("BATCH payload is parsed as (param_id, normalized_value) pairs", "[vst3-ipc]")
 {
     MorePhiProcessor processor;

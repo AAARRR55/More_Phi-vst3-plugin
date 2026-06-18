@@ -441,6 +441,17 @@ def get_tool_descriptions() -> list[dict[str, Any]]:
                     "failed_params": {"type": "integer"},
                     "skipped_params": {"type": "integer"},
                     "skipped": {"type": "array", "items": {"type": "string"}},
+                    "param_diffs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "param_id": {"type": "integer"},
+                                "before": {"type": "number"},
+                                "after": {"type": "number"},
+                            },
+                        },
+                    },
                     "failures": {"type": "array", "items": {"type": "string"}},
                     "execution_time_ms": {"type": "number"},
                 },

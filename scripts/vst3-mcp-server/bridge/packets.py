@@ -160,6 +160,22 @@ def parse_batch_payload(payload: bytes) -> list[tuple[int, float]]:
     return pairs
 
 
+# BATCH result diff payload: little-endian (uint32 param_id, double before, double after).
+# Mirrors C++ VST3IPCBridge::serializeBatchDiffs (20 bytes per diff).
+BATCH_DIFF_FORMAT = "<Idd"
+BATCH_DIFF_SIZE = struct.calcsize(BATCH_DIFF_FORMAT)
+
+
+def parse_batch_diffs(payload: bytes) -> list[tuple[int, float, float]]:
+    """Parse a BATCH result diff payload into (param_id, before, after) triples."""
+    if len(payload) % BATCH_DIFF_SIZE != 0:
+        raise ValueError(f"Batch diff payload length is not a multiple of {BATCH_DIFF_SIZE}")
+    return [
+        struct.unpack_from(BATCH_DIFF_FORMAT, payload, offset)
+        for offset in range(0, len(payload), BATCH_DIFF_SIZE)
+    ]
+
+
 @dataclass
 class ResultPacket:
     header: ResultPacketHeader = field(default_factory=ResultPacketHeader)

@@ -80,6 +80,16 @@ struct ResultPacket
     std::vector<uint8_t> payload;
 };
 
+/** One parameter's verified before/after, returned in a BATCH result payload.
+ *  Serialized little-endian as (uint32 paramId, double before, double after) = 20 bytes.
+ */
+struct BatchParamDiff
+{
+    uint32_t paramId = 0;
+    double before = 0.0;
+    double after = 0.0;
+};
+
 /**
  * IPC bridge that exposes the hosted VST3/AU plugin to the Python MCP server.
  *
@@ -131,8 +141,12 @@ public:
                                         size_t size,
                                         ResultPacketHeader& out);
 
+    static std::vector<uint8_t> serializeBatchDiffs(const std::vector<BatchParamDiff>& diffs);
+    static std::vector<BatchParamDiff> deserializeBatchDiffs(const uint8_t* data, size_t size);
+
     static constexpr size_t kCommandHeaderSize = sizeof(CommandPacketHeader);
     static constexpr size_t kResultHeaderSize  = sizeof(ResultPacketHeader);
+    static constexpr size_t kBatchDiffSize = sizeof(uint32_t) + sizeof(double) + sizeof(double);
 
 private:
     class Impl;
@@ -155,6 +169,7 @@ private:
                            double& outBefore, double& outAfter,
                            std::string& outError);
     bool applyBatch(const std::vector<uint8_t>& payload,
+                    std::vector<BatchParamDiff>& outDiffs,
                     std::string& outError);
     bool loadPresetFromPayload(const std::vector<uint8_t>& payload,
                                std::string& outError);
