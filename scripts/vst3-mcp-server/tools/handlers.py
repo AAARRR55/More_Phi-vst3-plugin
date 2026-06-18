@@ -51,20 +51,6 @@ def _param_name(band: int, suffix: str) -> str:
     return f"EQ_Band{band + 1}_{suffix}"
 
 
-def _send_set_param(
-    bridge: VST3IPCBridge,
-    param_id: int,
-    normalized: float,
-    registry: ParameterRegistry,
-) -> ResultPacket:
-    """Send SET_PARAM and return result."""
-    cmd = CommandPacket()
-    cmd.header.command_type = CommandType.SET_PARAM
-    cmd.header.param_id = param_id
-    cmd.header.normalized_value = normalized
-    return bridge.send_command(cmd)
-
-
 def _humanize(param_name: str, value: float) -> str:
     if "Gain" in param_name or "Threshold" in param_name or "Ceiling" in param_name:
         return format_db(value)
