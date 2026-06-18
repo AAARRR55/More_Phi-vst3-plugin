@@ -467,11 +467,21 @@ async def handle_load_preset(
     result = await bridge.load_preset(preset_name)
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
+    param_diff: list[dict[str, Any]] = []
+    if result.is_success and result.payload:
+        try:
+            param_diff = [
+                {"param_id": pid, "before": before, "after": after}
+                for pid, before, after in parse_batch_diffs(result.payload)
+            ]
+        except ValueError:
+            param_diff = []
+
     return {
         "status": "success" if result.is_success else "failure",
         "preset_loaded": preset_name,
-        "params_changed": 0 if not result.is_success else 1,
-        "param_diff": [],
+        "params_changed": len(param_diff),
+        "param_diff": param_diff,
         "error_message": result.error_message or None,
         "execution_time_ms": elapsed_ms,
     }

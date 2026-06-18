@@ -88,6 +88,12 @@ protected:
             pr = 0.25;
         return true;
     }
+
+    bool snapshotParameters(std::vector<double>& outValues) const override
+    {
+        outValues = params;
+        return true;
+    }
 };
 
 } // namespace
@@ -402,10 +408,10 @@ TEST_CASE("executeCommand GET_STATE returns the captured state blob", "[vst3-ipc
     REQUIRE(result.payload == bridge.stateBlob);
 }
 
-TEST_CASE("executeCommand LOAD_PRESET applies the preset payload", "[vst3-ipc]")
+TEST_CASE("executeCommand LOAD_PRESET applies the preset payload and diffs changes", "[vst3-ipc]")
 {
     MorePhiProcessor processor;
-    FakePluginBridge bridge(processor, 4);
+    FakePluginBridge bridge(processor, 4); // params start at 0.5
 
     CommandPacket cmd;
     cmd.header = { 13u, static_cast<uint8_t>(VST3IPCCommandType::LoadPreset), 0u, 0.0, 4u };
@@ -413,4 +419,12 @@ TEST_CASE("executeCommand LOAD_PRESET applies the preset payload", "[vst3-ipc]")
     const auto result = bridge.executeCommand(cmd);
     REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Success));
     REQUIRE(bridge.lastLoadedPreset == (std::vector<uint8_t>{ 'W', 'a', 'r', 'm' }));
+
+    // loadPresetFromPayload set all 4 params 0.5 -> 0.25, so the diff payload
+    // carries one entry per changed parameter.
+    const auto diffs = VST3IPCBridge::deserializeBatchDiffs(result.payload.data(), result.payload.size());
+    REQUIRE(diffs.size() == 4);
+    REQUIRE(diffs[0].paramId == 0u);
+    REQUIRE(diffs[0].before == Catch::Approx(0.5));
+    REQUIRE(diffs[0].after == Catch::Approx(0.25));
 }

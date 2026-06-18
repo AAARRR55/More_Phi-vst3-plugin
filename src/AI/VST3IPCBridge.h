@@ -161,6 +161,9 @@ protected:
                               std::string& outError);
     virtual bool loadPresetFromPayload(const std::vector<uint8_t>& payload,
                                        std::string& outError);
+    /** Snapshot all hosted-plugin parameter values (normalized). Used to diff
+     *  parameter changes across a preset load. Returns false if no plugin. */
+    virtual bool snapshotParameters(std::vector<double>& outValues) const;
 
 private:
     class Impl;

@@ -631,10 +631,24 @@ ResultPacket VST3IPCBridge::executeCommand(const CommandPacket& command)
 
         case VST3IPCCommandType::LoadPreset:
         {
+            std::vector<double> before;
+            snapshotParameters(before);
+
             std::string error;
             if (!loadPresetFromPayload(command.payload, error))
                 return makeErrorResult(commandId, VST3IPCResultStatus::Failure, error);
-            return makeSuccessResult(commandId, 0.0, 0.0);
+
+            std::vector<double> after;
+            snapshotParameters(after);
+
+            std::vector<BatchParamDiff> diffs;
+            const size_t n = std::min(before.size(), after.size());
+            diffs.reserve(n);
+            for (size_t i = 0; i < n; ++i)
+                if (before[i] != after[i])
+                    diffs.push_back({ static_cast<uint32_t>(i), before[i], after[i] });
+
+            return makeSuccessResult(commandId, 0.0, 0.0, serializeBatchDiffs(diffs));
         }
 
         default:
@@ -824,6 +838,20 @@ bool VST3IPCBridge::applySetParameter(uint32_t paramId,
                                    false);
     processor_.flushPendingParameterCommandsForAssistant();
     outAfter = static_cast<double>(bridge.getParameterNormalized(static_cast<int>(paramId)));
+    return true;
+}
+
+bool VST3IPCBridge::snapshotParameters(std::vector<double>& outValues) const
+{
+    auto* plugin = processor_.getHostManager().getPlugin();
+    if (plugin == nullptr)
+        return false;
+
+    auto& bridge = processor_.getParameterBridge();
+    const int count = bridge.getParameterCount();
+    outValues.resize(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+        outValues[static_cast<size_t>(i)] = bridge.getParameterNormalized(i);
     return true;
 }
 

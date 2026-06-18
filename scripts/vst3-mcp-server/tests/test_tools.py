@@ -151,6 +151,33 @@ async def test_reset_to_default_sends_normalized_values(
 
 
 @pytest.mark.asyncio
+async def test_load_preset_parses_param_diff(registry: ParameterRegistry) -> None:
+    import struct
+
+    class DiffBridge(FakeBridge):
+        async def send_command(self, cmd: CommandPacket, timeout: float | None = None) -> ResultPacket:
+            self.commands.append(cmd)
+            payload = (
+                struct.pack("<Idd", 1001, 0.5, 0.25) + struct.pack("<Idd", 5001, 0.0, 0.7)
+            )
+            return ResultPacket(
+                header=ResultPacketHeader(
+                    command_id=cmd.header.command_id,
+                    status=ResultStatus.SUCCESS,
+                    payload_length=len(payload),
+                ),
+                payload=payload,
+            )
+
+    diff_bridge = DiffBridge()
+    result = await HANDLERS["load_preset"](diff_bridge, {"preset_name": "Warm"}, registry)
+    assert result["status"] == "success"
+    assert result["params_changed"] == 2
+    assert result["param_diff"][0] == {"param_id": 1001, "before": pytest.approx(0.5), "after": pytest.approx(0.25)}
+    assert result["param_diff"][1] == {"param_id": 5001, "before": pytest.approx(0.0), "after": pytest.approx(0.7)}
+
+
+@pytest.mark.asyncio
 async def test_apply_mastering_chain_handler(bridge: FakeBridge, registry: ParameterRegistry) -> None:
     result = await HANDLERS["apply_mastering_chain"](
         bridge,
