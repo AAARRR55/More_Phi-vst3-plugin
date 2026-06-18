@@ -62,6 +62,22 @@ public:
     virtual void applyParameterState(const float* values, int count) = 0;
     virtual std::vector<float> captureParameterState() const = 0;
 
+    // Batch reads — acquire the hosted plugin once for the whole batch instead
+    // of once per parameter. Default implementations loop the per-parameter
+    // methods so test stubs/mocks compile unchanged; ParameterBridge overrides
+    // with a single plugin acquisition (cuts ~2N atomic lock cycles to 2).
+    virtual void captureAllNormalized(float* outValues, int count) const
+    {
+        for (int i = 0; i < count; ++i)
+            outValues[i] = getParameterNormalized(i);
+    }
+    virtual void captureAllNames(juce::StringArray& outNames, int count) const
+    {
+        outNames.ensureStorageAllocated(count);
+        for (int i = 0; i < count; ++i)
+            outNames.add(getParameterName(i));
+    }
+
     // Discrete parameter classification (for Listen Mode)
     virtual bool isDiscrete(int index) const = 0;
     virtual std::vector<bool> getDiscreteMap() const = 0;

@@ -81,6 +81,24 @@ public:
     void apply(const std::array<float, static_cast<int>(ModSourceId::NUM_SOURCES)>& sourceValues,
                std::vector<float>& output) noexcept;
 
+    /**
+     * Audio-thread safe: true if the published (read) route buffer has any
+     * assigned routes. Uses the same seqlock + readIndex_ read pattern as
+     * apply(); on a writer-in-progress or torn read it conservatively returns
+     * true so callers never wrongly skip processing.
+     * noexcept: only atomic loads, an acquire fence, and a trivial field read.
+     */
+    bool hasPublishedRoutes() const noexcept
+    {
+        const uint32_t s1 = seq_.load(std::memory_order_acquire);
+        if ((s1 & 1u) != 0u) return true;                              // writer in progress — don't skip
+        const int idx = readIndex_.load(std::memory_order_acquire);
+        const int count = buffers_[idx].assignedCount;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (s1 != seq_.load(std::memory_order_acquire)) return true;   // torn read — don't skip
+        return count > 0;
+    }
+
     // ── Route management (message thread) ─────────────────────────────────────
 
     /**

@@ -205,6 +205,9 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.outputGain = apvts.getRawParameterValue("outputGain");
     rawParams_.driftOutputX = apvts.getRawParameterValue("driftOutputX");
     rawParams_.driftOutputY = apvts.getRawParameterValue("driftOutputY");
+    rawParams_.coarseParameterWrites = apvts.getRawParameterValue("coarseParameterWrites");
+    rawParams_.disableTouchDetection = apvts.getRawParameterValue("disableTouchDetection");
+    rawParams_.throttleParamCommits = apvts.getRawParameterValue("throttleParamCommits");
 }
 
 bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
@@ -312,46 +315,68 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
         return false;
     }
 
-    if (auto* plugin = hostManager.beginExclusivePluginUse(200))
+    // Retry exclusive lock up to 3 times to handle transient contention from
+    // the audio thread's processBlock or the DAW's getStateInformation calls.
+    // Without retries, the CAS in beginExclusivePluginUse fails instantly if
+    // another exclusive user (e.g. DAW auto-save) is in progress, causing
+    // subsequent snapshot captures to silently fail.
+    constexpr int kMaxExclusiveRetries = 3;
+    for (int attempt = 0; attempt < kMaxExclusiveRetries; ++attempt)
     {
-        std::vector<float> values;
-        juce::StringArray names;
-
-        try
+        if (auto* plugin = hostManager.beginExclusivePluginUse(200))
         {
-            auto& params = plugin->getParameters();
-            const int count = juce::jmin(static_cast<int>(params.size()), MAX_PARAMETERS);
-            values.resize(static_cast<size_t>(count));
-            for (int i = 0; i < count; ++i)
+            std::vector<float> values;
+            juce::StringArray names;
+
+            try
             {
-                values[static_cast<size_t>(i)] = params[i]->getValue();
-                names.add(params[i]->getName(128));
+                auto& params = plugin->getParameters();
+                const int count = juce::jmin(static_cast<int>(params.size()), MAX_PARAMETERS);
+                values.resize(static_cast<size_t>(count));
+                for (int i = 0; i < count; ++i)
+                {
+                    values[static_cast<size_t>(i)] = params[i]->getValue();
+                    names.add(params[i]->getName(128));
+                }
+
+                if (count > 0)
+                    snapshotBank.captureValuesWithNames(slot, values.data(), count, names);
+
+                if (includeStateChunk)
+                {
+                    juce::MemoryBlock chunk;
+                    plugin->getStateInformation(chunk);
+                    if (chunk.getSize() > 0)
+                        snapshotBank.captureStateChunk(slot, chunk);
+                }
+            }
+            catch (...)
+            {
+                hostManager.endExclusivePluginUse();
+                return false;
             }
 
-            if (count > 0)
-                snapshotBank.captureValuesWithNames(slot, values.data(), count, names);
-
-            if (includeStateChunk)
-            {
-                juce::MemoryBlock chunk;
-                plugin->getStateInformation(chunk);
-                if (chunk.getSize() > 0)
-                    snapshotBank.captureStateChunk(slot, chunk);
-            }
-        }
-        catch (...)
-        {
             hostManager.endExclusivePluginUse();
-            return false;
+            return snapshotBank.isOccupied(slot);
         }
 
-        hostManager.endExclusivePluginUse();
+        // Brief sleep before retry — gives the other exclusive user time to finish.
+        // Only sleep if not the last attempt.
+        if (attempt < kMaxExclusiveRetries - 1)
+            juce::Thread::sleep(50);
+    }
+
+    // Exclusive lock failed after retries. Fall back to non-exclusive capture
+    // via ParameterBridge, which uses the shared acquirePluginForUse() path.
+    // This still captures parameter values correctly; only the opaque state
+    // chunk is skipped (it requires exclusive access).
+    if (hostManager.hasPlugin())
+    {
+        snapshotBank.capture(slot, paramBridge);
         return snapshotBank.isOccupied(slot);
     }
 
-    if (hostManager.hasPlugin())
-        return false;
-
+    // No plugin loaded at all — capture whatever paramBridge has (e.g. test mode)
     snapshotBank.capture(slot, paramBridge);
     return snapshotBank.isOccupied(slot);
 }
@@ -543,14 +568,57 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
                     rawParams_.morphY->store(slotY, std::memory_order_relaxed);
             }
 
+            // PERF-C3: Invalidate early-exit state — snapshot recall moved position
+            morphStableBlocks_ = 0;
+            prevMorphX_ = -1.0f;
+
             clearLiveEditHoldsAudioThread();
 
             const int paramCount = juce::jmin(cachedParamCount,
                                               static_cast<int>(touchCooldown_.size()));
-            for (int i = 0; i < paramCount; ++i)
+            // PERF-C4: Batch-read current values instead of per-param
+            // getParameterNormalized (which goes through withPlugin per call).
+            // Reuse currentParamSnapshot_ buffer (already pre-allocated).
+            if (exclusivePlugin != nullptr)
             {
-                lastApplied_[static_cast<size_t>(i)] = readParameter(i);
-                touchCooldown_[static_cast<size_t>(i)] = 0;
+                auto& params = exclusivePlugin->getParameters();
+                const int readCount = juce::jmin(paramCount, static_cast<int>(params.size()));
+                for (int i = 0; i < readCount; ++i)
+                {
+                    try { lastApplied_[static_cast<size_t>(i)] = (params[i] != nullptr) ? params[i]->getValue() : 0.0f; }
+                    catch (...) { lastApplied_[static_cast<size_t>(i)] = 0.0f; }
+                    touchCooldown_[static_cast<size_t>(i)] = 0;
+                }
+                for (int i = readCount; i < paramCount; ++i)
+                    touchCooldown_[static_cast<size_t>(i)] = 0;
+            }
+            else
+            {
+                if (auto* plugin = hostManager.acquirePluginForUse())
+                {
+                    struct ScopedRelease {
+                        PluginHostManager& hm;
+                        ~ScopedRelease() { hm.releasePluginFromUse(); }
+                    } release{ hostManager };
+                    auto& params = plugin->getParameters();
+                    const int readCount = juce::jmin(paramCount, static_cast<int>(params.size()));
+                    for (int i = 0; i < readCount; ++i)
+                    {
+                        try { lastApplied_[static_cast<size_t>(i)] = (params[i] != nullptr) ? params[i]->getValue() : 0.0f; }
+                        catch (...) { lastApplied_[static_cast<size_t>(i)] = 0.0f; }
+                        touchCooldown_[static_cast<size_t>(i)] = 0;
+                    }
+                    for (int i = readCount; i < paramCount; ++i)
+                        touchCooldown_[static_cast<size_t>(i)] = 0;
+                }
+                else
+                {
+                    for (int i = 0; i < paramCount; ++i)
+                    {
+                        lastApplied_[static_cast<size_t>(i)] = readParameter(i);
+                        touchCooldown_[static_cast<size_t>(i)] = 0;
+                    }
+                }
             }
         }
         else
@@ -958,6 +1026,14 @@ MorePhiProcessor::createParameterLayout()
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{"morphAlpha", 1}, "Morph Alpha", 0.0f, 1.0f, 0.0f));
 
+    // ── Performance (opt-in, default OFF — preserve current behavior) ───────
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"coarseParameterWrites", 1}, "Coarse Param Writes", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"disableTouchDetection", 1}, "Disable Touch Detect", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"throttleParamCommits", 1}, "Throttle Param Commits", false));
+
     return { params.begin(), params.end() };
 }
 
@@ -990,6 +1066,7 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
     finalOutput_.resize(MAX_PARAMETERS, 0.0f);
     finalOutput_.resize(MAX_PARAMETERS, 0.0f);      // Pre-size for discrete parameter processing
+    currentParamSnapshot_.resize(MAX_PARAMETERS, 0.0f); // PERF-C2: batch snapshot buffer
     lastApplied_.resize(MAX_PARAMETERS, -1.0f);     // -1 = never applied
     touchCooldown_.resize(MAX_PARAMETERS, 0);
     touchMorphX_.resize(MAX_PARAMETERS, -1.0f);     // Morph X when touch detected
@@ -1191,6 +1268,14 @@ void MorePhiProcessor::syncStateFromAPVTS()
     morphAlpha_.store(juce::jlimit(0.0f, 1.0f, readRawFloat(rawParams_.morphAlpha, 0.0f)),
                       std::memory_order_relaxed);
 
+    // PERF-OPT opt-in flags.
+    coarseParameterWrites_.store(readRawBool(rawParams_.coarseParameterWrites, false),
+                                 std::memory_order_relaxed);
+    disableTouchDetection_.store(readRawBool(rawParams_.disableTouchDetection, false),
+                                 std::memory_order_relaxed);
+    throttleParamCommits_.store(readRawBool(rawParams_.throttleParamCommits, false),
+                                std::memory_order_relaxed);
+
     if (audioDomainEnabled != lastLatencyAudioDomainEnabled_
         || spectralActive != lastLatencySpectralActive_
         || granularActive != lastLatencyGranularActive_)
@@ -1242,11 +1327,15 @@ void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* newPl
 void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                     juce::MidiBuffer& midi) noexcept
 {
-    // Allocation tracking guard (zero overhead in release)
     ScopedAudioCallback allocGuard;
     juce::ScopedNoDenormals noDenormals;
 
-    if (!prepared) return;
+    if (!prepared || shuttingDown_.load(std::memory_order_acquire)) return;
+
+    audioThreadActive_.fetch_add(1, std::memory_order_acq_rel);
+    struct AudioGuard { std::atomic<int>& ref; ~AudioGuard() { ref.fetch_sub(1, std::memory_order_acq_rel); } } audioGuard{audioThreadActive_};
+
+    if (!prepared || shuttingDown_.load(std::memory_order_acquire)) return;
 
     // M11 FIX: If a state restore was deferred from the audio thread, and
     // processBlock happens to run on the message thread (some hosts), start
@@ -1386,14 +1475,78 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                 }
             }
 
-            morphProcessor.process(linkX, linkY, fp, source, mode, dt, finalOutput_);
+            // PERF-C3: Early-exit when morph position is static in Direct mode.
+            // Interpolation is deterministic — same position → identical output.
+            // After the output stabilizes for MORPH_STABLE_THRESHOLD blocks,
+            // skip the expensive compute2D/compute1D + smoothing + SIMD walks.
+            // We still tick down touch cooldowns so they expire on schedule.
+            const int modeInt = static_cast<int>(mode);
+            const int sourceInt = static_cast<int>(source);
+            const bool positionChanged = (linkX != prevMorphX_ || linkY != prevMorphY_ ||
+                                          fp != prevFaderPos_ || modeInt != prevPhysicsMode_ ||
+                                          sourceInt != prevMorphSource_);
+            if (positionChanged)
+            {
+                prevMorphX_ = linkX;
+                prevMorphY_ = linkY;
+                prevFaderPos_ = fp;
+                prevPhysicsMode_ = modeInt;
+                prevMorphSource_ = sourceInt;
+            }
 
-            // V2: Modulation engine
-            const double hostBpm = transportBpm_.load(std::memory_order_relaxed);
-            modulationEngine_.setBPM(hostBpm > 0.0 ? static_cast<float>(hostBpm) : 120.0f);
-            modulationEngine_.setMorphPosition(linkX, linkY, fp);
-            modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
-            modulationEngine_.processBlock(finalOutput_, dt);
+            // PERF-C3+: Extend the steady-state skip to settled Elastic. Stability
+            // is measured by ACTUAL hosted-parameter write activity this block
+            // (anyWriteThisBlock, set in the apply loop below), not just the raw
+            // target. This keeps Elastic's smoothing tail (which keeps writing
+            // after the spring settles) from being frozen mid-ramp, and keeps
+            // Drift — which writes every block — from ever skipping (its output
+            // genuinely changes every block). Direct reaches the skip exactly as
+            // before once output is stable. morphStableBlocks_ is updated after
+            // the apply loop using anyWriteThisBlock.
+            bool anyWriteThisBlock = positionChanged;
+
+            // PERF-OPT: optional throttled commit. Compute the morph every block
+            // but only push setValue updates to the hosted plugin every Nth block,
+            // cutting the hosted-plugin setValue storm during continuous morphing
+            // (e.g. Drift) at the cost of a few-ms parameter latency. Throttled
+            // (non-commit) blocks are treated as "active" so they never feed the
+            // steady-state skip — we can't know the output is stable without
+            // committing it.
+            constexpr int kParamCommitInterval = 4;
+            const bool throttleCommits = throttleParamCommits_.load(std::memory_order_relaxed);
+            const bool commitThisBlock = !throttleCommits || (paramCommitCounter_ == 0);
+            if (throttleCommits)
+                paramCommitCounter_ = (paramCommitCounter_ + 1) % kParamCommitInterval;
+            if (!commitThisBlock)
+                anyWriteThisBlock = true;
+
+            const bool canSkipMorph = (mode == MorphMode::Direct || mode == MorphMode::Elastic)
+                                   && !positionChanged
+                                   && morphStableBlocks_ > MORPH_STABLE_THRESHOLD;
+
+            if (!canSkipMorph)
+            {
+                morphProcessor.process(linkX, linkY, fp, source, mode, dt, finalOutput_);
+
+                // V2: Modulation engine
+                const double hostBpm = transportBpm_.load(std::memory_order_relaxed);
+                modulationEngine_.setBPM(hostBpm > 0.0 ? static_cast<float>(hostBpm) : 120.0f);
+                modulationEngine_.setMorphPosition(linkX, linkY, fp);
+                // PERF-MOD-IDLE: Skip envelope-follower input processing and
+                // source ticking when no modulation routes are published (the
+                // common case). processAudioInput otherwise runs a per-sample
+                // pass over the block every morphing block for nothing.
+                // hasActiveRoutes() is audio-thread safe (seqlock-guarded).
+                if (modulationEngine_.hasActiveRoutes())
+                {
+                    modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
+                    modulationEngine_.processBlock(finalOutput_, dt);
+                }
+
+                // H1 FIX: Snap discrete parameters to valid steps with hysteresis
+                if (!finalOutput_.empty())
+                    discreteHandler_.processDiscreteParameters(finalOutput_, finalOutput_, fp);
+            }
 
             // Link Mode: if leader, broadcast current morph position
             if (linkEnabled_.load(std::memory_order_relaxed) && linkBroadcaster_.isLeader())
@@ -1402,84 +1555,187 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                 linkBroadcaster_.broadcast(linkX, linkY);
             }
 
-            // H1 FIX: Snap discrete parameters to valid steps with hysteresis
-            if (!finalOutput_.empty())
-                discreteHandler_.processDiscreteParameters(finalOutput_, finalOutput_, fp);
-
             // Apply interpolated values to hosted plugin
             {
                 MORE_PHI_PROFILE(profiler_, "parameter_application");
-                if (canTouchHostedParameters && finalOutput_.size() >= static_cast<size_t>(paramCount))
+
+                // PERF-C3: When morph is static in Direct mode and output has
+                // stabilized, skip parameter writes entirely. Still tick down
+                // active touch cooldowns so they expire on schedule.
+                if (canSkipMorph && canTouchHostedParameters)
                 {
-                    const bool hasTouchLock = touchStateLock_.tryEnter();
-
-                    for (int i = 0; i < paramCount; ++i)
+                    const bool skipTouchLock = touchStateLock_.tryEnter();
+                    if (skipTouchLock)
                     {
-                        const float morphVal = finalOutput_[static_cast<size_t>(i)];
-
-                        // Skip sentinel-marked discrete params (Listen Mode)
-                        if (morphVal < 0.0f) continue;
-
-                        if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[static_cast<size_t>(i)] != 0)
+                        const int touchSize = juce::jmin(paramCount, static_cast<int>(touchCooldown_.size()));
+                        for (int i = 0; i < touchSize; ++i)
                         {
-                            if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                            if (touchCooldown_[static_cast<size_t>(i)] > 0)
+                                --touchCooldown_[static_cast<size_t>(i)];
+                        }
+                        touchStateLock_.exit();
+                    }
+                }
+                else if (commitThisBlock && canTouchHostedParameters
+                         && finalOutput_.size() >= static_cast<size_t>(paramCount))
+                {
+                    if (auto* plugin = hostManager.acquirePluginForUse())
+                    {
+                        struct ScopedRelease {
+                            PluginHostManager& hm;
+                            ~ScopedRelease() { hm.releasePluginFromUse(); }
+                        } release{ hostManager };
+
+                        // PERF-C2: Batch-read current hosted parameter values once,
+                        // then use the cached snapshot for touch detection. Without this,
+                        // each iteration calls params[i]->getValue() individually, causing
+                        // up to 2048 virtual dispatches + L1 cache-pollution cycles per
+                        // block — the dominant CPU cost in FL Studio with small buffers.
+                        auto& pluginParams = plugin->getParameters();
+                        const int pluginParamCount = juce::jmin(paramCount, static_cast<int>(pluginParams.size()));
+
+                        // PERF-OPT opt-in flags (default OFF -> current behavior preserved).
+                        const float writeDeadband = coarseParameterWrites_.load(std::memory_order_relaxed)
+                                                    ? 5e-4f : 1e-5f;
+
+                        if (disableTouchDetection_.load(std::memory_order_relaxed))
+                        {
+                            // PERF-OPT: touch detection disabled — pure morph output.
+                            // Skips the per-block batch getValue() read (the dominant CPU
+                            // cost during morphing) and all touch/hold/cooldown logic.
+                            // Manual hosted-knob edits while morphing are NOT held in this
+                            // mode (opt-in trade-off). lastApplied_ still tracks writes for
+                            // the deadband skip, guarded by the same touchStateLock_.
+                            const bool hasLock = touchStateLock_.tryEnter();
+                            for (int i = 0; i < paramCount; ++i)
                             {
-                                liveEditHold_[static_cast<size_t>(i)] = 0;
+                                const size_t idx = static_cast<size_t>(i);
+                                const float morphVal = finalOutput_[idx];
+                                if (morphVal < 0.0f) continue;            // Listen Mode discrete sentinel
+                                if (i >= pluginParamCount) continue;
+                                if (hasLock && lastApplied_[idx] >= 0.0f
+                                    && std::abs(morphVal - lastApplied_[idx]) < writeDeadband)
+                                    continue;
+                                const float clamped = juce::jlimit(0.0f, 1.0f, morphVal);
+                                try { pluginParams[i]->setValue(clamped); }
+                                catch (...) { continue; }
+                                anyWriteThisBlock = true;
+                                if (hasLock) lastApplied_[idx] = morphVal;
                             }
-                            else
+                            if (hasLock) touchStateLock_.exit();
+                        }
+                        else
+                        {
+                        // currentParamSnapshot_ is pre-allocated to MAX_PARAMETERS in
+                        // prepareToPlay() and only indexed up to pluginParamCount, so no
+                        // per-block resize is needed (it was a redundant no-op-shrink).
+                        for (int i = 0; i < pluginParamCount; ++i)
+                        {
+                            try { currentParamSnapshot_[static_cast<size_t>(i)] = pluginParams[i]->getValue(); }
+                            catch (...) { currentParamSnapshot_[static_cast<size_t>(i)] = 0.0f; }
+                        }
+
+                        const bool hasTouchLock = touchStateLock_.tryEnter();
+
+                        for (int i = 0; i < paramCount; ++i)
+                        {
+                            const size_t idx = static_cast<size_t>(i);
+                            const float morphVal = finalOutput_[idx];
+
+                            // Skip sentinel-marked discrete params (Listen Mode)
+                            if (morphVal < 0.0f) continue;
+
+                            if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[idx] != 0)
                             {
-                                if (hasTouchLock)
-                                    lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
+                                if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                                {
+                                    liveEditHold_[idx] = 0;
+                                }
+                                else
+                                {
+                                    if (hasTouchLock && i < pluginParamCount)
+                                        lastApplied_[idx] = currentParamSnapshot_[idx];
+                                    continue;
+                                }
+                            }
+
+                            // Touch detection: check if user manually moved this parameter
+                            // PERF-C2: Use cached snapshot instead of per-param getValue()
+                            if (hasTouchLock && lastApplied_[idx] >= 0.0f)
+                            {
+                                const float currentVal = (i < pluginParamCount)
+                                    ? currentParamSnapshot_[idx] : 0.0f;
+                                const float lastVal = lastApplied_[idx];
+                                const float userDelta = std::abs(currentVal - lastVal);
+
+                                if (userDelta > TOUCH_THRESHOLD)
+                                {
+                                    touchMorphX_[idx] = linkX;
+                                    touchMorphY_[idx] = linkY;
+                                    lastApplied_[idx] = currentVal;
+                                    touchCooldown_[idx] = touchCooldownBlocks_;
+                                }
+                            }
+
+                            // If parameter is in cooldown, skip applying morph output
+                            if (hasTouchLock && touchCooldown_[idx] > 0)
+                            {
+                                --touchCooldown_[idx];
+
+                                const float morphDelta = std::abs(linkX - touchMorphX_[idx]) +
+                                                         std::abs(linkY - touchMorphY_[idx]);
+                                const bool morphMoved = morphDelta > MORPH_POS_THRESHOLD;
+
+                                if (touchCooldown_[idx] == 0 && morphMoved)
+                                {
+                                    lastApplied_[idx] = -1.0f;
+                                }
+                                else
+                                {
+                                    if (i < pluginParamCount)
+                                        lastApplied_[idx] = currentParamSnapshot_[idx];
+                                }
                                 continue;
                             }
+
+                            // Skip if the value has not changed significantly from the last applied value.
+                            if (hasTouchLock && lastApplied_[idx] >= 0.0f)
+                            {
+                                const float lastVal = lastApplied_[idx];
+                                if (std::abs(morphVal - lastVal) < writeDeadband)
+                                    continue;
+                            }
+
+                            // Apply morph output and track what we applied
+                            // PERF-C2: Direct setValue() bypasses per-param
+                            // acquirePluginForUse/releasePluginFromUse and throttle
+                            // lock acquisition (already batch-acquired above).
+                            if (i < pluginParamCount)
+                            {
+                                const float clamped = juce::jlimit(0.0f, 1.0f, morphVal);
+                                try { pluginParams[i]->setValue(clamped); }
+                                catch (...) { continue; }
+                                anyWriteThisBlock = true;
+                            }
+                            if (hasTouchLock)
+                                lastApplied_[idx] = morphVal;
                         }
 
-                        // Touch detection: check if user manually moved this parameter
-                        if (hasTouchLock && lastApplied_[static_cast<size_t>(i)] >= 0.0f)
-                        {
-                            const float currentVal = paramBridge.getParameterNormalized(i);
-                            const float lastVal = lastApplied_[static_cast<size_t>(i)];
-                            const float userDelta = std::abs(currentVal - lastVal);
-
-                            if (userDelta > TOUCH_THRESHOLD)
-                            {
-                                touchMorphX_[static_cast<size_t>(i)] = linkX;
-                                touchMorphY_[static_cast<size_t>(i)] = linkY;
-                                lastApplied_[static_cast<size_t>(i)] = currentVal;
-                                touchCooldown_[static_cast<size_t>(i)] = touchCooldownBlocks_;
-                            }
-                        }
-
-                        // If parameter is in cooldown, skip applying morph output
-                        if (hasTouchLock && touchCooldown_[static_cast<size_t>(i)] > 0)
-                        {
-                            --touchCooldown_[static_cast<size_t>(i)];
-
-                            const float morphDelta = std::abs(linkX - touchMorphX_[static_cast<size_t>(i)]) +
-                                                     std::abs(linkY - touchMorphY_[static_cast<size_t>(i)]);
-                            const bool morphMoved = morphDelta > MORPH_POS_THRESHOLD;
-
-                            if (touchCooldown_[static_cast<size_t>(i)] == 0 && morphMoved)
-                            {
-                                lastApplied_[static_cast<size_t>(i)] = -1.0f;
-                            }
-                            else
-                            {
-                                lastApplied_[static_cast<size_t>(i)] = paramBridge.getParameterNormalized(i);
-                            }
-                            continue;
-                        }
-
-                        // Apply morph output and track what we applied
-                        paramBridge.setParameterNormalized(i, morphVal);
                         if (hasTouchLock)
-                            lastApplied_[static_cast<size_t>(i)] = morphVal;
+                            touchStateLock_.exit();
+                        } // else (!disableTouchDetection)
                     }
-
-                    if (hasTouchLock)
-                        touchStateLock_.exit();
                 }
             }
+
+            // PERF-C3+: update stability for next block from this block's actual
+            // hosted-parameter write activity. Elastic reaches the skip once
+            // writes stop (spring settled + smoothing converged); Drift writes
+            // every block so it never skips.
+            if (anyWriteThisBlock)
+                morphStableBlocks_ = 0;
+            else
+                ++morphStableBlocks_;
         }
     }
 
@@ -2123,7 +2379,7 @@ void MorePhiProcessor::reconfigureAudioDomainProcessing()
     audioDomainReconfiguring_.store(true, std::memory_order_release);
 
     while (audioDomainUsers_.load(std::memory_order_acquire) > 0)
-        juce::Thread::yield();
+        juce::Thread::sleep(1);
 
     const int factor = juce::jlimit(1, OversamplingWrapper::kMaxOSFactor,
                                     desiredOversamplingFactor_.load(std::memory_order_relaxed));

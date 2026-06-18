@@ -111,6 +111,13 @@ float ParameterBridge::getParameterNormalized(int index) const noexcept
     });
 }
 
+float ParameterBridge::getParameterNormalized(juce::AudioPluginInstance& plugin, int index) const noexcept
+{
+    auto& params = plugin.getParameters();
+    if (index < 0 || index >= (int)params.size()) return 0.0f;
+    return params[index]->getValue();
+}
+
 void ParameterBridge::setParameterNormalized(int index, float value) noexcept
 {
     withPlugin(host_, cachedConcreteHost_, "setParameterNormalized", 0,
@@ -134,6 +141,26 @@ void ParameterBridge::setParameterNormalized(int index, float value) noexcept
         updateThrottleState(index, clamped, now);
         return 0;
     });
+}
+
+void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value) noexcept
+{
+    auto& params = plugin.getParameters();
+    if (index < 0 || index >= (int)params.size()) return;
+
+    const float clamped = juce::jlimit(0.0f, 1.0f, value);
+    const auto now = juce::Time::getMillisecondCounter();
+
+    if (shouldThrottle(index, clamped, now))
+        return;
+
+    try {
+        params[index]->setValue(clamped);
+    } catch (...) {
+        // Silent — hosted plugin setValue threw, but we can't log on audio thread
+    }
+
+    updateThrottleState(index, clamped, now);
 }
 
 juce::String ParameterBridge::getParameterName(int index) const
@@ -218,6 +245,42 @@ std::vector<float> ParameterBridge::captureParameterState() const noexcept
         for (int i = 0; i < (int)params.size(); ++i)
             state[i] = params[i]->getValue();
         return state;
+    });
+}
+
+void ParameterBridge::captureAllNormalized(float* outValues, int count) const noexcept
+{
+    if (outValues == nullptr || count <= 0) return;
+
+    // PERF-C2-BATCH: single plugin acquisition for the whole batch instead of
+    // one acquirePluginForUse/releasePluginFromUse cycle per parameter. For a
+    // 2048-param plugin this is ~4096 atomic lock cycles -> 2 per capture, on
+    // the exact PERF-C1 path that caused FL Studio stalls.
+    withPlugin(host_, cachedConcreteHost_, "captureAllNormalized", 0,
+        [outValues, count](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, static_cast<int>(params.size()));
+        for (int i = 0; i < safeCount; ++i)
+            outValues[static_cast<size_t>(i)] = params[i]->getValue();
+        return 0;
+    });
+}
+
+void ParameterBridge::captureAllNames(juce::StringArray& outNames, int count) const
+{
+    if (count <= 0) return;
+
+    // PERF-C2-BATCH: single plugin acquisition for the whole names batch.
+    withPlugin(host_, cachedConcreteHost_, "captureAllNames", 0,
+        [&outNames, count](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, static_cast<int>(params.size()));
+        outNames.ensureStorageAllocated(safeCount);
+        for (int i = 0; i < safeCount; ++i)
+            outNames.add(params[i]->getName(128));
+        return 0;
     });
 }
 

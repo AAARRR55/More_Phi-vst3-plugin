@@ -68,6 +68,7 @@ add_executable(MorePhiTests
     Unit/TestMCPServerUnit.cpp
     Unit/TestAutomationControlPlane.cpp
     Unit/TestVST3IPCBridge.cpp
+    Unit/TestAsyncToolExecutor.cpp
     # Ozone 11 mastering integration
     Unit/TestOzoneIntegration.cpp
     # Neural mastering safety projection

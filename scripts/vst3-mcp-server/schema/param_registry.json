@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "parameters": [
+    { "id": 1001, "name": "EQ_Band1_Gain", "stableId": "1001", "units": "dB", "min": -24.0, "max": 24.0, "default": 0.0 },
+    { "id": 1002, "name": "EQ_Band1_Freq", "stableId": "1002", "units": "Hz", "min": 20.0, "max": 20000.0, "default": 1000.0, "log": true },
+    { "id": 1003, "name": "EQ_Band1_Q", "stableId": "1003", "units": "", "min": 0.1, "max": 10.0, "default": 1.0 },
+    { "id": 1004, "name": "EQ_Band2_Gain", "stableId": "1004", "units": "dB", "min": -24.0, "max": 24.0, "default": 0.0 },
+    { "id": 1005, "name": "EQ_Band2_Freq", "stableId": "1005", "units": "Hz", "min": 20.0, "max": 20000.0, "default": 2000.0, "log": true },
+    { "id": 1006, "name": "EQ_Band2_Q", "stableId": "1006", "units": "", "min": 0.1, "max": 10.0, "default": 1.0 },
+    { "id": 1007, "name": "EQ_Band3_Gain", "stableId": "1007", "units": "dB", "min": -24.0, "max": 24.0, "default": 0.0 },
+    { "id": 1008, "name": "EQ_Band3_Freq", "stableId": "1008", "units": "Hz", "min": 20.0, "max": 20000.0, "default": 4000.0, "log": true },
+    { "id": 1009, "name": "EQ_Band3_Q", "stableId": "1009", "units": "", "min": 0.1, "max": 10.0, "default": 1.0 },
+    { "id": 1010, "name": "EQ_Band4_Gain", "stableId": "1010", "units": "dB", "min": -24.0, "max": 24.0, "default": 0.0 },
+    { "id": 1011, "name": "EQ_Band4_Freq", "stableId": "1011", "units": "Hz", "min": 20.0, "max": 20000.0, "default": 8000.0, "log": true },
+    { "id": 1012, "name": "EQ_Band4_Q", "stableId": "1012", "units": "", "min": 0.1, "max": 10.0, "default": 1.0 },
+    { "id": 2001, "name": "Compressor_Ratio", "stableId": "2001", "units": ":1", "min": 1.0, "max": 20.0, "default": 2.0 },
+    { "id": 2002, "name": "Compressor_Threshold", "stableId": "2002", "units": "dB", "min": -60.0, "max": 0.0, "default": -18.0 },
+    { "id": 2003, "name": "Compressor_Attack", "stableId": "2003", "units": "ms", "min": 0.1, "max": 100.0, "default": 10.0 },
+    { "id": 2004, "name": "Compressor_Release", "stableId": "2004", "units": "ms", "min": 10.0, "max": 1000.0, "default": 100.0 },
+    { "id": 3001, "name": "Limiter_Ceiling", "stableId": "3001", "units": "dBTP", "min": -12.0, "max": 0.0, "default": -1.0 },
+    { "id": 4001, "name": "LUFS_Target", "stableId": "4001", "units": "LUFS", "min": -23.0, "max": -6.0, "default": -14.0 },
+    { "id": 5001, "name": "Output_Gain", "stableId": "5001", "units": "dB", "min": -24.0, "max": 24.0, "default": 0.0 },
+    { "id": 6001, "name": "Saturation_Drive", "stableId": "6001", "units": "%", "min": 0.0, "max": 100.0, "default": 0.0 },
+    { "id": 7001, "name": "Stereo_Width", "stableId": "7001", "units": "%", "min": 0.0, "max": 200.0, "default": 100.0 }
+  ]
+}

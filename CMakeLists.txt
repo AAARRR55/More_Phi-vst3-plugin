@@ -471,6 +471,8 @@ set(MORE_PHI_UI_SOURCES
     src/UI/GranularControlPanel.cpp
     src/UI/HybridBlendPanel.h
     src/UI/HybridBlendPanel.cpp
+    src/UI/PerformancePanel.h
+    src/UI/PerformancePanel.cpp
     src/UI/ModulationMatrixPanel.h
     src/UI/ModulationMatrixPanel.cpp
     src/UI/V2PresetBrowserPanel.h

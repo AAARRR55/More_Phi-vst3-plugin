@@ -15,6 +15,7 @@
 #include "SpectralControlPanel.h"
 #include "GranularControlPanel.h"
 #include "HybridBlendPanel.h"
+#include "PerformancePanel.h"
 #include "Plugin/PluginProcessor.h"
 
 namespace more_phi {
@@ -23,6 +24,8 @@ namespace more_phi {
 
 static constexpr int kBlendPanelHeight = 56;
 static constexpr int kGapBelowBlend    =  2;
+static constexpr int kPerfPanelHeight  = 36;
+static constexpr int kGapBelowPerf     =  2;
 static constexpr int kGapBetweenSides  =  2;
 
 // ── Constructor / Destructor ─────────────────────────────────────────────────
@@ -32,8 +35,10 @@ EngineTabPage::EngineTabPage(MorePhiProcessor& proc)
     , spectralPanel_(std::make_unique<SpectralControlPanel>(proc_))
     , granularPanel_(std::make_unique<GranularControlPanel>(proc_))
     , blendPanel_   (std::make_unique<HybridBlendPanel>    (proc_))
+    , perfPanel_    (std::make_unique<PerformancePanel>  (proc_))
 {
     addAndMakeVisible(*blendPanel_);
+    addAndMakeVisible(*perfPanel_);
     addAndMakeVisible(*spectralPanel_);
     addAndMakeVisible(*granularPanel_);
 }
@@ -59,6 +64,10 @@ void EngineTabPage::resized()
     // Top row: HybridBlendPanel — full width, fixed height.
     blendPanel_->setBounds(area.removeFromTop(kBlendPanelHeight));
     area.removeFromTop(kGapBelowBlend);
+
+    // Second row: PerformancePanel — opt-in CPU toggles, full width.
+    perfPanel_->setBounds(area.removeFromTop(kPerfPanelHeight));
+    area.removeFromTop(kGapBelowPerf);
 
     if (compact)
     {
