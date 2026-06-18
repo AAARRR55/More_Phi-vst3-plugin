@@ -11,7 +11,6 @@
 #include "InstanceRegistry.h"
 #include "Plugin/PluginProcessor.h"
 #include "MCPToolsExtended.h"
-#include "MCPEQTool.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
 #include "Core/DiscreteParameterHandler.h"
@@ -3075,16 +3074,6 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "generate_dataset")               return MCPToolsExtended::generateDataset(params, p);
     else if (method == "generate_dataset_v2")            return MCPToolsExtended::generateDatasetV2(params, p);
     else if (method == "generate_dataset_v3")            return MCPToolsExtended::generateDatasetV3(params, p);
-
-    // EQ Assistant Tools (Natural Language EQ Control)
-    else if (method == "eq_adjust")                      return MCPEQTool::adjustEQ(params, p, p.getAIAssistant()).jsonResult;
-    else if (method == "eq_preview")                     result = MCPEQTool::previewEQ(params, p, p.getAIAssistant()).jsonResult;
-    else if (method == "eq_apply")                       return MCPEQTool::applyEQ(params, p).jsonResult;
-    else if (method == "eq_reject")                      return MCPEQTool::rejectEQ(params, p).jsonResult;
-    else if (method == "eq_context")                     result = MCPEQTool::getContext(params, p).jsonResult;
-    else if (method == "eq_reset_context")               return MCPEQTool::resetContext(params, p).jsonResult;
-    else if (method == "eq_validate")                    result = MCPEQTool::validateEQ(params, p).jsonResult;
-    else if (method == "eq_suggest")                     result = MCPEQTool::suggestEQ(params, p, p.getAIAssistant()).jsonResult;
 
     // Multi-instance tools
     else if (method == "get_instance_info")    result = getInstanceInfo(identity);

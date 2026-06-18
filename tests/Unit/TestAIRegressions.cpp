@@ -7,7 +7,6 @@
 
 #include "AI/MCPToolsExtended.h"
 #include "AI/MCPToolHandler.h"
-#include "AI/MCPEQTool.h"
 #include "AI/SemanticPluginProfile.h"
 #include "AI/TokenOptimizer.h"
 #include "Core/ParameterClassifier.h"
@@ -638,57 +637,6 @@ TEST_CASE("MCP optimized set reports queue_full when resolved edit cannot be que
     REQUIRE(static_cast<int>(parsedVar.getProperty("queued_count", -1)) == 0);
     REQUIRE(static_cast<int>(parsedVar.getProperty("queue_failures", -1)) == 1);
     REQUIRE(static_cast<int>(parsedVar.getProperty("rejected_count", -1)) == 0);
-}
-
-TEST_CASE("MCP EQ preview and reject route through assistant preview state", "[unit][ai][mcp][eq]")
-{
-    MorePhiProcessor processor;
-    processor.prepareToPlay(44100.0, 64);
-    auto* assistant = processor.getAIAssistant();
-
-    ParamChange change;
-    change.index = 0;
-    change.name = "Gain";
-    change.currentValue = 0.25f;
-    change.newValue = 0.75f;
-    assistant->stagePendingChanges({change});
-
-    const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
-    REQUIRE(preview.success);
-    REQUIRE(assistant->isPreviewActive());
-
-    const auto reject = MCPEQTool::rejectEQ({}, processor);
-    REQUIRE(reject.success);
-    REQUIRE_FALSE(assistant->isPreviewActive());
-    REQUIRE(assistant->getPendingChanges().empty());
-
-    processor.releaseResources();
-}
-
-TEST_CASE("MCP EQ preview reports command queue saturation", "[unit][ai][mcp][eq]")
-{
-    MorePhiProcessor processor;
-    processor.prepareToPlay(44100.0, 64);
-    auto* assistant = processor.getAIAssistant();
-
-    while (processor.enqueueParameterSet(0, 0.5f,
-                                         MorePhiProcessor::ParameterEditSource::MCP,
-                                         true))
-    {
-    }
-
-    ParamChange change;
-    change.index = 0;
-    change.name = "Gain";
-    change.currentValue = 0.25f;
-    change.newValue = 0.75f;
-    assistant->stagePendingChanges({change});
-
-    const auto preview = MCPEQTool::previewEQ({}, processor, assistant);
-    REQUIRE_FALSE(preview.success);
-    REQUIRE(preview.message.containsIgnoreCase("queue"));
-
-    processor.releaseResources();
 }
 
 TEST_CASE("MCP optimized set reports when no parameter edits were queued", "[unit][ai][mcp]")

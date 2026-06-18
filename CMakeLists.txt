@@ -356,8 +356,6 @@ set(MORE_PHI_AI_SOURCES
     src/AI/PluginSemanticMapper.cpp
     src/AI/TrackAssistantStore.h
     src/AI/TrackAssistantStore.cpp
-    src/AI/MCPEQTool.h
-    src/AI/MCPEQTool.cpp
     src/AI/MCPServer.h
     src/AI/MCPServer.cpp
     src/AI/MCPToolHandler.h
