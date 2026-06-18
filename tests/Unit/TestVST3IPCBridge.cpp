@@ -13,6 +13,7 @@
 #include "Host/ParameterBridge.h"
 #include "Plugin/PluginProcessor.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -35,6 +36,59 @@ CommandPacket makeSetParameterCommand(uint32_t commandId,
     packet.header.payload_length = 0;
     return packet;
 }
+
+// A VST3IPCBridge whose hosted-plugin access is an in-memory fake, so
+// executeCommand success paths can be exercised without a real hosted plugin
+// (the production applySetParameter/captureState/loadPreset return "no hosted
+// plugin loaded" when none is present).
+class FakePluginBridge : public VST3IPCBridge
+{
+public:
+    std::vector<double> params;
+    std::vector<uint8_t> stateBlob;
+    std::vector<uint8_t> lastLoadedPreset;
+    bool failNext = false;
+
+    explicit FakePluginBridge(MorePhiProcessor& p, int numParams = 8)
+        : VST3IPCBridge(p, p.getInstanceIdentity()), params(static_cast<size_t>(numParams), 0.5)
+    {
+    }
+
+protected:
+    bool applySetParameter(uint32_t paramId, double normalizedValue,
+                           double& outBefore, double& outAfter, std::string& outError) override
+    {
+        if (failNext)
+        {
+            outError = "injected failure";
+            return false;
+        }
+        if (paramId >= params.size())
+        {
+            outError = "param_id out of range";
+            return false;
+        }
+        const double v = std::min(1.0, std::max(0.0, normalizedValue));
+        outBefore = params[paramId];
+        params[paramId] = v;
+        outAfter = params[paramId];
+        return true;
+    }
+
+    bool captureState(std::vector<uint8_t>& outPayload, std::string&) override
+    {
+        outPayload = stateBlob;
+        return true;
+    }
+
+    bool loadPresetFromPayload(const std::vector<uint8_t>& payload, std::string&) override
+    {
+        lastLoadedPreset = payload;
+        for (auto& pr : params)
+            pr = 0.25;
+        return true;
+    }
+};
 
 } // namespace
 
@@ -258,4 +312,105 @@ TEST_CASE("Endpoint and registry paths contain the instance identity", "[vst3-ip
     REQUIRE(registry.contains("_registry.json"));
 
     processor.releaseResources();
+}
+
+TEST_CASE("executeCommand SET_PARAM succeeds and returns verified before/after", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 8); // params default to 0.5
+
+    const auto result = bridge.executeCommand(makeSetParameterCommand(1u, 3u, 0.8));
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Success));
+    REQUIRE(result.header.command_id == 1u);
+    REQUIRE(result.header.value_before == Catch::Approx(0.5));
+    REQUIRE(result.header.value_after == Catch::Approx(0.8));
+}
+
+TEST_CASE("executeCommand SET_PARAM out-of-range parameter fails controlled", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 4);
+
+    const auto result = bridge.executeCommand(makeSetParameterCommand(1u, 99u, 0.5));
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Failure));
+}
+
+TEST_CASE("executeCommand BATCH returns per-param diffs in the result payload", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 8); // params default to 0.5
+
+    CommandPacket cmd;
+    cmd.header.command_id = 7u;
+    cmd.header.command_type = static_cast<uint8_t>(VST3IPCCommandType::Batch);
+    cmd.header.payload_length = 24; // two (u32,double) pairs
+    cmd.payload.resize(24, 0);
+    const uint32_t p1 = 2u;
+    const double v1 = 0.25;
+    const uint32_t p2 = 5u;
+    const double v2 = 0.75;
+    std::memcpy(cmd.payload.data(), &p1, sizeof(uint32_t));
+    std::memcpy(cmd.payload.data() + sizeof(uint32_t), &v1, sizeof(double));
+    std::memcpy(cmd.payload.data() + 12, &p2, sizeof(uint32_t));
+    std::memcpy(cmd.payload.data() + 12 + sizeof(uint32_t), &v2, sizeof(double));
+
+    const auto result = bridge.executeCommand(cmd);
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Success));
+    REQUIRE(result.header.payload_length == 2u * VST3IPCBridge::kBatchDiffSize);
+
+    const auto diffs = VST3IPCBridge::deserializeBatchDiffs(result.payload.data(), result.payload.size());
+    REQUIRE(diffs.size() == 2);
+    REQUIRE(diffs[0].paramId == 2u);
+    REQUIRE(diffs[0].before == Catch::Approx(0.5));
+    REQUIRE(diffs[0].after == Catch::Approx(0.25));
+    REQUIRE(diffs[1].paramId == 5u);
+    REQUIRE(diffs[1].before == Catch::Approx(0.5));
+    REQUIRE(diffs[1].after == Catch::Approx(0.75));
+}
+
+TEST_CASE("executeCommand BATCH failure returns a failure result", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 8);
+    bridge.failNext = true;
+
+    CommandPacket cmd;
+    cmd.header.command_id = 9u;
+    cmd.header.command_type = static_cast<uint8_t>(VST3IPCCommandType::Batch);
+    cmd.header.payload_length = 12;
+    cmd.payload.resize(12, 0);
+    const uint32_t p = 1u;
+    const double v = 0.5;
+    std::memcpy(cmd.payload.data(), &p, sizeof(uint32_t));
+    std::memcpy(cmd.payload.data() + sizeof(uint32_t), &v, sizeof(double));
+
+    const auto result = bridge.executeCommand(cmd);
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Failure));
+    REQUIRE(result.header.command_id == 9u);
+}
+
+TEST_CASE("executeCommand GET_STATE returns the captured state blob", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 4);
+    bridge.stateBlob = { 's', 't', 'a', 't', 'e' };
+
+    CommandPacket cmd;
+    cmd.header = { 11u, static_cast<uint8_t>(VST3IPCCommandType::GetState), 0u, 0.0, 0u };
+    const auto result = bridge.executeCommand(cmd);
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Success));
+    REQUIRE(result.payload == bridge.stateBlob);
+}
+
+TEST_CASE("executeCommand LOAD_PRESET applies the preset payload", "[vst3-ipc]")
+{
+    MorePhiProcessor processor;
+    FakePluginBridge bridge(processor, 4);
+
+    CommandPacket cmd;
+    cmd.header = { 13u, static_cast<uint8_t>(VST3IPCCommandType::LoadPreset), 0u, 0.0, 4u };
+    cmd.payload = { 'W', 'a', 'r', 'm' };
+    const auto result = bridge.executeCommand(cmd);
+    REQUIRE(result.header.status == static_cast<uint8_t>(VST3IPCResultStatus::Success));
+    REQUIRE(bridge.lastLoadedPreset == (std::vector<uint8_t>{ 'W', 'a', 'r', 'm' }));
 }

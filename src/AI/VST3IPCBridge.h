@@ -102,7 +102,7 @@ class VST3IPCBridge
 {
 public:
     VST3IPCBridge(MorePhiProcessor& processor, const InstanceIdentity& identity);
-    ~VST3IPCBridge();
+    virtual ~VST3IPCBridge();
 
     /** Start the listener thread. Safe to call multiple times (idempotent). */
     void start();
@@ -148,6 +148,20 @@ public:
     static constexpr size_t kResultHeaderSize  = sizeof(ResultPacketHeader);
     static constexpr size_t kBatchDiffSize = sizeof(uint32_t) + sizeof(double) + sizeof(double);
 
+protected:
+    /** Seams for the hosted-plugin command handlers. Default implementations wrap
+     *  MorePhiProcessor (production); tests override these to inject an in-memory
+     *  fake plugin so executeCommand success paths can be exercised without a real
+     *  hosted plugin loaded. applyBatch() calls applySetParameter(), so overriding
+     *  applySetParameter alone redirects batch application. */
+    virtual bool applySetParameter(uint32_t paramId, double normalizedValue,
+                                   double& outBefore, double& outAfter,
+                                   std::string& outError);
+    virtual bool captureState(std::vector<uint8_t>& outPayload,
+                              std::string& outError);
+    virtual bool loadPresetFromPayload(const std::vector<uint8_t>& payload,
+                                       std::string& outError);
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
@@ -165,16 +179,9 @@ private:
                                    double after,
                                    std::vector<uint8_t> payload = {}) const;
 
-    bool applySetParameter(uint32_t paramId, double normalizedValue,
-                           double& outBefore, double& outAfter,
-                           std::string& outError);
     bool applyBatch(const std::vector<uint8_t>& payload,
                     std::vector<BatchParamDiff>& outDiffs,
                     std::string& outError);
-    bool loadPresetFromPayload(const std::vector<uint8_t>& payload,
-                               std::string& outError);
-    bool captureState(std::vector<uint8_t>& outPayload,
-                      std::string& outError);
 
     /** Writes a result packet back to the current IPC client.
      *  Called on the message thread by the async command dispatcher.
