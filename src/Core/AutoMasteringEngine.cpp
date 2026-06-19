@@ -7,12 +7,23 @@
 
 namespace more_phi {
 
+namespace {
+// ponytail: inlined from the removed NeuralCompressor — its loadModel() always
+// returned false and its 33Hz timer was a no-op, so the only real effect was
+// applying these published-literature per-band compressor defaults once.
+const MultibandDynamicsProcessor::BandParams kHeuristicDefaults[] = {
+    { .thresholdDB = -18.f, .ratio = 1.5f, .attackMs =  50.f, .releaseMs = 200.f, .makeupDB = 0.f, .kneeDB = 4.f }, // Band 0: Sub
+    { .thresholdDB = -20.f, .ratio = 2.5f, .attackMs =  15.f, .releaseMs = 150.f, .makeupDB = 0.f, .kneeDB = 3.f }, // Band 1: Low
+    { .thresholdDB = -22.f, .ratio = 3.0f, .attackMs =   8.f, .releaseMs = 120.f, .makeupDB = 0.f, .kneeDB = 2.f }, // Band 2: Mid
+    { .thresholdDB = -18.f, .ratio = 2.0f, .attackMs =   3.f, .releaseMs =  80.f, .makeupDB = 0.f, .kneeDB = 2.f }, // Band 3: High
+};
+} // namespace
+
 AutoMasteringEngine::AutoMasteringEngine() = default;
 
 AutoMasteringEngine::~AutoMasteringEngine()
 {
     stopTimer();
-    neuralComp_.stop();
     genreClassifier_.stop();
     eqTranslator_.stop();
 }
@@ -47,8 +58,11 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     // Wire intelligence layer
     if (startIntelligence)
     {
-        neuralComp_.prepare(dynamics_, sampleRate);
-        neuralComp_.start();
+        // ponytail: NeuralCompressor was a 33Hz no-op timer around this
+        // heuristic table (loadModel() always returned false). Apply the
+        // published-literature per-band defaults directly to the dynamics stage.
+        for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
+            dynamics_.setBandParams(b, kHeuristicDefaults[b]);
         genreClassifier_.start();
     }
 

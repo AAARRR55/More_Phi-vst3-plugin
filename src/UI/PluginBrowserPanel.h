@@ -16,7 +16,6 @@ class MorePhiProcessor;
 
 class PluginBrowserPanel : public juce::Component,
                            private juce::Button::Listener,
-                           private juce::ChangeListener,
                            private juce::Timer
 {
 public:
@@ -28,7 +27,6 @@ public:
 
 private:
     void buttonClicked(juce::Button* b) override;
-    void changeListenerCallback(juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
     void showPluginListDialog();

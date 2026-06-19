@@ -149,11 +149,6 @@ public:
     static juce::String generateDatasetV3(const juce::var& params, MorePhiProcessor& processor);
 
 private:
-    // Helper: Build parameter JSON with metadata
-    static juce::var buildParameterInfo(
-        int index,
-        const ParameterClassifier& classifier,
-        MorePhiProcessor& processor);
     
     // Helper: Parse parameter list from request
     static std::vector<int> parseParameterList(const juce::var& params);

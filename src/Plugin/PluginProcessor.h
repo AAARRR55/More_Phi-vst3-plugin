@@ -121,14 +121,6 @@ public:
     AIAssistant*              getAIAssistant() noexcept     { return aiAssistant_.get(); }
     const ParameterClassifier& getParameterClassifier() const { return parameterClassifier_; }
     
-    // Learn Mode integration
-    void refreshParameterClassification();
-    void recordParameterModification(int paramIndex);
-    
-    // Morph compatibility checking
-    bool areSnapshotsCompatible(int slotA, int slotB) const;
-    juce::String getMorphCompatibilityReport(int slotA, int slotB) const;
-
     // ── V2 accessors ───────────────────────────────────────────────────────
     ModulationEngine&      getModulationEngine()     { return modulationEngine_; }
     SpectralMorphEngine&   getSpectralEngine()       { return spectralEngine_; }
@@ -136,8 +128,6 @@ public:
     FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
     OversamplingWrapper&   getOversampling()          { return oversampling_; }
     LatencyManager&        getLatencyManager()        { return latencyManager_; }
-    PluginHostManager&     getHostManagerB()          { return hostManagerB_; }
-    ParameterBridge&       getParameterBridgeB()      { return paramBridgeB_; }
 
     // Audio-domain morph controls
     void setAudioDomainEnabled(bool v)

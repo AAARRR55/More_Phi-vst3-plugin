@@ -55,7 +55,6 @@ struct DatasetGeneratorConfig
 
     // Source audio settings
     juce::File sourceAudioDirectory;
-    bool useAugmentation = true;
 
     // Sampling settings
     SamplingConfig samplingConfig;

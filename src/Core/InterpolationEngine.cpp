@@ -210,12 +210,8 @@ const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions
 // fallback on exhaustion. Both compute1D and compute2D use this pattern.
 // noexcept: tryReadLocked is noexcept, DBG and std::fill do not throw.
 template<typename Fn>
-static void computeWithRetry(const SnapshotBank& bank,
-                              std::vector<float>& output,
-                              const char* /*caller*/,
-                              Fn&& fn) noexcept
+static void computeWithRetry(const SnapshotBank& bank, Fn&& fn) noexcept
 {
-    (void)output; // Written to by the caller-supplied lambda; kept in signature for clarity.
     constexpr int kMaxRetries = 5;
     bool lockAcquired = false;
 
@@ -251,7 +247,7 @@ void InterpolationEngine::compute1D(float faderPos,
         return;
     }
 
-    computeWithRetry(bank, output, "InterpolationEngine::compute1D",
+    computeWithRetry(bank,
         [&output, faderPos](const auto& slots)
         {
             std::fill(output.begin(), output.end(), 0.5f);
@@ -315,7 +311,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 
     const auto positions = getClockPositions();
 
-    computeWithRetry(bank, output, "InterpolationEngine::compute2D",
+    computeWithRetry(bank,
         [&output, &positions, cursorX, cursorY](const auto& slots)
         {
             std::array<float, SnapshotBank::NUM_SLOTS> weights{};

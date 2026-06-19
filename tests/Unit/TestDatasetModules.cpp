@@ -18,8 +18,6 @@
 #include "AI/Dataset/MetadataWriter.h"
 #include "AI/Dataset/ValidationEngine.h"
 #include "AI/Dataset/DatasetOrganizer.h"
-#include "AI/Dataset/PhaseVocoder.h"
-#include "AI/Dataset/AudioAugmentation.h"
 
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -700,77 +698,6 @@ TEST_CASE("DatasetOrganizer: split ratios produce proportional results", "[datas
 }
 
 // =============================================================================
-//  PhaseVocoder Tests
-// =============================================================================
-
-TEST_CASE("PhaseVocoder: can be constructed", "[dataset][phasevocoder]")
-{
-    more_phi::PhaseVocoder vocoder;
-    REQUIRE(true); // Just verify it compiles
-}
-
-TEST_CASE("PhaseVocoder: prepare initializes FFT", "[dataset][phasevocoder]")
-{
-    more_phi::PhaseVocoder vocoder;
-    vocoder.prepare(48000.0, 2048);
-    // Should not crash, FFT should be initialized
-    REQUIRE(true);
-}
-
-TEST_CASE("PhaseVocoder: prepare handles different FFT sizes", "[dataset][phasevocoder]")
-{
-    more_phi::PhaseVocoder vocoder;
-    vocoder.prepare(48000.0, 1024);
-    vocoder.prepare(48000.0, 4096);
-    REQUIRE(true);
-}
-
-TEST_CASE("PhaseVocoder: time stretch changes duration", "[dataset][phasevocoder]")
-{
-    more_phi::PhaseVocoder vocoder;
-    vocoder.prepare(48000.0, 2048);
-
-    // Create 1 second of audio (440 Hz sine wave)
-    juce::AudioBuffer<float> buffer(1, 48000);
-    for (int i = 0; i < 48000; ++i)
-        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f));
-
-    const int originalSamples = buffer.getNumSamples();
-
-    juce::Random rng(42);
-    vocoder.processTimeStretch(buffer, 1.5f, rng);  // Speed up by 1.5x
-
-    // After stretch with ratio > 1, buffer should be shorter
-    // 48000 / 1.5 = 32000
-    REQUIRE(buffer.getNumSamples() < originalSamples);
-    REQUIRE(buffer.getNumSamples() > 0);
-
-    // Buffer should still contain valid audio (non-zero magnitude)
-    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
-}
-
-TEST_CASE("PhaseVocoder: time stretch preserves approximate energy", "[dataset][phasevocoder]")
-{
-    more_phi::PhaseVocoder vocoder;
-    vocoder.prepare(48000.0, 2048);
-
-    juce::AudioBuffer<float> buffer(1, 48000);
-    for (int i = 0; i < 48000; ++i)
-        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f));
-
-    float originalRMS = buffer.getRMSLevel(0, 0, 48000);
-
-    juce::Random rng(42);
-    vocoder.processTimeStretch(buffer, 1.0f, rng);  // No stretch
-
-    // Buffer size should remain unchanged for stretch ratio 1.0
-    REQUIRE(buffer.getNumSamples() == 48000);
-
-    float newRMS = buffer.getRMSLevel(0, 0, 48000);
-    REQUIRE(std::abs(newRMS - originalRMS) < 0.1f);  // Allow some tolerance
-}
-
-// =============================================================================
 //  Normalization Tests
 // =============================================================================
 
@@ -835,95 +762,6 @@ TEST_CASE("ParameterNormalizer: recommendMethod returns correct types", "[datase
     REQUIRE(normalizer.recommendMethod("Continuous") == NormalizationMethod::MinMax);
 }
 
-// =============================================================================
-//  Augmentation Tests
-// =============================================================================
-
-TEST_CASE("AudioAugmenter: noise injection changes RMS", "[dataset][augmentation]")
-{
-    AudioAugmenter augmenter;
-    AugmentationConfig config;
-    config.type = AugmentationType::NoiseInjection;
-    config.probability = 1.0f; // Always apply
-    config.intensity = 0.5f;
-    config.enabled = true;
-
-    augmenter.addAugmentation(config);
-
-    // Create silent buffer
-    juce::AudioBuffer<float> buffer(1, 1000);
-    buffer.clear();
-
-    juce::Random rng(42);
-    auto results = augmenter.apply(buffer, 48000.0f, rng);
-
-    // Buffer should no longer be silent
-    float rms = 0.0f;
-    for (int i = 0; i < buffer.getNumSamples(); ++i)
-        rms += buffer.getSample(0, i) * buffer.getSample(0, i);
-    rms = std::sqrt(rms / buffer.getNumSamples());
-
-    REQUIRE(results[0].applied == true);
-    REQUIRE(rms > 1e-6f); // No longer silent
-}
-
-TEST_CASE("AudioAugmenter: gain change applies dB correctly", "[dataset][augmentation]")
-{
-    AudioAugmenter augmenter;
-    AugmentationConfig config;
-    config.type = AugmentationType::GainChange;
-    config.probability = 1.0f;
-    config.intensity = 0.0f; // Min intensity = +/- 1 dB
-
-    augmenter.addAugmentation(config);
-
-    // Create buffer with known amplitude
-    juce::AudioBuffer<float> buffer(1, 1000);
-    for (int i = 0; i < 1000; ++i)
-        buffer.setSample(0, i, 0.5f);
-
-    juce::Random rng(42);
-    augmenter.apply(buffer, 48000.0f, rng);
-
-    // Calculate new RMS
-    float newRms = 0.0f;
-    for (int i = 0; i < buffer.getNumSamples(); ++i)
-        newRms += buffer.getSample(0, i) * buffer.getSample(0, i);
-    newRms = std::sqrt(newRms / buffer.getNumSamples());
-
-    // Gain should have changed - just verify it's not identical
-    REQUIRE(newRms > 0.0f);
-}
-
-TEST_CASE("AudioAugmenter: time mask zeroes target samples", "[dataset][augmentation]")
-{
-    AudioAugmenter augmenter;
-    AugmentationConfig config;
-    config.type = AugmentationType::TimeMask;
-    config.probability = 1.0f;
-    config.intensity = 0.5f;
-
-    augmenter.addAugmentation(config);
-
-    // Create buffer with non-zero samples
-    juce::AudioBuffer<float> buffer(1, 10000);
-    for (int i = 0; i < 10000; ++i)
-        buffer.setSample(0, i, 0.5f);
-
-    juce::Random rng(42);
-    augmenter.apply(buffer, 48000.0f, rng);
-
-    // Check that some samples are zero (masked)
-    int zeroCount = 0;
-    for (int i = 0; i < buffer.getNumSamples(); ++i) {
-        if (std::abs(buffer.getSample(0, i)) < 1e-6f)
-            zeroCount++;
-    }
-
-    // Time mask should have zeroed some samples
-    REQUIRE(zeroCount > 0);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Framework Missing Required Deliverable Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -947,18 +785,6 @@ TEST_CASE("DatasetNormalizer: classification-aware normalization", "[dataset][no
     REQUIRE(tB.size() == 1);
     REQUIRE(tA[0] == Catch::Approx(0.5f).margin(0.01f));
     REQUIRE(tB[0] == Catch::Approx(0.5f).margin(0.01f));
-}
-
-TEST_CASE("ParameterAugmenter: parameter-space interpolation", "[dataset][augmentation][interpolation]")
-{
-    std::vector<float> a = {0.0f, 0.0f, 0.0f};
-    std::vector<float> b = {1.0f, 0.5f, 0.2f};
-    
-    auto mid = more_phi::ParameterAugmenter::interpolate(a, b, 0.5f);
-    REQUIRE(mid.size() == 3);
-    REQUIRE(mid[0] == Catch::Approx(0.5f));
-    REQUIRE(mid[1] == Catch::Approx(0.25f));
-    REQUIRE(mid[2] == Catch::Approx(0.1f));
 }
 
 TEST_CASE("ValidationEngine: cross-reference validation", "[dataset][validation][crossref]")
@@ -1016,78 +842,4 @@ TEST_CASE("MetadataWriter: binary export produces readable file", "[dataset][met
     REQUIRE(tempFile.getSize() > 20); // Header + some data
 
     tempFile.deleteFile();
-}
-
-// =============================================================================
-//  PhaseVocoder Integration with AudioAugmenter Tests
-// =============================================================================
-
-TEST_CASE("AudioAugmenter: time stretch augmentation applies", "[dataset][augmentation]")
-{
-    more_phi::AudioAugmenter augmenter;
-    augmenter.addAugmentation({more_phi::AugmentationType::TimeStretch, 1.0f, 0.5f, true});
-
-    juce::AudioBuffer<float> buffer(1, 48000);
-    for (int i = 0; i < 48000; ++i)
-        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
-
-    const int originalSamples = buffer.getNumSamples();
-    float originalRms = buffer.getRMSLevel(0, 0, originalSamples);
-
-    juce::Random rng(42);
-    auto results = augmenter.apply(buffer, 48000.0f, rng);
-
-    REQUIRE(results.size() == 1);
-    REQUIRE(results[0].applied == true);
-    REQUIRE(results[0].augmentationType == "TimeStretch");
-
-    // Time stretch with intensity 0.5 should change the buffer size
-    // (stretch ratio is mapped from intensity 0->0.8x, 1->1.2x, so 0.5->1.0x)
-    // At intensity 0.5, stretch ratio is 1.0, so no size change expected
-    // But the vocoder should still have been called (buffer has valid content)
-    REQUIRE(buffer.getNumSamples() > 0);
-    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
-}
-
-TEST_CASE("AudioAugmenter: pitch shift augmentation applies", "[dataset][augmentation]")
-{
-    more_phi::AudioAugmenter augmenter;
-    augmenter.addAugmentation({more_phi::AugmentationType::PitchShift, 1.0f, 0.5f, true});
-
-    juce::AudioBuffer<float> buffer(1, 48000);
-    for (int i = 0; i < 48000; ++i)
-        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
-
-    const int originalSamples = buffer.getNumSamples();
-
-    juce::Random rng(42);
-    auto results = augmenter.apply(buffer, 48000.0f, rng);
-
-    REQUIRE(results.size() == 1);
-    REQUIRE(results[0].applied == true);
-    REQUIRE(results[0].augmentationType == "PitchShift");
-
-    // Pitch shift should keep the same buffer size but modify the content
-    REQUIRE(buffer.getNumSamples() == originalSamples);
-    REQUIRE(buffer.getMagnitude(0, 0, buffer.getNumSamples()) > 0.0f);
-}
-
-TEST_CASE("AudioAugmenter: time stretch with high intensity shortens buffer", "[dataset][augmentation]")
-{
-    more_phi::AudioAugmenter augmenter;
-    augmenter.addAugmentation({more_phi::AugmentationType::TimeStretch, 1.0f, 1.0f, true}); // intensity 1.0 = 1.2x faster
-
-    juce::AudioBuffer<float> buffer(1, 48000);
-    for (int i = 0; i < 48000; ++i)
-        buffer.setSample(0, i, 0.5f * std::sin(2.0f * 3.14159f * 440.0f * i / 48000.0f));
-
-    const int originalSamples = buffer.getNumSamples();
-
-    juce::Random rng(123);
-    augmenter.apply(buffer, 48000.0f, rng);
-
-    // With intensity 1.0, stretch ratio is 1.2 (faster), so buffer should be shorter
-    // 48000 / 1.2 = 40000
-    REQUIRE(buffer.getNumSamples() < originalSamples);
-    REQUIRE(buffer.getNumSamples() > static_cast<int>(originalSamples * 0.7)); // Allow some tolerance
 }

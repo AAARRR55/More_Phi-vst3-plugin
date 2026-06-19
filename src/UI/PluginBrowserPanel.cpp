@@ -66,11 +66,6 @@ void PluginBrowserPanel::buttonClicked(juce::Button* b)
         captureToNextSlot();
 }
 
-void PluginBrowserPanel::changeListenerCallback(juce::ChangeBroadcaster*)
-{
-    // Scan completed or plugin list changed
-}
-
 void PluginBrowserPanel::timerCallback()
 {
     // Auto-refresh label and button states after async plugin reload / state restore.

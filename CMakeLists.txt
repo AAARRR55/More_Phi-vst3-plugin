@@ -246,8 +246,6 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/LoudnessNormalizer.h
     src/Core/LoudnessNormalizer.cpp
     src/Core/MonoCompatibilityChecker.h
-    src/Core/NeuralCompressor.h
-    src/Core/NeuralCompressor.cpp
     src/Core/AutoMasteringEngine.h
     src/Core/AutoMasteringEngine.cpp
     ${MORE_PHI_NEURAL_MASTERING_SOURCES}
@@ -279,8 +277,6 @@ set(MORE_PHI_LICENSING_SOURCES
 )
 
 set(MORE_PHI_AI_DATASET_STABLE_SOURCES
-    src/AI/Dataset/DatasetGenerator.h
-    src/AI/Dataset/DatasetGenerator.cpp
     src/AI/Dataset/ParameterSampler.h
     src/AI/Dataset/ParameterSampler.cpp
     src/AI/Dataset/AudioContentLibrary.h
@@ -428,7 +424,6 @@ set(MORE_PHI_UI_SOURCES
     src/UI/ModeBar.h
     src/UI/ModeBar.cpp
     src/UI/HostedPluginWindow.h
-    src/UI/HostedPluginWindow.cpp
     src/UI/ParameterMapPanel.h
     src/UI/ParameterMapPanel.cpp
     src/UI/BottomControlStrip.h

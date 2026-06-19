@@ -17,7 +17,6 @@
  *   [11] MSMatrix::decode         M/S → L/R
  *
  * Intelligence (all on message thread):
- *   - NeuralCompressor updates dynamics params every 30ms
  *   - EQParameterTranslator applies genre warm-start to EQ bands 0–7
  *   - ChainPlanExecutor runs a 5-step heuristic rule planner every 30s
  *   - GenreClassifier classifies genre every 30s
@@ -51,7 +50,6 @@
 #include "RealtimeSpectrumAnalyzer.h"
 #include "StereoFieldAnalyzer.h"
 #include "NeuralMasteringTypes.h"
-#include "NeuralCompressor.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
 #include "../AI/GenreClassifier.h"
@@ -110,7 +108,6 @@ public:
         return meterWindow_.computeWindow(windowSeconds);
     }
     [[nodiscard]] bool isGenreClassifierModelLoaded() const noexcept { return genreClassifier_.isModelLoaded(); }
-    [[nodiscard]] bool isNeuralCompressorModelLoaded() const noexcept { return neuralComp_.isModelLoaded(); }
 
     // ── Chain access (message thread — for ABCompareEngine etc.) ─────────────
 
@@ -161,7 +158,6 @@ private:
     StereoFieldAnalyzer         stereoFieldAnalyzer_;
 
     // ── Intelligence layer ────────────────────────────────────────────────────
-    NeuralCompressor            neuralComp_;
     EQParameterTranslator       eqTranslator_;
     GenreClassifier             genreClassifier_;
     ChainPlanExecutor           chainPlanner_;

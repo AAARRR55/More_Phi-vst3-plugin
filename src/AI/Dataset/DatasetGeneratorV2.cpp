@@ -74,9 +74,6 @@ DatasetGeneratorConfig DatasetGeneratorConfig::fromJson(const nlohmann::json& j)
     if (j.contains("sourceAudioDirectory"))
         config.sourceAudioDirectory = juce::File(j["sourceAudioDirectory"].get<std::string>());
 
-    if (j.contains("useAugmentation"))
-        config.useAugmentation = j["useAugmentation"].get<bool>();
-
     if (j.contains("numParallelThreads"))
         config.numParallelThreads = j["numParallelThreads"].get<int>();
 
@@ -159,7 +156,6 @@ nlohmann::json DatasetGeneratorConfig::toJson() const
     if (sourceAudioDirectory.exists())
         j["sourceAudioDirectory"] = sourceAudioDirectory.getFullPathName().toStdString();
 
-    j["useAugmentation"] = useAugmentation;
     j["numParallelThreads"] = numParallelThreads;
     j["pluginSettleTimeMs"] = pluginSettleTimeMs;
     j["dryRun"] = dryRun;

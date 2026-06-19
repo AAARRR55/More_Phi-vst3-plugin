@@ -1556,20 +1556,14 @@ static json modelStatusToJson(MorePhiProcessor& processor)
 {
     auto& engine = processor.getAutoMasteringEngine();
     const bool genreLoaded = engine.isGenreClassifierModelLoaded();
-    const bool compressorLoaded = engine.isNeuralCompressorModelLoaded();
 
     return {
         {"genre_classifier_loaded", genreLoaded},
-        {"neural_compressor_loaded", compressorLoaded},
         {"genre_classifier_backend", genreLoaded ? "loaded_backend" : "default_fallback"},
-        {"neural_compressor_backend", compressorLoaded ? "loaded_backend" : "heuristic_fallback"},
         {"genre_classifier_status", genreLoaded ? "model_loaded" : "default_fallback"},
-        {"neural_compressor_status", compressorLoaded ? "model_loaded" : "heuristic_fallback"},
         {"genre_classifier_inference", genreLoaded ? "available" : "unavailable"},
-        {"neural_compressor_inference", compressorLoaded ? "available" : "unavailable"},
         {"limitations", json::array({
-            "genre classifier uses default fallback when no model is loaded",
-            "neural compressor uses heuristic fallback when no inference backend is loaded"
+            "genre classifier uses default fallback when no model is loaded"
         })}
     };
 }
