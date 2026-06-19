@@ -78,6 +78,10 @@ add_executable(MorePhiTests
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
+    Unit/TestTruePeakEstimator.cpp
+    Unit/TestLUFSMeter.cpp
+    Unit/TestAdaptiveEQ.cpp
+    Unit/TestModulationAndEnvelope.cpp
     Unit/TestLicensing.cpp
     # Spec optimization extensions (heartbeat, scoped cache invalidation, adaptive rate limit)
     Unit/TestSpecOptimizations.cpp

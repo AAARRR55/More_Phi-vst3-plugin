@@ -37,19 +37,30 @@ public:
     explicit ToolResultCache(size_t maxEntries = 64);
 
     /** Look up a cached result. Returns std::nullopt if missing, expired,
-     *  or generation token mismatch.
+     *  generation token mismatch, or (when @p instanceId is non-empty) the
+     *  cached entry belongs to a different plugin instance.
+     *
+     *  B1 FIX (2026-06-19 audit): the cache is a process-wide singleton shared
+     *  by all plugin instances. Without instanceId in the key, instance A could
+     *  read instance B's cached get_plugin_info (which embeds instanceId/port/
+     *  morphCode) on a (toolName, params, generationToken) collision. Namespacing
+     *  the key by instanceId makes the shared cache instance-safe.
      */
     std::optional<nlohmann::json> get(const juce::String& toolName,
                                       const juce::var& params,
-                                      uint64_t generationToken);
+                                      uint64_t generationToken,
+                                      const juce::String& instanceId = {});
 
     /** Store a result. If an entry for the same key exists it is moved to
      *  the front (most-recently-used) and its TTL is refreshed.
+     *
+     *  @p instanceId namespaces the entry by plugin instance (see get() docs).
      */
     void put(const juce::String& toolName,
              const juce::var& params,
              uint64_t generationToken,
              const nlohmann::json& result,
+             const juce::String& instanceId = {},
              std::chrono::seconds ttl = std::chrono::seconds(30));
 
     /** Invalidate all entries. Call when the hosted plugin changes or a
@@ -93,7 +104,8 @@ private:
 
     std::string makeKey(const juce::String& toolName,
                         const juce::var& params,
-                        uint64_t generationToken) const;
+                        uint64_t generationToken,
+                        const juce::String& instanceId) const;
 
     size_t maxEntries_;
     mutable std::mutex mutex_;

@@ -8,6 +8,7 @@
 #include <string>
 #include <array>
 #include <stdexcept>
+#include <cstring>   // std::memset for portable secure-zero in zeroize()
 
 #if JUCE_WINDOWS
     // Must include windows.h BEFORE bcrypt.h - bcrypt.h requires NTSTATUS, ULONG, etc.
@@ -150,7 +151,13 @@ struct InstanceIdentity
 #if JUCE_WINDOWS
             SecureZeroMemory(rawPtr, static_cast<size_t>(tokenLen));
 #else
-            explicit_bzero(rawPtr, static_cast<size_t>(tokenLen));
+            // Portable secure zero: sink through volatile so the compiler
+            // cannot elide the wipe as a dead store. (explicit_bzero is a
+            // BSD/glibc extension absent from the macOS Xcode SDK; memset_s
+            // is C11 Annex K but not universally exposed. The volatile sink
+            // is the most portable form and is what crypto libraries use.)
+            std::memset(rawPtr, 0, static_cast<size_t>(tokenLen));
+            asm volatile("" : : "r"(rawPtr) : "memory");
 #endif
         }
         bearerToken = {};

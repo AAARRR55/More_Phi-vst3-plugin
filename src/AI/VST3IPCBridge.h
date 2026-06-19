@@ -51,10 +51,15 @@ struct CommandPacketHeader
 
 /** 33-byte little-endian result header.
  *
- *  NOTE: The integration spec lists the ResultPacketHeader as 29 bytes, which
- *  omits the 4-byte payload_length field. The field is included here so that
- *  both sides can read the payload size from the header, making the actual
- *  packed size 33 bytes. The C++ and Python serializers use identical layouts.
+ *  Layout: command_id (u32) + status (u8) + value_before (f64) + value_after
+ *  (f64) + timestamp_ns (u64) + payload_length (u32) = 4+1+8+8+8+4 = 33 bytes.
+ *
+ *  Verified 2026-06-19 against the Python peer
+ *  (scripts/vst3-mcp-server/bridge/packets.py), which uses struct format
+ *  "<IBddQI" and computes size via struct.calcsize — both sides agree on 33
+ *  bytes. payload_length is included so either side can read the payload size
+ *  directly from the header. (An earlier integration spec draft omitted this
+ *  field for a 29-byte header; that draft is superseded and not authoritative.)
  */
 struct ResultPacketHeader
 {

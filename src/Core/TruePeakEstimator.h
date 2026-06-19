@@ -13,6 +13,19 @@
  *   Upsample by 4 using an FIR interpolation filter (zero-phase, linear-phase).
  *   Find the absolute maximum over all upsampled samples per block.
  *
+ * Accuracy (measured 2026-06-19 against a Kaiser-windowed 4x reference
+ * reconstruction — see tests/Unit/TestTruePeakEstimator.cpp):
+ *   - DC / low-frequency ISP: within ~0 dB of reference (good).
+ *   - Step-transition overshoot: detected, but undershoots the reference by
+ *     up to ~2 dB depending on block alignment.
+ *   - Near-Nyquist content (>=0.45*fs): under-reads by ~20-25 dB. The 12-tap
+ *     polyphase prototype rolls off well before Nyquist, so a full-scale
+ *     near-Nyquist sine reads ~-25 dBTP instead of ~-1 dBTP.
+ *   This is a KNOWN LIMITATION. The estimator is adequate for detecting DC and
+ *   low/mid-frequency inter-sample peaks but is NOT a ±0.2 dBTP meter. Any
+ *   claim of reference-grade accuracy is unsupported until the prototype FIR
+ *   is widened. The test suite pins these values as regression guards.
+ *
  * Thread safety:
  *   processBlock() — audio thread only, noexcept.
  *   getTruePeak_dBTP() — atomic read, safe from any thread.

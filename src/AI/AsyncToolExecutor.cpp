@@ -8,14 +8,20 @@
 namespace more_phi {
 
 juce::String AsyncToolExecutor::submit(const juce::String& toolName,
-                                       std::function<nlohmann::json()> work)
+                                       std::function<nlohmann::json()> work,
+                                       const juce::String& instancePrefix)
 {
     // Periodic housekeeping: reap finished jobs past their TTL so the table
     // cannot grow without bound across a long-lived session.
     prune(std::chrono::seconds(300));
 
     const auto idNumber = nextId_.fetch_add(1, std::memory_order_relaxed);
-    const auto jobId = juce::String("async_") + juce::String(static_cast<juce::uint64>(idNumber));
+    // B1 FIX: namespace the job ID with the submitting instance's prefix so
+    // cross-instance job enumeration (async_1, async_2, ...) cannot leak
+    // another instance's job status/result. Empty prefix preserves the legacy
+    // bare-counter ID for backward compatibility (e.g. legacy tests).
+    juce::String jobId = (instancePrefix.isNotEmpty() ? (instancePrefix + "-") : juce::String{})
+                       + "async_" + juce::String(static_cast<juce::uint64>(idNumber));
 
     bool spawn = true;
     {

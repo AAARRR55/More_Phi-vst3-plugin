@@ -799,3 +799,122 @@ TEST_CASE("GranularMorphEngine (production): inactive engine leaves buffer uncha
         REQUIRE(out[i] == Catch::Approx(0.5f).margin(1e-6f));
     }
 }
+
+// =============================================================================
+//  H5 normalization characterization — peak gain vs active grain count
+//
+//  The H5 fix normalizes the grain cloud by 1/sqrt(0.375 * N) (the Hann²-power
+//  correct normalization). This test characterizes the actual peak-gain curve
+//  so the normalization can be validated against its design intent:
+//    - Output RMS must stay bounded (not grow with N) for uncorrelated grains.
+//    - Output peak must never exceed a sane ceiling even at max density.
+//
+//  We deliberately avoid asserting an exact scaling law (peak gain is
+//  path-dependent on grain scheduling, positions, and pitch), and instead
+//  bound the behaviour the normalization is meant to guarantee.
+// =============================================================================
+
+TEST_CASE("GranularMorphEngine (production): output RMS stays bounded as density grows", "[granular][production][h5]")
+{
+    // Drive both sources with uncorrelated noise-like content (different sines)
+    // so the cloud's grains are genuinely decorrelated — the regime the H5
+    // RMS-normalization targets.
+    constexpr double sr = 44100.0;
+    constexpr int blockSize = 512;
+
+    auto runCloud = [&](float density, float positionRandom) -> float
+    {
+        more_phi::GranularMorphEngine engine;
+        engine.prepare(sr, blockSize);
+        engine.setActive(true);
+        engine.setGrainSize(50.0f);
+        engine.setGrainDensity(density);
+        engine.setPositionRandomization(positionRandom);
+
+        juce::AudioBuffer<float> bufA(1, blockSize);
+        juce::AudioBuffer<float> bufB(1, blockSize);
+
+        // Uncorrelated sources: A = 440 Hz, B = 660 Hz at unit amplitude.
+        for (int ch = 0; ch < 1; ++ch)
+        {
+            float* a = bufA.getWritePointer(ch);
+            float* b = bufB.getWritePointer(ch);
+            for (int i = 0; i < blockSize; ++i)
+            {
+                a[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * i / static_cast<float>(sr));
+                b[i] = std::sin(2.0f * 3.14159265358979f * 660.0f * i / static_cast<float>(sr));
+            }
+        }
+
+        // Warm up + measure over many blocks for a stable RMS.
+        double sumSq = 0.0;
+        int count = 0;
+        int globalSample = 0;
+        for (int blk = 0; blk < 100; ++blk)
+        {
+            // Re-fill sources each block so the cloud keeps reading new samples.
+            for (int i = 0; i < blockSize; ++i)
+            {
+                bufA.getWritePointer(0)[i] = std::sin(2.0f * 3.14159265358979f * 440.0f * globalSample / static_cast<float>(sr));
+                bufB.getWritePointer(0)[i] = std::sin(2.0f * 3.14159265358979f * 660.0f * globalSample / static_cast<float>(sr));
+                ++globalSample;
+            }
+            engine.processBlock(bufA, bufB, 0.5f);
+            if (blk < 10) continue;  // skip warmup
+            const float* out = bufA.getReadPointer(0);
+            for (int i = 0; i < blockSize; ++i)
+            {
+                sumSq += static_cast<double>(out[i]) * out[i];
+                ++count;
+            }
+        }
+        return static_cast<float>(std::sqrt(sumSq / static_cast<double>(count)));
+    };
+
+    const float rmsLow  = runCloud(10.0f, 1.0f);   // sparse, decorrelated
+    const float rmsHigh = runCloud(100.0f, 1.0f);  // max density, decorrelated
+
+    INFO("RMS low-density = " << rmsLow << "  RMS high-density = " << rmsHigh);
+    // RMS must not explode with density — the whole point of H5.
+    // Allow generous headroom; the requirement is "bounded", not "flat".
+    REQUIRE(rmsHigh < 4.0f * (rmsLow + 1e-6f));
+}
+
+TEST_CASE("GranularMorphEngine (production): peak output stays within sane ceiling at max density", "[granular][production][h5]")
+{
+    constexpr double sr = 44100.0;
+    constexpr int blockSize = 512;
+
+    more_phi::GranularMorphEngine engine;
+    engine.prepare(sr, blockSize);
+    engine.setActive(true);
+    engine.setGrainSize(200.0f);   // max grain size -> longest overlap
+    engine.setGrainDensity(100.0f); // max density
+    engine.setPositionRandomization(0.0f); // worst case: coherent reads
+
+    juce::AudioBuffer<float> bufA(1, blockSize);
+    juce::AudioBuffer<float> bufB(1, blockSize);
+
+    float globalPeak = 0.0f;
+    for (int blk = 0; blk < 50; ++blk)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const int gi = blk * blockSize + i;
+            bufA.getWritePointer(0)[i] = 1.0f;  // full-scale DC: maximizes coherent sum
+            bufB.getWritePointer(0)[i] = 1.0f;
+        }
+        engine.processBlock(bufA, bufB, 0.5f);
+        const float* out = bufA.getReadPointer(0);
+        for (int i = 0; i < blockSize; ++i)
+            globalPeak = std::max(globalPeak, std::abs(out[i]));
+    }
+
+    INFO("peak at max density / coherent = " << globalPeak);
+    // Even in the worst coherent case, the cloud must not run away. The prior
+    // test asserted < 20.0; the H5 normalization should keep this substantially
+    // tighter. We assert a conservative ceiling that still catches a
+    // normalization regression (e.g. normalization removed entirely).
+    REQUIRE(globalPeak < 10.0f);
+    REQUIRE(std::isfinite(globalPeak));
+}

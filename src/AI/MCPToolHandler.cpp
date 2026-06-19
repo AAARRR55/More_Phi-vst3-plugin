@@ -2842,7 +2842,8 @@ juce::String MCPToolHandler::getCachedToolResult(const juce::String& method,
     if (!isCacheableTool(method))
         return {};
 
-    const auto cached = toolResultCache().get(method, params, p.getProcessorGenerationToken());
+    const auto cached = toolResultCache().get(method, params, p.getProcessorGenerationToken(),
+                                              p.getInstanceIdentity().instanceId);
     if (!cached.has_value())
         return {};
 
@@ -2867,6 +2868,7 @@ void MCPToolHandler::cacheToolResult(const juce::String& method,
             return;
 
         toolResultCache().put(method, params, p.getProcessorGenerationToken(), parsed,
+                              p.getInstanceIdentity().instanceId,
                               std::chrono::seconds(30));
     }
     catch (...)
@@ -2893,7 +2895,8 @@ juce::String MCPToolHandler::submitAsyncTool(const juce::String& /*method*/,
         innerMethod.toStdString(),
         [innerMethod, innerParams, &p, &identity, &runtime]() -> json {
             return parseToolResponse(MCPToolHandler::handle(innerMethod, innerParams, p, identity, runtime));
-        });
+        },
+        identity.morphCode);  // B1 FIX: namespace job ID by instance
 
     return toJString(json{
         {"success", true},

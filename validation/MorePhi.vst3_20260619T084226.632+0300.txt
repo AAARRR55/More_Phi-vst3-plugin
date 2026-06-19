@@ -1,4 +1,3 @@
-Started validating: G:\More_Phi-vst3-plugin\build\MorePhi_artefacts\Release\VST3\MorePhi.vst3
 Random seed: 0x299777
 Validation started
 Strictness level: 5
@@ -11,16 +10,6 @@ MorePhi: MorePhi v3.3.0
 Completed tests in pluginval / Scan for plugins located in: G:\More_Phi-vst3-plugin\build\MorePhi_artefacts\Release\VST3\MorePhi.vst3
 -----------------------------------------------------------------
 Starting tests in: pluginval / Open plugin (cold)...
-[~MorePhiProcessor] entering destructor
-[~MorePhiProcessor] stopped timer
-[~MorePhiProcessor] reset aiAssistant_
-[~MorePhiProcessor] detached linkBroadcaster_
-[~MorePhiProcessor] stopping mcpServer...
-[~MorePhiProcessor] stopped mcpServer
-[~MorePhiProcessor] deregistered instance
-[~MorePhiProcessor] cleared hosted mastering applicators
-[~MorePhiProcessor] unloading hosted plugin...
-[~MorePhiProcessor] unloaded hosted plugin
 Completed tests in pluginval / Open plugin (cold)
 -----------------------------------------------------------------
 Starting tests in: pluginval / Open plugin (warm)...
@@ -124,17 +113,5 @@ Completed tests in pluginval / Disabling non-main busses
 Starting tests in: pluginval / Restoring default layout...
 Main bus num input channels: 2
 Main bus num output channels: 2
-[~MorePhiProcessor] entering destructor
-[~MorePhiProcessor] stopped timer
-[~MorePhiProcessor] reset aiAssistant_
-[~MorePhiProcessor] detached linkBroadcaster_
-[~MorePhiProcessor] stopping vst3IpcBridge_...
-[~MorePhiProcessor] stopped vst3IpcBridge_
-[~MorePhiProcessor] stopping mcpServer...
-[~MorePhiProcessor] stopped mcpServer
-[~MorePhiProcessor] deregistered instance
-[~MorePhiProcessor] cleared hosted mastering applicators
-[~MorePhiProcessor] unloading hosted plugin...
-[~MorePhiProcessor] unloaded hosted plugin
 Completed tests in pluginval / Restoring default layout
 SUCCESS

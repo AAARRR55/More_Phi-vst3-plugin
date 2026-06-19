@@ -224,6 +224,64 @@ TEST_CASE("LatencyManager: mode switch to bypass resets oversampling latency to 
     REQUIRE(lm.getTotal() == 0);
 }
 
+// =============================================================================
+//  LatencyManager — full PDC accounting (B2 verification)
+//
+//  These tests pin the production latency-reporting contract: the value the
+//  plugin feeds to AudioProcessor::setLatencySamples() must equal the sum of
+//  every delay the signal path introduces, so the DAW's PDC can compensate.
+//  The processor wires four components (PluginProcessor.cpp:2475-2485):
+//    hosted plugin + oversampling + FFT window + mastering-chain lookahead.
+//  A regression that drops any component from the sum would silently misalign
+//  downstream buses in a mix.
+// =============================================================================
+
+TEST_CASE("LatencyManager: total includes all four PDC components", "[latency][pdc]")
+{
+    LatencyManager lm;
+    // Representative values: hosted plugin 256, oversampling 32, FFT window 512,
+    // mastering-chain (brickwall lookahead @ 48 kHz) 192.
+    lm.setHostedPluginLatency(256);
+    lm.setOversamplingLatency(32);
+    lm.setFFTWindowLatency(512);
+    lm.setMasteringChainLatency(192);
+
+    REQUIRE(lm.getTotal() == 256 + 32 + 512 + 192);
+    REQUIRE(lm.getHostedPluginLatency()   == 256);
+    REQUIRE(lm.getOversamplingLatency()   == 32);
+    REQUIRE(lm.getFFTWindowLatency()      == 512);
+    REQUIRE(lm.getMasteringChainLatency() == 192);
+}
+
+TEST_CASE("LatencyManager: mastering-chain lookahead is non-negative when dormant", "[latency][pdc]")
+{
+    // The shipped mastering chain meters only (no lookahead processing active),
+    // so its reported latency must be >= 0 — never a negative value that would
+    // corrupt the PDC sum. This guards against a future mastering-engine change
+    // that returns a signed underflow.
+    LatencyManager lm;
+    lm.setHostedPluginLatency(128);
+    lm.setMasteringChainLatency(0);   // dormant chain
+    REQUIRE(lm.getTotal() == 128);
+    REQUIRE(lm.getMasteringChainLatency() >= 0);
+
+    // And negative inputs are clamped (defensive: a buggy sub-component must
+    // not be able to subtract from the reported latency).
+    lm.setMasteringChainLatency(-50);
+    REQUIRE(lm.getMasteringChainLatency() == 0);
+    REQUIRE(lm.getTotal() == 128);
+}
+
+TEST_CASE("LatencyManager: spectral-only path reports FFT window latency", "[latency][pdc]")
+{
+    // When the spectral morph engine is active, the FFT window contributes
+    // fftSize/2 samples of delay. Pin that the window component flows through
+    // to the total even when no other processing is active.
+    LatencyManager lm;
+    lm.setFFTWindowLatency(1024);   // e.g. 2048-point FFT
+    REQUIRE(lm.getTotal() == 1024);
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Aliasing detection — swept-sine test

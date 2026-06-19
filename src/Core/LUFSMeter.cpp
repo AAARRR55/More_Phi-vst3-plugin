@@ -128,13 +128,17 @@ void LUFSMeter::processBlock(const float* const* channels,
 
 void LUFSMeter::commitBlock(int numChannels) noexcept
 {
-    // ITU-R BS.1770-4 channel-weighted mean square
-    // Weights: L=1.0, R=1.0, C=1.0, Ls=1.41, Rs=1.41 (stereo: L+R only)
+    // ITU-R BS.1770-4 channel-weighted mean square.
+    // Each channel's block mean-square is scaled by its BS.1770-4 weight
+    // (default 1.0 for L/R; surround callers set Ls/Rs to 1.41 via
+    // setChannelWeights()). The weight multiplies an already-squared power
+    // quantity, so 1.41 contributes 10*log10(1.41) ≈ +1.5 dB per surround
+    // channel. For the default stereo layout every weight is 1.0, so this
+    // reproduces the previous uniform-weighting result exactly.
     float ms = 0.0f;
     const float blockSamples = static_cast<float>(blockSizeSamples_);
     for (int ch = 0; ch < numChannels; ++ch)
-        ms += blockSumSq_[ch] / blockSamples;
-    // For stereo, no extra channel weighting (both G=1.0)
+        ms += channelWeights_[static_cast<size_t>(ch)] * blockSumSq_[ch] / blockSamples;
 
     // Reset accumulator
     for (int ch = 0; ch < kMaxChannels; ++ch)

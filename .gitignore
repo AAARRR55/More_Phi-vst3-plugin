@@ -138,6 +138,16 @@ tools/pluginval.zip
 # Node.js dependencies
 node_modules/
 
+# Playwright MCP browser automation cache
+.playwright-mcp/
+
 # Stale / backup files
 *.bak
 *.stale
+
+
+# Generated test audio (output of scripts/generate_test_audio.py)
+pink_noise.wav
+
+# Windows null-device-name artifact (regenerates from build-windows-safe.ps1's >nul redirect)
+nul

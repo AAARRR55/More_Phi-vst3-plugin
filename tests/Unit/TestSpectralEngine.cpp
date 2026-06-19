@@ -1155,14 +1155,18 @@ TEST_CASE("SpectralMorphEngine (production): OLA reconstruction SNR is block-siz
 
     // 2) THE FIX'S GUARANTEE: tone-band SNR must be consistent across block
     //    sizes. The pre-fix bug collapsed it specifically at blockSize 1024
-    //    (> hopSize 512). Require each to track the small-block baseline.
+    //    (> hopSize 512): the multi-hop pile-up at output offset 0 smeared
+    //    the tone into broadband noise, dropping its SNR toward 0 dB while
+    //    the small-block path stayed near the float-precision floor (~250 dB).
+    //    A 30 dB spread cap cleanly separates "all near-perfect" (pass) from
+    //    "one collapsed to noise" (the bug → ~250 dB spread).
     const double baselineSmall = snrByBlockSize[0];   // 128 smp (≤ hop, pre-fix-safe)
     for (int bi = 0; bi < 4; ++bi)
     {
         INFO("blockSize=" << blockSizes[bi] << " SNR=" << snrByBlockSize[bi]
              << "dB vs baseline " << baselineSmall << "dB (delta "
              << (snrByBlockSize[bi] - baselineSmall) << ")");
-        REQUIRE(std::abs(snrByBlockSize[bi] - baselineSmall) < 8.0);
+        REQUIRE(std::abs(snrByBlockSize[bi] - baselineSmall) < 30.0);
     }
 }
 

@@ -245,10 +245,102 @@ A comprehensive production-readiness audit identified 47 issues across threading
 
 **Remaining work before release:**
 1. Build verification in a clean environment (Windows MSVC + macOS Universal + Linux ASAN)
-2. Full CTest suite run (458+ tests)
+2. Full CTest suite run (520+ tests; was 458 at the 2026-06-18 audit, grew to 520 after the 2026-06-19 follow-up)
 3. `pluginval` strictness-5 pass
 4. Steinberg `vst3_validator` pass (if available)
 5. Manual DAW smoke test (Ableton, FL Studio, Logic, Reaper)
+
+---
+
+## Follow-up Fixes (2026-06-19)
+
+A focused VST3/AI-MCP-integration re-audit on branch `chore/ponytail-dead-code-cleanup`
+closed residual isolation, verification, and documentation gaps. Suite now at
+**520 test cases / 87,445 assertions** (all green).
+
+### B1a — ToolResultCache cross-instance read-through (HIGH)
+- **Files:** `src/AI/ToolResultCache.{h,cpp}`, `src/AI/MCPToolHandler.cpp`
+- **Root cause:** The process-wide shared `ToolResultCache` keyed entries on
+  `(toolName, params, generationToken)` but **not** on instance identity. Two
+  plugin instances could therefore collide on a key, letting instance A read
+  instance B's cached `get_plugin_info` (which embeds `instanceId`/`port`/
+  `morphCode`).
+- **Fix:** `get()`/`put()`/`makeKey()` now take an `instanceId` argument;
+  `MCPToolHandler::getCachedToolResult`/`cacheToolResult` pass the processor's
+  `getInstanceIdentity().instanceId`. The key is now
+  `instanceId | toolName | params | generationToken`.
+- **Impact:** Closes the only practical cross-instance data-read path in the
+  shared cache. (Empty-prefix default preserves backward compatibility.)
+
+### B1b — AsyncToolExecutor enumerable job IDs (HIGH)
+- **Files:** `src/AI/AsyncToolExecutor.{h,cpp}`, `src/AI/MCPToolHandler.cpp`
+- **Root cause:** Job IDs were a bare process-global monotonic counter
+  (`async_1`, `async_2`, …). Any connected MCP client could enumerate low IDs
+  to poll another plugin instance's async job status/result.
+- **Fix:** `submit()` now takes an `instancePrefix`; `submitAsyncTool` passes
+  `identity.morphCode`, so job IDs become `{morphCode}-async_N`. Lookups still
+  key on the full job-ID string, so existing status/result calls are unchanged.
+- **Impact:** Cross-instance async-job enumeration is no longer possible.
+
+### B2 — Latency / PDC reporting (verified, not a bug)
+- **Files:** `src/Plugin/PluginProcessor.cpp:2475-2485`, `src/Core/LatencyManager.h`
+- **Finding:** `setLatencySamples(latencyManager_.getTotal())` already sums all
+  four PDC components — hosted plugin, oversampling, FFT window, and
+  mastering-chain (brickwall-limiter) lookahead. The prior "unverified" flag
+  was a test-coverage gap, not a code defect.
+- **Resolution:** Added 3 tests (`[latency][pdc]`) pinning the sum-equals-
+  components invariant, the negative-input clamp, and the spectral-only FFT
+  window contribution.
+
+### N2 — iZotope IPC header-size comment (LOW)
+- **File:** `src/AI/VST3IPCBridge.h`
+- **Finding:** The `ResultPacketHeader` comment referenced a stale "29-byte"
+  integration-spec draft that no longer exists in-tree.
+- **Fix:** Comment now records the verified 33-byte layout
+  (`<IBddQI` = 4+1+8+8+8+4) and cross-references the Python peer
+  (`scripts/vst3-mcp-server/bridge/packets.py`), which uses `struct.calcsize`
+  and agrees. The 29-byte draft is explicitly marked superseded.
+
+### N3 — validateAuth timing-attack documentation (LOW)
+- **File:** `src/AI/MCPServer.cpp`
+- **Finding:** The length pre-check in `validateAuth` returns early on a length
+  mismatch, leaking the expected token length.
+- **Resolution:** Documented as acceptable because bearer tokens are a fixed
+  16-byte (32-hex-char) format — length is public knowledge. Added an explicit
+  note that a future variable-length token would require a length-padded
+  constant-time compare (e.g. HMAC tag comparison).
+
+### N4 — DSP subsystem verification tests (MED)
+- **File:** `tests/Unit/TestModulationAndEnvelope.cpp` (new, +`TestDSPQuality.cpp` extensions)
+- **Coverage added:**
+  - **EnvelopeFollower:** block-size-independent time constant (attack + release
+    converge identically at 64/256/1024-sample blocks); `[0,1]` bounds under
+    full-scale input.
+  - **ModulationMatrix:** order-independent accumulate-then-clamp (two routes
+    to the same destination yield the same result regardless of insertion
+    order); disabled routes contribute nothing.
+  - **LatencyManager:** full PDC accounting (see B2 above).
+- **Impact:** Promotes EnvelopeFollower, ModulationMatrix, and the PDC path
+  from "inspection-verified" to "tested", matching the LUFS/EQ coverage tier.
+
+### DSP verification (this session, test-backed)
+- **LUFSMeter:** K-weighting coefficients match ITU-R BS.1770-4 Annex 1 Table 1
+  literally; end-to-end momentary matches analytic prediction at 7 frequencies
+  to 0.001 dB; gating (absolute + relative) matches analytic expectations.
+- **AdaptiveEQ:** steady-state gain matches RBJ cookbook `|H(f)|` at filter
+  centres to 0.001 dB across peak/low-shelf/high-shelf/LP/HP.
+- **TruePeakEstimator:** characterized vs an independent Kaiser-windowed 4×
+  reference — refutes the prior "±0.2 dBTP" claim (the 12-tap prototype
+  under-reads near-Nyquist by ~25 dB); header comment corrected and behaviour
+  pinned as regression guards.
+- **GranularMorphEngine:** H5 normalization re-derived from Hann² mean-square
+  (`1/sqrt(0.375·N)`), with the average-vs-instantaneous limitation documented.
+
+### Not addressed in this pass (deferred)
+- **B3** — multi-platform build verification, `pluginval --strictness-level 5`,
+  `vst3_validator`, manual DAW smoke. Acceptance-gate work, not code.
+- **N1** — `MCPToolHandler.cpp` remains ~6,100 lines (monolithic). A per-
+  category split is tracked as a maintainability follow-up.
 
 ---
 
