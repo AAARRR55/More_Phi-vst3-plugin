@@ -655,6 +655,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS "-mavx2;-msse4.1")
     endif()
+elseif(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # macOS Universal build (x86_64 + arm64). CMAKE_SYSTEM_PROCESSOR is the
+    # host's CPU (arm64 on Apple Silicon runners), so the x86 regex above
+    # doesn't match even though the build targets x86_64 as a slice. Scope
+    # -mavx2/-msse4.1 to the x86_64 slice only via -Xarch; the arm64 slice
+    # is unaffected (its intrinsics are #if-guarded to no-ops in source).
+    set(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS "-Xarch_x86_64;-mavx2;-Xarch_x86_64;-msse4.1")
 endif()
 
 if(MORE_PHI_SIMD_SOURCE_COMPILE_OPTIONS)
