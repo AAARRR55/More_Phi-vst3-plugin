@@ -148,3 +148,6 @@ node_modules/
 
 # Generated test audio (output of scripts/generate_test_audio.py)
 pink_noise.wav
+
+# Windows null-device-name artifact (regenerates from build-windows-safe.ps1's >nul redirect)
+nul
