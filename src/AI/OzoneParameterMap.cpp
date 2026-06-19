@@ -338,6 +338,15 @@ float OzoneParameterMap::normalizeWidth(float width) noexcept
     return std::clamp(width * 0.5f, 0.0f, 1.0f);
 }
 
+float OzoneParameterMap::normalizeQ(float q, float minQ, float maxQ) noexcept
+{
+    // Q is linear in normalized VST3 space. Range [0.1, 8.0] matches
+    // PluginSemanticMapper ("0.3 to 8.0") + EQParameterTranslator's 0.1 floor.
+    // (Previously this was mis-encoded via normalizeFreq's log2 curve.)
+    if (maxQ <= minQ) return 0.5f;
+    return std::clamp((q - minQ) / (maxQ - minQ), 0.0f, 1.0f);
+}
+
 float OzoneParameterMap::normalizeLUFS(float lufs, float minLUFS, float maxLUFS) noexcept
 {
     if (maxLUFS <= minLUFS) return 0.5f;
