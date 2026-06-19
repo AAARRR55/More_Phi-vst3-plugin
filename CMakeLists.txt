@@ -424,7 +424,6 @@ set(MORE_PHI_UI_SOURCES
     src/UI/ModeBar.h
     src/UI/ModeBar.cpp
     src/UI/HostedPluginWindow.h
-    src/UI/HostedPluginWindow.cpp
     src/UI/ParameterMapPanel.h
     src/UI/ParameterMapPanel.cpp
     src/UI/BottomControlStrip.h
