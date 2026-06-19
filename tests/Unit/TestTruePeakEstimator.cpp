@@ -221,7 +221,7 @@ TEST_CASE("TruePeakEstimator: step transition produces overshoot above sample pe
     REQUIRE(toDb(estPeak) < 3.0f);
 }
 
-TEST_CASE("TruePeakEstimator: near-Nyquist sine — known under-read (regression guard)", "[truepeak][isp]")
+TEST_CASE("TruePeakEstimator: near-Nyquist sine - known under-read (regression guard)", "[truepeak][isp]")
 {
     // The estimator under-reads near-Nyquist content by ~25 dB vs the reference.
     // This is a DOCUMENTED LIMITATION, not a target. The test pins the current
@@ -247,7 +247,7 @@ TEST_CASE("TruePeakEstimator: near-Nyquist sine — known under-read (regression
     REQUIRE(toDb(estPeak) < -15.0f);
 }
 
-TEST_CASE("TruePeakEstimator: two-tone beat — known under-read (regression guard)", "[truepeak][isp]")
+TEST_CASE("TruePeakEstimator: two-tone beat - known under-read (regression guard)", "[truepeak][isp]")
 {
     // 0.45*fs + 0.49*fs. Estimator under-reads by ~21 dB vs reference.
     constexpr int N = 8192;
@@ -275,7 +275,7 @@ TEST_CASE("TruePeakEstimator: two-tone beat — known under-read (regression gua
 //  Sanity — non-negativity, identity on DC, ring-index correctness
 // =============================================================================
 
-TEST_CASE("TruePeakEstimator: diagnostic — full-scale DC unit amplitude", "[truepeak][diag]")
+TEST_CASE("TruePeakEstimator: diagnostic - full-scale DC unit amplitude", "[truepeak][diag]")
 {
     // Isolate whether the estimator reads DC correctly at amplitude 1.0.
     // (The constant-signal sanity test uses 0.5; this uses 1.0 to match the
@@ -287,7 +287,7 @@ TEST_CASE("TruePeakEstimator: diagnostic — full-scale DC unit amplitude", "[tr
     REQUIRE(peak == Approx(1.0f).margin(0.05f));
 }
 
-TEST_CASE("TruePeakEstimator: diagnostic — sustained +1 after step", "[truepeak][diag]")
+TEST_CASE("TruePeakEstimator: diagnostic - sustained +1 after step", "[truepeak][diag]")
 {
     // Mirror the step test but inspect: does the estimator see the +1 tail?
     std::vector<float> x(256, -1.0f);
@@ -304,7 +304,7 @@ TEST_CASE("TruePeakEstimator: diagnostic — sustained +1 after step", "[truepea
     }
 }
 
-TEST_CASE("TruePeakEstimator: diagnostic — near-Nyquist sine block size sweep", "[truepeak][diag]")
+TEST_CASE("TruePeakEstimator: diagnostic - near-Nyquist sine block size sweep", "[truepeak][diag]")
 {
     constexpr double sr = 48000.0;
     constexpr double f = 0.49 * sr;
