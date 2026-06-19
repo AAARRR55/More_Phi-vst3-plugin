@@ -2627,11 +2627,6 @@ const juce::String MorePhiProcessor::getProgramName(int index)
     if (index < 0 || index >= SnapshotBank::NUM_SLOTS)
         return {};
 
-    // Read slot name from snapshot bank (best-effort, no lock)
-    std::array<int, SnapshotBank::NUM_SLOTS> occupied;
-    int numOccupied = snapshotBank.getOccupiedSlots(occupied);
-    juce::ignoreUnused(numOccupied);
-
     if (snapshotBank.isOccupied(index))
         return "Snapshot " + juce::String(index + 1);
 
