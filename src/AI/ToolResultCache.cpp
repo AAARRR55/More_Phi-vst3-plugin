@@ -20,10 +20,14 @@ ToolResultCache::ToolResultCache(size_t maxEntries)
 
 std::string ToolResultCache::makeKey(const juce::String& toolName,
                                      const juce::var& params,
-                                     uint64_t generationToken) const
+                                     uint64_t generationToken,
+                                     const juce::String& instanceId) const
 {
+    // B1 FIX: instanceId namespaces the key so a process-wide shared cache
+    // cannot serve one plugin instance's results to another.
     std::ostringstream key;
-    key << toolName.toStdString() << '\0'
+    key << instanceId.toStdString() << '\0'
+        << toolName.toStdString() << '\0'
         << juceVarToStableString(params) << '\0'
         << generationToken;
     return key.str();
@@ -31,9 +35,10 @@ std::string ToolResultCache::makeKey(const juce::String& toolName,
 
 std::optional<nlohmann::json> ToolResultCache::get(const juce::String& toolName,
                                                    const juce::var& params,
-                                                   uint64_t generationToken)
+                                                   uint64_t generationToken,
+                                                   const juce::String& instanceId)
 {
-    const auto key = makeKey(toolName, params, generationToken);
+    const auto key = makeKey(toolName, params, generationToken, instanceId);
     const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -63,9 +68,10 @@ void ToolResultCache::put(const juce::String& toolName,
                           const juce::var& params,
                           uint64_t generationToken,
                           const nlohmann::json& result,
+                          const juce::String& instanceId,
                           std::chrono::seconds ttl)
 {
-    const auto key = makeKey(toolName, params, generationToken);
+    const auto key = makeKey(toolName, params, generationToken, instanceId);
     const auto now = std::chrono::steady_clock::now();
     const Scope scope = scopeForTool(toolName);
 

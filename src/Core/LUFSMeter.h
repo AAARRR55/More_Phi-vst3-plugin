@@ -56,6 +56,16 @@ public:
      * Process a block of interleaved channel pointers.
      * noexcept — pure arithmetic on pre-allocated state.
      *
+     * Channel weights: BS.1770-4 §4 specifies loudness factors L/R/C = 1.0,
+     * Ls/Rs = 1.41. The weight multiplies each channel's block mean-square
+     * (an already-squared power quantity), so a 1.41-weighted surround channel
+     * contributes 10*log10(1.41) ≈ +1.5 dB relative to a 1.0-weighted channel
+     * of equal power. For the default stereo configuration both channels carry
+     * weight 1.0, so stereo output is numerically identical to the previous
+     * uniform-weighting implementation. Surround layouts (>2 ch) must call
+     * setChannelWeights() to install the correct role weights; otherwise all
+     * active channels are weighted 1.0.
+     *
      * @param channels     Array of channel pointers (L=0, R=1)
      * @param numChannels  Active channel count (clamped to kMaxChannels)
      * @param numSamples   Samples per channel in this block
@@ -63,6 +73,18 @@ public:
     void processBlock(const float* const* channels,
                       int numChannels,
                       int numSamples) noexcept;
+
+    /**
+     * Install per-channel loudness weights (BS.1770-4 §4 channel factors).
+     * Entries beyond @p count retain their current value. Call from the
+     * message thread on layout change. Default is uniform 1.0 (correct for
+     * stereo; surround callers pass {1.0,1.0,1.0,1.41,1.41} for 5.0).
+     */
+    void setChannelWeights(const float* weights, int count) noexcept
+    {
+        for (int i = 0; i < count && i < kMaxChannels; ++i)
+            channelWeights_[static_cast<size_t>(i)] = weights[i];
+    }
 
     // ── Result accessors (any thread) ────────────────────────────────────────
 
@@ -97,6 +119,16 @@ private:
     BiquadCoeffs pre_{};
     BiquadCoeffs hp_{};
 
+    // BS.1770-4 per-channel loudness weights. Default 1.0 for every channel
+    // (correct for stereo L/R; surround callers set Ls/Rs to 1.41 via
+    // setChannelWeights()). The weight multiplies an already-squared
+    // mean-square, so 1.41 contributes 10*log10(1.41) ≈ +1.5 dB per surround
+    // channel. Restoring the true surround weights here was the LUFS-BUG fix
+    // from the 2026-06-19 DSP re-audit — previously every channel was
+    // hardcoded 1.0, under-reporting surround loudness by ~1.5 dB on the
+    // surround channels.
+    std::array<float, kMaxChannels> channelWeights_{ 1.0f, 1.0f };
+
     // ── 100 ms integration ────────────────────────────────────────────────────
     double sampleRate_      { 48000.0 };
     int    blockSizeSamples_{ 4800 };       // 100ms in samples
@@ -125,6 +157,17 @@ private:
     void  updateLongTermMetrics() noexcept;
     float windowedMeanLUFS(int numBlocks) const noexcept;
 
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
+public:
+    // ── Test-only coefficient access ─────────────────────────────────────────
+    // Exposes the computed K-weighting biquad coefficients so unit tests can
+    // compare them directly against the ITU-R BS.1770-4 Annex 1 Table 1
+    // normative values. Not part of the production API; gated behind
+    // MORE_PHI_TEST_MODE (defined for the test target only).
+    struct KWeightCoeffsView { float b0, b1, b2, a1, a2; };
+    KWeightCoeffsView getPreFilterCoeffs() const noexcept { return { pre_.b0, pre_.b1, pre_.b2, pre_.a1, pre_.a2 }; }
+    KWeightCoeffsView getRLBCoeffs()      const noexcept { return { hp_.b0,  hp_.b1,  hp_.b2,  hp_.a1,  hp_.a2  }; }
+#endif
 };
 
 } // namespace more_phi

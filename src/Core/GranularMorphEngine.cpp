@@ -202,11 +202,44 @@ void GranularMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
 
     renderGrains(mixBuffer_.data(), usedSamples);
 
-    // H5 FIX: Normalize grain cloud amplitude to prevent buildup at high density.
+    // H5 FIX: Normalize the grain cloud so output power stays bounded as the
+    // active grain count grows.
+    //
+    // Derivation (replaces the prior heuristic 1/sqrt(N/2+1)):
+    //   Each grain reads the mono source through a Hann window w[n] and is
+    //   summed into the mix. A Hann window's *time-averaged* mean-square value
+    //   (the continuous / large-N limit) is
+    //       <w^2> = integral_0^1 [0.5(1-cos 2pi t)]^2 dt = 3/8 = 0.375
+    //   For N grains carrying the same source variance sigma^2 and treated as
+    //   uncorrelated (the design intent: grains read from randomized offsets
+    //   and pitches), the *time-averaged* summed-output variance is
+    //       <Var(out)> = N * <w^2> * sigma^2
+    //   so the output RMS scales as sqrt(N * 0.375) * sigma_rms on average.
+    //   Dividing by 1 / sqrt(N * <w^2>) = 1 / sqrt(0.375 * N) keeps the cloud's
+    //   AVERAGE RMS roughly independent of N — which is exactly the "no buildup
+    //   at high density" behaviour the original H5 fix wanted, but with a
+    //   constant derived from the window rather than a fudge factor.
+    //
+    //   IMPORTANT LIMITATION: 0.375 is the time-averaged <w^2>, not the
+    //   instantaneous power at any one output sample. The instantaneous
+    //   summed power at output sample m is sum_grain env_grain(m)^2, which
+    //   varies as grains slide through their Hann envelopes (peaks when many
+    //   grains are centred, dips at grain boundaries). This scalar therefore
+    //   normalizes the AVERAGE level, not the instantaneous peak — short-term
+    //   crest-factor variation remains. A truly peak-bounded cloud would need
+    //   a per-sample normalization (look-ahead limiter), out of scope here.
+    //
+    //   Worst case (positionRandom_ -> 0): grains read near-coherently and
+    //   amplitudes sum linearly, so peak can still grow ~N. That is
+    //   fundamental to coherent grain overlap and cannot be removed by a
+    //   single scalar; users who need hard bounding in that regime must lower
+    //   density or raise positionRandom_. The peak-gain-vs-density unit test
+    //   (TestGranularEngine.cpp) characterizes the actual curve.
     const int activeCount = pool_.getActiveCount();
     if (activeCount > 0)
     {
-        const float norm = 1.0f / std::sqrt(static_cast<float>(activeCount) * 0.5f + 1.0f);
+        constexpr float kHannMeanSquare = 0.375f;  // time-averaged <w^2> for a Hann window
+        const float norm = 1.0f / std::sqrt(kHannMeanSquare * static_cast<float>(activeCount));
         for (int i = 0; i < usedSamples; ++i)
             mixBuffer_[static_cast<size_t>(i)] *= norm;
     }

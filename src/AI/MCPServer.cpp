@@ -581,6 +581,16 @@ bool MCPServer::validateAuth(const juce::var& params)
         const juce::String expectedToken = identity_.bearerToken;
 
         // C-14 FIX: Fixed-length constant-time comparison to prevent timing attacks.
+        //
+        // Timing note (audit N3, 2026-06-19): the length pre-check below returns
+        // early on a length mismatch, which leaks the EXPECTED token length via
+        // the time taken to reject. This is acceptable here because the bearer
+        // token is a fixed-size format — InstanceIdentity::generate() always
+        // produces a 16-byte (32-hex-char) token — so the length is public
+        // knowledge, not a secret. The constantTimeEqual() loop then compares
+        // only the byte contents without early exit. If the token format ever
+        // becomes variable-length, replace the pre-check with a
+        // length-padded constant-time compare (e.g. HMAC tag comparison).
         if (candidateToken.length() != expectedToken.length())
             return false;
 
