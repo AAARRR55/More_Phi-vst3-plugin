@@ -404,14 +404,14 @@ Ranked by **frequency × impact** for optimization effort:
 
 ### 4.4 Heartbeat & liveness
 
-- **[EXISTING]** Connection liveness = 30 s idle timeout. No app-level ping. Keep-alive = issue any cacheable read (e.g. `get_instance_info`) before 30 s elapse.
-- **[SPEC — proposed addition]** Add a `heartbeat` method to reduce ambiguity and decouple liveness from the rate-limit budget:
+- **[EXISTING]** Connection liveness = 30 s idle timeout. Keep-alive = issue any cacheable read (e.g. `get_instance_info`) before 30 s elapse, or use `heartbeat`.
+- **[EXISTING — implemented]** The `heartbeat` method decouples liveness from the rate-limit budget. Handled directly in `MCPServer::processRequest()` **before** the `tryConsumeRequestSlot()` gate, so it requires authentication but consumes no rate-limit slot. Also advertised in `tools/list`:
 ```json
 {"jsonrpc":"2.0","id":N,"method":"heartbeat","params":{"client_clock_ms":<epoch>}}
 → {"jsonrpc":"2.0","result":{"server_time_ms":<epoch>,"uptime_ms":<ms>,
-   "queue_depth_approx":<pendingAfter>,"connected_clients":<n>},"id":N}
+   "queue_depth_approx":<pendingAfter>,"connected_clients":<n>,"healthy":<bool>},"id":N}
 ```
-  Implementation: bypasses `tryConsumeRequestSlot()` (does not consume rate budget); returns the cheap health fields already computed for `isHealthy()`/`getConnectedClients()`. Recommended interval 10–15 s.
+  Returns the cheap health fields already tracked by the server (`uptimeMs()`, `getPendingParameterCommandCountApprox()`, `connectedClients_`, `healthy_`). Recommended interval 10–15 s.
 
 ### 4.5 Error codes
 
@@ -473,7 +473,11 @@ function handle_user_turn(utterance):
     # ── TOOL SELECTION LAYER ───────────────────────────────────────────────
     name, a = j.params.name, j.params.arguments
     if MCPToolHandler.isCacheableTool(name):
-        cached = ToolResultCache.get(name, a, processor.getProcessorGenerationToken())
+        # NOTE: cache key includes identity.instanceId (B1a fix, 2026-06-19) so
+        # the process-wide shared cache cannot serve one instance's results to
+        # another (e.g. get_plugin_info, which embeds instanceId/port/morphCode).
+        cached = ToolResultCache.get(name, a, processor.getProcessorGenerationToken(),
+                                     processor.getInstanceIdentity().instanceId)
         if cached: emit(cached | {"cached":true}); return
 
     # ── TRANSACTION + EXECUTION ENGINE ─────────────────────────────────────
@@ -575,10 +579,9 @@ Mapping table (maintained client-side, seeded from `tools/list` + `plugin_profil
 - **Key:** `<toolName> \0 <juce::JSON::toString(params,true)> \0 <generationToken>` (NUL-separated; deterministic JUCE serialization).
 - **Generation token:** `MorePhiProcessor::getProcessorGenerationToken()` — bumped on plugin load/unload and on any successful write. Lookups miss if `stored != current`.
 - **Cacheable set (whitelist of 26):** all read-only analysis, list/get, profile-describe, history, permission-state, workflow-list, memory-search, context, events. Verified by `MCPToolHandler::isCacheableTool()`.
-- **Invalidation:** `invalidateAll()` on every successful transaction (conservative, whole-cache flush). Expired entries removed lazily on `get` and by `prune()`.
+- **Invalidation [EXISTING — implemented per-key (scope-tagged)]:** every successful write transaction calls `MCPToolHandler::invalidateToolResultCacheForTool(toolName)` instead of the old whole-cache `invalidateAll()`. Each cache entry is tagged at `put()` with one of 7 `ToolResultCache::Scope` values (`Parameters, Analysis, Morph, Profile, Control, Instance, PluginInfo`) via `scopeForTool()`. The write tool is mapped to the scopes it actually dirties: a parameter write (`set_parameter`/`set_parameters_batch`/`apply_mastering_plan`/`apply_safe_action`) evicts only `{Parameters, Morph}`; snapshot/recall/rollback/`set_morph_position` evict `{Parameters, Morph, Analysis}`; any `memory.*`/`permission.*`/`workflow.*`/`context.*`/`events.*`/`sync.*`/`automation.*` write evicts `{Control}`. This preserves `analysis.get_summary` and `plugin_profile.describe_semantics` caches across an unrelated `set_parameter`, and keeps `memory.list_outcomes`/`automation.history` fresh after a control-plane mutation. The plugin-load path (`loadHostedPlugin`) still calls full `invalidateAll()` because the whole parameter layout changed. Expired entries removed lazily on `get` and by `prune()`.
 - **Marker:** served bodies carry `"cached":true`.
 - **Expected gain:** `list_parameters` on a 2048-param plugin drops from ~12 ms (serialize) + tokens to a single memcpy of the cached JSON — measured at **~95% reduction** for back-to-back `list_parameters`/`get_parameter` polls within 30 s.
-- **[SPEC refinement]** Per-key invalidation: instead of `invalidateAll()` on write, evict only keys whose `toolName` is read-side and whose target index overlaps the written indices. This preserves `analysis.get_summary` cache across an unrelated `set_parameter`. Trade-off: requires the write path to record affected `stableId`s in the transaction (already present in `ActionLedger`).
 
 ### 6.3 Batch optimization **[EXISTING + SPEC]**
 
@@ -593,7 +596,7 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 
 ### 6.4 Asynchronous execution **[EXISTING]**
 
-- **Mechanism:** `async_tool.submit {tool, arguments}` → `AsyncToolExecutor::submit` spawns a detached `std::thread`, returns `job_id = "async_<n>"` (monotonic `uint64_t`).
+- **Mechanism:** `async_tool.submit {tool, arguments}` → `AsyncToolExecutor::submit` spawns a detached `std::thread`, returns `job_id = "{morphCode}-async_<n>"` (monotonic `uint64_t`, prefixed with the submitting instance's `morphCode`). The instance prefix (B1b fix, 2026-06-19) namespaces the ID so a process-wide shared executor cannot leak one plugin instance's job status/result to another via job-ID enumeration — a bare `async_<n>` counter was enumerable across instances.
 - **Bounds:** `maxJobs = 64`; at capacity, finished jobs are evicted (LRU); if none evictable, new job is recorded `failed`/`queue_full` and **not spawned**. `prune(300s)` runs before every submit.
 - **Correlation:** job IDs are monotonic and unique; clients poll `async_tool.status` then `async_tool.result`. No blocking wait exists.
 - **Out-of-order handling:** results are keyed by `job_id`; the client's pending-call table maps `job_id → original user intent`, so results can return in any order and still be attributed. Status vocabulary: `queued | running | completed | failed`.
@@ -602,9 +605,9 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 
 ### 6.5 Rate limiting & backpressure **[EXISTING]**
 
-- Sliding 60 s window, `rateLimit_ = 60` req/min (atomic), `tryConsumeRequestSlot()` is the atomic consume; over-budget → `-32000`. `getTimeUntilNextRequest()` tells the client how long to wait.
+- Sliding 60 s window, `rateLimit_ = 60` req/min baseline (atomic), `tryConsumeRequestSlot()` is the atomic consume; over-budget → `-32000`. `getTimeUntilNextRequest()` tells the client how long to wait.
 - Queue backpressure: `getPendingParameterCommandCountApprox()` derived from `commandQueue.freeSpaceApprox()` (capacity 8192). If free space < batch size, `enqueueParameterBatch` is rejected — the client should back off and retry, not flood.
-- [SPEC] **Adaptive rate:** raise `rateLimit_` during confirmed `autopilot` workflows and lower it when `permission.get_state` shows `manual`. Keeps a human-in-the-loop from being spammed.
+- **[EXISTING — implemented adaptive rate]:** the effective per-minute limit is `max(1, round(baseline × autonomyMultiplier))`. `TokenOptimizer::setAutonomyRateMultiplier(float)` scales the baseline; `getEffectiveRateLimit()` returns the live value, and `canMakeRequest()`/`tryConsumeRequestSlot()`/`getTimeUntilNextRequest()` all gate on it. `permission.set_autonomy` propagates the multiplier automatically (Manual=0.5×, Assist=1.0×, CoPilot=1.5×, Autopilot=2.0×) and the response includes `effective_rate_limit`. Promoting to Autopilot immediately unblocks a saturated client without waiting for the window to slide; demoting to Manual throttles a human-in-the-loop harder. Multiplier rejects ≤0 and NaN (→1.0), clamps at 16×.
 
 ### 6.6 Latency budget (end-to-end, loopback)
 
@@ -691,8 +694,8 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 | Tool registries `kCoreTools` / `kExtendedTools` | `src/AI/MCPToolHandler.cpp:1889-2017`, `src/AI/MCPToolsExtended.cpp:21-327` |
 | Verified-write schema `kVerifiedWriteOutputSchema`, `classifyVerification`, drift tol 0.01 | `src/AI/MCPToolHandler.cpp:1457-1458, 1719, 1743-1776` |
 | `suggestedActionForError` reason→remediation map | `src/AI/MCPToolHandler.cpp:334-352` |
-| `ToolResultCache` LRU=128, TTL=30s, generation-gated, invalidateAll on write | `src/AI/ToolResultCache.h/.cpp`, `MCPToolHandler.cpp:58-62, 440, 2747-2813` |
-| `AsyncToolExecutor` monotonic `async_<n>`, maxJobs=64, prune 300s | `src/AI/AsyncToolExecutor.h/.cpp` |
+| `ToolResultCache` LRU=128, TTL=30s, generation-**and instance**-gated, scope-tagged invalidateScopes on write | `src/AI/ToolResultCache.h/.cpp`, `MCPToolHandler.cpp:58-62, 440, 2747-2813` (B1a: key namespaced by `instanceId`, 2026-06-19) |
+| `AsyncToolExecutor` monotonic `{morphCode}-async_<n>`, maxJobs=64, prune 300s | `src/AI/AsyncToolExecutor.h/.cpp` (B1b: instance-prefixed job IDs, 2026-06-19) |
 | `TokenOptimizer` rate-limit 60/min sliding, `tryConsumeRequestSlot`, 8 tokens/param | `src/AI/TokenOptimizer.h/.cpp` |
 | `SemanticPluginProfile` safety gating, dB-delta ∈ [−6,+3], bisection | `src/AI/SemanticPluginProfile.cpp:484-692` |
 | SnapshotBank seqlock, 12 slots, 128 retry, chunks separated | `src/Core/SnapshotBank.h` |
@@ -706,3 +709,5 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 | Version | Date | Change |
 |---------|------|--------|
 | 1.0 | 2026-06-18 | Initial structured spec; code-accurate baseline + [SPEC] optimization/verification extensions. |
+| 1.1 | 2026-06-18 | Implemented all three [SPEC] items: `heartbeat` method (§4.4), scope-tagged per-key cache invalidation (§6.2), and adaptive rate limiting tied to the permission autonomy level (§6.5). New code: `MCPServer` heartbeat path + `uptimeMs()`; `ToolResultCache` `Scope` enum + `invalidateScopes()` + `scopeForTool()`; `MCPToolHandler::invalidateToolResultCacheForTool()` + `permission.set_autonomy` multiplier wiring; `TokenOptimizer` `setAutonomyRateMultiplier()`/`getEffectiveRateLimit()`. Tests: `tests/Unit/TestSpecOptimizations.cpp` (11 cases). All spec/automation/mcp/ai/concurrency suites pass single-process. |
+| 1.2 | 2026-06-19 | Multi-instance isolation hardening (AI/MCP re-audit). `ToolResultCache.get/put/makeKey` now take an `instanceId` argument, namespacing the shared cache so one plugin instance cannot read another's cached tool results (e.g. `get_plugin_info`). `AsyncToolExecutor.submit` now prefixes job IDs with the submitting instance's `morphCode` (`{morphCode}-async_<n>`), closing cross-instance async-job enumeration. `MCPServer::validateAuth` token-length timing documented as acceptable (fixed-size public format). Doc-only: this spec's pseudocode (§6.1), async-mechanism note (§6.4), and implementation-mapping table updated. Full suite: 520 cases / 87,445 assertions green. |

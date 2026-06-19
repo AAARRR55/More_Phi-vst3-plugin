@@ -5,6 +5,79 @@
 **Scope:** 170+ source files, 22 test files, build system, all major subsystems  
 **Lines of Code Reviewed:** ~25,000+ lines
 
+> ## ⚠️ STATUS: HISTORICAL DOCUMENT — FINDINGS LARGELY RESOLVED (2026-06-19)
+>
+> **Read this before acting on any finding below.** This report audits a
+> 2026-06-17 snapshot of the codebase. Subsequent commits (C2–C5b on branch
+> `chore/ponytail-dead-code-cleanup`) remediated the DSP-critical findings it
+> raised. The codebase is in materially better shape than this report implies.
+>
+> **Resolved findings** (verified by re-tracing each path against the current
+> source — every fix carries a tagged `FIX` comment cross-referencing the
+> finding ID):
+>
+> | Finding | Status | Where the fix lives |
+> |---------|--------|---------------------|
+> | C1 ThreadPool `activeTasks_` leak on exception | ✅ Fixed | `ThreadPool.cpp:50–63` (RAII `ActiveTaskGuard`) |
+> | C2 SnapshotBank::toXml seqlock violation | ✅ Fixed | `SnapshotBank.h` seqlock rework |
+> | C6 FormantMorphEngine output buffer under-allocation | ✅ Fixed | `FormantMorphEngine.cpp:74–75, 306–310` |
+> | C7 SpectralMorphEngine transient on channel 0 only | ✅ Fixed | `SpectralMorphEngine.cpp:255–274` (per-hop `blockAlphas_`) |
+> | C8 Heavy elastic underdamped (ζ≈0.168) | ✅ Fixed (better than report's prescription) | `PhysicsEngine.cpp:36` (ζ=1.5, deliberately overdamped) |
+> | C9 Semi-implicit Euler "adds energy" | ✅ Fixed (note: report's *diagnosis* was wrong — semi-implicit Euler preserves energy; explicit Euler injects it. The real risk was damping-term instability under large dt, addressed by `PhysicsEngine.cpp:42–61` sub-stepping + fully-implicit damping) | `PhysicsEngine.cpp:42–61` |
+> | C15 EnvelopeFollower `std::pow` on audio thread | ✅ Fixed | `EnvelopeFollower.cpp:105–143` (per-block-size LUT + exp/log fallback) |
+> | C16 PerformanceProfiler audio-thread allocation | ✅ Fixed | `PerformanceProfiler.cpp:91–119` (`find()` not `[]`, try-lock) |
+> | H1 DiscreteParameterHandler not wired | ✅ Wired (see `MorphProcessor`, listen-mode path) | `MorphProcessor.cpp:212–227` |
+> | H3 ModulationMatrix per-route clamping | ✅ Fixed | `ModulationMatrix.cpp:89–110` (accumulate-then-clamp) |
+> | H4 MIDIRouter block-size-dependent coefficients | ✅ Fixed | `MIDIRouter.cpp:17–25` (`1-exp(-dt/τ)`) |
+> | H5 GranularMorphEngine amplitude buildup | ✅ Mitigated | `GranularMorphEngine.cpp:205–212` (see note below) |
+> | M6 Smoothing in Direct mode | ✅ N/A (Direct mode skips smoothing; report's premise didn't match code) | `MorphProcessor.cpp:67–68` |
+> | M7 Drift time float precision | ✅ Fixed | `MorphProcessor.cpp:107–108` (Perlin-period wrap) |
+> | M8 Perlin `static_cast<int>` overflow | ✅ Fixed | `PhysicsEngine.cpp:128–133` (`fmod` before cast) |
+>
+> **Findings still open** (raised in a 2026-06-19 DSP re-audit, NOT in this
+> report — the report never audited the mastering/EQ/limiter/LUFS DSP):
+> - `LUFSMeter` claims BS.1770-4 surround channel weights (L/R/C=1.0,
+>   Ls/Rs=1.41) in comments but applies uniform 1.0; no weight mechanism
+>   exists. Stereo is unaffected (L=R=1.0). Fixed by adding a real weight
+>   table. **(RESOLVED 2026-06-19: weight mechanism added; K-weighting
+>   coefficients verified literal vs ITU-R BS.1770-4 Table 1; end-to-end LUFS
+>   + gating tested analytically.)**
+> - `TruePeakEstimator` polyphase FIR header claims "±0.2 dBTP vs TC LM2n /
+>   85 dB stopband" with no in-repo verification. Added a unit test that
+>   reconstructs the worst-case ISP analytically and bounds the estimator.
+>   **(RESOLVED 2026-06-19: claim refuted and corrected — the 12-tap prototype
+>   under-reads near-Nyquist by ~25 dB; header rewritten; behaviour pinned as
+>   regression guards.)**
+> - `GranularMorphEngine` H5 normalization `1/sqrt(N/2+1)` is heuristic, not
+>   derived. Replaced with a Hann²-power-derived `1/sqrt(0.375·N)` form and
+>   added a peak-gain-vs-density test. **(RESOLVED 2026-06-19.)**
+> - Latency reporting through `getLatencySamples()` for the brickwall limiter
+>   lookahead + exciter 4× oversampling + spectral engines **(VERIFIED
+>   2026-06-19: all four PDC components are correctly summed at
+>   `PluginProcessor.cpp:2475-2485`; 3 pinning tests added.)**
+> - **ToolResultCache cross-instance read-through** (2026-06-19 AI/MCP audit):
+>   the shared cache key omitted instance identity. **(RESOLVED: key now
+>   namespaced by `instanceId`.)**
+> - **AsyncToolExecutor enumerable job IDs** (2026-06-19): bare global counter
+>   `async_N` let one instance poll another's async jobs. **(RESOLVED: job IDs
+>   now prefixed with `identity.morphCode`.)**
+>
+> **Severity-count note.** The numbers are consistent once read carefully:
+> the headline (16 Critical + 14 High) sums to **30 critical-and-high**, which
+> matches the Executive Summary's "30 critical and high-priority issues." The
+> Appendix (raw sub-agent counts 30+37+44+33=144) is the **pre-deduplication**
+> tally, which the report itself explains ("Some issues were flagged by
+> multiple sub-agents ... deduplicated into 16 critical and 14 high"). So there
+> is no real arithmetic contradiction.
+>
+> The one genuine internal inconsistency is in the **Production Readiness
+> Blockers table** (§"Blockers (Must Fix Before Release)"): it is presented as
+> a list of 16 blockers mapped 1:1 onto C1–C16, but **row #16 is H1**
+> (DiscreteParameterHandler not wired), which is a **High** finding, not a
+> Critical. Either the table's "16 blockers" framing is loose (it mixes one
+> High in), or H1 was mis-promoted to the blocker list. Treat C1–C15 as the
+> true Critical set and H1 as the highest-priority High.
+
 ---
 
 ## Executive Summary
