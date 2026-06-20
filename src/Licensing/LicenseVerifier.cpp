@@ -111,13 +111,23 @@ bool LicenseVerifier::verifySignature_(const SignedCertificate& certificate,
         return false;
     }
 
-    if (!signatureVerifier_ || !signatureVerifier_(certificate.keyId, payloadBytes, signatureBytes))
-    {
-        error = "License certificate signature could not be verified.";
-        return false;
-    }
+    // Primary path: real signature verification (Ed25519 in production builds).
+    if (signatureVerifier_ && signatureVerifier_(certificate.keyId, payloadBytes, signatureBytes))
+        return true;
 
-    return true;
+    // Fallback: trusted development signatures. The map is only populated in
+    // debug builds (LicenseManager registers "dev-key"/"dev-signature" under
+    // #if !defined(NDEBUG)), so a forged dev certificate can never unlock a
+    // release build. This lets a local checkout of the backend (which emits the
+    // dev-signature stub instead of a real Ed25519 signature) be exercised
+    // end-to-end without provisioning real key material.
+    const auto it = trustedDevelopmentSignatures_.find(certificate.keyId);
+    if (it != trustedDevelopmentSignatures_.end()
+        && std::string(signatureBytes.begin(), signatureBytes.end()) == it->second)
+        return true;
+
+    error = "License certificate signature could not be verified.";
+    return false;
 }
 
 std::optional<LicensePayload> LicenseVerifier::parsePayload(const SignedCertificate& certificate,
@@ -170,9 +180,13 @@ ValidationResult LicenseVerifier::validateCertificate(const SignedCertificate& c
     juce::String error;
     const auto maybePayload = parsePayload(certificate, error);
     if (!maybePayload)
+    {
+        lastValidatedPayload_.reset();
         return { LicenseState::Invalid, false, 0u, 0, 0, error };
+    }
 
     const auto& payload = *maybePayload;
+    lastValidatedPayload_ = payload;
 
     if (payload.schema != LICENSE_SCHEMA)
         return makeResult(LicenseState::Invalid, "License certificate schema is unsupported.", payload);

@@ -1,5 +1,6 @@
 #include "LicenseManager.h"
 
+#include "Ed25519Verifier.h"
 #include "Version.h"
 
 #include <utility>
@@ -22,7 +23,19 @@ LicenseManager::LicenseManager(LicenseRuntimeState& runtimeState,
     if (!activationClient_)
         activationClient_ = std::make_unique<StubActivationClient>();
 
+    // Real Ed25519 verification against the compiled-in public keys. This is
+    // the only signature path that accepts production certificates.
+    verifier_.setSignatureVerifier(makeEd25519SignatureVerifier());
+
+    // Debug-only development bypass: the local licensing server emits a fixed
+    // "dev-signature" with keyId "dev-key" so a checkout of the backend can be
+    // exercised without provisioning real key material. Compiled out of release
+    // builds (NDEBUG) so a forged dev certificate can never unlock a shipped
+    // plugin. The string form ("dev-signature") is what the decoded signature
+    // bytes are compared against by the default verifier in LicenseVerifier.cpp.
+#if ! defined(NDEBUG)
     verifier_.addTrustedDevelopmentSignature("dev-key", "dev-signature");
+#endif
 }
 
 int64_t LicenseManager::nowUnixSeconds()
@@ -44,6 +57,15 @@ void LicenseManager::publish_(const ValidationResult& result)
     runtimeState_.premiumFeaturesEnabled.store(result.enablesPremiumFeatures, std::memory_order_release);
     runtimeState_.state.store(result.state, std::memory_order_release);
     lastMessage_ = result.message;
+
+    // Cache the activationId from the verifier's most-recent validated payload
+    // so refresh/deactivate can address the right server-side activation without
+    // re-parsing the on-disk certificate.
+    if (result.enablesPremiumFeatures)
+    {
+        const auto& payload = verifier_.lastValidatedPayload();
+        lastActivationId_ = payload ? juce::String(payload->activationId) : juce::String();
+    }
 }
 
 ValidationResult LicenseManager::loadCachedCertificate()
@@ -52,6 +74,7 @@ ValidationResult LicenseManager::loadCachedCertificate()
     const auto cert = store_.loadCertificate(&error);
     if (!cert)
     {
+        lastActivationId_.clear();
         ValidationResult result { LicenseState::ActivationRequired, false, 0u, 0, 0, error };
         publish_(result);
         return result;
@@ -201,6 +224,7 @@ bool LicenseManager::clearActivation(juce::String* error)
         0,
         "Activation removed from this computer."
     };
+    lastActivationId_.clear();
     publish_(result);
     return true;
 }

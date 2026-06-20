@@ -40,6 +40,11 @@ public:
     juce::String getMachineHash() const { return machineHash_; }
     juce::String getLastMessage() const { return lastMessage_; }
 
+    // The activationId from the most recently validated certificate. Used by the
+    // refresh/deactivate flows and surfaced to the UI. Empty if no certificate
+    // has been validated in this session or the store is empty.
+    juce::String lastActivationId() const { return lastActivationId_; }
+
     static int64_t nowUnixSeconds();
     static juce::String createRequestNonce();
 
@@ -52,6 +57,7 @@ private:
     std::unique_ptr<IActivationClient> activationClient_;
     juce::String machineHash_;
     juce::String lastMessage_;
+    juce::String lastActivationId_;
 };
 
 } // namespace more_phi::licensing

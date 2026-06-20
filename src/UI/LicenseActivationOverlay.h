@@ -10,6 +10,7 @@
 namespace more_phi {
 
 class MorePhiProcessor;
+class LicenseImportDialog;
 
 class LicenseActivationOverlay : public juce::Component
 {
@@ -19,7 +20,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    
+
     // Intercept mouse events to prevent clicking components behind the overlay
     void mouseDown(const juce::MouseEvent& event) override { (void)event; }
     void mouseUp(const juce::MouseEvent& event) override { (void)event; }
@@ -28,7 +29,15 @@ public:
 private:
     void onActivateClicked();
     void onBuyClicked();
+    void onOfflineClicked();
+    void onRefreshClicked();
     void handleActivationResult(const licensing::ValidationResult& result);
+    void handleRefreshResult(const licensing::ValidationResult& result);
+
+    // Re-renders the status/description copy for the current runtime state
+    // (activation-required / grace / expired). Called from the editor timer and
+    // after each activate/refresh.
+    void refreshStateCopy();
 
     MorePhiProcessor& processor_;
 
@@ -38,7 +47,10 @@ private:
     juce::TextEditor keyInput_;
     juce::TextButton activateBtn_{"Activate"};
     juce::TextButton buyBtn_{"Get License Key"};
+    juce::TextButton refreshBtn_{"Refresh Now"};
+    juce::TextButton offlineBtn_{"Activate Offline"};
     juce::Label statusLabel_;
+    juce::HyperlinkButton offlineLink_;
 
     bool isActivating_ = false;
 

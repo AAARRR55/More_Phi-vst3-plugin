@@ -115,6 +115,29 @@ FetchContent_Declare(nlohmann_json
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
 
+# ── Ed25519 license-certificate verification ─────────────────────────────────
+# The plugin verifies activation-certificate signatures with a self-contained,
+# public-domain Ed25519 implementation vendored under third_party/ed25519
+# (orlp/ed25519). Verify+sign+keypair paths only. This deliberately avoids a
+# libsodium/system-crypto dependency: pulling sodium into a VST3 via
+# FetchContent proved unreliable across the available MSVC forks, and platform
+# crypto (CNG/Security.framework) would split the verify path across three OSes
+# for ~600 lines of portable code. The verifier fails closed if the vendored
+# sources are somehow absent (see Ed25519Verifier.cpp).
+set(MORE_PHI_ED25519_SOURCES
+    third_party/ed25519/src/sha512.c
+    third_party/ed25519/src/fe.c
+    third_party/ed25519/src/ge.c
+    third_party/ed25519/src/sc.c
+    third_party/ed25519/src/keypair.c
+    third_party/ed25519/src/sign.c
+    third_party/ed25519/src/verify.c
+)
+add_library(more_phi_ed25519 STATIC ${MORE_PHI_ED25519_SOURCES})
+target_include_directories(more_phi_ed25519 PUBLIC third_party/ed25519/src)
+set_target_properties(more_phi_ed25519 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set(MORE_PHI_HAS_ED25519 1)
+
 # Patch JUCE headers that conflict with Windows macros on MSVC
 include(cmake/PatchJuceForMSVC.cmake)
 
@@ -294,6 +317,10 @@ set(MORE_PHI_LICENSING_SOURCES
     src/Licensing/ActivationClient.cpp
     src/Licensing/LicenseManager.h
     src/Licensing/LicenseManager.cpp
+    src/Licensing/SigningKeys.h
+    src/Licensing/SigningKeys.cpp
+    src/Licensing/Ed25519Verifier.h
+    src/Licensing/Ed25519Verifier.cpp
 )
 
 set(MORE_PHI_AI_DATASET_STABLE_SOURCES
@@ -421,6 +448,8 @@ set(MORE_PHI_UI_SOURCES
     src/UI/MorePhiLookAndFeel.cpp
     src/UI/LicenseActivationOverlay.h
     src/UI/LicenseActivationOverlay.cpp
+    src/UI/LicenseImportDialog.h
+    src/UI/LicenseImportDialog.cpp
     src/UI/ChatDisplay.h
     src/UI/ChatDisplay.cpp
     src/UI/AIChatPanel.h
@@ -659,6 +688,14 @@ endif()
 if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAS_ONNX=1)
     target_link_libraries(MorePhi PRIVATE more_phi::onnxruntime)
+endif()
+
+# ── libsodium linkage (Ed25519 license-certificate verification) ──────────────
+# Ed25519Verifier.cpp uses __has_include(<sodium.h>) so it degrades gracefully if
+# this is off; the compile definition just makes the include path authoritative.
+if(MORE_PHI_HAS_ED25519)
+    target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAVE_ED25519=1)
+    target_link_libraries(MorePhi PRIVATE more_phi_ed25519)
 endif()
 
 # Build-stability defaults are target-scoped so normal CMake options stay explicit.

@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance, FastifyBaseLogger, FastifyRequest } from "fastify";
 import { randomUUID } from "crypto";
+import { fileURLToPath } from "url";
 import cookie from "@fastify/cookie";
 import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
@@ -101,6 +102,8 @@ async function main() {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compare filesystem paths (not a hand-built file:// URL) so the entry-point
+// guard works on Windows too, where argv[1] contains backslashes.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   void main();
 }

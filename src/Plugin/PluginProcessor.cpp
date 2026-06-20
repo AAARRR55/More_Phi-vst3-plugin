@@ -2374,6 +2374,46 @@ void MorePhiProcessor::loadCachedLicenseIfNeeded()
         licenseManager_->loadCachedCertificate();
 }
 
+void MorePhiProcessor::refreshLicenseIfNeeded()
+{
+    // Runs on the message thread from timerCallback(). When the cached
+    // certificate's nextOnlineCheckAtUnix has passed, kick off ONE background
+    // refresh so the license renews without forcing the user to re-enter the
+    // key. The activation server re-activates the same machine idempotently, so
+    // a periodic refresh never burns a seat.
+    if (licenseManager_ == nullptr)
+        return;
+
+    const auto& runtime = licenseManager_->getRuntimeState();
+    if (!runtime.premiumFeaturesEnabled.load(std::memory_order_relaxed))
+        return; // nothing to refresh when unlicensed
+
+    const int64_t nextCheck = runtime.nextCheckUnixSeconds.load(std::memory_order_relaxed);
+    if (nextCheck <= 0)
+        return; // cert without an online-check deadline — nothing to do
+
+    if (licensing::LicenseManager::nowUnixSeconds() <= nextCheck)
+        return; // not due yet
+
+    // exchange returns the PREVIOUS value. If it was already true a refresh is
+    // in flight and we bail; only the caller that observed false proceeds.
+    if (licenseRefreshInFlight_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    // Capture by value: the manager outlives this thread (it is a processor
+    // member). After completion we publish the result (already done inside
+    // refreshActivation) and clear the in-flight flag.
+    auto* manager = licenseManager_.get();
+    const auto activationId = manager->lastActivationId();
+    juce::Thread::launch([manager, activationId, this]()
+    {
+        if (activationId.isNotEmpty())
+            (void) manager->refreshActivation(activationId);
+
+        licenseRefreshInFlight_.store(false, std::memory_order_release);
+    });
+}
+
 void MorePhiProcessor::startMCPServerIfNeeded()
 {
     if (!mcpStartPending_.exchange(false, std::memory_order_acq_rel) || mcpServer.isRunning())
@@ -2533,6 +2573,7 @@ void MorePhiProcessor::timerCallback()
     }
 
     loadCachedLicenseIfNeeded();
+    refreshLicenseIfNeeded();
     startMCPServerIfNeeded();
 
     if (audioDomainConfigDirty_.load(std::memory_order_acquire))

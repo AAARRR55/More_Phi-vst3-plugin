@@ -16,6 +16,15 @@ constexpr int VERSION_PATCH = 0;
 constexpr const char* VERSION_STRING = "3.3.0";
 constexpr const char* VERSION_CODENAME = "Synthesizer Edition";
 
+// Storefront URL — where the "Get License Key" button sends the user. Override
+// at build time by defining MORE_PHI_STORE_URL (CMake -DMORE_PHI_STORE_URL=...).
+// The default targets the local dev storefront; production builds pass the real
+// public URL via the define so it is baked into the binary.
+#ifndef MORE_PHI_STORE_URL
+#  define MORE_PHI_STORE_URL "http://localhost:3000"
+#endif
+constexpr const char* STORE_URL = MORE_PHI_STORE_URL;
+
 // Build info
 extern const char* BUILD_DATE;
 extern const char* BUILD_TIME;

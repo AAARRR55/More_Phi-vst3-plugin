@@ -46,6 +46,56 @@ juce::String jsonStringOrEmpty(const nlohmann::json& json, const char* key)
     return {};
 }
 
+// Maps the backend's ErrorCode strings (store-backend/src/lib/errors.ts) to
+// plugin-facing copy so the activation overlay shows the real reason instead of
+// a generic "Activation failed." Unmapped codes fall through to the server's own
+// message field. Returns empty if no friendly mapping exists.
+juce::String friendlyMessageForCode(const juce::String& code) noexcept
+{
+    if (code == "NOT_FOUND")
+        return "License key not found. Please check the key and try again.";
+    if (code == "LICENSE_REVOKED")
+        return "This license has been revoked. Contact support.";
+    if (code == "LICENSE_EXPIRED")
+        return "This license has expired.";
+    if (code == "MAX_ACTIVATIONS_REACHED")
+        return "Activation limit reached for this license. Deactivate another machine first.";
+    if (code == "RATE_LIMITED")
+        return "Too many activation attempts. Please wait a moment and try again.";
+    if (code == "VALIDATION_ERROR")
+        return "The license key format is not valid.";
+    return {};
+}
+
+// Extracts message/errorCode from the standard { "error": { "code", "message" } }
+// envelope used by the licensing backend, with fallbacks for the flat shape
+// (top-level "message"/"error_code"/"code") some legacy responses used.
+void extractErrorFields(const nlohmann::json& root, juce::String& outCode, juce::String& outMessage)
+{
+    if (root.contains("error") && root.at("error").is_object())
+    {
+        const auto& err = root.at("error");
+        if (outCode.isEmpty())
+            outCode = jsonStringOrEmpty(err, "code");
+        if (outMessage.isEmpty())
+            outMessage = jsonStringOrEmpty(err, "message");
+    }
+
+    if (outCode.isEmpty())
+        outCode = jsonStringOrEmpty(root, "error_code");
+    if (outCode.isEmpty())
+        outCode = jsonStringOrEmpty(root, "code");
+
+    if (outMessage.isEmpty())
+        outMessage = jsonStringOrEmpty(root, "message");
+
+    // Prefer the friendly mapping when one exists; keeps the raw server message
+    // as a fallback for codes we have not localised.
+    const auto friendly = friendlyMessageForCode(outCode);
+    if (friendly.isNotEmpty())
+        outMessage = friendly;
+}
+
 std::string base64UrlEncode(const std::string& text)
 {
     auto encoded = juce::Base64::toBase64(text.data(), text.size()).toStdString();
@@ -100,6 +150,13 @@ std::optional<SignedCertificate> certificateFromResponse(const nlohmann::json& r
     return std::nullopt;
 }
 
+} // namespace
+
+// NOTE: parseActivationResponse lives in more_phi::licensing (declared in the
+// header) but is defined here, after the anonymous-namespace helpers it relies
+// on (extractErrorFields, certificateFromResponse, jsonStringOrEmpty). Those
+// helpers are visible to it because they appear earlier in this translation
+// unit, even though they have internal linkage.
 ActivationResponse parseActivationResponse(int statusCode, const juce::String& body, bool requireCertificate)
 {
     ActivationResponse response;
@@ -126,6 +183,21 @@ ActivationResponse parseActivationResponse(int statusCode, const juce::String& b
     {
         const auto root = nlohmann::json::parse(body.toStdString());
         response.status = jsonStringOrEmpty(root, "status");
+
+        // Success responses carry a top-level "status" (e.g. "ACTIVE"); errors
+        // arrive in the { "error": { code, message } } envelope. Pull both so
+        // the overlay shows the real reason on failure.
+        if (!response.success)
+        {
+            extractErrorFields(root, response.errorCode, response.message);
+            if (auto cert = certificateFromResponse(root))
+                response.certificate = *cert;
+
+            if (response.message.isEmpty())
+                response.message = "Activation server did not return a usable signed certificate.";
+            return response;
+        }
+
         response.errorCode = jsonStringOrEmpty(root, "error_code");
         if (response.errorCode.isEmpty())
             response.errorCode = jsonStringOrEmpty(root, "code");
@@ -150,8 +222,6 @@ ActivationResponse parseActivationResponse(int statusCode, const juce::String& b
 
     return response;
 }
-
-} // namespace
 
 HttpActivationClient::HttpActivationClient(LicenseApiConfig config)
     : config_(std::move(config))
