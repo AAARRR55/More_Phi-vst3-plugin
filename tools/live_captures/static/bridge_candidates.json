@@ -1,0 +1,20 @@
+{
+ "dll": "C:\\Program Files\\Common Files\\VST3\\iZotope\\iZOzonePro.dll",
+ "controller_markers": [
+  "0xd4b830",
+  "0xeabdb0",
+  "0xead3e0",
+  "0xead930",
+  "0x163dfa0",
+  "0x166ca90"
+ ],
+ "audiofeed_markers": [
+  "0xfbd0b0",
+  "0xfd7f30",
+  "0x1072860"
+ ],
+ "controller_upstream_count": 12,
+ "audiofeed_upstream_count": 6,
+ "bridge_candidate_count": 0,
+ "bridge_candidates": []
+}

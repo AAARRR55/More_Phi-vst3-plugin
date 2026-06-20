@@ -1,0 +1,102 @@
+{
+ "dll": "C:\\Program Files\\Common Files\\VST3\\iZotope\\iZOzonePro.dll",
+ "image_base": "0x180000000",
+ "method": "Strategy B (Master Assistant cluster) + reverse-chain climb from POLLER/SECONDARY common callers",
+ "key_discovery": "0xEABDB0 is an UNDOCUMENTED second common caller of BOTH the poller (0xEAD3E0) and the apply path (0xEAD930). Live findings only named 0x166CA90. Climbing 0xEABDB0 upward yields a single-parent pipeline whose root caller is a Master-Assistant-string-referencing function (0xD58A20), reachable from a call-tree root (0xD572F0) = the GUI/IPC entry surface.",
+ "verified_pipeline": [
+  {
+   "rva": "0xd572f0",
+   "role": "root (no detected callers; GUI/IPC dispatch)"
+  },
+  {
+   "rva": "0xd58a20",
+   "role": "TRIGGER: refs Master Assistant string; 1 caller; 22 callees incl pipeline root; thiscall context-struct prologue"
+  },
+  {
+   "rva": "0xe9fc30",
+   "role": "pipeline root: fans into 6-stage analysis"
+  },
+  {
+   "rva": "0xea1b20",
+   "role": "stage 1"
+  },
+  {
+   "rva": "0xea4d50",
+   "role": "stage 2"
+  },
+  {
+   "rva": "0xea4fd0",
+   "role": "stage 3"
+  },
+  {
+   "rva": "0xe9f4f0",
+   "role": "stage 4"
+  },
+  {
+   "rva": "0xeab020",
+   "role": "orchestrator: calls HUB + 8 assistants"
+  },
+  {
+   "rva": "0xeabdb0",
+   "role": "HUB: calls POLLER + SECONDARY"
+  },
+  {
+   "rva": "0xead3e0",
+   "role": "POLLER (known anchor, NOT trigger)"
+  },
+  {
+   "rva": "0xead930",
+   "role": "SECONDARY / apply path (known anchor)"
+  }
+ ],
+ "trigger_candidate_primary": {
+  "rva": "0xd58a20",
+  "func_begin": "0xd58a20",
+  "func_end": "0xd59d10",
+  "size": 4848,
+  "confidence": 0.72,
+  "evidence": [
+   "one of 20 funcs with direct RIP xref to Master Assistant string",
+   "single caller 0xd572f0 (call-tree root -> GUI/IPC entry)",
+   "22 callees incl 0xe9fc30 (verified pipeline root to POLLER+SECONDARY)",
+   "prologue: rcx saved as context/this, sub rsp,0x7e0, reads [rcx] vtable + [this+0x90] flag byte = start-analysis entry shape",
+   "does NOT directly call state helpers -> reaches them via the 6-stage pipeline (matches the 0-direct-xref phase-string observation in recon)"
+  ]
+ },
+ "trigger_candidate_secondary": {
+  "rva": "0xe9fc30",
+  "func_begin": "0xe9fc30",
+  "func_end": "0xea00f4",
+  "size": 1220,
+  "confidence": 0.45,
+  "evidence": [
+   "verified pipeline root (calls 0xea1b20 which chains to HUB)",
+   "single caller 0xd58a20 (MA cluster)",
+   "smaller; more pipeline-internal than the MA-string entry; could be a sub-phase kickoff rather than the GUI entry"
+  ]
+ },
+ "trigger_candidate_tertiary": {
+  "rva": "0xd572f0",
+  "func_begin": "0xd572f0",
+  "confidence": 0.3,
+  "role": "call-tree root above 0xd58a20; candidate for the actual GUI Play-button dispatch (the wrapper that selects assistant target then calls 0xd58a20)",
+  "evidence": [
+   "no detected callers (root)",
+   "sole caller of the MA-string entry 0xd58a20",
+   "needs prologue check to confirm GUI/IPC boundary"
+  ]
+ },
+ "rejected": {
+  "0x166ca90": "documented caller; only calls POLLER+SECONDARY directly, no pipeline, NOT the trigger (confirmed by live findings)",
+  "0xead3e0": "poller, 548 calls/min idle, returns 0x1 (confirmed NOT trigger)",
+  "0xead930": "apply path (param mutation), not the start trigger",
+  "0xfd7f30": "SmoothAudioDataStream ctor; audio ingestion layer, separate subtree (callers 0xfbd0b0/0x1072860) with no bridge to the control pipeline in the 1-hop graph"
+ },
+ "thunk_finding": {
+  "rva": "0xd572f0",
+  "size": 27,
+  "disasm": "push rbx; sub rsp,0x20; add rcx,8; mov rbx,rdx; call 0xd58a20; mov rax,rbx; ret",
+  "interpretation": "MSVC this-pointer-adjustor THUNK (vtable slot). +8 this adjustment = virtual-method dispatch into a base sub-object. This is the vtable entry the GUI Play button calls; the actual trigger body is 0xD58A20.",
+  "implication": "The trigger is invoked through a VIRTUAL call (call qword ptr [rax+N]), so static callers-list for 0xD58A20 shows only the thunk 0xD572F0; the real GUI/IPC caller reaches it indirectly via the vtable. This explains the single-parent chain and the call-tree-root profile."
+ }
+}
