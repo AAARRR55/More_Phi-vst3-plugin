@@ -37,7 +37,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 # Allow running as `python train.py` from the package dir or via -m.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,17 +57,28 @@ from model import build_model, count_parameters  # noqa: E402
 
 
 class MasteringControlLoss(nn.Module):
-    """Weighted MSE + an EQ monotonicity regularizer.
+    """Weighted MSE + EQ monotonicity + restraint priors.
 
-    The EQ-delta smoothness term penalises large jumps between adjacent EQ
-    band deltas: a mastering curve that zig-zags band-to-band sounds bad even
-    at low MSE. Cheap (one L1 over a diff), high value.
+    Components:
+      - MSE: primary regression target.
+      - eq_smooth_weight: penalises adjacent EQ-band jumps (a zig-zag mastering
+        curve sounds bad even at low MSE). Cheap (one L1 over a diff), high value.
+      - delta_l1_weight: Fix 1 (restraint). L1 on predicted deltas toward neutral.
+        Correction-only data pulls every delta toward a saturated correction; this
+        holds predictions toward smaller (more restrained) moves unless the audio
+        strongly drives them. Default ON (0.02); pair with null-pair corpus (Fix 3).
+      - overcorrect_weight: Fix 5 (restraint). Asymmetric penalty on
+        over-correction — penalize |pred|>|target| more than |pred|<|target|, so
+        the model is pushed to under-shoot when uncertain rather than saturate.
     """
 
-    def __init__(self, eq_count: int, eq_smooth_weight: float = 0.05) -> None:
+    def __init__(self, eq_count: int, eq_smooth_weight: float = 0.05,
+                 delta_l1_weight: float = 0.02, overcorrect_weight: float = 0.0) -> None:
         super().__init__()
         self.eq_count = eq_count
         self.eq_smooth_weight = eq_smooth_weight
+        self.delta_l1_weight = delta_l1_weight
+        self.overcorrect_weight = overcorrect_weight
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         mse = nn.functional.mse_loss(pred, target)
@@ -78,10 +89,22 @@ class MasteringControlLoss(nn.Module):
         pred_rough = (eq_pred[:, 1:] - eq_pred[:, :-1]).abs().mean()
         target_rough = (eq_target[:, 1:] - eq_target[:, :-1]).abs().mean()
         smooth = (pred_rough - target_rough).clamp_min(0.0)
-        loss = mse + self.eq_smooth_weight * smooth
+        l1 = pred.abs().mean()  # restraint prior toward neutral deltas
+        # Fix 5: asymmetric over-correction penalty. excess = how far |pred|
+        # exceeds |target| (only the overshoot counts); symmetric MSE already
+        # penalizes under-shoot, so this biases against saturation when uncertain.
+        excess = (pred.abs() - target.abs()).clamp_min(0.0).mean()
+        loss = (
+            mse
+            + self.eq_smooth_weight * smooth
+            + self.delta_l1_weight * l1
+            + self.overcorrect_weight * excess
+        )
         return loss, {
             "mse": float(mse.detach()),
             "eq_smooth": float(smooth.detach()),
+            "l1": float(l1.detach()),
+            "overcorrect": float(excess.detach()),
             "loss": float(loss.detach()),
         }
 
@@ -241,23 +264,41 @@ def train(args: argparse.Namespace) -> None:
         train_ds = SyntheticDataset(teacher, args.synthetic_train)
         val_ds = SyntheticDataset(teacher, args.synthetic_val)
     elif args.data_mode == "manifest":
-        train_ds = ManifestDataset(Path(args.train_manifest))
-        val_ds = ManifestDataset(Path(args.val_manifest))
+        # Fix 3 (restraint): accept multiple manifests so a null-pair/restraint
+        # corpus (e.g. AAM human mixes labelled with --zero-labels) can be
+        # concatenated with the correction corpus in one training set. A single
+        # path still works (backward-compatible).
+        train_paths = [Path(p) for p in args.train_manifest]
+        val_paths = [Path(p) for p in args.val_manifest]
+        if len(train_paths) == 1:
+            train_ds = ManifestDataset(train_paths[0])
+        else:
+            train_ds = ConcatDataset([ManifestDataset(p) for p in train_paths])
+            print(f"concatenated {len(train_paths)} train manifests "
+                  f"({sum(len(ManifestDataset(p)) for p in train_paths)} segments)")
+        val_ds = ManifestDataset(val_paths[0]) if len(val_paths) == 1 else \
+            ConcatDataset([ManifestDataset(p) for p in val_paths])
     else:
         raise ValueError(f"unknown data mode {args.data_mode}")
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
-    model = build_model().to(device)
-    print(f"model params: {count_parameters(model):,} (budget ~150k)")
-    criterion = MasteringControlLoss(eq_count=SPECTRAL_BAND_COUNT, eq_smooth_weight=args.eq_smooth_weight).to(device)
+    model = build_model(gated_head=args.gated_head, zero_init=not args.no_zero_init).to(device)
+    print(f"model params: {count_parameters(model):,} (budget ~150k) "
+          f"gated_head={args.gated_head} zero_init={not args.no_zero_init}")
+    criterion = MasteringControlLoss(
+        eq_count=SPECTRAL_BAND_COUNT,
+        eq_smooth_weight=args.eq_smooth_weight,
+        delta_l1_weight=args.delta_l1_weight,
+        overcorrect_weight=args.overcorrect_weight,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     best_val = math.inf
     for epoch in range(args.epochs):
         model.train()
-        train_metrics = {"loss": 0.0, "mse": 0.0, "eq_smooth": 0.0}
+        train_metrics = {"loss": 0.0, "mse": 0.0, "eq_smooth": 0.0, "l1": 0.0, "overcorrect": 0.0}
         n_batches = 0
         for feature, delta in train_loader:
             feature = feature.to(device)
@@ -274,7 +315,7 @@ def train(args: argparse.Namespace) -> None:
         train_metrics = {k: v / max(1, n_batches) for k, v in train_metrics.items()}
 
         model.eval()
-        val_metrics = {"loss": 0.0, "mse": 0.0}
+        val_metrics = {"loss": 0.0, "mse": 0.0, "l1": 0.0, "overcorrect": 0.0}
         n_val = 0
         with torch.no_grad():
             for feature, delta in val_loader:
@@ -284,6 +325,8 @@ def train(args: argparse.Namespace) -> None:
                 _, metrics = criterion(pred, delta)
                 val_metrics["loss"] += metrics["loss"]
                 val_metrics["mse"] += metrics["mse"]
+                val_metrics["l1"] += metrics["l1"]
+                val_metrics["overcorrect"] += metrics["overcorrect"]
                 n_val += 1
         val_metrics = {k: v / max(1, n_val) for k, v in val_metrics.items()}
 
@@ -291,7 +334,9 @@ def train(args: argparse.Namespace) -> None:
         best_val = min(best_val, val_metrics["loss"])
         print(
             f"epoch {epoch:3d} | train loss {train_metrics['loss']:.5f} mse {train_metrics['mse']:.5f} "
-            f"| val loss {val_metrics['loss']:.5f} mse {val_metrics['mse']:.5f}"
+            f"l1 {train_metrics['l1']:.5f} oc {train_metrics['overcorrect']:.5f} "
+            f"| val loss {val_metrics['loss']:.5f} mse {val_metrics['mse']:.5f} "
+            f"l1 {val_metrics['l1']:.5f} oc {val_metrics['overcorrect']:.5f}"
             f"{' *' if improved else ''}"
         )
 
@@ -311,8 +356,11 @@ def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-mode", choices=["synthetic", "manifest"], default="synthetic")
-    p.add_argument("--train-manifest", help="JSONL feature/delta manifest (manifest mode)")
-    p.add_argument("--val-manifest", help="JSONL feature/delta manifest (manifest mode)")
+    p.add_argument("--train-manifest", nargs="+",
+                   help="JSONL feature/delta manifest(s). Fix 3: pass multiple to concat a "
+                        "null-pair/restraint corpus with the correction corpus.")
+    p.add_argument("--val-manifest", nargs="+",
+                   help="JSONL feature/delta manifest(s) (manifest mode)")
     p.add_argument("--synthetic-train", type=int, default=2048)
     p.add_argument("--synthetic-val", type=int, default=512)
     p.add_argument("--epochs", type=int, default=20)
@@ -320,6 +368,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--learning-rate", type=float, default=3e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--eq-smooth-weight", type=float, default=0.05)
+    p.add_argument("--delta-l1-weight", type=float, default=0.02,
+                   help="Fix 1 (restraint): L1 penalty on predicted deltas toward neutral. "
+                        "Default 0.02 (on). 0=off; sweep 0.005-0.05 against val MSE + restraint metric.")
+    p.add_argument("--overcorrect-weight", type=float, default=0.0,
+                   help="Fix 5 (restraint): asymmetric penalty on |pred|>|target|. 0=off; try 0.05-0.1.")
+    p.add_argument("--gated-head", action="store_true",
+                   help="Fix 4 (restraint): gated residual head — a learned scalar gate can drive "
+                        "the output to 0 on already-good audio. Contract stays 63->72/tanh.")
+    p.add_argument("--no-zero-init", action="store_true",
+                   help="Disable Fix 1 zero-init of the final head (identity start). Off by default.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--output-dir", default="runs/control-regressor")
     p.add_argument("--export-onnx", type=Path, default=Path("control_regressor.onnx"))

@@ -7,10 +7,11 @@ runs the model + labels.py (T1), and prints a structured summary:
 per-axis response, restraint behavior, edge-case robustness, T1 fidelity.
 This answers "what can this model do right now" with evidence, not assertion.
 
-Usage: python characterize_model.py [path/to/model.onnx]
+Usage: python characterize_model.py [path/to/model.onnx] [--fail-neutral-max-delta 0.08]
 """
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import random
 import sys
@@ -44,25 +45,50 @@ def run_model(sess: ort.InferenceSession, frame: FeatureFrame) -> np.ndarray:
     return sess.run(None, {"input": x})[0][0]
 
 
-def line(tag: str, deltas) -> None:
+def line(tag: str, deltas) -> float:
     d = deltas if hasattr(deltas, "eq") else vector_to_control_deltas(deltas.tolist())
     eq = list(d.eq)
     n = max(abs(v) for v in (list(d.eq) + list(d.dynamics) + list(d.stereo) + list(d.harmonic) + list(d.limiter) + list(d.loudness)))
     print(f"  {tag:30s} eq[min/max]={min(eq):+.3f}/{max(eq):+.3f} loud={d.loudness[0]:+.3f} "
           f"dyn={d.dynamics[0]:+.3f} stereo={d.stereo[0]:+.3f} lim={d.limiter[0]:+.3f} harm={d.harmonic[0]:+.3f} |maxΔ|={n:.3f}")
+    return n
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("model", nargs="?", default="runs/blackwell-fma/model_fma.onnx")
+    parser.add_argument(
+        "--fail-neutral-max-delta",
+        type=float,
+        default=None,
+        help="Fail if the neutral already-good baseline emits a max absolute delta above this threshold.",
+    )
+    parser.add_argument(
+        "--fail-random-restraint-rate",
+        type=float,
+        default=None,
+        help="Fail if the fraction of random probes with |maxDelta|<0.05 is below this value.",
+    )
+    return parser.parse_args()
 
 
 def main() -> int:
-    model = sys.argv[1] if len(sys.argv) > 1 else "runs/blackwell-fma/model_fma.onnx"
-    sess = ort.InferenceSession(model)
+    args = parse_args()
+    sess = ort.InferenceSession(args.model)
     b = baseline()
     rng = random.Random(1)
 
-    print(f"=== MODEL: {model} ===")
+    print(f"=== MODEL: {args.model} ===")
     print("\n[1] NEUTRAL baseline (already-decent mix) — restraint test")
     bm = run_model(sess, b)
-    line("model", bm)
+    neutral_max = line("model", bm)
     line("T1 teacher", synthesize_deltas(b, rng))
+    if args.fail_neutral_max_delta is not None and neutral_max > args.fail_neutral_max_delta:
+        print(
+            f"\nFAIL: neutral already-good baseline |maxDelta|={neutral_max:.3f} "
+            f"> threshold {args.fail_neutral_max_delta:.3f}"
+        )
+        return 2
 
     print("\n[2] LOUDNESS sweep (integrated_lufs) — does loudness/dynamics delta respond?")
     for lufs in (-28, -22, -18, -14, -10, -6):
@@ -114,9 +140,6 @@ def main() -> int:
             block_size=r.choice([256, 512, 1024]), frame_index=r.randint(0, 100000),
         )
         m = run_model(sess, fr)
-        t = np.asarray(serialize_feature_frame(fr) and [0] * OUTPUT_DELTA_COUNT)  # placeholder
-        tv = []
-        # build T1 delta vector via codec
         from codec import control_deltas_to_vector
         tv = np.asarray(control_deltas_to_vector(synthesize_deltas(fr, r)), dtype=np.float32)
         mv = np.asarray(m, dtype=np.float32)
@@ -129,8 +152,16 @@ def main() -> int:
     print(f"  corr(model,T1) mean={np.mean(corrs):.3f} (1.0=model reproduces teacher)")
     print(f"  |maxΔ| model mean={np.mean(model_max):.3f} vs T1 mean={np.mean(t1_max):.3f} "
           f"(model<{np.mean(t1_max):.3f} = learned restraint; > = more aggressive)")
-    print(f"  restraint: model emits |maxΔ|<0.05 on {sum(1 for m in model_max if m < 0.05)}/200 random frames "
+    restraint_count = sum(1 for m in model_max if m < 0.05)
+    restraint_rate = restraint_count / max(1, len(model_max))
+    print(f"  restraint: model emits |maxΔ|<0.05 on {restraint_count}/200 random frames "
           f"(T1: {sum(1 for t in t1_max if t < 0.05)}/200)")
+    if args.fail_random_restraint_rate is not None and restraint_rate < args.fail_random_restraint_rate:
+        print(
+            f"\nFAIL: random-probe restraint rate={restraint_rate:.3f} "
+            f"< threshold {args.fail_random_restraint_rate:.3f}"
+        )
+        return 3
     return 0
 
 

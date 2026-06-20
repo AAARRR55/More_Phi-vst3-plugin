@@ -67,6 +67,15 @@ def recover_deltas_render(frame, seg_audio, rng, genre="neutral", render_host=No
             return 1e6
 
     t1_loss = obj(x0)
+    # Fix 2 (restraint): include the ALL-ZERO ("do nothing") candidate as a
+    # first-class option. If leaving the audio untouched beats both T1 and the
+    # CMA-ES search, the teacher honestly labels the segment near-zero instead of
+    # forcing a correction. This makes the teacher self-capable of restraint on
+    # already-good material (root-cause cure for over-correction), not merely
+    # correction-or-T1. All-zeros is a valid label (passes assert_label_semantics:
+    # every delta in range, dead slots zero, harmonic[0]=0 in [0,1]).
+    zero_active = np.zeros(len(ACTIVE), dtype=np.float32)
+    zero_loss = obj(zero_active)
     # harmonic[0] (index 48) is ONE-SIDED [0,1] (an "amount", labels.py
     # harmonic_to_params clamps to [0,1]); all other active dims are [-1,1].
     lo = [0.0 if i == 48 else -1.0 for i in ACTIVE]
@@ -83,8 +92,14 @@ def recover_deltas_render(frame, seg_audio, rng, genre="neutral", render_host=No
     es.optimize(obj)
     xbest = np.asarray(es.result.xbest, dtype=np.float32)
     fbest = float(es.result.fbest)
-    if fbest >= t1_loss - 1e-6:          # didn't beat T1 -> keep T1
-        xbest = x0
+    # Winner = best of {CMA-ES, T1 warm-start, zero "do nothing"}. The zero
+    # candidate only wins when it genuinely scores lowest -> safe: it never
+    # suppresses a correction that the objective says is warranted.
+    if fbest >= t1_loss - 1e-6 and zero_loss < t1_loss:
+        xbest = zero_active          # do-nothing beats T1 -> label near-zero
+    elif fbest >= t1_loss - 1e-6:
+        xbest = x0                   # CMA-ES couldn't beat T1 -> keep T1 (unchanged)
+    # else: CMA-ES found the best correction -> keep xbest
 
     d72 = _from_active(xbest)
     deltas = vector_to_control_deltas([float(x) for x in d72])

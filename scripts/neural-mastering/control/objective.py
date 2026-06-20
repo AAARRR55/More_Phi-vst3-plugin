@@ -8,6 +8,7 @@ does (zero train/serve skew).
 
 L = w_loud*L_loud + w_spec*L_spec + w_crest*L_crest + w_stereo*L_stereo
   + w_tp*L_tp + w_artifact*L_artifact + w_eqsmooth*L_eqsmooth + w_prior*L_prior
+  + w_zero*L_zero
 
   L_loud     ((integrated_lufs(render) - T_lufs)/6)^2
   L_spec     mean_b ((spec_dB(render)[b] - T_spec[b])/12)^2
@@ -16,7 +17,8 @@ L = w_loud*L_loud + w_spec*L_spec + w_crest*L_crest + w_stereo*L_stereo
   L_tp       max(0, true_peak_dbtp(render) - ceiling)^2 * 5
   L_artifact high-band energy proxy (harshness/alias guardrail)
   L_eqsmooth mean |eq[i+1]-eq[i]| / 0.24                    # musical-curve prior
-  L_prior    mean ((delta - x_T1)^2)                         # restraint anchor
+  L_prior    mean ((delta - x_T1)^2)                         # restraint anchor (toward T1)
+  L_zero     mean (delta)^2                                  # restraint anchor (toward identity)
 """
 from __future__ import annotations
 
@@ -25,8 +27,13 @@ import numpy as np
 from features import extract_feature_frame
 from target import TargetProfile
 
+# w_zero added (Fix 2): a restraint anchor toward the identity (do-nothing) delta.
+# Unlike L_prior (anchored to T1, which is itself a correction), L_zero is
+# symmetric across all candidates and gives the "do nothing" option a fair shot
+# at winning when the audio is already close to target. Small weight so it only
+# breaks ties near the floor, never overrides a real correction.
 WEIGHTS = dict(loud=2.0, spec=1.0, crest=1.0, stereo=1.0, tp=5.0,
-               artifact=8.0, eqsmooth=0.5, prior=0.4)
+               artifact=8.0, eqsmooth=0.5, prior=0.4, zero=0.15)
 
 
 def _to_interleaved(seg) -> np.ndarray:
@@ -91,6 +98,9 @@ def loss(delta72, seg, target: TargetProfile, host, x_t1=None, weights=None) -> 
                                     - np.asarray(x_t1, dtype=np.float32)) ** 2))
     else:
         L["prior"] = 0.0
+    # L_zero: restraint anchor toward the identity (all-zero) delta. Lets the
+    # "do nothing" candidate compete fairly against T1 in the teacher (labels_t2).
+    L["zero"] = float(np.mean(np.asarray(delta72, dtype=np.float32) ** 2))
 
     total = sum(w[k] * L[k] for k in WEIGHTS)
     return float(total), L

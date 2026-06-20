@@ -53,6 +53,65 @@ from labels import assert_label_semantics, synthesize_deltas  # noqa: E402
 AUDIO_EXTENSIONS = {".wav", ".flac", ".aif", ".aiff", ".ogg", ".mp3"}
 
 
+def _write_zero_label_manifest_from_existing(source_manifest_dir: Path, out_dir: Path, args: argparse.Namespace) -> bool:
+    """Reuse extracted features from an existing manifest and replace labels with zero deltas."""
+    train_src = source_manifest_dir / "train.jsonl"
+    val_src = source_manifest_dir / "val.jsonl"
+    if not train_src.exists() or not val_src.exists():
+        return False
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    items: list[dict] = []
+    for split, src_path in (("train", train_src), ("val", val_src)):
+        out_lines: list[str] = []
+        with src_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                feature_vec = record.get("feature")
+                if not isinstance(feature_vec, list) or len(feature_vec) != INPUT_FEATURE_COUNT:
+                    continue
+                record["delta"] = [0.0] * OUTPUT_DELTA_COUNT
+                record["teacher"] = "zero-label-restraint"
+                out_lines.append(json.dumps(record, sort_keys=True))
+                items.append({
+                    "id": record.get("id"),
+                    "sourceId": record.get("sourceId"),
+                    "split": split,
+                    "provenanceComplete": True,
+                    "licenseStatus": args.license_status,
+                    "referenceQuality": "synthetic",
+                    "unsupportedMaterial": False,
+                    "sampleRate": record.get("sampleRate", args.sample_rate),
+                    "segmentSeconds": args.segment_seconds,
+                    "startSample": record.get("startSample", 0),
+                    "sourcePath": record.get("sourcePath", ""),
+                    "pairingMode": "zero-label-restraint",
+                })
+        (out_dir / f"{split}.jsonl").write_text("\n".join(out_lines) + ("\n" if out_lines else ""), encoding="utf-8")
+
+    manifest = {
+        "schemaVersion": 1,
+        "createdBy": "control/build_manifest.py --zero-labels reuse",
+        "corpusName": args.corpus_name,
+        "sampleRate": args.sample_rate,
+        "segmentSeconds": args.segment_seconds,
+        "featureExtractor": "reused from existing manifest",
+        "labelSource": "all-zero deltas for already-good/restraint supervision",
+        "referenceQuality": "synthetic",
+        "lufsDependency": "in-house BS.1770-4 (features.compute_loudness)",
+        "items": items,
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        f"\nDONE: reused {source_manifest_dir} features with zero labels "
+        f"({len(items)} total) -> {out_dir}"
+    )
+    return True
+
+
 def load_audio(path: Path, target_sr: int) -> tuple[np.ndarray, int, int]:
     """Load + resample to target_sr, return (audio[nch,samples], native_channels, target_sr).
 
@@ -112,6 +171,11 @@ def build(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.zero_labels and out_dir.name.endswith("_restraint"):
+        sibling_manifest = out_dir.with_name(out_dir.name.removesuffix("_restraint"))
+        if _write_zero_label_manifest_from_existing(sibling_manifest, out_dir, args):
+            return 0
+
     audio_files = sorted(
         p for p in source_dir.rglob("*") if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
     )
@@ -156,10 +220,16 @@ def build(args: argparse.Namespace) -> int:
             feature_vec = serialize_feature_frame(frame)
             assert len(feature_vec) == INPUT_FEATURE_COUNT
 
-            deltas = synthesize_deltas(frame, label_rng)
-            assert_label_semantics(deltas)  # never write a label that violates the DSP mapping
-            delta_vec = control_deltas_to_vector(deltas)
-            assert len(delta_vec) == OUTPUT_DELTA_COUNT
+            if args.zero_labels:
+                # Fix 1 (null-pair / restraint): already-good audio -> all-zero deltas
+                # ("do nothing"). Builds a restraint corpus (e.g. AAM human mixes) so the
+                # model learns identity, not only correction. Pair with L1 reg (train.py).
+                delta_vec = [0.0] * OUTPUT_DELTA_COUNT
+            else:
+                deltas = synthesize_deltas(frame, label_rng)
+                assert_label_semantics(deltas)  # never write a label that violates the DSP mapping
+                delta_vec = control_deltas_to_vector(deltas)
+                assert len(delta_vec) == OUTPUT_DELTA_COUNT
 
             seg_id = f"{source_id}_{file_idx:04d}_{n_seg_for_file:04d}"
             record = {
@@ -237,6 +307,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--license-status", default="approved",
                    help="Provenance licenseStatus value written to manifest.json (audit gate G10).")
     p.add_argument("--corpus-name", default="unnamed")
+    p.add_argument("--zero-labels", action="store_true",
+                   help="Fix 1 (restraint): emit all-zero deltas (null-pair corpus for already-good audio).")
     return p.parse_args()
 
 
