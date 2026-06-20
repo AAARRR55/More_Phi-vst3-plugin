@@ -26,6 +26,8 @@ const envSchema = z
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
     LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+    REGISTRATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    REGISTRATION_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(3600000),
     CHECKOUT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(6),
     CHECKOUT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
     ACTIVATION_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
