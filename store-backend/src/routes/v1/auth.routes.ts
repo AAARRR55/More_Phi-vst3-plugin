@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { createHash, randomBytes } from "crypto";
 import { CustomerService } from "../../services/CustomerService.js";
-import { verifyPassword } from "../../lib/crypto.js";
+import { verifyPassword, sha256, hashPassword } from "../../lib/crypto.js";
 import {
   signAccessToken,
   signRefreshToken,
@@ -17,6 +17,11 @@ import { rotateRefreshToken } from "../../plugins/auth.js";
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+});
+
+const setPasswordSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8),
 });
 
 const TOKEN_COOKIE_OPTIONS = {
@@ -132,4 +137,45 @@ export async function authRoutes(app: FastifyInstance) {
     clearAuthCookies(reply);
     return reply.send({ status: "logged_out" });
   });
+
+  app.post(
+    "/set-password",
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: 60_000,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { token, password } = validate(setPasswordSchema, request.body);
+      const tokenHash = sha256(token);
+
+      const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash } });
+      if (!record || record.usedAt || record.expiresAt < new Date()) {
+        throw new ApiError(ErrorCode.UNAUTHORIZED, "Invalid or expired token");
+      }
+
+      const passwordHash = await hashPassword(password);
+
+      await prisma.$transaction(async (tx) => {
+        const consumed = await tx.passwordResetToken.updateMany({
+          where: { id: record.id, usedAt: null, expiresAt: { gt: new Date() } },
+          data: { usedAt: new Date() },
+        });
+
+        if (consumed.count === 0) {
+          throw new ApiError(ErrorCode.UNAUTHORIZED, "Invalid or expired token");
+        }
+
+        await tx.customer.update({
+          where: { id: record.customerId },
+          data: { passwordHash },
+        });
+      });
+
+      return reply.send({ status: "ok" });
+    }
+  );
 }

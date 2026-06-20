@@ -38,9 +38,10 @@ model Customer {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  orders        Order[]
-  licenses      License[]
-  refreshTokens RefreshToken[]
+  orders               Order[]
+  licenses             License[]
+  refreshTokens        RefreshToken[]
+  passwordResetTokens  PasswordResetToken[]
 
   @@map("customers")
 }
@@ -154,4 +155,18 @@ model RefreshToken {
 
   @@index([customerId])
   @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  customerId String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("password_reset_tokens")
 }
