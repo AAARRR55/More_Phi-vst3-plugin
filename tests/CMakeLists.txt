@@ -106,6 +106,13 @@ target_link_libraries(MorePhiTests PRIVATE
     juce::juce_dsp            # required by OversamplingWrapper and LatencyManager tests
     nlohmann_json::nlohmann_json
 )
+if(MORE_PHI_HAS_ED25519)
+    # TestLicensing.cpp exercises the real Ed25519 path (ed25519_sign /
+    # ed25519_verify) directly, so it needs the vendored lib linked in addition
+    # to whatever MorePhi already propagates.
+    target_compile_definitions(MorePhiTests PRIVATE MORE_PHI_HAVE_ED25519=1)
+    target_link_libraries(MorePhiTests PRIVATE more_phi_ed25519)
+endif()
 
 target_include_directories(MorePhiTests PRIVATE
     ${CMAKE_SOURCE_DIR}/src

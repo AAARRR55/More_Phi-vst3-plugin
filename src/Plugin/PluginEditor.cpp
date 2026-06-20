@@ -76,22 +76,69 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         auto options = juce::MessageBoxOptions::makeOptionsOkCancel(
             juce::MessageBoxIconType::QuestionIcon,
             "Deactivate License",
-            "Are you sure you want to delete the current license key and deactivate this computer?\n\n"
-            "This will lock the plugin until a valid license key is entered.",
+            "Are you sure you want to deactivate this computer?\n\n"
+            "This releases the activation seat on the license server and locks the "
+            "plugin until a valid license key is entered again.",
             "Deactivate",
             "Cancel"
         );
 
-        juce::AlertWindow::showAsync(options, [this](int result)
+        juce::Component::SafePointer<MorePhiEditor> safeThis(this);
+        juce::AlertWindow::showAsync(options, [safeThis](int result)
         {
-            if (result == 1)
+            if (safeThis == nullptr || result != 1)
+                return;
+
+            // Server-side deactivate (releases the seat) on a background thread,
+            // then clear the local cert on the message thread. If the server is
+            // unreachable we offer a force-local-clear so users are never
+            // trapped unable to switch machines by a transient network failure.
+            auto& processor = safeThis->processor;
+            const auto activationId = processor.getLicenseManager().lastActivationId();
+
+            juce::Thread::launch([safeThis, &processor, activationId]()
             {
                 juce::String error;
-                processor.getLicenseManager().clearActivation(&error);
-                deactivateBtn_.setVisible(false);
-                licenseOverlay.setVisible(true);
-                licenseOverlay.toFront(false);
-            }
+                const bool serverOk = activationId.isNotEmpty()
+                    && processor.getLicenseManager().deactivateActivation(activationId, &error);
+
+                juce::MessageManager::callAsync([safeThis, serverOk, error]()
+                {
+                    if (safeThis == nullptr)
+                        return;
+
+                    if (serverOk)
+                    {
+                        safeThis->deactivateBtn_.setVisible(false);
+                        safeThis->licenseOverlay.setVisible(true);
+                        safeThis->licenseOverlay.toFront(false);
+                        return;
+                    }
+
+                    // Server unreachable / failed — let the user choose whether to
+                    // still clear locally (which would strand a server-side seat).
+                    auto force = juce::MessageBoxOptions::makeOptionsOkCancel(
+                        juce::MessageBoxIconType::WarningIcon,
+                        "Server deactivation failed",
+                        "The license server could not be reached to release this "
+                        "activation seat:\n" + error + "\n\n"
+                        "Clear the license on this computer anyway? The activation "
+                        "may still count against your seat limit until it expires "
+                        "or is released by support.",
+                        "Clear locally anyway",
+                        "Keep license");
+                    juce::AlertWindow::showAsync(force, [safeThis](int r)
+                    {
+                        if (safeThis == nullptr || r != 1)
+                            return;
+                        juce::String localErr;
+                        safeThis->processor.getLicenseManager().clearActivation(&localErr);
+                        safeThis->deactivateBtn_.setVisible(false);
+                        safeThis->licenseOverlay.setVisible(true);
+                        safeThis->licenseOverlay.toFront(false);
+                    });
+                });
+            });
         });
     };
     addAndMakeVisible(deactivateBtn_);

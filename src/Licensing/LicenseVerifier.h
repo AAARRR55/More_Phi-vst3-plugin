@@ -30,6 +30,11 @@ public:
                                          const juce::String& expectedMachineHash,
                                          int64_t nowUnixSeconds) const;
 
+    // The payload from the most recent successful validateCertificate() call on
+    // this verifier. Stable until the next validateCertificate(). Used by the
+    // manager to read the activationId / next-check time without re-parsing.
+    const std::optional<LicensePayload>& lastValidatedPayload() const noexcept { return lastValidatedPayload_; }
+
     static std::optional<SignedCertificate> parseSignedCertificateJson(const juce::String& jsonText,
                                                                        juce::String& error);
     static juce::String toJson(const SignedCertificate& certificate);
@@ -45,6 +50,7 @@ private:
 
     SignatureVerifier signatureVerifier_;
     std::map<std::string, std::string> trustedDevelopmentSignatures_;
+    mutable std::optional<LicensePayload> lastValidatedPayload_;
 };
 
 } // namespace more_phi::licensing

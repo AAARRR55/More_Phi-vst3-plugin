@@ -605,6 +605,7 @@ private:
     void requestMessageThreadMaintenance() noexcept;
     bool hasPendingMessageThreadWork() const noexcept;
     void loadCachedLicenseIfNeeded();
+    void refreshLicenseIfNeeded(); // auto-renew once nextOnlineCheckAtUnix passes
     void startMCPServerIfNeeded();
     void reconfigureAudioDomainProcessing();
     void updateReportedLatency();
@@ -661,6 +662,7 @@ private:
     std::atomic<bool> mcpStartPending_{false};
     std::atomic<bool> maintenanceTimerRequested_{false};
     std::atomic<bool> licenseLoadPending_{true};
+    std::atomic<bool> licenseRefreshInFlight_{false}; // guards background refresh
 
     std::atomic<bool> audioDomainConfigDirty_{false};
     std::atomic<bool> latencyConfigDirty_{false};

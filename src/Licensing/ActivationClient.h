@@ -54,6 +54,14 @@ public:
                                           const juce::String& machineHash) = 0;
 };
 
+// Parses a raw activation-server response body into an ActivationResponse.
+// Exposed (rather than file-static inside ActivationClient.cpp) so the
+// error-envelope mapping and certificate extraction are unit-testable without
+// going to the network.
+ActivationResponse parseActivationResponse(int statusCode,
+                                           const juce::String& body,
+                                           bool requireCertificate);
+
 class HttpActivationClient final : public IActivationClient
 {
 public:
