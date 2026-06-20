@@ -15,7 +15,7 @@ export async function registerCors(app: FastifyInstance) {
         cb(null, true);
         return;
       }
-      if (allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+      if (allowedOrigins.includes(origin)) {
         cb(null, true);
         return;
       }
