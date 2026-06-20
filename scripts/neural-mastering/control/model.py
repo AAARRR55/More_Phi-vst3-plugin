@@ -146,8 +146,12 @@ class MasteringControlRegressor(nn.Module):
         joint_hidden: int = 192,
         spectral_embed: int = 48,
         dropout: float = 0.1,
+        gated_head: bool = False,
+        zero_init: bool = True,
+        gate_bias: float = -2.0,
     ) -> None:
         super().__init__()
+        self.gated_head = gated_head
         self.normalize = _Normalize()
         self.spectral = _SpectralFrontEnd(out_dim=spectral_embed)
 
@@ -170,10 +174,35 @@ class MasteringControlRegressor(nn.Module):
         )
 
         # Final tanh head: structural [-1, 1] bound matching sanitizePlanCandidate.
-        self.head = nn.Sequential(
-            nn.Linear(joint_hidden, OUTPUT_DELTA_COUNT),
-            nn.Tanh(),
-        )
+        # Fix 1 (restraint): zero-init the final Linear so tanh(0)=0 -> the model
+        # STARTS as a pure identity ("do nothing"). Corrections must be earned by
+        # the data pulling predictions away from zero against the L1 prior
+        # (train.py --delta-l1-weight). Pairs with Fix 3 (null-pair corpus).
+        self.delta_head = nn.Linear(joint_hidden, OUTPUT_DELTA_COUNT)
+        self.tanh = nn.Tanh()
+        self.head = nn.Sequential(self.delta_head, self.tanh)  # kept for backward-compat callers
+
+        # Fix 1 + Fix 4 interaction: zero-init the delta head ONLY for the vanilla
+        # head. With the gated head, zero-init'ing the delta head would starve the
+        # gate of gradient (gate's gradient flows through raw=tanh(delta_head),
+        # which is 0 under zero-init) — the gate could never escape 0 at init, so
+        # it could never learn to abstain. The gated path instead gets restraint
+        # from the gate's negative bias (sigmoid(-2)~=0.12 -> output starts near
+        # identity via raw*gate, where raw is small-but-non-zero so both heads
+        # receive gradient). The vanilla path keeps pure zero-init (tanh(0)=0).
+        if zero_init and not gated_head:
+            nn.init.zeros_(self.delta_head.weight)
+            nn.init.zeros_(self.delta_head.bias)
+
+        # Fix 4 (restraint): optional gated residual head (Residual-Gates /
+        # Highway-Net principle). A learned per-sample scalar gate in [0,1]
+        # multiplies the raw delta head, so the model can abstain (gate->0) on
+        # already-good audio. Output stays tanh-bounded in [-1,1] (gate<=1), so
+        # the C++ contract (63->72, tanh) is intact and test_contract.py passes.
+        # The gate only learns to suppress when supervised by null pairs (Fix 3).
+        if gated_head:
+            self.gate_logit = nn.Linear(joint_hidden, 1)
+            nn.init.constant_(self.gate_logit.bias, gate_bias)  # sigmoid(-2)=0.12 -> starts near identity
 
     def forward(self, feature_tensor: torch.Tensor) -> torch.Tensor:
         if feature_tensor.dim() != 2 or feature_tensor.shape[1] != INPUT_FEATURE_COUNT:
@@ -196,7 +225,11 @@ class MasteringControlRegressor(nn.Module):
         context = torch.cat((rest, spectral_embed), dim=1)
         context = self.scalar_block(context)
         joint = self.joint(context)
-        return self.head(joint)
+        raw = self.tanh(self.delta_head(joint))  # [B, 72] in [-1, 1]
+        if self.gated_head:
+            gate = torch.sigmoid(self.gate_logit(joint))  # [B, 1] in (0, 1)
+            return raw * gate  # still in [-1, 1]
+        return raw
 
 
 def count_parameters(model: nn.Module) -> int:
@@ -204,7 +237,12 @@ def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def build_model() -> MasteringControlRegressor:
-    """Construct the model with the reference hyperparameters."""
+def build_model(gated_head: bool = False, zero_init: bool = True) -> MasteringControlRegressor:
+    """Construct the model with the reference hyperparameters.
+
+    zero_init=True (default): final head zero-initialized -> identity start (Fix 1).
+    gated_head=False (default): vanilla tanh head. Set True for the gated residual
+        head (Fix 4) — adds a learned abstention gate; contract stays 63->72/tanh.
+    """
     torch.manual_seed(1337)
-    return MasteringControlRegressor()
+    return MasteringControlRegressor(gated_head=gated_head, zero_init=zero_init)

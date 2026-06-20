@@ -753,3 +753,13 @@ if(MORE_PHI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# T2 Phase-0: ctypes-callable headless mastering render harness. Drives the real
+# AutoMasteringEngine OFFLINE so the Python CMA-ES teacher can search the 72-delta
+# space against a perceptual target. OFF by default (only needed for T2 training).
+option(MORE_PHI_BUILD_HEADLESS_RENDER
+       "Build ctypes-callable headless mastering render harness for the T2 CMA-ES teacher"
+       OFF)
+if(MORE_PHI_BUILD_HEADLESS_RENDER)
+    add_subdirectory(tools/headless_mastering_render)
+endif()
