@@ -1,0 +1,9 @@
+# Trained/exported artifacts — reproducible from train.py; do not version-control.
+*.pt
+*.onnx
+*.onnx.data
+runs/
+
+# Python bytecode/cache
+__pycache__/
+*.pyc
