@@ -17,6 +17,8 @@ OVERCORRECT="${OVERCORRECT:-0.02}"
 RESTRAINT_GATE_MAX_DELTA="${RESTRAINT_GATE_MAX_DELTA:-0.08}"
 NEUTRAL_TRAIN_COUNT="${NEUTRAL_TRAIN_COUNT:-10000}"
 NEUTRAL_VAL_COUNT="${NEUTRAL_VAL_COUNT:-1000}"
+RUN_DIR="${RUN_DIR:-runs/blackwell_restraint_v5}"
+MODEL_OUT="${MODEL_OUT:-$RUN_DIR/model_blackwell_restraint_v5.onnx}"
 
 echo "=== 1. ensure CUDA torch (current venv is +cpu) ==="
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
@@ -70,15 +72,15 @@ echo "=== 5. Train Model A on GPU (v5 restraint recipe) ==="
   --val-manifest data/manifest_fma/val.jsonl data/manifest_aam_restraint/val.jsonl data/manifest_neutral_restraint_10k/val.jsonl \
   --epochs "$EPOCHS" --batch-size "$BATCH" --learning-rate "$LR" --device cuda \
   --delta-l1-weight "$DELTA_L1" --overcorrect-weight "$OVERCORRECT" \
-  --output-dir runs/blackwell --export-onnx runs/blackwell/model_blackwell.onnx
+  --output-dir "$RUN_DIR" --export-onnx "$MODEL_OUT"
 
 echo "=== 6. Contract test (must PASS before loading into the VST seam) ==="
-.venv/bin/python tests/test_contract.py runs/blackwell/model_blackwell.onnx
+.venv/bin/python tests/test_contract.py "$MODEL_OUT"
 
 echo "=== 7. Restraint characterization gate (already-good input should stay subtle) ==="
-.venv/bin/python characterize_model.py runs/blackwell/model_blackwell.onnx \
+.venv/bin/python characterize_model.py "$MODEL_OUT" \
   --fail-neutral-max-delta "$RESTRAINT_GATE_MAX_DELTA"
 
 echo ""
-echo "DONE. If contract + restraint gates PASSed, copy runs/blackwell/model_blackwell.onnx"
-echo "to the plugin's OnnxNeuralMasteringRunner (once ONNX Runtime is linked)."
+echo "DONE. If contract + restraint gates PASSed, copy $MODEL_OUT"
+echo "to scripts/neural-mastering/control/model_blackwell_restraint_v5.onnx for plugin/test staging."
