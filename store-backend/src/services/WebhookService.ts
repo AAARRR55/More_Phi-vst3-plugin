@@ -6,6 +6,7 @@ import { LicenseService } from "./LicenseService.js";
 import { EmailService } from "./EmailService.js";
 import { logger } from "../lib/logger.js";
 import { ApiError, ErrorCode } from "../lib/errors.js";
+import { randomBytesAsync, sha256 } from "../lib/crypto.js";
 
 export const WebhookService = {
   async handleEvent(event: Stripe.Event) {
@@ -117,7 +118,7 @@ export const WebhookService = {
       licenseKey: licenseResult.plainKey,
       productName: order.product.name,
       downloadUrl: order.product.downloadUrl,
-      setPasswordLink: this.buildSetPasswordLink(order.customer.id),
+      setPasswordLink: await this.buildSetPasswordLink(order.customer.id),
     });
 
     logger.info(
@@ -232,9 +233,25 @@ export const WebhookService = {
     return "unknown";
   },
 
-  buildSetPasswordLink(customerId: string): string {
-    // In production, generate a signed single-use token.
+  async buildSetPasswordLink(customerId: string): Promise<string> {
+    const rawToken = (await randomBytesAsync(32)).toString("hex");
+    const tokenHash = sha256(rawToken);
     const base = process.env.FRONTEND_URL ?? "http://localhost:5173";
-    return `${base}/set-password?customer=${customerId}`;
+
+    await prisma.$transaction([
+      prisma.passwordResetToken.updateMany({
+        where: { customerId, usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+      prisma.passwordResetToken.create({
+        data: {
+          customerId,
+          tokenHash,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      }),
+    ]);
+
+    return `${base}/set-password?token=${rawToken}`;
   },
 };
