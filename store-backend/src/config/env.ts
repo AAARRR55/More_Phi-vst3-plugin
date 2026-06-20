@@ -47,6 +47,14 @@ const envSchema = z
     DOWNLOAD_URL_BASE: z.string().min(1),
   })
   .superRefine((data, ctx) => {
+    const origins = data.CORS_ORIGIN.split(",").map((o) => o.trim());
+    if (origins.includes("*")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["CORS_ORIGIN"],
+        message: "Wildcard '*' is not allowed in CORS_ORIGIN when credentials are enabled",
+      });
+    }
     if (data.EMAIL_PROVIDER === "resend" && !data.RESEND_API_KEY) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
