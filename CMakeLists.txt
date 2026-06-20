@@ -10,6 +10,8 @@ option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local st
 set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
+option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
+set(MORE_PHI_ONNX_VERSION "1.22.1" CACHE STRING "ONNX Runtime prebuilt release version (used when MORE_PHI_ENABLE_ONNX=ON)")
 
 if(MORE_PHI_ENABLE_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "clang-tidy")
@@ -116,6 +118,22 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Patch JUCE headers that conflict with Windows macros on MSVC
 include(cmake/PatchJuceForMSVC.cmake)
 
+# ── ONNX Runtime (optional, gated) ────────────────────────────────────────────
+# When MORE_PHI_ENABLE_ONNX=ON, download the official prebuilt ONNX Runtime
+# release for the current platform/arch into a CMake cache directory and expose
+# it as an imported target `more_phi::onnxruntime`. The prebuilt-binary route is
+# deliberately chosen over building ORT from source: source builds pull in onnx
+# + protobuf and add ~30+ minutes to configure, and the prebuilt static/dynamic
+# libs are the supported distribution for plugin embedding.
+#
+# When OFF (default), none of this runs, the build is identical to pre-ONNX, and
+# OnnxNeuralMasteringRunner abstains (loadModel returns false).
+set(MORE_PHI_HAS_ONNX 0)
+if(MORE_PHI_ENABLE_ONNX)
+    include(cmake/FetchOnnxRuntime.cmake)
+    set(MORE_PHI_HAS_ONNX 1)
+endif()
+
 
 # Plugin formats: AU is macOS-only, do not emit it on other platforms
 if(APPLE)
@@ -217,6 +235,8 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/Core/NeuralMasteringTypes.h
     src/Core/NeuralMasteringSafetyPolicy.h
     src/Core/NeuralMasteringSafetyPolicy.cpp
+    src/AI/OnnxNeuralMasteringRunner.h
+    src/AI/OnnxNeuralMasteringRunner.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
@@ -629,6 +649,16 @@ target_compile_definitions(MorePhi
 
 if(APPLE)
     target_compile_definitions(MorePhi PUBLIC JUCE_PLUGINHOST_AU=1)
+endif()
+
+# ── ONNX Runtime linkage + compile definition ─────────────────────────────────
+# When enabled, the runner's real session/inference path compiles in (the .cpp
+# guards on MORE_PHI_HAS_ONNX) and the imported ORT target is linked PRIVATE so
+# ONNX symbols do not leak into the plugin's public ABI. Stays fully off by
+# default; flipping MORE_PHI_ENABLE_ONNX=ON is the single activation switch.
+if(MORE_PHI_HAS_ONNX)
+    target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAS_ONNX=1)
+    target_link_libraries(MorePhi PRIVATE more_phi::onnxruntime)
 endif()
 
 # Build-stability defaults are target-scoped so normal CMake options stay explicit.
