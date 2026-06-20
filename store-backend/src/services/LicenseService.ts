@@ -25,7 +25,6 @@ export const LicenseService = {
             customerId: input.customerId,
             orderId: input.orderId,
             productId: input.productId,
-            key,
             keyHash: hash,
             maxActivations: input.maxActivations ?? 3,
             status: LicenseStatus.ACTIVE,

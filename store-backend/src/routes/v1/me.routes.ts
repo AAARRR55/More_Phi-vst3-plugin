@@ -18,7 +18,7 @@ export async function meRoutes(app: FastifyInstance) {
       orderBy: { createdAt: "desc" },
       include: {
         product: { select: { slug: true, name: true } },
-        licenses: { select: { id: true, key: true, status: true, createdAt: true } },
+        licenses: { select: { id: true, status: true, createdAt: true } },
       },
     });
 
@@ -36,16 +36,10 @@ export async function meRoutes(app: FastifyInstance) {
         product: o.product,
         licenses: o.licenses.map((l) => ({
           id: l.id,
-          key: maskLicenseKey(l.key),
           status: l.status,
         })),
       })),
       licenses,
     });
   });
-}
-
-function maskLicenseKey(key: string): string {
-  const parts = key.split("-");
-  return parts.map((part, i) => (i === 0 ? part : "****")).join("-");
 }

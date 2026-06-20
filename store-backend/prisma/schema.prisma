@@ -86,7 +86,6 @@ model License {
   customerId     String
   orderId        String
   productId      String
-  key            String        @unique
   keyHash        String        @unique
   status         LicenseStatus @default(ACTIVE)
   maxActivations Int           @default(3)

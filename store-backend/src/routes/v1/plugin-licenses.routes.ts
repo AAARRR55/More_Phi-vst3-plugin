@@ -140,17 +140,16 @@ export async function pluginLicenseRoutes(app: FastifyInstance) {
       const input = validate(deactivateSchema, request.body);
 
       const activation = await prisma.activation.findFirst({
-        where: { id: input.activation_id, fingerprintHash: input.machine_id },
-        include: { license: true },
+        where: { id: input.activation_id, fingerprintHash: input.machine_id, status: "ACTIVE" },
       });
 
-      if (!activation || !activation.license) {
+      if (!activation) {
         throw new ApiError(ErrorCode.NOT_FOUND, "Activation not found");
       }
 
-      await ActivationService.deactivate({
-        licenseKey: activation.license.key,
-        fingerprintHash: input.machine_id,
+      await prisma.activation.update({
+        where: { id: activation.id },
+        data: { status: "DEACTIVATED", deactivatedAt: new Date() },
       });
 
       return reply.send({ status: "deactivated" });
