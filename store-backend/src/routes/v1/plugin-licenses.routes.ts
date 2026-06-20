@@ -98,6 +98,14 @@ export async function pluginLicenseRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const input = validate(refreshSchema, request.body);
 
+      const existing = await prisma.activation.findFirst({
+        where: { id: input.activation_id, fingerprintHash: input.machine_id },
+      });
+
+      if (!existing) {
+        throw new ApiError(ErrorCode.NOT_FOUND, "Activation not found");
+      }
+
       const activation = await ActivationService.refresh(input.activation_id, input.machine_id);
       const signed = createCertificateForActivation(
         activation.licenseId,
