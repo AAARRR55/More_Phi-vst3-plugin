@@ -214,6 +214,7 @@ def export_onnx(model: nn.Module, path: Path) -> None:
     them when ONNX Runtime is linked.
     """
     model.eval()
+    model.cpu()  # export on CPU: ONNX graph is device-agnostic, and this avoids the cuda/cpu FakeTensor mismatch when the model was trained on GPU
     dummy = torch.zeros(1, INPUT_FEATURE_COUNT, dtype=torch.float32)
     with torch.no_grad():
         torch.onnx.export(
