@@ -94,6 +94,60 @@ TEST_CASE("OzoneParameterMap::normalizeThreshold boundary values", "[ozone][norm
     }
 }
 
+// ── Test 3b: normalizeQ ───────────────────────────────────────────────────────
+//
+// Regression guard for the Q-encoding defect: OzonePlanApplicator previously
+// routed the EQ band Q value through normalizeFreq() (a log2 curve over
+// [0.1, 20]). That both mis-scaled Q (Ozone exposes Q as linear in normalized
+// VST3 space) and used a range that disagrees with this codebase's own Q
+// documentation — PluginSemanticMapper.cpp:171 advertises Q as "0.3 to 8.0"
+// and EQParameterTranslator.cpp clamps Q to a narrow mastering range with a
+// 0.1 floor. normalizeQ is linear over [0.1, 8.0] so a plan's Q value maps
+// deterministically to the hosted plugin's Q parameter, consistent with the
+// other linear normalize helpers (gain/threshold/LUFS/ceiling) and distinct
+// from the log2 freq curve.
+
+TEST_CASE("OzoneParameterMap::normalizeQ boundary and linearity", "[ozone][normalization]")
+{
+    SECTION("Floor (0.1) maps to 0.0")
+    {
+        REQUIRE(OzoneParameterMap::normalizeQ(0.1f) == Approx(0.0f).margin(1e-5f));
+    }
+
+    SECTION("Ceiling (8.0) maps to 1.0")
+    {
+        REQUIRE(OzoneParameterMap::normalizeQ(8.0f) == Approx(1.0f).margin(1e-5f));
+    }
+
+    SECTION("Unity Q (1.0) maps to a linear midpoint, not a log midpoint")
+    {
+        // Linear over [0.1, 8.0]: (1.0 - 0.1) / (8.0 - 0.1) ≈ 0.11392
+        REQUIRE(OzoneParameterMap::normalizeQ(1.0f) == Approx(0.11392f).margin(1e-4f));
+    }
+
+    SECTION("Mapping is linear (midpoint of the range maps to 0.5)")
+    {
+        const float rangeMid = (0.1f + 8.0f) * 0.5f;   // 4.05
+        REQUIRE(OzoneParameterMap::normalizeQ(rangeMid) == Approx(0.5f).margin(1e-5f));
+    }
+
+    SECTION("Result is clamped to [0, 1] for out-of-range input")
+    {
+        REQUIRE(OzoneParameterMap::normalizeQ(0.0f)  == Approx(0.0f).margin(1e-5f));
+        REQUIRE(OzoneParameterMap::normalizeQ(20.0f) == Approx(1.0f).margin(1e-5f));
+    }
+
+    SECTION("Linear Q encoding differs from the old log2-freq encoding")
+    {
+        // The bug routed Q through normalizeFreq(q, 0.1, 20) (log2). For q=1.0
+        // that yielded ~0.384; the linear helper must NOT match it. If this
+        // assertion ever fails, Q was re-routed through a log curve.
+        const float buggyLogEncoding = OzoneParameterMap::normalizeFreq(1.0f, 0.1f, 20.0f);
+        REQUIRE_FALSE(OzoneParameterMap::normalizeQ(1.0f)
+                      == Approx(buggyLogEncoding).margin(1e-3f));
+    }
+}
+
 // ── Test 4: isOzone11 ─────────────────────────────────────────────────────────
 
 TEST_CASE("OzoneParameterMap::isOzone11 name detection", "[ozone][detection]")

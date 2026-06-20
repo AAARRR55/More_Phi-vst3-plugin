@@ -117,6 +117,16 @@ public:
      *  0 = fully mono, 1 = unity, 2 = double width. */
     static float normalizeWidth(float width) noexcept;
 
+    /** Map an EQ band Q (bandwidth) value to VST3 normalized [0..1].
+     *
+     *  Linear over [0.1, 8.0]. The range matches this codebase's own Q
+     *  documentation — PluginSemanticMapper advertises Q as "0.3 to 8.0" and
+     *  EQParameterTranslator clamps Q to a narrow mastering range with a 0.1
+     *  floor — and Q is exposed by hosted plugins as linear in normalized
+     *  VST3 space, so a log curve (previously mis-applied via normalizeFreq)
+     *  distorts the value. Do NOT reuse normalizeFreq for Q. */
+    static float normalizeQ(float q, float minQ = 0.1f, float maxQ = 8.0f) noexcept;
+
     /** Map a target LUFS value to VST3 normalized [0..1].
      *  Range [-24, -6] LUFS covering typical mastering targets. */
     static float normalizeLUFS(float lufs,

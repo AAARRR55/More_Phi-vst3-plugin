@@ -64,8 +64,11 @@ int OzonePlanApplicator::applyEQ(const MultiEffectPlan& plan)
             count += enqueueIfMapped(bm.gainIdx,
                 OzoneParameterMap::normalizeGain(gain));
             count += enqueueIfMapped(bm.qIdx,
-                // Q typically [0.1..20] → [0..1] using log scale like freq
-                OzoneParameterMap::normalizeFreq(q, 0.1f, 20.0f));
+                // Q is linear in VST3 normalized space over [0.1, 8.0] — see
+                // OzoneParameterMap::normalizeQ. Do NOT route through normalizeFreq
+                // (log2); that distorted Q and used a range ([0.1, 20]) that
+                // disagreed with PluginSemanticMapper's documented Q domain.
+                OzoneParameterMap::normalizeQ(q));
             count += enqueueIfMapped(bm.typeIdx,
                 OzoneParameterMap::encodeFilterType(typeStr));
             count += enqueueIfMapped(bm.enabledIdx, 1.0f);  // enable band

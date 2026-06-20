@@ -74,6 +74,9 @@ add_executable(MorePhiTests
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
     Unit/TestNeuralMasteringController.cpp
+    Unit/TestNeuralMasteringFeatureExtractor.cpp
+    Unit/TestOnnxNeuralMasteringRunner.cpp
+    Unit/TestOnnxRunnerInference.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
@@ -115,6 +118,31 @@ target_compile_definitions(MorePhiTests PRIVATE
     JUCE_STANDALONE_APPLICATION=0
     JUCE_MODAL_LOOPS_PERMITTED=1
 )
+# When the plugin is built with ONNX enabled, propagate the definition so test
+# TUs that assert on the live-inference path compile against the same code, and
+# link the ORT runtime so the test binary can load it.
+if(MORE_PHI_HAS_ONNX)
+    target_compile_definitions(MorePhiTests PRIVATE MORE_PHI_HAS_ONNX=1)
+    target_link_libraries(MorePhiTests PRIVATE more_phi::onnxruntime)
+
+    # Stage the trained artifact next to the test exe so the inference test can
+    # find it at runtime, and copy the ONNX Runtime DLL alongside so Windows
+    # can resolve it. Both are POST_BUILD so they refresh on incremental builds.
+    set(MOREPHI_MODEL_SRC "${CMAKE_SOURCE_DIR}/scripts/neural-mastering/control/model_scaled.onnx")
+    set(MOREPHI_MODEL_DST "$<TARGET_FILE_DIR:MorePhiTests>/model_scaled.onnx")
+    add_custom_command(TARGET MorePhiTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MOREPHI_MODEL_SRC}" "${MOREPHI_MODEL_DST}"
+        COMMENT "Staging model_scaled.onnx next to test exe"
+        VERBATIM)
+    if(WIN32 AND MORE_PHI_ONNX_RUNTIME_LIB)
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MORE_PHI_ONNX_RUNTIME_LIB}" "$<TARGET_FILE_DIR:MorePhiTests>"
+            COMMENT "Copying onnxruntime.dll next to test exe"
+            VERBATIM)
+    endif()
+endif()
 if(COMMAND more_phi_apply_build_tuning)
     more_phi_apply_build_tuning(MorePhiTests)
 endif()
