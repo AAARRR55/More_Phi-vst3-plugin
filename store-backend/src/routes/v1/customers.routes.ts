@@ -22,8 +22,8 @@ export async function customerRoutes(app: FastifyInstance) {
     {
       config: {
         rateLimit: {
-          max: env.LOGIN_RATE_LIMIT_MAX,
-          timeWindow: env.LOGIN_RATE_LIMIT_WINDOW_MS,
+          max: env.REGISTRATION_RATE_LIMIT_MAX,
+          timeWindow: env.REGISTRATION_RATE_LIMIT_WINDOW_MS,
         },
       },
     },
