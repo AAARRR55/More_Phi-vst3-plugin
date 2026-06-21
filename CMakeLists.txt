@@ -262,6 +262,8 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/AI/OnnxNeuralMasteringRunner.cpp
     src/AI/SonicMasterDecisionDecoder.h
     src/AI/SonicMasterDecisionDecoder.cpp
+    src/AI/SonicMasterDecisionRunner.h
+    src/AI/SonicMasterDecisionRunner.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
