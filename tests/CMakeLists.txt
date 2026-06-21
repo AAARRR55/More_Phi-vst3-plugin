@@ -104,6 +104,7 @@ add_executable(MorePhiTests
     Unit/TestRealtimeControlAgent.cpp
     Unit/TestQualitySafetyAgent.cpp
     Unit/TestMemoryAgent.cpp
+    Unit/TestStructuredAgentLogger.cpp
     # Orchestrator facades and protocols
     Unit/TestAgentOrchestrator.cpp
     Unit/TestMcpProtocol.cpp
