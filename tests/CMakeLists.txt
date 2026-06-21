@@ -80,6 +80,7 @@ add_executable(MorePhiTests
     # SonicMaster realtime neural mastering (preview)
     Unit/TestSonicMasterDecisionDecoder.cpp
     Unit/TestAudioCaptureRing.cpp
+    Unit/TestSonicMasterAnalysisEngine.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp

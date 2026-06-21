@@ -73,7 +73,7 @@ TEST_CASE("decodeSonicMasterDecision maps target LUFS into loudness band",
     CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
 }
 
-TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band",
+TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band (telemetry, mask off)",
           "[SonicMaster][Decoder]")
 {
     float decision[more_phi::kSonicMasterDecisionWidth] {};
@@ -82,9 +82,12 @@ TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band",
     more_phi::ValidatedNeuralMasteringPlan plan {};
     REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
 
-    REQUIRE(plan.appliedMask.limiter);
-    // applyValidatedPlan: ceiling = -1 + limiter[0]*0.5 clamped to [-3,-0.1].
-    // A -1 dBTP target must decode to limiter[0] == 0.0.
+    // The ceiling is decoded into limiter[0] for callers that opt into the
+    // high-risk limiter mask, but the default appliedMask.limiter stays OFF so
+    // the safety policy (which treats limiter as high-risk) accepts the plan.
+    CHECK_FALSE(plan.appliedMask.limiter);
+    // applyValidatedPlan: ceiling = -1 + limiter[0]*0.5. A -1 dBTP target must
+    // decode to limiter[0] == 0.0 so a caller that enables the mask reproduces it.
     CHECK_THAT(plan.projectedTargets.limiter[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
 }
 

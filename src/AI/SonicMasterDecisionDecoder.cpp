@@ -53,14 +53,19 @@ bool decodeSonicMasterDecision(const float* decision,
         out.appliedMask.loudness = true;
     }
 
-    // ── Limiter: true-peak ceiling -> limiter[0] so that applyValidatedPlan's
-    //    (-1 + value*0.5) clamped to [-3,-0.1] reproduces the ceiling.
+    // ── Limiter: true-peak ceiling decoded for telemetry. The default safety
+    //    posture treats the limiter as high-risk (highRiskControls.limiter),
+    //    so the mask is left OFF and the ceiling is not auto-applied — matching
+    //    the DeterministicBaseline posture in OnnxNeuralMasteringRunner. The
+    //    ceiling value is still projected into limiter[0..1] so a caller that
+    //    explicitly raises the mask (e.g. an "apply limiter ceiling" toggle)
+    //    gets the right number.
     {
         const float ceiling = clamp(decision[kSonicMasterTruePeakIdx], -6.0f, -0.1f);
         const float value = (ceiling + 1.0f) / 0.5f;
         out.projectedTargets.limiter[0] = value;
         out.projectedTargets.limiter[1] = value;
-        out.appliedMask.limiter = true;
+        out.appliedMask.limiter = false;
     }
 
     // ── Dynamics: 3 x (threshold,ratio,attack,release,makeup,knee).
