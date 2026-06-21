@@ -387,6 +387,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/AgentRuntime.cpp
     src/AI/Agents/Conductor/ConductorAgent.h
     src/AI/Agents/Conductor/ConductorAgent.cpp
+    src/AI/Agents/Agents/AnalysisAgent.h
+    src/AI/Agents/Agents/AnalysisAgent.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
