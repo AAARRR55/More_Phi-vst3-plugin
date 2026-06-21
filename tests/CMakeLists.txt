@@ -82,6 +82,7 @@ add_executable(MorePhiTests
     Unit/TestAudioCaptureRing.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
     Unit/TestSonicMasterHttpInferenceSource.cpp
+    Unit/TestSonicMasterHttpLive.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp

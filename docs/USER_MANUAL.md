@@ -336,7 +336,9 @@ Above the AI status bar, **Neural Master (Preview)** drives the built-in masteri
 | Neural Master (Preview) | Toggle | Enables the background analysis loop. **Off by default.** |
 | Neural Master status | Label | `off` · `collecting audio...` · `applied #N` · `held (low confidence)` · `error - see log` · `unavailable (no model)`. |
 
-**This is a preview feature and off by default.** The model is research-grade — it failed several of its own release-quality gates (EQ MAE ≈ 2.1 dB, true-peak ≈ 0.8 dBTP) — so treat it as an assistant, not an autocrat. Every prediction is clamped by the plugin's `NeuralMasteringSafetyPolicy`, so a bad frame can never push the chain into an unsafe state; rejected frames hold the last safe setting. The toggle is disabled when no model is loaded (the plugin must be built with `MORE_PHI_ENABLE_ONNX=ON` and the model must be staged — see `tools/export_onnx/README.md`).
+**This is a preview feature and off by default.** The model is research-grade — it failed several of its own release-quality gates (EQ MAE ≈ 2.1 dB, true-peak ≈ 0.8 dBTP) — so treat it as an assistant, not an autocrat. Every prediction is clamped by the plugin's `NeuralMasteringSafetyPolicy`, so a bad frame can never push the chain into an unsafe state; rejected frames hold the last safe setting.
+
+**To enable it**, start the local Python inference server that hosts the model (see `tools/inference_server/README.md`), then toggle "Neural Master (Preview)" on. The toggle stays disabled ("unavailable (no model)") until the server is reachable on `127.0.0.1:8765`. The plugin drives inference via that server because the checkpoint cannot yet be exported to a faithful in-process ONNX model; the server path runs the exact inference the model was validated with.
 
 Limitations (by design):
 

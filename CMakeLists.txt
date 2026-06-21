@@ -379,6 +379,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Blackboard/BlackboardBridge.cpp
     src/AI/Agents/Llm/DeterministicFallbackLlmClient.h
     src/AI/Agents/Llm/DeterministicFallbackLlmClient.cpp
+    src/AI/Agents/Tooling/DefaultToolInvoker.h
+    src/AI/Agents/Tooling/DefaultToolInvoker.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp

@@ -38,6 +38,7 @@
 #include "AI/NeuralMasteringController.h"
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "AI/SonicMasterDecisionRunner.h"
+#include "AI/SonicMasterHttpInferenceSource.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include "Licensing/LicenseManager.h"
@@ -468,6 +469,7 @@ private:
     SonicMasterDecisionRunner            sonicMasterRunner_;
     SonicMasterAnalysisEngine            sonicMasterEngine_;
     SonicMasterRunnerInferenceSource     sonicMasterSource_ { sonicMasterRunner_ };
+    SonicMasterHttpInferenceSource       sonicMasterHttpSource_;
 
     // ── V2 components ──────────────────────────────────────────────────────
     PluginHostManager  hostManagerB_;

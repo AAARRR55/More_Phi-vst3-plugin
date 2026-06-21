@@ -102,10 +102,13 @@ MorePhiProcessor::MorePhiProcessor()
     licenseManager_ = std::make_unique<licensing::LicenseManager>(licenseRuntimeState_);
     requestMessageThreadMaintenance();
 
-    // SonicMaster realtime neural mastering (preview): wire the engine to the
-    // inference source (no-op until a model is loaded) and to the built-in
-    // mastering chain. prepare()/release() run in prepareToPlay/releaseResources.
-    sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
+    // SonicMaster realtime neural mastering (preview): drive the analysis loop
+    // via the local Python inference server over HTTP (the masteringbrainv2
+    // checkpoint can't yet be exported to ONNX faithfully — see
+    // tools/inference_server/README.md). The ONNX runner remains the preferred
+    // source if a model is loaded in future; for now the HTTP source is the
+    // working path.
+    sonicMasterEngine_.setInferenceSource(&sonicMasterHttpSource_);
     sonicMasterEngine_.setApplicationEngine(&autoMasteringEngine_);
 
     // Wire MIDI router callbacks (plain C function pointers + void* context)
