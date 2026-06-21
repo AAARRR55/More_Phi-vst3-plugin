@@ -19,6 +19,7 @@ This manual is the definitive feature reference for More-Phi. Use it when you ne
 - [Presets Tab](#presets-tab)
 - [AI Tab and LLM Settings](#ai-tab-and-llm-settings)
 - [AI Status Bar](#ai-status-bar)
+- [Agent Orchestration](#agent-orchestration)
 - [MIDI Functions](#midi-functions)
 - [MCP Feature Reference](#mcp-feature-reference)
 - [Configuration and Automation Parameters](#configuration-and-automation-parameters)
@@ -63,12 +64,15 @@ Bottom Tabs
   |-- Engine
   |-- Modulation
   |-- Presets
-  `-- AI
+  |-- AI
+  `-- Agent Orchestration
 
 AI Status Bar
   |-- MCP status
   |-- Port
   |-- External clients
+  |-- Agent states
+  |-- Scheduler stats
   |-- Start/Stop MCP
   `-- Copy Token
 ```
@@ -288,7 +292,21 @@ More-Phi presets are separate from hosted-plugin presets. A More-Phi preset can 
 
 ## AI Tab and LLM Settings
 
-The AI tab hosts chat and assistant workflows where enabled.
+The AI tab hosts chat and assistant workflows where enabled. It also displays the **Agent Status** panel when the orchestrator is active, showing the current state of all six built-in agents, the scheduler queue depth, and the Conductor's latest plan.
+
+### Agent Status Panel
+
+When MCP is running, the AI tab includes an **Agent Status** panel with the following readouts:
+
+| Element | Description |
+|---|---|
+| Orchestrator state | `running`, `paused`, or `stopped`. |
+| Agent list | One row per agent (Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety) showing current state. |
+| Agent state badges | `idle`, `planning`, `waiting_for_approval`, `executing`, or `error`. |
+| Scheduler stats | Queue depth, tasks completed, and average task latency. |
+| Plan viewer | Collapsible view of the Conductor's current plan with step ownership. |
+| Approval buttons | **Approve**, **Modify**, and **Reject** buttons appear when the Creative or Optimization agents propose changes. |
+| Cancel button | Interrupts the currently executing plan. |
 
 ### LLM Settings Dialog
 
@@ -326,6 +344,49 @@ The AI status bar is always visible at the bottom of the editor.
 | External clients | Label | Shows connected external client count when greater than zero. |
 | Start MCP / Stop MCP | Button | Starts or stops the embedded MCP server. |
 | Copy Token | Button | Copies the current MCP bearer token to the clipboard. |
+
+## Agent Orchestration
+
+More-Phi v3.3.0 includes a multi-agent orchestration layer that supervises six built-in agents to carry out high-level sound-design goals. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
+
+### The Six Built-In Agents
+
+| Agent | Role | Behavior |
+|---|---|---|
+| **Conductor** | Coordinates all other agents, breaks down user goals, and approves or rejects proposed plans. | Always active when orchestration is enabled. |
+| **Analysis** | Reads audio measurements, spectrum, stereo field, and parameter states. | Read-only; it never changes parameters directly. |
+| **Optimization** | Drafts detailed parameter plans (EQ moves, gain changes, width adjustments) to satisfy a goal. | Proposes plans only; changes are applied only through Conductor approval. |
+| **Creative** | Generates novel snapshot ideas, suggests unconventional parameter combinations, and explores variations. | Always requires user explicit approval before applying changes, regardless of autonomy settings. |
+| **RealtimeControl** | Manages time-critical adjustments such as gain staging or limiting during playback. | Operates automatically on **RealtimeCritical** priority; does not wait for manual approval. |
+| **QualitySafety** | Monitors every proposed change against safety policies and clamps or rejects dangerous values. | Runs automatically in the background. |
+
+### Autonomy Levels
+
+| Level | Agents | Effect |
+|---|---|---|
+| **Automatic** | RealtimeControl, QualitySafety | Act immediately without user intervention. |
+| **Approval-required** | Creative | Always prompts the user before applying changes. |
+| **Conductor-gated** | Optimization | Drafts plans, but the Conductor queues them for review or auto-approves based on trust settings. |
+
+### AI Status Bar Additions
+
+When the orchestrator is active, the AI status bar also shows:
+
+| Control | Type | Description |
+|---|---|---|
+| Orchestrator state | Label | `Orchestrator: running`, `paused`, or `stopped`. |
+| Active agent count | Label | Number of agents currently busy. |
+| Queue depth | Label | Current scheduler task queue depth. |
+
+### Using Agent Orchestration
+
+1. Start MCP from the AI status bar.
+2. Open the AI tab and locate the **Agent Status** panel.
+3. Type a goal in plain language (e.g., "make this track louder and brighter") and submit it.
+4. The Conductor agent breaks the goal into sub-tasks and delegates to the appropriate agents.
+5. Monitor agent states in the status panel. Click any agent row to expand its reasoning log or proposed plan.
+6. If an agent is waiting for approval, a notification badge appears on the AI tab. Click the badge to review and approve, modify, or reject the proposal.
+7. Click **Cancel** in the AI tab to stop an in-progress plan at any time.
 
 ## Neural Master (Preview)
 
@@ -398,6 +459,31 @@ Safety categories:
 | `analysis.capture_window` | Rolling meter-window statistics when analysis samples are available. |
 | `mastering.plan_preview` | Generate a heuristic rule-based plan without applying. |
 | `mastering.apply_plan` | Apply a heuristic rule-based mastering plan. |
+
+### Multi-Agent System
+
+The MCP server also exposes tools for the agent orchestration layer. These tools are available when the orchestrator is active and MCP is running.
+
+| Tool | Description |
+|---|---|
+| `orchestrator.describe_system_state` | Returns a JSON snapshot of the orchestrator, MCP server, agent roster, and scheduler statistics. |
+| `orchestrator.submit_user_goal` | Submits a high-level goal (e.g., "make this track louder and brighter") to the Conductor agent. |
+| `orchestrator.cancel_plan` | Interrupts the currently executing plan and returns all agents to idle. |
+| `orchestrator.get_agent_state` | Returns the detailed state of a single agent by name. |
+| `orchestrator.approve_proposal` | Approves a pending plan or action from the Creative or Optimization agent. |
+| `orchestrator.reject_proposal` | Rejects a pending plan and returns the agent to idle. |
+
+**`orchestrator.describe_system_state` response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `orchestratorRunning` | Bool | Whether the orchestrator thread is active. |
+| `mcpServerRunning` | Bool | Whether the MCP server is currently accepting connections. |
+| `mcpHealthy` | Bool | Whether the last MCP health check passed. |
+| `mcpPort` | Int | The local port the MCP server is listening on. |
+| `agentCount` | Int | Number of registered agents (always 6 for the built-in set). |
+| `agentStates` | Array | One object per agent with `name`, `state`, `lastTask`, and `pendingApproval`. |
+| `schedulerStats` | Object | `queueDepth`, `tasksCompleted`, and `averageLatencyMs`. |
 
 ## Configuration and Automation Parameters
 
@@ -512,3 +598,13 @@ Safety categories:
 | Snapshot | Captured hosted-plugin parameter state in one of 12 slots. |
 | Snap Fader | Vertical 1D morph control. |
 | VST3 | Cross-platform audio plugin format. |
+| AgentOrchestrator | The multi-agent supervision layer that coordinates the six built-in agents and manages the scheduler. |
+| ConductorAgent | The central agent that breaks down user goals, delegates tasks, and approves or rejects proposed plans. |
+| AnalysisAgent | Read-only agent that inspects audio measurements, spectrum, stereo field, and parameter states. |
+| OptimizationAgent | Agent that drafts detailed parameter plans to satisfy a goal; applies changes only through Conductor approval. |
+| CreativeAgent | Agent that generates novel snapshot ideas and unconventional parameter combinations; always requires user approval. |
+| RealtimeControlAgent | Agent that manages time-critical adjustments such as gain staging or limiting during playback. |
+| QualitySafetyAgent | Agent that monitors proposed changes against safety policies and clamps or rejects dangerous values. |
+| BlackboardBridge | Internal shared-state bridge that lets agents read and post intermediate results without direct coupling. |
+| EcosystemConfig | Runtime configuration object that controls orchestrator and MCP server settings. |
+| McpProtocol | JSON-RPC schema definitions used by the MCP server for message construction and tool dispatch. |

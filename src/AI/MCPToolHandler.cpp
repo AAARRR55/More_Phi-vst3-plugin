@@ -23,6 +23,7 @@
 #include "PluginSemanticMapper.h"
 #include "TrackAssistantStore.h"
 #include "MasteringCandidateScoring.h"
+#include "Agents/AgentRuntime.h"
 #include "SonicMasterDecisionDecoder.h"
 #include "AutomationControlPlane.h"
 #include "StandaloneMcp/IZotopeIPCAssistant.h"
@@ -2949,6 +2950,22 @@ juce::String MCPToolHandler::getToolList()
     for (int i = 0; i < kExtendedToolCount; ++i)
         appendTool(kExtendedTools[i].name, kExtendedTools[i].description, kExtendedTools[i].schema);
 
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    appendTool("agents.list", "List registered agents and their state",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.run_goal", "Submit a natural-language goal to the Conductor agent",
+        R"({"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]})");
+    appendTool("agents.run_task", "Submit a task directly to a named agent (bypass Conductor)",
+        R"({"type":"object","properties":{"agent":{"type":"string"},"intent":{"type":"string"}},"required":["agent"]})");
+    appendTool("agents.run_status", "Poll a run/task for state and findings",
+        R"({"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"]})");
+    appendTool("agents.run_cancel", "Cooperatively cancel the agent runtime",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.blackboard.recent", "Read recent blackboard events",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.set_autonomy", "Set the agent-domain autonomy level",
+        R"({"type":"object","properties":{"level":{"type":"string","enum":["manual","assist","copilot","autopilot"]}},"required":["level"]})");
+
     return toJString(json{{"tools", tools}});
 }
 
@@ -3028,6 +3045,15 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return savePluginProfile(params, p); });
     else if (method == "plugin_profile.describe_semantic_map" || method == "describe_plugin_semantic_map")
         result = describePluginSemanticMap(params, p);
+
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    else if (method == "agents.list")               result = agentsList(p);
+    else if (method == "agents.run_goal")           return agentsRunGoal(params, p);
+    else if (method == "agents.run_task")           return agentsRunTask(params, p);
+    else if (method == "agents.run_status")         result = agentsRunStatus(params, p);
+    else if (method == "agents.run_cancel")         return agentsRunCancel(params, p);
+    else if (method == "agents.blackboard.recent")  result = agentsBlackboardRecent(p);
+    else if (method == "agents.set_autonomy")       return agentsSetAutonomy(params, p, runtime);
 
     else if (method == "sync.apply_envelope")
         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
@@ -6186,6 +6212,169 @@ juce::String MCPToolHandler::ozoneTrackSearch(const juce::var& params,
     }
 
     return toJString(TrackAssistantStore::search(query, statuses, dateFrom, dateTo, page, pageSize));
+}
+
+// ── Agent runtime tools (agents.*) ────────────────────────────────────────────
+//
+// These handlers are thin MCP wrappers over AgentRuntime (src/AI/Agents/AgentRuntime.h).
+// They intentionally defer every state check to the runtime; if the runtime was never
+// constructed (e.g. MCP server not started, or agent layer disabled) we return a
+// deterministic `agents_unavailable` error envelope so callers can branch cleanly.
+
+namespace {
+// Resolves the per-processor agent runtime. Returns nullptr if the plugin has not
+// started its MCP server / runtime yet.
+more_phi::agents::AgentRuntime* runtimeOf(MorePhiProcessor& p);
+more_phi::agents::AgentRuntime* runtimeOf(MorePhiProcessor& p)
+{
+    return p.getAgentRuntime();
+}
+
+juce::String agentsUnavailable()
+{
+    return juce::String(nlohmann::json{
+        {"error", { {"code", "agents_unavailable"},
+                    {"message", "agent runtime not started"} } }
+    }.dump());
+}
+
+// Best-effort conversion of an AgentResult (which uses nlohmann::json internally) to a
+// juce::String MCP envelope. Findings/actions/events are surfaced verbatim so MCP
+// consumers (and tests) can introspect them.
+juce::String resultEnvelope(const juce::String& taskId, const more_phi::agents::AgentResult& r)
+{
+    nlohmann::json env = nlohmann::json::object();
+    env["task_id"] = taskId.toStdString();
+    env["success"] = r.success;
+    if (! r.errorCode.isEmpty())
+        env["error_code"] = r.errorCode.toStdString();
+    env["findings"]       = r.findings;
+    env["proposed_actions"] = r.proposedActions;
+    env["telemetry"]      = r.telemetry;
+    return juce::String(env.dump());
+}
+} // namespace
+
+juce::String MCPToolHandler::agentsList(MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    return juce::String(rt->describeState().dump());
+}
+
+juce::String MCPToolHandler::agentsRunGoal(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto intent = params.getProperty("intent", {}).toString();
+    if (intent.trim().isEmpty())
+        return toJString(json{{"error", "missing_intent"}});
+
+    const auto runId = rt->submitGoal(intent, more_phi::agents::TaskPriority::High, "mcp");
+    if (runId.isEmpty())
+        return toJString(json{{"error", "no_conductor_registered"}});
+
+    return juce::String(nlohmann::json{
+        {"run_id", runId.toStdString()},
+        {"state",  "submitted"}
+    }.dump());
+}
+
+juce::String MCPToolHandler::agentsRunTask(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto agentName = params.getProperty("agent", {}).toString().trim();
+    const auto intent    = params.getProperty("intent", {}).toString();
+    if (agentName.isEmpty())
+        return toJString(json{{"error", "missing_agent"}});
+
+    const auto role = more_phi::agents::agentRoleFromString(agentName);
+    if (role == more_phi::agents::AgentRole::Custom && agentName.toLowerCase() != "custom")
+        return toJString(json{{"error", "unknown_agent_role"}, {"role", agentName.toStdString()}});
+
+    more_phi::agents::AgentTask task;
+    task.targetRole = role;
+    task.intent     = intent;
+    task.priority   = more_phi::agents::TaskPriority::Normal;
+    task.origin     = "mcp";
+    const auto taskId = rt->submitTask(std::move(task));
+    if (taskId.isEmpty())
+        return toJString(json{{"error", "agent_not_registered"}, {"role", agentName.toStdString()}});
+
+    return juce::String(nlohmann::json{
+        {"task_id", taskId.toStdString()},
+        {"state",   "submitted"}
+    }.dump());
+}
+
+juce::String MCPToolHandler::agentsRunStatus(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto taskId = params.getProperty("task_id", {}).toString().trim();
+    if (taskId.isEmpty())
+        return toJString(json{{"error", "missing_task_id"}});
+
+    const auto maybe = rt->peekResult(taskId);
+    if (! maybe.has_value())
+    {
+        return juce::String(nlohmann::json{
+            {"task_id", taskId.toStdString()},
+            {"state",   "pending"}
+        }.dump());
+    }
+    return resultEnvelope(taskId, *maybe);
+}
+
+juce::String MCPToolHandler::agentsRunCancel(const juce::var& /*params*/, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    rt->stop();
+    return juce::String(nlohmann::json{{"state", "stopped"}}.dump());
+}
+
+juce::String MCPToolHandler::agentsBlackboardRecent(MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    // The blackboard is layered over the AutomationRuntime's IntegrationEventBus; we
+    // surface recent bus events so MCP consumers can see what agents have published
+    // without needing a direct AutomationRuntime handle.
+    auto* runtime = p.getAutomationRuntimeForAgents();
+    if (runtime == nullptr)
+        return juce::String(nlohmann::json{
+            {"error", { {"code", "agents_unavailable"},
+                        {"message", "automation runtime not started"} } }
+        }.dump());
+    return juce::String(runtime->events().listRecent(32).dump());
+}
+
+juce::String MCPToolHandler::agentsSetAutonomy(const juce::var& params,
+                                                MorePhiProcessor& p,
+                                                AutomationRuntime& runtime)
+{
+    (void)p;
+    const auto levelStr = params.getProperty("level", {}).toString().trim();
+    if (levelStr.isEmpty())
+        return toJString(json{{"error", "missing_level"}});
+
+    const auto level = more_phi::autonomyLevelFromString(levelStr);
+    runtime.permissions().setAutonomyLevel(level);
+    return juce::String(nlohmann::json{
+        {"level",  more_phi::toString(level).toStdString()},
+        {"applied", true}
+    }.dump());
 }
 
 } // namespace more_phi

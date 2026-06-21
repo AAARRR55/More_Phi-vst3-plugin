@@ -147,6 +147,15 @@ private:
     static juce::String getAsyncToolStatus(const juce::var& params);
     static juce::String getAsyncToolResult(const juce::var& params);
 
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    static juce::String agentsList(MorePhiProcessor& p);
+    static juce::String agentsRunGoal(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunTask(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunStatus(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunCancel(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsBlackboardRecent(MorePhiProcessor& p);
+    static juce::String agentsSetAutonomy(const juce::var& params, MorePhiProcessor& p, AutomationRuntime& runtime);
+
     // Caching helpers
     static bool isCacheableTool(const juce::String& method);
     static juce::String getCachedToolResult(const juce::String& method,

@@ -110,12 +110,12 @@ External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separ
 
 ## Test Coverage
 
-Current `build/windows-msvc-release` CTest discovery lists 459+ tests. All tests pass successfully.
+Current `build/windows-msvc-release` CTest discovery lists 492+ tests. All tests pass successfully.
 
 ### Test Matrix Summary
 | Scope | Result |
 |-------|--------|
-| Full current Release CTest suite | 459/459 passed |
+| Full current Release CTest suite | 492/492 passed |
 | Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
 | Dataset-filtered integration/schema tests | 8/8 passed |
 | Release benchmark executable gates | 9/9 passed |
@@ -134,6 +134,25 @@ The hardening sprint added three key regression test categories to verify DSP co
 3. **Vocoder Channel Synchronization (`[spectral][production]`):**
    - **Target:** `SpectralMorphEngine`
    - **Assertion:** Verifies that transient detection is channel-coherent. Validates that modified morph alphas calculated on channel 0 are successfully cached and shared with channel 1, preventing stereo field collapse or asymmetric channel offsets.
+
+### Multi-Agent Orchestration Tests (v3.3.0)
+Four new test suites verify the AgentOrchestrator, MCP protocol, ecosystem configuration, and security validation:
+
+1. **TestAgentOrchestrator (`[ai][orchestrator]`):** 5 test cases
+   - **Target:** `AgentOrchestrator::start()`, `stop()`, `submitGoal()`, agent lifecycle
+   - **Assertion:** Validates that all six agents initialize, register, and teardown cleanly without blocking the audio thread.
+
+2. **TestMcpProtocol (`[ai][mcp][protocol]`):** 11 test cases
+   - **Target:** `McpProtocol::send()`, `receive()`, `handleRequest()`, JSON-RPC 2.0 framing
+   - **Assertion:** Verifies message serialization, request/response correlation, error code propagation, and connection recovery.
+
+3. **TestEcosystemConfig (`[ai][config]`):** 7 test cases
+   - **Target:** `EcosystemConfig::load()`, `save()`, port allocation, instance isolation
+   - **Assertion:** Confirms per-instance port auto-increment, quarantine mode behavior, and persistence round-trip.
+
+4. **TestSecurityValidator (`[ai][security]`):** 10 test cases
+   - **Target:** `SecurityValidator::validate()`, `approve()`, `reject()`, parameter bounds checking
+   - **Assertion:** Ensures creative-agent changes are gated by approval, bounds are enforced for all parameter types, and sandboxed agents cannot affect the production audio path.
 
 Comprehensive E2E test is now enabled and compiles with the current API.
 
@@ -185,7 +204,92 @@ External VST3-validator and DAW-host results should be attached as separate rele
 
 ---
 
-## 6. Link Mode (Cross-Instance Sync)
+## 6. Multi-Agent Orchestration
+
+**Purpose:** Coordinates six specialized AI agents for autonomous plugin management, real-time audio control, creative exploration, and cross-instance ecosystem collaboration.
+
+### Location
+`src/AI/Orchestrator/`
+
+### The 6 Agents
+
+| Agent | Role | Responsibility |
+|-------|------|----------------|
+| **RealtimeControl** | Safety & dynamics | Monitors audio levels (clipping, LUFS, true peak) and applies corrective parameter adjustments in real time. |
+| **Creative** | Exploration | Generates novel snapshot combinations and suggests morph trajectories using the genetic engine. Requires user approval before applying changes. |
+| **MIDI** | Routing intelligence | Optimizes MIDI routing, note-to-snapshot mappings, and CC-to-parameter assignments based on learned patterns. |
+| **Preset** | Memory management | Manages meta-preset organization, auto-tagging, and intelligent recall sequencing. |
+| **System** | Health monitoring | Watches plugin health, resource usage, and subsystem integrity. Reports anomalies and recommends maintenance. |
+| **Collaboration** | Ecosystem sync | Interfaces with the MCP server to enable inter-plugin communication and shared morph spaces across instances. |
+
+### APVTS Parameters
+
+| ID | Type | Default | Description |
+|----|------|---------|-------------|
+| `agentOrchestratorEnabled` | Bool | `false` | Master toggle enabling the multi-agent system |
+| `agentRealtimeControl` | Bool | `true` | Enable RealtimeControl agent |
+| `agentCreative` | Bool | `true` | Enable Creative agent |
+| `agentMIDI` | Bool | `true` | Enable MIDI agent |
+| `agentPreset` | Bool | `true` | Enable Preset agent |
+| `agentSystem` | Bool | `true` | Enable System agent |
+| `agentCollaboration` | Bool | `true` | Enable Collaboration agent |
+| `aiGoalInput` | Text | `""` | User-submitted goal description for AI processing |
+
+### Configuration Options
+
+`EcosystemConfig` provides per-instance configuration:
+
+```cpp
+struct EcosystemConfig {
+    bool mcpEnabled = true;          // Enable MCP server integration
+    int mcpBasePort = 30001;          // Starting port for MCP server (auto-increments per instance)
+    int maxAgents = 6;                // Maximum concurrent agents
+    bool requireApproval = true;      // Creative agent changes require manual approval
+    float clippingThreshold = -0.1f; // dBFS threshold for RealtimeControl intervention
+    bool quarantineMode = false;     // Isolate experimental agents from production audio path
+};
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    AgentOrchestrator                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
+│  │Realtime  │ │ Creative │ │  MIDI    │ │ Preset   │   │
+│  │ Control  │ │  Agent   │ │  Agent   │ │ Agent    │   │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘   │
+│  ┌────┴──────────┴──────────┴──────────┴──────────┐      │
+│  │           SecurityValidator                     │      │
+│  └────────────────────┬──────────────────────────┘      │
+│                       │                                   │
+│  ┌────────────────────┴──────────────────────────┐      │
+│  │              McpProtocol                      │      │
+│  │     (JSON-RPC 2.0 / localhost)              │      │
+│  └─────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────┘
+```
+
+### How to Use It
+1. Enable the orchestrator via the `agentOrchestratorEnabled` toggle in the AI settings panel.
+2. Submit goals through the AI goal input field in the UI.
+3. Monitor agent status in the AI status panel.
+4. Approve or reject Creative agent suggestions via the approval dialog.
+5. Configure per-instance MCP port behavior in `EcosystemConfig`.
+
+### Security
+All agent actions pass through `SecurityValidator`, which enforces:
+- Audio-thread safety (no blocking operations from agents)
+- Parameter bounds checking
+- Approval gates for destructive/creative changes
+- Sandboxed execution for experimental agents
+
+### State Persistence
+Agent configuration is serialized as `<AGENT_ORCHESTRATOR enabled="true" requireApproval="true"><AGENT name="realtime" enabled="true"/>...</AGENT_ORCHESTRATOR>` in the plugin's XML state.
+
+---
+
+## 7. Link Mode (Cross-Instance Sync)
 
 **Purpose:** Synchronize morph position across multiple More-Phi instances in the same DAW session.
 
@@ -201,7 +305,7 @@ External VST3-validator and DAW-host results should be attached as separate rele
 
 ---
 
-## 7. Drift Recording
+## 8. Drift Recording
 
 **Purpose:** Record drift/orbit morph movement as DAW automation.
 
@@ -215,7 +319,7 @@ Written from `processBlock()` after morph computation. DAWs can record these as 
 
 ---
 
-## 8. Smart Randomize (DAW Trigger)
+## 9. Smart Randomize (DAW Trigger)
 
 **Purpose:** Trigger preset randomization from DAW automation.
 
@@ -226,7 +330,7 @@ Written from `processBlock()` after morph computation. DAWs can record these as 
 
 ---
 
-## 9. Meta Preset Manager
+## 10. Meta Preset Manager
 
 **Purpose:** Bank/preset navigation with JSON serialization.
 
@@ -243,4 +347,4 @@ String getPresetName(int bank, int preset) const;
 Full JSON roundtrip: snapshot bank (12 slots) + APVTS state + version tag.
 
 
-_Updated 2026-06-18._
+_Updated 2026-06-21._

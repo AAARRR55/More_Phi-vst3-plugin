@@ -1,6 +1,6 @@
 # VST3 License Key Management System
 
-**Target:** More-Phi / JUCE 8 / C++20 VST3 and AU plugin releases  
+**Target:** More-Phi v3.3.0 / JUCE 8 / C++20 VST3 and AU plugin releases  
 **Purpose:** Practical implementation guide for trial, perpetual, subscription, node-locked, and floating licensing in a desktop audio plugin.  
 **Security posture:** Defense-in-depth. The goal is to deter casual misuse and large-scale redistribution while keeping the plugin stable, real-time safe, privacy-aware, and user-friendly.
 
@@ -1260,3 +1260,10 @@ For More-Phi specifically, implement this default policy:
   - Preserve saved projects regardless of license state.
 
 This gives a strong, user-friendly licensing foundation without violating the real-time and lifecycle constraints of VST3/AU plugin hosting.
+
+---
+
+## 25. Recent Changes
+
+### More-Phi v3.3.0
+- **Experimental research artifacts quarantined to `research/`:** All experimental and research-oriented code artifacts (dataset generation V2/V3 pipelines, inference server prototypes, and related tooling) have been moved to the `research/` directory at the repository root. This has **no impact on the production build** — these components are excluded from the standard VST3/AU build path and do not affect runtime behavior, plugin load times, or DAW compatibility. Production code continues to live under `src/` and is built normally via CMake.

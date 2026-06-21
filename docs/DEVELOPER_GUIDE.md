@@ -82,6 +82,7 @@ cmake --build build --config RelWithDebInfo
 | `MORE_PHI_BUILD_TESTS` | ON | Build Catch2 test executable |
 | `MORE_PHI_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
 | `MORE_PHI_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
+| `MORE_PHI_ENABLE_ORCHESTRATOR` | ON (implicit) | AgentOrchestrator layer sources in `src/AI/Orchestrator/` are always compiled into the shared-code target |
 
 ```bash
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON
@@ -132,7 +133,12 @@ morephi/
 │   │   └── PluginScanner.h/cpp
 │   ├── AI/                 # MCP server
 │   │   ├── MCPServer.h/cpp
-│   │   └── MCPToolHandler.h/cpp
+│   │   ├── MCPToolHandler.h/cpp
+│   │   └── Orchestrator/     # Agent orchestration layer
+│   │       ├── AgentOrchestrator.h/cpp
+│   │       ├── EcosystemConfig.h/cpp
+│   │       ├── SecurityValidator.h/cpp
+│   │       └── McpProtocol.h/cpp
 │   ├── MIDI/               # MIDI processing
 │   │   └── MIDIRouter.h/cpp
 │   ├── Preset/             # State persistence
@@ -185,19 +191,28 @@ More-Phi follows strict real-time audio guidelines:
          │                   │                   │
          ▼                   ▼                   ▼
 ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
- │ PluginHostManager│ │  MorphProcessor │ │   MCPServer     │
+ │ PluginHostManager│ │  MorphProcessor │ │ AgentOrchestrator│
  │                 │ │                 │ │                 │
- │ - Hosts VST3/AU │ │ - Interpolation │ │ - JSON-RPC 2.0  │
- │ - ParameterMap  │ │ - Physics       │ │ - Tool dispatch │
- └────────┬────────┘ │ - Smoothing     │ └────────┬────────┘
-          │          └────────┬────────┘          │
+ │ - Hosts VST3/AU │ │ - Interpolation │ │ - Wires runtime │
+ │ - ParameterMap  │ │ - Physics       │ │ - EcosystemCfg  │
+ └────────┬────────┘ │ - Smoothing     │ │ - SecurityVal   │
+          │          └────────┬────────┘ └────────┬────────┘
           │                   │                   │
           ▼                   ▼                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      SnapshotBank                           │
 │                   (12-slot state storage)                   │
 └─────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   MCPServer     │
+                    │ - JSON-RPC 2.0  │
+                    │ - Tool dispatch │
+                    └─────────────────┘
 ```
+
+> **AgentOrchestrator** (v3.3.0): A single-initialization facade in `src/AI/Orchestrator/` that coordinates the wiring between `PluginProcessor`, the agent runtime, and `MCPServer`. It loads `EcosystemConfig` (unified JSON configuration), sets up `SecurityValidator` (message sanitization, auth, rate limiting), and registers `McpProtocol` explicit JSON-RPC 2.0 schemas (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`). All orchestrator components are compiled into the `MorePhi` shared-code target.
 
 ### Data Flow
 
@@ -499,6 +514,29 @@ Refs: #issue-number
 
 ---
 
+## What's New in v3.3.0
+
+### Agent Orchestration Layer
+
+The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/AI/Orchestrator/` that provides structured initialization, configuration, and security mediation between the audio processor and the MCP server.
+
+**New components:**
+
+- **`AgentOrchestrator`** — Single-initialization facade that wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer`. Centralizes startup sequencing and runtime coordination.
+- **`EcosystemConfig`** — Unified JSON configuration for plugin settings, agent behavior, MCP server options, and security policies. Replaces ad-hoc configuration scattered across subsystems.
+- **`SecurityValidator`** — MCP message sanitization, authentication validation, and rate limiting. Protects the audio thread from malformed or excessive JSON-RPC traffic.
+- **`McpProtocol`** — Explicit JSON-RPC 2.0 message schemas (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`). Provides type-safe parsing and validation for all MCP traffic.
+
+**Project structure changes:**
+- New directory: `src/AI/Orchestrator/` containing the four component pairs listed above.
+- Experimental Ozone/iZotope research artifacts relocated to `research/` to keep the main source tree focused on production code.
+
+**Build impact:**
+- Orchestrator sources are compiled into the `MorePhi` shared-code target by default (no new CMake option required).
+- The layer operates on the message and MCP threads only; it does not introduce any new audio-thread obligations.
+
+---
+
 ## Resources
 
 - [JUCE Documentation](https://docs.juce.com/)
@@ -508,4 +546,4 @@ Refs: #issue-number
 
 ---
 
-*Updated 2026-06-18.*
+*Updated 2026-06-21.*

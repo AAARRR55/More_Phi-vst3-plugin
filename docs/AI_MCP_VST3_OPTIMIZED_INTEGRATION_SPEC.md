@@ -28,13 +28,20 @@
  │ MORE-PHI PLUGIN PROCESS (juce::AudioProcessor)                                                  │              │
  │                                                                                                 │              │
  │  ┌───────────────────────────────────── TOOL SELECTION LAYER ────────────────────────────┐     │              │
- │  │ MCPServer (juce::Thread "MorePhi-MCP")                                                 │     │              │
- │  │   ├─ accept loop: serverSocket_.waitUntilReady(true,500); reject non-local clients     │     │              │
- │  │   ├─ per-conn ConnectionThread (juce::Thread "MCP-Connection"), MAX_CONNECTIONS=4      │     │              │
- │  │   ├─ read loop: buffer bytes, split on '\n', MAX_REQUEST_BYTES=256KiB                  │     │              │
- │  │   ├─ authenticate: validateAuth(bearer_token) — constant-time compare                  │     │              │
- │  │   ├─ rate-limit gate: TokenOptimizer::tryConsumeRequestSlot()  (60 req/min sliding)    │     │              │
- │  │   └─ processRequest → dispatchTool("tools/call" | bare method name)                    │     │              │
+ │  │ AgentOrchestrator (facade)                                                             │     │              │
+ │  │   • start() → registers 6 agents, starts MCPServer, loads EcosystemConfig               │     │              │
+ │  │   • describeSystemState() → JSON {orchestrator, MCP, agents, scheduler}               │     │              │
+ │  │   • submitUserGoal() → routes to Conductor agent                                        │     │              │
+ │  │          │                                                                              │     │              │
+ │  │          ▼                                                                              │     │              │
+ │  │  ┌──────────────────────────────────────────────────────────────────────────────┐     │              │
+ │  │  │ MCPServer (juce::Thread "MorePhi-MCP")                                                 │     │              │
+ │  │  │   ├─ accept loop: serverSocket_.waitUntilReady(true,500); reject non-local clients     │     │              │
+ │  │  │   ├─ per-conn ConnectionThread (juce::Thread "MCP-Connection"), MAX_CONNECTIONS=4      │     │              │
+ │  │  │   ├─ read loop: buffer bytes, split on '\n', MAX_REQUEST_BYTES=256KiB                  │     │              │
+ │  │  │   ├─ authenticate: SecurityValidator::validateAuthToken — constant-time compare        │     │              │
+ │  │  │   ├─ rate-limit gate: SecurityValidator::checkRateLimit + TokenOptimizer              │     │              │
+ │  │  │   └─ processRequest → McpProtocol::parseRequest → dispatchTool                        │     │              │
  │  │                                       │                                                 │     │              │
  │  │   ┌───────────────────────────────────┴──────────────────────── MCPThread ┐           │     │              │
  │  │   │ MCPToolHandler::handle(method, params, processor, identity, runtime)  │           │     │              │
@@ -44,6 +51,7 @@
  │  │   │   ├─ TokenOptimizer (param selection, batch flush at >=10)             │           │     │              │
  │  │   │   └─ Semantic safety gate (plugin_profile.apply_safe_action)           │           │     │              │
  │  │   └────────────────────────────────────────────────────────────────────────┘           │     │              │
+ │  │  └──────────────────────────────────────────────────────────────────────────────┘     │     │              │
  │  └────────────────────────────────────────────────────────────────────────────────────────┘     │              │
  │                                                 │                                               │              │
  │                                 verified writes / reads                                          │              │
@@ -73,7 +81,7 @@
 
 | Layer | Owns | Boundary Contract |
 |-------|------|-------------------|
-| **Tool Selection Layer** | TCP transport, auth, JSON-RPC framing, tool registry (`tools/list`), routing, caching, transactions, rate limiting | Receives JSON-RPC; emits canonical tool calls + structured result envelopes. No audio-thread access. |
+| **Tool Selection Layer** | `AgentOrchestrator`, `MCPServer`, TCP transport, auth, JSON-RPC framing, tool registry (`tools/list`), routing, caching, transactions, rate limiting | Receives JSON-RPC; emits canonical tool calls + structured result envelopes. No audio-thread access. |
 | **Tool Execution Layer** | `LockFreeQueue`, parameter write path, snapshot/morph ops, plugin host lease protocol | Receives `ParamCommand`s and host operations; reports back via read-back + flush result. Never blocks the audio thread. |
 
 The two layers communicate **only** through `MorePhiProcessor`'s enqueue/flush/capture API and `ParameterBridge`/`PluginHostManager` accessors. No MCP object is reachable from the audio thread.
@@ -126,15 +134,15 @@ For each tool result R:
 
 **Routing logic (per request, on the connection thread):**
 ```
-parse (nlohmann::json)                                   // -32700 on parse_error
+McpProtocol::parseRequest(raw)                               // -32700 on parse_error
 if not object / jsonrpc != "2.0":  -32600               // M-2
 if raw bytes > 256 KiB:             -32600 "Request too large"
 if is_batch:  recurse per item, collect array
 if missing id (notification):  process, emit NOTHING   // C-15
 if not authenticated and method != "initialize":  -32001 "call initialize first"
-if authenticated:  TokenOptimizer::tryConsumeRequestSlot()  else -32000 "Rate limit exceeded"
+if authenticated:  SecurityValidator::checkRateLimit(clientId) && TokenOptimizer::tryConsumeRequestSlot()  else -32000 "Rate limit exceeded"
 switch method:
-  "initialize"            -> validateAuth() + emit result + notifications/initialized
+  "initialize"            -> SecurityValidator::validateAuthToken() + McpProtocol::makeInitResponse() + notifications/initialized
   "tools/list"            -> MCPToolHandler::getToolList()   (union kCoreTools ∪ kExtendedTools)
   "tools/call"            -> name = params.name, args = params.arguments
                              envelope result with content[], structuredContent, isError
@@ -225,6 +233,82 @@ if !v.verified: v.corrective_action = suggestedActionForError(error_reason)
 
 **Error reason codes** (mapped to remediation by `suggestedActionForError`):
 `queue_full`, `plugin_not_loaded`, `invalid_param_id`, `approval_required`, `rate_limit_exceeded`, `snapshot_slot_empty`, `transaction_not_found`, `rollback_unavailable`, `pending_parameter_edits`, `value_drift`, `out_of_range`, `timeout`, `plugin_not_ready`, `value_must_be_finite`, `semantic_control_not_found`, `semantic_control_ambiguous`, `value_out_of_safe_range`, `delta_out_of_safe_range`, `caution_requires_confirmation`, `control_locked`, `unsupported_unit_conversion`.
+
+---
+
+### 2.5 AgentOrchestrator — single-initialization facade
+
+**Class:** `more_phi::AgentOrchestrator` (`src/AI/Orchestrator/AgentOrchestrator.h`).
+
+**Role:** The sole entry point for the plugin to interact with the AI/agent subsystem. It coordinates lifecycle, goal submission, and system-state introspection.
+
+**Key operations:**
+
+| Method | Behaviour | Thread |
+|--------|-----------|--------|
+| `start(EcosystemConfig)` | Loads config, constructs `SecurityValidator`, registers all 6 agents (Conductor + 5 workers), starts `MCPServer`, and publishes the instance descriptor. | Message thread |
+| `stop()` | Graceful shutdown: stops `MCPServer`, drains async jobs, joins agent threads, flushes `ActionLedger`. | Message thread |
+| `describeSystemState()` | Returns JSON with keys: `orchestrator` (health, uptime), `mcp` (port, connectedClients, healthy), `agents` (agent name → status map), `scheduler` (pendingGoals, activeWorkers). | Message thread |
+| `submitUserGoal(intent, context)` | Wraps the intent in a `Goal` object and submits it to the Conductor agent's priority queue. Returns a `goalId` that can be polled. | Message thread |
+
+**Integration:**
+- `AgentOrchestrator` is owned by `MorePhiProcessor` as a `std::unique_ptr`; it is created in `prepareToPlay` and destroyed in `releaseResources`.
+- `describeSystemState()` is exposed to MCP via `get_instance_info` and `orchestrator.status` (not in `tools/list` but dispatched by `MCPServer`).
+- `submitUserGoal()` can be triggered by a future UI menu item or by an MCP tool (`workflow.create` with `source:"user_goal"`).
+
+---
+
+### 2.6 EcosystemConfig — unified configuration
+
+**Class:** `more_phi::EcosystemConfig` (`src/AI/Orchestrator/EcosystemConfig.h`).
+
+**Role:** Replaces scattered JSON / `juce::ValueTree` fragments with a single validated configuration object shared across all AI subsystems.
+
+**Sub-configurations:**
+
+| Sub-config | Header | Key fields | Consumer |
+|------------|--------|------------|----------|
+| **McpConfig** | `McpConfig.h` | `port`, `maxConnections`, `idleTimeoutMs`, `requestByteLimit`, `bearerTokenRotation` | `MCPServer` |
+| **AgentConfig** | `AgentConfig.h` | `agentPoolSize`, `goalQueueCapacity`, `workerTimeoutMs`, `conductorRefreshHz` | `AgentOrchestrator` |
+| **SecurityConfig** | `SecurityConfig.h` | `tokenHashAlgorithm`, `maxFailedAuthAttempts`, `rateLimitBuckets`, `paramSanitizationMode` | `SecurityValidator` |
+| **PluginConfig** | `PluginConfig.h` | `defaultHostedPluginPath`, `autoLoadLastPlugin`, `bridgeHoldAgainstMorphDefault`, `flushTimeoutMs` | `MorePhiProcessor`, `ParameterBridge` |
+
+**Lifecycle:**
+1. On `AgentOrchestrator::start()`, the active config is loaded (from disk if present, else factory defaults).
+2. Sub-configs are passed as `const&` to their consumers; no subsystem copies the whole object.
+3. Hot-reload: a background file watcher checks the config path hash; if changed, only subsystems whose slice diffed are re-initialised. The audio thread is never interrupted.
+
+**File path:** `%USERPROFILE%\.MorePhi\ecosystem.json` (Windows) or `~/.config/MorePhi/ecosystem.json` (macOS/Linux). Missing keys fall back to compile-time defaults defined in `EcosystemConfig::Defaults`.
+
+---
+
+### 2.7 SecurityValidator — message validation, auth, and rate limiting
+
+**Class:** `more_phi::SecurityValidator` (`src/AI/Orchestrator/SecurityValidator.h`).
+
+**Role:** Stateless gate that runs **before** any request reaches `MCPToolHandler`. Constructed from `SecurityConfig` and owned by `AgentOrchestrator`.
+
+**API surface:**
+
+| Method | Behaviour | Failure mode |
+|--------|-----------|--------------|
+| `validateRequestJson(json)` | Syntax check, schema conformance (unknown fields rejected, type mismatches), max-depth enforcement (`MAX_JSON_DEPTH=32`). | Returns `McpError` (-32600) |
+| `validateAuthToken(token)` | Constant-time comparison against active bearer token; increments failed-attempt counter; locks out after `maxFailedAuthAttempts`. | Returns `McpError` (-32001) |
+| `checkRateLimit(clientId)` | Bucket-token rate limit per `clientId` (derived from `getClientId`). Returns *allow* / *deny* with `retry-after-ms`. | Returns `McpError` (-32000) |
+| `sanitizeParams(params)` | Recursive pass: strips non-finite floats, clamps strings to `MAX_STRING_LENGTH=4096`, rejects nested objects deeper than `MAX_PARAM_DEPTH=8`. | Returns sanitised copy or empty `var` on fatal error |
+| `getClientId(socket)` | Stable opaque hash of the local socket endpoint (`127.0.0.1:port`) for per-client rate-limit tracking. | — |
+
+**Pipeline position:**
+```
+ConnectionThread ──► validateRequestJson ──► validateAuthToken ──► checkRateLimit
+                                                      │
+                                                      ▼
+                                            sanitizeParams ──► MCPToolHandler::handle
+```
+
+- **Fail-fast:** any rejection short-circuits the pipeline and returns an `McpError` response immediately; `MCPToolHandler` is never invoked.
+- **Auth token rotation:** `SecurityConfig` supports scheduled rotation; `validateAuthToken` checks both the current and previous token during a grace window (`TOKEN_ROTATION_GRACE_MS=30000`) to avoid race conditions with reconnecting clients.
+- **No audio-thread access:** all validation happens on the connection thread.
 
 ---
 
@@ -336,10 +420,10 @@ Ranked by **frequency × impact** for optimization effort:
 
 ### 4.1 Transport & framing
 
-- **Wire:** JSON-RPC 2.0 over raw TCP, **newline-delimited** (`\n`). No HTTP, no SSE.
+- **Wire:** JSON-RPC 2.0 over raw TCP, **newline-delimited** (`\n`). No HTTP, no SSE. Parsing and serialisation is handled by `McpProtocol::parseRequest` and `McpProtocol::serializeResponse`.
 - **Bind:** `127.0.0.1` only. Non-local connections are rejected and logged.
-- **Port:** default `30001`; per-instance from `InstanceRegistry` (`BASE_PORT=30001`, `MAX_INSTANCES=64`).
-- **Limits:** `MAX_CONNECTIONS = 4` concurrent clients; `MAX_REQUEST_BYTES = 256 KiB` (oversized → `-32600 "Request too large"` + close); `IDLE_TIMEOUT_MS = 30000` (idle close); `MAX_READ_ERRORS = 3`.
+- **Port:** default `30001` (from `McpConfig` in `EcosystemConfig`); per-instance from `InstanceRegistry` (`BASE_PORT=30001`, `MAX_INSTANCES=64`).
+- **Limits:** `MAX_CONNECTIONS = 4` concurrent clients; `MAX_REQUEST_BYTES = 256 KiB` (oversized → `-32600 "Request too large"` + close); `IDLE_TIMEOUT_MS = 30000` (idle close); `MAX_READ_ERRORS = 3`. All limits are sourced from `EcosystemConfig.mcpConfig`.
 - **Bind retry:** up to `MAX_BIND_ATTEMPTS = 3`, incrementing `port_` on failure.
 
 ### 4.2 Handshake (`initialize`)
@@ -361,9 +445,22 @@ Ranked by **frequency × impact** for optimization effort:
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 ```
 
-**Auth:** `validateAuth()` does fixed-length constant-time compare (`constantTimeEqual`) against `identity_.bearerToken`; length mismatch returns false before compare. Pre-`initialize` calls → `-32001 "Unauthorized: call initialize with bearer_token first"`. Bad token → `-32001 "Unauthorized: invalid bearer_token"`.
+**Auth:** `SecurityValidator::validateAuthToken()` does fixed-length constant-time compare (`constantTimeEqual`) against `identity_.bearerToken`; length mismatch returns false before compare. Pre-`initialize` calls → `-32001 "Unauthorized: call initialize with bearer_token first"`. Bad token → `-32001 "Unauthorized: invalid bearer_token"`.
 
 ### 4.3 Canonical message formats
+
+All JSON shapes below are produced and consumed through the `McpProtocol` layer (`src/AI/Orchestrator/McpProtocol.h`), which replaces ad-hoc `nlohmann::json` manipulation with strongly-typed structs and deterministic helpers. `McpProtocol::parseRequest` converts raw bytes → `McpRequest`; `McpProtocol::serializeResponse` converts `McpResponse` → wire bytes. The `SecurityValidator` (§2.7) reuses `McpProtocol::validateRequest` for semantic gate-checking before auth.
+
+**Core structs:**
+
+| Struct | Fields | Purpose |
+|--------|--------|---------|
+| `McpRequest` | `id`, `method`, `params`, `jsonrpc` | Inbound request after syntactic validation |
+| `McpResponse` | `id`, `result`, `error`, `jsonrpc` | Outbound response envelope |
+| `McpNotification` | `method`, `params`, `jsonrpc` | Fire-and-forget telemetry (no `id`) |
+| `McpError` | `code`, `message`, `data` | Standard JSON-RPC 2.0 error object |
+
+**Helper functions:** `parseRequest`, `serializeResponse`, `validateRequest`, `validateAuth`, `makeErrorResponse`, `makeInitResponse`, `makeToolResponse`.
 
 **Request (notification — no `id`):**
 ```json
@@ -417,12 +514,12 @@ Ranked by **frequency × impact** for optimization effort:
 
 | Code | Meaning | Trigger |
 |------|---------|---------|
-| `-32700` | Parse error | `nlohmann::json::parse` throws |
-| `-32600` | Invalid Request | non-object; `jsonrpc != "2.0"`; batch non-array; > 256 KiB |
-| `-32602` | Invalid params | `tools/call` missing `name` |
+| `-32700` | Parse error | `McpProtocol::parseRequest` throws (`nlohmann::json::parse` failure) |
+| `-32600` | Invalid Request | `McpProtocol::validateRequest` rejects: non-object; `jsonrpc != "2.0"`; batch non-array; > 256 KiB |
+| `-32602` | Invalid params | `tools/call` missing `name` (checked by `McpProtocol::validateRequest`) |
 | `-32603` | Internal error | uncaught exception (debug: includes `e.what()`) |
-| `-32000` | Rate limit exceeded | `tryConsumeRequestSlot()` false (sliding 60s/60req) |
-| `-32001` | Unauthorized | missing/bad bearer; pre-`initialize` call |
+| `-32000` | Rate limit exceeded | `SecurityValidator::checkRateLimit()` denies or `TokenOptimizer::tryConsumeRequestSlot()` false (sliding 60s/60req) |
+| `-32001` | Unauthorized | `SecurityValidator::validateAuthToken()` fails; missing/bad bearer; pre-`initialize` call |
 
 Tool-level (in-band) error reasons: see §2.4 list.
 
@@ -463,12 +560,18 @@ function handle_user_turn(utterance):
 
     # ── MCP SERVER (connection thread) ─────────────────────────────────────
     raw = read_until_newline()                  # enforce 256 KiB, IDLE_TIMEOUT
-    j = json.parse(raw)                         # else -32700
-    if j.jsonrpc != "2.0": error -32600
-    if not authenticated:                       # (initialize path elided)
+    parsed = McpProtocol.parseRequest(raw)    # returns McpRequest or McpError
+    if parsed.isError(): error parsed.error.code
+    req = parsed.request
+    if not McpProtocol.validateRequest(req): error -32600
+    if not authenticated and req.method != "initialize":
         error -32001
-    if not TokenOptimizer.tryConsumeRequestSlot():
+    if not securityValidator.validateAuthToken(req.params.get("bearer_token")):
+        error -32001
+    if not securityValidator.checkRateLimit(securityValidator.getClientId(socket)):
         error -32000                            # client backs off getTimeUntilNextRequest()
+    if not TokenOptimizer.tryConsumeRequestSlot():
+        error -32000
 
     # ── TOOL SELECTION LAYER ───────────────────────────────────────────────
     name, a = j.params.name, j.params.arguments
@@ -516,10 +619,8 @@ function handle_user_turn(utterance):
         outcome = {success:false, error:..., verification:{status:"failure",...}}
 
     # ── MARSHAL OUT ────────────────────────────────────────────────────────
-    emit({"jsonrpc":"2.0","result":{
-            "content":[{"type":"text","text":outcome.dump()}],
-            "structuredContent":outcome,
-            "isError": !outcome.success},"id":req_id})
+    response = McpProtocol.makeToolResponse(req_id, outcome, req.method == "tools/call")
+    emit(McpProtocol.serializeResponse(response))
 
     # ── AI ASSISTANT (client) resumes ──────────────────────────────────────
     resp = await_line()
@@ -605,7 +706,9 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 
 ### 6.5 Rate limiting & backpressure **[EXISTING]**
 
-- Sliding 60 s window, `rateLimit_ = 60` req/min baseline (atomic), `tryConsumeRequestSlot()` is the atomic consume; over-budget → `-32000`. `getTimeUntilNextRequest()` tells the client how long to wait.
+- **Two-layer gate:**
+  1. `SecurityValidator::checkRateLimit(clientId)` — bucket-token per-client gate sourced from `EcosystemConfig.securityConfig.rateLimitBuckets`. This runs before `TokenOptimizer` and is the first hard reject.
+  2. `TokenOptimizer::tryConsumeRequestSlot()` — sliding 60 s window, `rateLimit_ = 60` req/min baseline (atomic). Over-budget → `-32000`. `getTimeUntilNextRequest()` tells the client how long to wait.
 - Queue backpressure: `getPendingParameterCommandCountApprox()` derived from `commandQueue.freeSpaceApprox()` (capacity 8192). If free space < batch size, `enqueueParameterBatch` is rejected — the client should back off and retry, not flood.
 - **[EXISTING — implemented adaptive rate]:** the effective per-minute limit is `max(1, round(baseline × autonomyMultiplier))`. `TokenOptimizer::setAutonomyRateMultiplier(float)` scales the baseline; `getEffectiveRateLimit()` returns the live value, and `canMakeRequest()`/`tryConsumeRequestSlot()`/`getTimeUntilNextRequest()` all gate on it. `permission.set_autonomy` propagates the multiplier automatically (Manual=0.5×, Assist=1.0×, CoPilot=1.5×, Autopilot=2.0×) and the response includes `effective_rate_limit`. Promoting to Autopilot immediately unblocks a saturated client without waiting for the window to slide; demoting to Manual throttles a human-in-the-loop harder. Multiplier rejects ≤0 and NaN (→1.0), clamps at 16×.
 
@@ -613,14 +716,14 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 
 | Stage | Budget | Notes |
 |-------|--------|-------|
-| TCP framing + parse | ≤ 0.5 ms | newline split, `nlohmann::json::parse` |
-| Auth + rate check | ≤ 0.1 ms | constant-time compare + deque cleanup |
+| TCP framing + parse | ≤ 0.5 ms | newline split, `McpProtocol::parseRequest` |
+| Auth + rate check | ≤ 0.1 ms | `SecurityValidator::validateAuthToken` + `checkRateLimit` |
 | Cache hit (read) | ≤ 0.2 ms | LRU lookup |
 | Tool dispatch + transaction open | ≤ 1 ms | captureAllNormalized under 1 lease |
 | Enqueue to `LockFreeQueue` | ≤ 0.05 ms | SpinLock push |
-| `flushPendingParameterCommandsForAssistant` | ≤ 250 ms cap, typical <5 ms | bounded by DAW idle |
+| `flushPendingParameterCommandsForAssistant` | ≤ 250 ms cap, typical <5 ms | bounded by DAW idle (default from `EcosystemConfig.pluginConfig.flushTimeoutMs`) |
 | Verification read-back | ≤ 0.5 ms | single param `getParameterNormalized` |
-| Marshal + send | ≤ 0.5 ms | JSON serialize + newline |
+| Marshal + send | ≤ 0.5 ms | `McpProtocol::serializeResponse` + newline |
 | **Total single `set_parameter`** | **< 8 ms typical** | bounded by flush wait |
 | **Batched 8-param write** | **< 6 ms typical** | one flush, one lease |
 
@@ -699,6 +802,10 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 | `TokenOptimizer` rate-limit 60/min sliding, `tryConsumeRequestSlot`, 8 tokens/param | `src/AI/TokenOptimizer.h/.cpp` |
 | `SemanticPluginProfile` safety gating, dB-delta ∈ [−6,+3], bisection | `src/AI/SemanticPluginProfile.cpp:484-692` |
 | SnapshotBank seqlock, 12 slots, 128 retry, chunks separated | `src/Core/SnapshotBank.h` |
+| `AgentOrchestrator` facade, `start()`, `describeSystemState()`, `submitUserGoal()` | `src/AI/Orchestrator/AgentOrchestrator.h` |
+| `EcosystemConfig` unified config (MCP, Agent, Security, Plugin sub-configs) | `src/AI/Orchestrator/EcosystemConfig.h` |
+| `SecurityValidator` validateRequestJson, validateAuthToken, checkRateLimit, sanitizeParams, getClientId | `src/AI/Orchestrator/SecurityValidator.h` |
+| `McpProtocol` structs (McpRequest, McpResponse, McpNotification, McpError) and helpers (parseRequest, serializeResponse, validateRequest, validateAuth, makeErrorResponse) | `src/AI/Orchestrator/McpProtocol.h` |
 | Genetics UI-only (`breed`/`smartRandomize` not MCP-exposed) | `src/Core/GeneticEngine.h`, `src/UI/BreedingPanel.cpp:96` |
 | EQ via semantic `eq.band_N.gain` + `eq_gain_delta_db` (no `set_eq_band`) | `src/AI/SemanticPluginProfile.cpp:584-687` |
 
@@ -711,3 +818,4 @@ single call → set_parameters_batch → 8 ParamCommands in one pushRange
 | 1.0 | 2026-06-18 | Initial structured spec; code-accurate baseline + [SPEC] optimization/verification extensions. |
 | 1.1 | 2026-06-18 | Implemented all three [SPEC] items: `heartbeat` method (§4.4), scope-tagged per-key cache invalidation (§6.2), and adaptive rate limiting tied to the permission autonomy level (§6.5). New code: `MCPServer` heartbeat path + `uptimeMs()`; `ToolResultCache` `Scope` enum + `invalidateScopes()` + `scopeForTool()`; `MCPToolHandler::invalidateToolResultCacheForTool()` + `permission.set_autonomy` multiplier wiring; `TokenOptimizer` `setAutonomyRateMultiplier()`/`getEffectiveRateLimit()`. Tests: `tests/Unit/TestSpecOptimizations.cpp` (11 cases). All spec/automation/mcp/ai/concurrency suites pass single-process. |
 | 1.2 | 2026-06-19 | Multi-instance isolation hardening (AI/MCP re-audit). `ToolResultCache.get/put/makeKey` now take an `instanceId` argument, namespacing the shared cache so one plugin instance cannot read another's cached tool results (e.g. `get_plugin_info`). `AsyncToolExecutor.submit` now prefixes job IDs with the submitting instance's `morphCode` (`{morphCode}-async_<n>`), closing cross-instance async-job enumeration. `MCPServer::validateAuth` token-length timing documented as acceptable (fixed-size public format). Doc-only: this spec's pseudocode (§6.1), async-mechanism note (§6.4), and implementation-mapping table updated. Full suite: 520 cases / 87,445 assertions green. |
+| 1.3 | 2026-06-20 | Added `AgentOrchestrator` to architecture diagram (§1.1) and layer table (§1.2); added component specs §2.5 `AgentOrchestrator`, §2.6 `EcosystemConfig`, §2.7 `SecurityValidator`; updated §4.1–§4.5 to reference `McpProtocol` explicit schemas and `SecurityValidator` gating; updated §5.1 pseudocode to use `McpProtocol` and `SecurityValidator`; updated §6.5 rate-limiting to two-layer gate; updated §6.6 latency budget with `McpProtocol`/`SecurityValidator` references; updated §9 source citations. |

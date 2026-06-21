@@ -1,9 +1,17 @@
 # Morphy - Complete Architectural Blueprint
 ## High-Performance VST3/AU Parameter Morphing Plugin with AI Integration
 
-**Version:** 1.0
+> ⚠️ **DEPRECATED — This document is an historical v1.0 blueprint (2026-02-18).**
+> The actual implementation has evolved significantly and is now documented in:
+> - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — Current production architecture
+> - [`docs/ECOSYSTEM.md`](ECOSYSTEM.md) — Multi-agent ecosystem reference
+> - [`docs/AI_MCP_VST3_INTEGRATION_SPEC.md`](AI_MCP_VST3_INTEGRATION_SPEC.md) — MCP integration specification
+> 
+> Key differences from this blueprint: the product name is **More-Phi** (not Morphy), the MCP transport is **embedded TCP server** (not external WebSocket client), and the architecture includes **multi-agent orchestration** not present in this original design. This document is retained for archaeology only.
+
+**Version:** 1.0 (historical)
 **Date:** 2026-02-18
-**Status:** Architecture Complete - Ready for Implementation
+**Status:** Architecture Complete - Ready for Implementation (superseded by v3.3.0)
 
 ---
 

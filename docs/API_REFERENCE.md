@@ -483,6 +483,167 @@ Get current morph position and mode.
 
 ---
 
+## Orchestrator API
+
+More-Phi v3.3.0 exposes a system-level orchestration API on top of the MCP server. These tools allow AI clients and external scripts to inspect the multi-agent system, submit goals, and manage agent lifecycle.
+
+### describeSystemState
+
+Returns a JSON snapshot of the orchestrator, MCP server, all registered agents, and scheduler statistics.
+
+**Method:** `tools/call`
+
+**Parameters:**
+```json
+{
+    "name": "orchestrator.describe_system_state",
+    "arguments": {}
+}
+```
+
+**Response:**
+```json
+{
+    "orchestratorRunning": true,
+    "mcpServerRunning": true,
+    "mcpHealthy": true,
+    "mcpPort": 30001,
+    "agentCount": 6,
+    "agentStates": [
+        {
+            "name": "Conductor",
+            "state": "idle",
+            "lastTask": "decompose_goal",
+            "pendingApproval": false
+        },
+        {
+            "name": "Analysis",
+            "state": "executing",
+            "lastTask": "get_spectrum",
+            "pendingApproval": false
+        }
+    ],
+    "schedulerStats": {
+        "queueDepth": 2,
+        "tasksCompleted": 14,
+        "averageLatencyMs": 12.5
+    }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `orchestratorRunning` | Bool | Whether the orchestrator thread is active. |
+| `mcpServerRunning` | Bool | Whether the MCP server is currently accepting connections. |
+| `mcpHealthy` | Bool | Whether the last MCP health check passed. |
+| `mcpPort` | Int | The local port the MCP server is listening on. |
+| `agentCount` | Int | Number of registered agents (always 6 for the built-in set). |
+| `agentStates` | Array | One object per agent with `name`, `state`, `lastTask`, and `pendingApproval`. |
+| `schedulerStats` | Object | `queueDepth`, `tasksCompleted`, and `averageLatencyMs`. |
+
+### submitUserGoal
+
+Submits a high-level natural-language goal to the Conductor agent. The Conductor breaks the goal into sub-tasks, delegates to the other agents, and returns a plan ID.
+
+**Method:** `tools/call`
+
+**Parameters:**
+```json
+{
+    "name": "orchestrator.submit_user_goal",
+    "arguments": {
+        "intent": "make this track louder and brighter"
+    }
+}
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `intent` | String | A plain-language goal describing the desired change. |
+
+**Response:**
+```json
+{
+    "success": true,
+    "planId": "plan_2026_abcdef",
+    "conductorState": "planning"
+}
+```
+
+### AgentOrchestrator Lifecycle
+
+The `AgentOrchestrator` is the C++ class that manages the multi-agent system. Its lifecycle is:
+
+1. **Construct** — Created by `MorePhiProcessor` during plugin initialization. Registers the six built-in agents and the scheduler.
+2. **Start** — Called when the user clicks **Start MCP** or when the MCP server is started programmatically. The orchestrator spins up its background thread and begins accepting goals.
+3. **Submit** — A user goal is submitted via `submitUserGoal(intent)`. The Conductor agent decomposes it and queues tasks for the other agents.
+4. **Stop** — Called when the user clicks **Stop MCP** or when the plugin is destroyed. All agents are returned to idle, the scheduler is drained, and the background thread exits cleanly.
+
+### MCP Protocol Schemas
+
+The `McpProtocol` namespace defines the JSON-RPC schemas used for message construction and tool dispatch. When building custom MCP clients, reference these schemas to ensure compatibility:
+
+- `McpProtocol::Request` — wraps `jsonrpc`, `method`, `params`, and `id`.
+- `McpProtocol::ToolCallParams` — wraps `name` and `arguments` for `tools/call`.
+- `McpProtocol::InitializeParams` — wraps `protocolVersion` and `capabilities`.
+- `McpProtocol::SystemState` — wraps the full `describeSystemState` response shape.
+
+All messages follow JSON-RPC 2.0. The `tools/call` method is the standard entry point for every tool, including orchestrator tools.
+
+---
+
+## Configuration API
+
+### EcosystemConfig
+
+`EcosystemConfig` is the runtime configuration object that controls orchestrator and MCP server settings. It is loaded during plugin initialization and can be queried or updated through the MCP layer.
+
+**Common fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `mcpEnabled` | Bool | Whether the MCP server should start automatically on plugin load. |
+| `mcpPort` | Int | Preferred local port for the MCP server (default: 30001). |
+| `orchestratorEnabled` | Bool | Whether the multi-agent orchestrator should be created and started. |
+| `agentAutonomyLevel` | Choice | Global autonomy override: `manual`, `conductor_gated`, or `automatic`. |
+| `realtimePriority` | Choice | Thread priority for the RealtimeControl agent: `normal`, `elevated`, or `realtime_critical`. |
+| `blackboardHistorySize` | Int | Number of past agent results retained in the BlackboardBridge for context. |
+| `safetyPolicy` | String | Name of the active safety policy loaded by the QualitySafety agent. |
+
+**Example — querying current configuration:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "ecosystem.get_config",
+        "arguments": {}
+    },
+    "id": 1
+}
+```
+
+**Example — updating a field:**
+
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "ecosystem.set_config",
+        "arguments": {
+            "agentAutonomyLevel": "conductor_gated"
+        }
+    },
+    "id": 2
+}
+```
+
+Changes to `mcpPort` or `mcpEnabled` require a restart of the MCP server to take effect. Changes to `agentAutonomyLevel` apply immediately to the next submitted goal.
+
+---
+
 ## Error Codes
 
 | Code | Description |

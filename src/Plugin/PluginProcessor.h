@@ -56,6 +56,14 @@ class IZotopeIPCAssistant;
 class IZotopeIPCDiscovery;
 }
 
+namespace agents {
+class AgentRuntime;
+class DefaultToolInvoker;
+class NullAgentLogger;
+class DeterministicFallbackLlmClient;
+class BlackboardBridge;
+} // namespace agents
+
 class MorePhiProcessor : public juce::AudioProcessor,
                           private juce::Timer
 {
@@ -112,6 +120,14 @@ public:
     const licensing::LicenseRuntimeState& getLicenseRuntimeState() const noexcept { return licenseRuntimeState_; }
     licensing::LicenseManager& getLicenseManager() noexcept { return *licenseManager_; }
     const licensing::LicenseManager& getLicenseManager() const noexcept { return *licenseManager_; }
+
+    // ── Multi-agent orchestration layer (Phase 4 wiring) ─────────────────────
+    // Returns nullptr until startMCPServerIfNeeded() has constructed the runtime.
+    agents::AgentRuntime* getAgentRuntime() const noexcept { return agentRuntime_.get(); }
+    // Resolves the AutomationRuntime that backs the agent runtime + MCP server.
+    // Used by agents.* MCP helpers (e.g. agents.blackboard.recent) to read recent
+    // bus events without exposing the runtime object directly.
+    AutomationRuntime* getAutomationRuntimeForAgents() noexcept;
 
 #if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
     void startPendingMCPServerForTesting() { startMCPServerIfNeeded(); }
@@ -459,6 +475,17 @@ private:
     TokenOptimizer           tokenOptimizer_;
     std::unique_ptr<AIAssistant> aiAssistant_;
 
+    // ── Multi-agent orchestration layer (Phase 4 wiring) ─────────────────────
+    // Owned Pimpl-style (full types live in PluginProcessor.cpp's TU). The runtime
+    // borrows the four holders by raw reference, so declaration order is critical:
+    // holders must be declared BEFORE the runtime so the runtime is destroyed
+    // FIRST (C++ destroys members in reverse declaration order).
+    std::unique_ptr<agents::DefaultToolInvoker>          agentTools_;
+    std::unique_ptr<agents::NullAgentLogger>             agentLogger_;
+    std::unique_ptr<agents::DeterministicFallbackLlmClient> agentLlm_;
+    std::unique_ptr<agents::BlackboardBridge>            agentBlackboard_;
+    std::unique_ptr<agents::AgentRuntime>                agentRuntime_;
+
     // ── Ozone 11 mastering integration ───────────────────────────────────────
     AutoMasteringEngine                  autoMasteringEngine_;
     NeuralMasteringController            neuralMasteringController_;
@@ -618,6 +645,7 @@ private:
     void loadCachedLicenseIfNeeded();
     void refreshLicenseIfNeeded(); // auto-renew once nextOnlineCheckAtUnix passes
     void startMCPServerIfNeeded();
+    void startAgentRuntimeIfNeeded();  // Phase 4: lazily build + register the agent cast
     void reconfigureAudioDomainProcessing();
     void updateReportedLatency();
     void applyPendingFullStateRecall();

@@ -1,14 +1,14 @@
 # More-Phi - Architecture Document
 
-**Date:** 2026-03-04
+**Date:** 2026-06-21
 **Version:** 3.3.0
-_Updated 2026-06-18 to reflect production-readiness fixes._
+_Updated 2026-06-21 to reflect AgentOrchestrator layer and research artifact relocation._
 **Type:** Desktop Audio Plugin (VST3/AU)
 **Pattern:** Layered plugin architecture with strict thread-domain separation
 
 ## Executive Summary
 
-More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
+More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The AI module includes a dedicated Orchestrator sub-layer (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) that wires the processor to the agent runtime and MCP server. The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
 
 ## Technology Stack
 
@@ -26,15 +26,19 @@ More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and pro
 More-Phi follows a **layered plugin architecture** where:
 
 1. **Plugin layer** (entry point) owns all subsystem instances as member variables
-2. **Core layer** provides pure computation (audio-thread-safe, no I/O)
-3. **Host layer** manages the hosted plugin lifecycle and parameter I/O
-4. **AI layer** provides network I/O (MCP server) isolated on its own thread
-5. **UI layer** renders state and enqueues commands via the LockFreeQueue
+2. **Orchestrator layer** (facade) wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer` via `AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, and `McpProtocol`
+3. **Core layer** provides pure computation (audio-thread-safe, no I/O)
+4. **Host layer** manages the hosted plugin lifecycle and parameter I/O
+5. **AI layer** provides network I/O (MCP server) isolated on its own thread
+6. **UI layer** renders state and enqueues commands via the LockFreeQueue
 
 ```
 ┌─────────────────────────────────────────────────┐
 │                  Plugin Layer                     │
 │         MorePhiProcessor (owns all)             │
+├─────────────────────────────────────────────────┤
+│              Orchestrator Layer                   │
+│  AgentOrchestrator · EcosystemConfig · SecurityValidator · McpProtocol │
 ├──────────┬──────────┬───────────┬────────────────┤
 │  Core    │  Host    │   AI      │   UI            │
 │ (DSP)    │ (VST3)   │  (MCP)    │  (JUCE GUI)     │
@@ -73,6 +77,11 @@ Three thread domains with strict boundaries:
 - **Contract:** JSON-RPC I/O. Enqueues parameter changes to audio thread via `LockFreeQueue`. Reads snapshot data via seqlock.
 - **Security:** Instance-scoped `AutomationRuntime` (no global static). Cache keys prefixed with `instanceId + ":"`. Constant-time token comparison using `volatile uint8_t diff`. 30-second idle timeout on connections. TTL-based zombie eviction in `InstanceRegistry`.
 
+### Orchestrator Thread
+- **Entry:** `AgentOrchestrator::initialize()` (single-initialization facade)
+- **Classes:** `AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`
+- **Contract:** Wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer` during startup. `EcosystemConfig` provides unified JSON configuration for plugin, agents, MCP, and security settings. `SecurityValidator` provides MCP message sanitization, auth validation, and rate limiting. `McpProtocol` defines explicit JSON-RPC 2.0 message schemas (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`). All orchestrator components live in `src/AI/Orchestrator/` and compile into the `MorePhi` shared-code target.
+
 ### Concurrency Primitives
 
 | Primitive | Location | Purpose |
@@ -84,6 +93,7 @@ Three thread domains with strict boundaries:
 | `std::atomic<int>` | `ModulationMatrix::readIndex_` | Buffer swap index |
 | `memory_order_relaxed` atomics | Various | Morph position, physics mode, toggle flags |
 | Security primitives | `MCPServer` / `InstanceRegistry` | Instance-scoped runtime, constant-time token compare, idle timeouts, TTL eviction |
+| Orchestrator security | `SecurityValidator` / `AgentOrchestrator` | MCP message sanitization, auth validation, rate limiting, unified JSON config via `EcosystemConfig` |
 
 ## Processing Pipeline
 

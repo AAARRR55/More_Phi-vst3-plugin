@@ -14,6 +14,19 @@
 #include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
 #include "AI/StandaloneMcp/IZotopeIPCDiscovery.h"
 #include "AI/VST3IPCBridge.h"
+#include "AI/Agents/AgentRuntime.h"
+#include "AI/Agents/Blackboard/BlackboardBridge.h"
+#include "AI/Agents/Tooling/DefaultToolInvoker.h"
+#include "AI/Agents/Logging/NullAgentLogger.h"
+#include "AI/Agents/Llm/DeterministicFallbackLlmClient.h"
+#include "AI/Agents/Conductor/ConductorAgent.h"
+#include "AI/Agents/Agents/AnalysisAgent.h"
+#include "AI/Agents/Agents/OptimizationAgent.h"
+#include "AI/Agents/Agents/CreativeAgent.h"
+#include "AI/Agents/Agents/RealtimeControlAgent.h"
+#include "AI/Agents/Agents/QualitySafetyAgent.h"
+#include "AI/Agents/Agents/MemoryAgent.h"
+#include "AI/MCPToolHandler.h"
 #include <algorithm>
 #include <atomic>
 
@@ -146,6 +159,11 @@ MorePhiProcessor::~MorePhiProcessor()
     std::cout << "[~MorePhiProcessor] entering destructor" << std::endl;
     stopTimer();
     std::cout << "[~MorePhiProcessor] stopped timer" << std::endl;
+    // Stop the agent runtime FIRST — its workers borrow references to the MCP
+    // server's AutomationRuntime (events/workflows/etc.) and to the four holders
+    // below, so they must be joined before any of those are torn down.
+    agentRuntime_.reset();
+    std::cout << "[~MorePhiProcessor] reset agentRuntime_" << std::endl;
     aiAssistant_.reset();
     std::cout << "[~MorePhiProcessor] reset aiAssistant_" << std::endl;
     linkBroadcaster_.detach();
@@ -2487,6 +2505,83 @@ void MorePhiProcessor::startMCPServerIfNeeded()
 
     vst3IpcBridge_->start();
     vst3IpcBridge_->exportParameterRegistry();
+
+    // Spin up the multi-agent orchestration layer now that the MCP server's
+    // AutomationRuntime (ledger/permissions/events/workflows/memory) exists.
+    startAgentRuntimeIfNeeded();
+}
+
+void MorePhiProcessor::startAgentRuntimeIfNeeded()
+{
+    if (agentRuntime_ != nullptr)
+        return;
+
+    namespace ag = more_phi::agents;
+
+    auto& automationRuntime = mcpServer.getAutomationRuntime();
+
+    // Long-lived holders for the runtime's by-reference dependencies. The runtime
+    // itself is constructed last and destroyed first (member declaration order in
+    // the header is: toolHolder_ -> logHolder_ -> llmHolder_ -> blackboardHolder_
+    // -> agentRuntime_), so the references stay valid for the runtime's lifetime.
+    auto blackboardHolder = std::make_unique<ag::BlackboardBridge>(automationRuntime.events());
+    auto toolHolder = std::make_unique<ag::DefaultToolInvoker>(
+        // DispatchFn: route every agent tool call through MCPToolHandler::handle so
+        // the existing permission/ledger/rate budgets remain the single chokepoint.
+        [this](const juce::String& method, const nlohmann::json& params) -> juce::String {
+            juce::var v = juce::JSON::parse(juce::String(params.dump()));
+            return MCPToolHandler::handle(method, v, *this, instanceIdentity_);
+        },
+        // CapabilityFn: resolve per-agent allowed-tools by role id prefix.
+        // Returning an empty list fails closed inside DefaultToolInvoker.
+        [](const juce::String& agentId) -> std::vector<juce::String> {
+            const auto id = agentId.toLowerCase();
+            if (id.startsWith("conductor"))    return { "workflow.submit", "workflow.execute", "workflow.cancel", "hosted_plugin.info", "analysis.get_summary" };
+            if (id.startsWith("analysis"))     return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field", "analysis.capture_window", "analysis.compare_render" };
+            if (id.startsWith("optimization")) return { "mastering.plan_preview", "mastering.render_batch", "mastering.render_status", "mastering.select_candidate", "hosted_plugin.set_parameter" };
+            if (id.startsWith("creative"))     return { "mastering.plan_preview", "plugin_profile.describe_semantics" };
+            if (id.startsWith("realtime"))     return { "hosted_plugin.set_parameter", "hosted_plugin.set_parameters", "analysis.get_summary" };
+            if (id.startsWith("quality"))      return { "analysis.get_summary", "analysis.compare_render", "mastering.render_status" };
+            if (id.startsWith("memory"))       return { "memory.list", "memory.store", "memory.recall" };
+            return {};
+        });
+    auto logHolder = std::make_unique<ag::NullAgentLogger>();
+    auto llmHolder = std::make_unique<ag::DeterministicFallbackLlmClient>();
+
+    auto runtime = std::make_unique<ag::AgentRuntime>(
+        this,
+        &instanceIdentity_,
+        &automationRuntime,
+        *toolHolder,
+        *blackboardHolder,
+        *logHolder,
+        llmHolder.get());
+
+    // Register the full cast: Conductor + 6 specialists.
+    runtime->registerAgent(std::make_unique<ag::ConductorAgent>());
+    runtime->registerAgent(std::make_unique<ag::AnalysisAgent>());
+    runtime->registerAgent(std::make_unique<ag::OptimizationAgent>());
+    runtime->registerAgent(std::make_unique<ag::CreativeAgent>());
+    runtime->registerAgent(std::make_unique<ag::RealtimeControlAgent>());
+    runtime->registerAgent(std::make_unique<ag::QualitySafetyAgent>());
+    runtime->registerAgent(std::make_unique<ag::MemoryAgent>());
+
+    runtime->start(2);  // two scheduler workers
+
+    // Commit: order matters — assign the runtime LAST so the holders are already
+    // in place on the processor before any worker could try to dispatch.
+    agentTools_      = std::move(toolHolder);
+    agentLogger_     = std::move(logHolder);
+    agentLlm_        = std::move(llmHolder);
+    agentBlackboard_ = std::move(blackboardHolder);
+    agentRuntime_    = std::move(runtime);
+}
+
+AutomationRuntime* MorePhiProcessor::getAutomationRuntimeForAgents() noexcept
+{
+    if (mcpServer.isRunning())
+        return &mcpServer.getAutomationRuntime();
+    return nullptr;
 }
 
 void MorePhiProcessor::reconfigureAudioDomainProcessing()

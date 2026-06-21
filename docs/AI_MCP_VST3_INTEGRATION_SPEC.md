@@ -28,6 +28,7 @@ flowchart LR
     end
 
     subgraph MorePhi["More-Phi VST3 Plugin"]
+        AO["AgentOrchestrator<br/>Facade / Coordinator"]
         MCP["MCPServer<br/>JSON-RPC 2.0 / TCP"]
         TH["MCPToolHandler"]
         CP["AutomationControlPlane"]
@@ -44,6 +45,9 @@ flowchart LR
     TH --> CP
     TH --> TO
     TH --> PPC
+    PPC <-->|"goals / system state"| AO
+    AO --> MCP
+    AO --> TH
     PPC --> LF
     LF --> AT
     AT --> PB
@@ -53,6 +57,7 @@ flowchart LR
 | Component | Responsibility | Thread Domain |
 |-----------|----------------|---------------|
 | **AI Assistant** | Natural-language understanding, intent parsing, tool selection, verification validation, user confirmation | External process |
+| **AgentOrchestrator** | Single-initialization facade; registers all 6 agents, starts MCP server, exposes `describeSystemState()` and `submitUserGoal()` | Message thread |
 | **MCPServer** | TCP listener, JSON-RPC 2.0 framing, auth, rate-limit check, request dispatch, connection lifecycle | `MorePhi-MCP` + per-connection threads |
 | **MCPToolHandler** | Tool dispatch, parameter normalization, transaction wrapping, result serialization | MCP thread |
 | **AutomationControlPlane** | `AutomationTransaction`, `ActionLedger`, `PermissionKernel`, `WorkflowOrchestrator`, `MemoryStore` | MCP thread |
@@ -115,6 +120,62 @@ sequenceDiagram
 │                        │                                     │ calls│
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 2.4 Unified Configuration (`EcosystemConfig`)
+
+All VST3 plugin, agent runtime, and MCP server settings are consolidated under a single `EcosystemConfig` object (see `src/AI/Orchestrator/EcosystemConfig.h`). This eliminates scattered `juce::ValueTree` / JSON fragments and guarantees that every subsystem reads from the same validated source of truth.
+
+### 2.4.1 Sub-configurations
+
+| Sub-config | File | Purpose | Key Fields |
+|------------|------|---------|------------|
+| **MCP** | `McpConfig` | Server socket, auth, rate-limit defaults | `port`, `maxConnections`, `idleTimeoutMs`, `requestByteLimit`, `bearerTokenRotation` |
+| **Agent** | `AgentConfig` | Conductor + 5 worker agents, scheduling | `agentPoolSize`, `goalQueueCapacity`, `workerTimeoutMs`, `conductorRefreshHz` |
+| **Security** | `SecurityConfig` | Validation rules, auth policy, rate-limit tuning | `tokenHashAlgorithm`, `maxFailedAuthAttempts`, `rateLimitBuckets`, `paramSanitizationMode` |
+| **Plugin** | `PluginConfig` | Hosted-plugin defaults, bridge behaviour | `defaultHostedPluginPath`, `autoLoadLastPlugin`, `bridgeHoldAgainstMorphDefault`, `flushTimeoutMs` |
+
+### 2.4.2 Lifecycle
+
+1. **`AgentOrchestrator::start()`** loads the active `EcosystemConfig` (from file if present, else factory defaults).
+2. Each sub-config is passed by const-reference to the subsystem that needs it (`MCPServer` gets `McpConfig`, `SecurityValidator` gets `SecurityConfig`, etc.).
+3. Hot-reload: changing the config file on disk triggers a hash-based diff; only subsystems whose config slice changed are re-initialised. The audio thread is never interrupted.
+
+### 2.4.3 Cross-subsystem sharing
+
+- **Port & token** — `McpConfig.port` and the generated bearer token are published in the instance descriptor so the AI assistant can discover them.
+- **Rate-limit baseline** — `SecurityConfig.rateLimitBuckets` feeds `TokenOptimizer` at start-up; runtime autonomy multipliers (§5.5) are applied on top.
+- **Flush timeouts** — `PluginConfig.flushTimeoutMs` is passed to `MorePhiProcessor::flushPendingParameterCommandsForAssistant` as the default bound.
+
+---
+
+## 2.5 Security Layer (`SecurityValidator`)
+
+The `SecurityValidator` (see `src/AI/Orchestrator/SecurityValidator.h`) is a lightweight, stateless gate that runs **before** any JSON-RPC request reaches the tool handler. It is constructed from `SecurityConfig` and owned by `AgentOrchestrator`.
+
+### 2.5.1 API surface
+
+| Method | Purpose |
+|--------|---------|
+| `validateRequestJson(json)` | Syntax check, schema conformance (reject unknown fields, type mismatches), max-depth enforcement. Returns `McpError` on failure. |
+| `validateAuthToken(token)` | Constant-time comparison against the active bearer token; counts failed attempts; locks out after `maxFailedAuthAttempts`. |
+| `checkRateLimit(clientId)` | Bucket-token rate limit per `clientId` (derived from `getClientId`). Returns *allow* / *deny* / *retry-after-ms*. |
+| `sanitizeParams(params)` | Recursive pass over `params`: strips non-finite floats, clamps strings to `MAX_STRING_LENGTH`, rejects nested objects deeper than `MAX_PARAM_DEPTH`. |
+| `getClientId(socket)` | Generates a stable, opaque client identifier from the local socket endpoint (e.g. `127.0.0.1:port` hash) for per-client rate-limit tracking. |
+
+### 2.5.2 Integration into the request pipeline
+
+```
+ConnectionThread ──► validateRequestJson ──► validateAuthToken ──► checkRateLimit
+                                                      │
+                                                      ▼
+                                            sanitizeParams ──► MCPToolHandler::handle
+```
+
+- **Fail-fast:** any `SecurityValidator` rejection short-circuits the pipeline and returns an `McpError` response immediately; `MCPToolHandler` is never invoked.
+- **No audio-thread access:** all validation happens on the connection thread; zero risk of blocking the audio callback.
+- **Auth token rotation:** `SecurityConfig` supports scheduled rotation; `validateAuthToken` checks both the current and the previous token during a grace window to avoid race conditions with reconnecting clients.
 
 ---
 
@@ -204,6 +265,33 @@ Every tool is advertised in `tools/list` with:
   "id": 1
 }
 ```
+
+### 3.4 McpProtocol Explicit Schemas
+
+All JSON-RPC parsing, validation, and serialization is formalised through the `McpProtocol` layer (`src/AI/Orchestrator/McpProtocol.h`). This replaces ad-hoc `nlohmann::json` manipulation with strongly-typed structs and deterministic helpers.
+
+**Core structs:**
+
+| Struct | Fields | Purpose |
+|--------|--------|---------|
+| `McpRequest` | `id`, `method`, `params`, `jsonrpc` | Inbound request after syntactic validation |
+| `McpResponse` | `id`, `result`, `error`, `jsonrpc` | Outbound response envelope |
+| `McpNotification` | `method`, `params`, `jsonrpc` | Fire-and-forget telemetry (no `id`) |
+| `McpError` | `code`, `message`, `data` | Standard JSON-RPC 2.0 error object |
+
+**Helper functions:**
+
+| Function | Behaviour |
+|----------|-----------|
+| `parseRequest(rawJson)` | Returns `McpRequest` or `McpError` (-32700 on parse failure, -32600 on schema mismatch) |
+| `serializeResponse(resp)` | Serialises `McpResponse` to a single line of JSON + `"\n"` |
+| `validateRequest(req)` | Semantic validation: checks `jsonrpc == "2.0"`, method is non-empty, params is object/array |
+| `validateAuth(req, token)` | Extracts bearer token from `req.params` and performs constant-time comparison |
+| `makeErrorResponse(id, code, message, data?)` | Builds a compliant `McpResponse` wrapping an `McpError` |
+
+**Integration:**
+- `MCPServer::processRequest` receives raw bytes, calls `McpProtocol::parseRequest`, then `SecurityValidator::validateRequestJson` (which internally reuses `McpProtocol::validateRequest`), and finally emits via `McpProtocol::serializeResponse`.
+- `McpProtocol::validateAuth` is the canonical entry point for bearer-token verification; `SecurityValidator::validateAuthToken` delegates to it after extracting the token from the socket-level context.
 
 ---
 
@@ -359,7 +447,7 @@ struct AsyncToolExecutor {
 |-------|--------|-------------|
 | Intent parsing | < 50 ms | AI assistant internal |
 | TCP + JSON-RPC parse | < 5 ms | `MCPServer::processRequest` |
-| Auth + rate limit | < 1 ms | `validateAuth` + `tryConsumeRequestSlot` |
+| Auth + rate limit | < 1 ms | `SecurityValidator::validateAuthToken` + `tryConsumeRequestSlot` |
 | Tool dispatch | < 10 ms | `MCPToolHandler::handle` |
 | Queue flush (typical batch) | < 20 ms | `flushPendingParameterCommandsForAssistant` |
 | Audio-thread apply | < 1 block | Audio callback |
@@ -408,28 +496,35 @@ class AIAssistant:
 ```cpp
 juce::String MCPServer::processRequest(const juce::String& jsonRequest,
                                        bool& authenticated) {
-    auto parsed = json::parse(jsonRequest.toStdString());
-    auto method = parsed["method"].get<std::string>();
-    auto params = jsonToJuceVar(parsed.value("params", json::object()));
-    auto reqId  = parsed.value("id", nullptr);
+    auto parsed = McpProtocol::parseRequest(jsonRequest.toStdString());
+    if (parsed.isError())
+        return McpProtocol::makeErrorResponse(nullptr, -32700, "Parse error");
 
-    if (method == "initialize") {
-        if (validateAuth(params)) { authenticated = true; return makeInitResponse(reqId); }
-        return errResponse(-32001, "Unauthorized");
+    auto req = parsed.request();
+    if (!McpProtocol::validateRequest(req))
+        return McpProtocol::makeErrorResponse(req.id, -32600, "Invalid Request");
+
+    if (req.method == "initialize") {
+        if (securityValidator_.validateAuthToken(req.params["bearer_token"])) {
+            authenticated = true;
+            return McpProtocol::serializeResponse(McpProtocol::makeInitResponse(req.id, identity_));
+        }
+        return McpProtocol::makeErrorResponse(req.id, -32001, "Unauthorized");
     }
-    if (!authenticated) return errResponse(-32001, "Unauthorized");
-    if (!processor_.getTokenOptimizer().tryConsumeRequestSlot())
-        return errResponse(-32000, "Rate limit exceeded");
+    if (!authenticated)
+        return McpProtocol::makeErrorResponse(req.id, -32001, "Unauthorized");
+    if (!securityValidator_.checkRateLimit(getClientId()))
+        return McpProtocol::makeErrorResponse(req.id, -32000, "Rate limit exceeded");
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    auto result = MCPToolHandler::handle(method, params, processor_,
+    auto result = MCPToolHandler::handle(req.method, req.params, processor_,
                                          identity_, automationRuntime_);
     auto latency = std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t0).count();
 
     auto embedded = json::parse(result.toStdString());
     embedded["latency_ms"] = latency;
-    return makeToolResponse(reqId, embedded, method == "tools/call");
+    return McpProtocol::serializeResponse(McpProtocol::makeToolResponse(req.id, embedded, req.method == "tools/call"));
 }
 ```
 
@@ -471,7 +566,7 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
 
 | Concern | Mitigation |
 |---------|------------|
-| Unauthorized access | Per-instance bearer token; constant-time comparison in `validateAuth()` |
+| Unauthorized access | Per-instance bearer token; constant-time comparison in `SecurityValidator::validateAuthToken()` |
 | Remote access | `127.0.0.1` only; non-local connections rejected |
 | Resource exhaustion | Max 4 concurrent connections; 256 KB request limit; rate limiting |
 | Audio-thread safety | All parameter writes go through `LockFreeQueue`; no locks/allocs on audio thread |
@@ -489,6 +584,10 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
 - `src/AI/AsyncToolExecutor.h` / `src/AI/AsyncToolExecutor.cpp` — background tool execution
 - `src/AI/AutomationControlPlane.h` / `src/AI/AutomationControlPlane.cpp` — transactions, permissions, workflows, memory
 - `src/AI/TokenOptimizer.h` / `src/AI/TokenOptimizer.cpp` — rate limits and token budgets
+- `src/AI/Orchestrator/AgentOrchestrator.h` — single-initialization facade, agent registration, goal submission
+- `src/AI/Orchestrator/EcosystemConfig.h` — unified configuration (MCP, Agent, Security, Plugin sub-configs)
+- `src/AI/Orchestrator/SecurityValidator.h` — request validation, auth, rate-limit, param sanitization
+- `src/AI/Orchestrator/McpProtocol.h` — explicit JSON-RPC structs and serialisation helpers
 - `src/Plugin/PluginProcessor.h` — `MorePhiProcessor`, `ParamCommand`, queue accessors
 - `src/Core/LockFreeQueue.h` — real-time-safe command queue
 - `src/Core/PerformanceProfiler.h` — latency profiling
@@ -502,3 +601,4 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-06-17 | Kimi Code CLI | Initial architecture, tool mapping, verification, and optimization spec |
+| 1.1 | 2026-06-20 | Kimi Code CLI | Added `AgentOrchestrator` to architecture diagram and component table; added §2.4 `EcosystemConfig` (unified configuration) and §2.5 `SecurityValidator` (security layer); added §3.4 `McpProtocol` explicit schemas; updated §6.2 pseudocode to use `McpProtocol` helpers; updated §8 references to include new Orchestrator headers.

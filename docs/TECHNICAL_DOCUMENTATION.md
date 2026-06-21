@@ -1,8 +1,8 @@
 # More-Phi Technical Documentation
 
-> Updated 2026-06-18.
+> Updated 2026-06-21.
 
-More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control.
+More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture now includes an **Agent Orchestration Layer** (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) that provides unified initialization, configuration, and security mediation between the processor, agent runtime, and MCP server.
 
 > Screenshot placeholder: `[Screenshot: More-Phi main interface with MorphPad, plugin browser, tab bar, and AI status panel]`
 >
@@ -60,8 +60,9 @@ MorePhiProcessor
 | Thread domain | Main entry points | Rules |
 |---|---|---|
 | Audio thread | `MorePhiProcessor::processBlock()` | No allocation, no blocking, no locks, no I/O. Drains command queues and processes audio. |
-| Message thread | JUCE UI, timers, plugin loading, editor windows | Owns UI interactions and safe deferred hosted-plugin operations. |
+| Message thread | JUCE UI, timers, plugin loading, editor windows | Owns UI interactions and safe deferred hosted-plugin operations. Also owns `AgentOrchestrator` initialization and `EcosystemConfig` loading. |
 | MCP threads | `MCPServer`, `MCPToolHandler` | Handles JSON-RPC I/O and queues parameter edits back to the processor. MCP threads are now instance-isolated. `AutomationRuntime` is per-instance, cache keys are prefixed with `instanceId + ':'`, and `InstanceRegistry` evicts zombies after TTL expiry. |
+| Orchestrator thread | `AgentOrchestrator`, `SecurityValidator` | Mediates processor-to-agent runtime wiring, MCP message sanitization, auth validation, and rate limiting. Operates on the message thread during initialization; security validation runs on MCP threads. |
 | Background workers | Dataset, rendering, scan, and validation jobs | Run long-lived work outside the audio callback. |
 | Standalone MCP process | `MorePhiMcpServer` | Separate stdio MCP server for standalone workflows. |
 
@@ -106,6 +107,35 @@ A set of structural audio thread safety fixes were implemented in version 3.3.0 
 
 3. **Phase-Vocoder Stereo Coherence (`SpectralMorphEngine`):**
    - **Shared Transient Modification:** Runs transient detection on the left channel (Channel 0) and records the resulting morph alpha adjustments into a pre-allocated `blockAlphas_` shared array. Channel 1 (or subsequent channels) reuses these values for identical hop indices, avoiding channel phase drift.
+
+## Agent Orchestration Layer
+
+Introduced in v3.3.0, the **Agent Orchestration Layer** lives in `src/AI/Orchestrator/` and provides a single-initialization facade that wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer`. All files compile into the `MorePhi` shared-code target.
+
+### Components
+
+| Component | Source Files | Purpose |
+|---|---|---|
+| `AgentOrchestrator` | `AgentOrchestrator.h` / `AgentOrchestrator.cpp` | Single-initialization facade that coordinates the processor, agent runtime, and MCP server lifecycle. |
+| `EcosystemConfig` | `EcosystemConfig.h` / `EcosystemConfig.cpp` | Unified JSON configuration for plugin settings, agent behavior, MCP server options, and security policies. |
+| `SecurityValidator` | `SecurityValidator.h` / `SecurityValidator.cpp` | MCP message sanitization, authentication validation, and rate limiting for incoming JSON-RPC connections. |
+| `McpProtocol` | `McpProtocol.h` / `McpProtocol.cpp` | Explicit JSON-RPC 2.0 message schemas defining `McpRequest`, `McpResponse`, `McpNotification`, and `McpError`. |
+
+### Initialization Flow
+
+```text
+MorePhiProcessor::prepareToPlay()
+  |
+  v
+AgentOrchestrator::initialize()
+  |---> EcosystemConfig::load(configPath)
+  |---> SecurityValidator::setup(rules)
+  |---> McpProtocol::registerSchemas()
+  |---> AgentRuntime::start()
+  |---> MCPServer::run()
+```
+
+All orchestrator components are instantiated on the **message thread** and operate outside the real-time audio path. They communicate with the audio thread exclusively through the existing `LockFreeQueue<ParamCommand, 8192>` and `SnapshotBank` seqlock mechanisms.
 
 
 ## Installation and Build
@@ -170,6 +200,8 @@ cmake --build build/codex-ninja-vs18d-relwithdebinfo --target MorePhi_VST3 --par
 | Standalone MCP server | `MorePhiMcpServer` |
 | Tests | `MorePhiTests`, `MorePhiMcpServerTests` |
 
+> **Note:** Orchestrator source files (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) in `src/AI/Orchestrator/` are compiled into the `MorePhi` shared-code target and do not produce a separate artifact.
+
 ## Dependencies
 
 | Dependency | Version | Purpose |
@@ -193,23 +225,55 @@ Common CMake options:
 
 ## Codebase Structure
 
+The project is structured into distinct layers with clear architectural responsibilities:
+
+### 1. Embedded MCP Integration & AI (`src/AI/`, `src/CLI/`)
+- `MCPServer`: Embeds a JSON-RPC 2.0 TCP server, managing API integration across system lifetimes. Uses a bounded `LockFreeQueue` (8192 capacity) to relay parameterized actions without blocking the audio thread.
+- `MCPToolHandler`: Dispatches calls to DSP targets and offloads heavy tasks via `AsyncToolExecutor` to prevent audio dropouts. Features `ToolResultCache` with smart dirtying algorithms.
+- `DatasetGenerator`: Advanced multi-pipeline architecture (V2 and asynchronous V3). Handles Latin Hypercube sampling, multithreaded offline routing, CPU chunking, crash checkpoints, and audio feature extraction to build supervised ML training materials.
+- `StandaloneMcpServer`: Operates via `stdio` using `OzonePluginBackend` independently of the main plugin framework, bridging isolated configuration over process IPC.
+- `MorePhiCLI`: A headless command-line tool designed for bulk non-GUI batch processing workflows and AI smoke testing without JUCE editor boundaries.
+
+### 2. Core Audio & Data processing (`src/Core/`, `src/MIDI/`)
+- `MorphProcessor`: Audio thread-safe orchestrator utilizing `noexcept` constraints and raw primitive buffers to transform user input via physics and interpolation configurations smoothly. Employs mathematically stable single-pole filters.
+- `PhysicsEngine`: Handles 2D cursor algorithms for mathematical tracking: `ElasticState` (spring-damper physics) and `Drift` modes (Procedural Perlin Noise gradient generators). Stateless limits assure scaling stability.
+- `GeneticEngine`: Mutates and breeds interpolation nodes using pseudo-evolutionary crossover operations and strict algorithmic boundary protections natively defined in a fast-hash map `SanityConfig`.
+- `MIDIRouter`: Wait-free callback translation bridging notes-to-snapshots and control changes to direct UI interactions utilizing an array buffer limit implementation to protect allocations. Employs pre-computed RMS arrays for audio transient thresholds.
+
+### 3. VST/AU Host Abstraction & Presets (`src/Host/`, `src/Licensing/`, `src/Preset/`)
+- `PluginHostManager`: Encapsulates 3rd-party plugin lifecycle, discovery logic utilizing fallback methodologies, resolving specific plugin architecture bundles. Maintains exception guard recovery systems bypassing real-time crashes via isolated audio suspension zones.
+- `ParameterBridge`: Casts diverse plugin traits directly onto normalized float structures, maintaining synchronization without dynamic allocations via memory throttling loop systems avoiding overloads and cache-miss stall scenarios over concurrent threads.
+- `PresetLibrary`: A fast-indexing metadata indexer mapping recursive directory parsing of preset schemas and cross-referencing capabilities optimized exclusively to standard message UI threads without real-time boundaries.
+- `PresetSerializer` / `LicenseManager`: Static-typed variable mapping structures parsing JSON object graphs into the exact binary arrays necessary to load DSP layouts, coupled with cryptographical `Ed25519Verifier` bounds protecting plugin deployment environments without online interruptions.
+
+### 4. User Interface & Integration Layer (`src/Plugin/`, `src/UI/`, `src/Tools/`)
+- `MorePhiProcessor`: Main APVTS controller and root plugin instance connecting GUI scopes with Real-time processing engines synchronously. Ensures cross-subsystem containment without global singleton dependencies.
+- `MorePhiEditor`: Principal modern JUCE 8 Tab system connecting user interactions through atomic components avoiding event blocking. 
+- `MorphPad`: Circular UX interaction element built on rendering loops retaining local circular tracking vectors directly optimized without heap fragmentation constraints over continuous drawing cycles.
+- `OzoneHeadlessHost` (`src/Tools/`): Creates a fabricated dummy framework to satisfy iZotope integrations which require virtual Message Thread cycles simulating a real DAW without requiring explicit standard process hooks.
+
 ```text
 src/
   Plugin/              JUCE plugin entry point and editor
   Core/                Morphing, DSP, snapshots, modulation, mastering engines
   Host/                Hosted plugin lifecycle, scanning, parameter bridge
   AI/                  MCP server, tool handler, LLM settings, semantic profiles
+  AI/Orchestrator/     AgentOrchestrator, EcosystemConfig, SecurityValidator, McpProtocol
   AI/StandaloneMcp/    Stdio MCP server for standalone workflows
   AI/Dataset/          Dataset generation, render pipeline, validation
   MIDI/                Snapshot note and CC routing
   Preset/              Meta presets, preset library, serialization
   UI/                  MorphPad, tabs, panels, controls, theme
+  CLI/                 Standalone offline CLI executable tools
+  Licensing/           Offline crypto licensing protocols
+  Tools/               Headless host bridging capabilities
 
 tests/
   Unit/                Catch2 unit tests
   Integration/         Plugin lifecycle and MCP integration tests
   Performance/         Benchmarks when enabled
 
+research/              Experimental artifacts (Ozone/iZotope research, prototypes)
 docs/
   architecture/        Architecture and methodology notes
   audits/              Manual DAW QA matrices
@@ -219,7 +283,7 @@ docs/
 
 ## MCP API Reference
 
-More-Phi exposes an embedded local JSON-RPC MCP server. The active port and bearer token are shown in the AI status panel.
+More-Phi exposes an embedded local JSON-RPC MCP server. The active port and bearer token are shown in the AI status panel. Message schemas are explicitly defined by `McpProtocol` (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`) in `src/AI/Orchestrator/McpProtocol.h`.
 
 > Screenshot placeholder: `[Screenshot: AI status panel showing MCP ON, port, clients, Start/Stop MCP, and Copy Token controls]`
 
