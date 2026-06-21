@@ -260,6 +260,8 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/Core/NeuralMasteringSafetyPolicy.cpp
     src/AI/OnnxNeuralMasteringRunner.h
     src/AI/OnnxNeuralMasteringRunner.cpp
+    src/AI/SonicMasterDecisionDecoder.h
+    src/AI/SonicMasterDecisionDecoder.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
@@ -613,6 +615,29 @@ target_link_libraries(MorePhiMcpServer
         juce::juce_gui_basics
 )
 
+# ── OzoneHeadlessHost: GUI-initialized Ozone host for headless Assistant R&D ──
+add_executable(OzoneHeadlessHost
+    src/Tools/OzoneHeadlessHost/OzoneHeadlessHostMain.cpp
+)
+target_link_libraries(OzoneHeadlessHost
+    PRIVATE
+        juce::juce_core
+        juce::juce_events
+        juce::juce_gui_basics
+        juce::juce_audio_basics
+        juce::juce_audio_processors
+)
+target_include_directories(OzoneHeadlessHost PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(OzoneHeadlessHost PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_PUSH_NOTIFICATIONS=0
+)
+
 target_compile_definitions(MorePhiCLI
     PUBLIC
         JUCE_WEB_BROWSER=0
@@ -703,6 +728,7 @@ more_phi_apply_build_tuning(MorePhi)
 more_phi_apply_build_tuning(MorePhiCLI)
 more_phi_apply_build_tuning(MorePhiMcpCore)
 more_phi_apply_build_tuning(MorePhiMcpServer)
+more_phi_apply_build_tuning(OzoneHeadlessHost)
 if(TARGET MorePhi_VST3)
     more_phi_apply_build_tuning(MorePhi_VST3)
 endif()
