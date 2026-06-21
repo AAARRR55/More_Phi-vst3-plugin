@@ -71,6 +71,11 @@ private:
     juce::TextButton paramToggleBtn_;
     bool paramPanelVisible_ = false;
 
+    // SonicMaster realtime neural mastering (preview) — toggle + live status.
+    juce::ToggleButton sonicMasterToggle_ { "Neural Master (Preview)" };
+    juce::Label        sonicMasterStatus_;
+    void refreshSonicMasterStatus();
+
     // Hosted plugin window (detached)
     std::unique_ptr<HostedPluginWindow> hostedWindow_;
     juce::AudioPluginInstance* hostedWindowPlugin_ = nullptr; // pointer used at creation; only compared, never dereferenced after unload

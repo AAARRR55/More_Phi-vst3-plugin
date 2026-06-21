@@ -65,6 +65,26 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     };
     addAndMakeVisible(paramToggleBtn_);
 
+    // ── SonicMaster realtime neural mastering (preview) ───────────────────────
+    // Toggle is bound to the APVTS bool; disabled when no model is available.
+    // Status label is refreshed every timer tick (timerCallback).
+    sonicMasterToggle_.setTooltip(
+        "Continuously analyse ~6s of audio on a background thread and refresh "
+        "the built-in mastering chain from a neural decision model. Preview "
+        "(research-grade); off by default. Every prediction is clamped by the "
+        "safety policy, so a bad frame can never push the chain unsafe.");
+    sonicMasterToggle_.onClick = [this]()
+    {
+        if (auto* param = dynamic_cast<juce::AudioParameterBool*>(
+                processor.getAPVTS().getParameter("SonicMasterAnalysisEnabled")))
+            param->setValueNotifyingHost(sonicMasterToggle_.getToggleState() ? 1.0f : 0.0f);
+    };
+    addAndMakeVisible(sonicMasterToggle_);
+
+    sonicMasterStatus_.setJustificationType(juce::Justification::centredLeft);
+    sonicMasterStatus_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(sonicMasterStatus_);
+
     // Open Plugin UI button
     openPluginBtn_.onClick = [this]() { openPluginWindow(); };
     addAndMakeVisible(openPluginBtn_);
@@ -273,6 +293,11 @@ void MorePhiEditor::resized()
     auto bottomBar = area.removeFromBottom(32);
     aiPanel.setBounds(bottomBar);
 
+    // ── SonicMaster neural-mastering toggle + status (just above AI bar) ───────
+    auto sonicRow = area.removeFromBottom(28);
+    sonicMasterToggle_.setBounds(sonicRow.removeFromLeft(200));
+    sonicMasterStatus_.setBounds(sonicRow);
+
     // ── Tab bar ────────────────────────────────────────────────────────────────
     const bool compactWidth = area.getWidth() < 760;
     const int baseTabContentHeight = compactWidth ? 300 : 260;
@@ -429,6 +454,43 @@ void MorePhiEditor::timerCallback()
         lastDbLevel_ = smoothedDbLevel_;
         repaint(0, 0, getWidth(), 48);
     }
+
+    // Throttled refresh of the SonicMaster toggle + status (cheap atomic reads).
+    refreshSonicMasterStatus();
+}
+
+void MorePhiEditor::refreshSonicMasterStatus()
+{
+    auto& engine = processor.getSonicMasterEngine();
+
+    // Mirror the APVTS bool into the toggle so host automation / preset recall
+    // keeps the button in sync (avoid feedback: don't fire onClick).
+    if (auto* param = dynamic_cast<juce::AudioParameterBool*>(
+            processor.getAPVTS().getParameter("SonicMasterAnalysisEnabled")))
+    {
+        const bool desired = param->get();
+        if (sonicMasterToggle_.getToggleState() != desired)
+            sonicMasterToggle_.setToggleState(desired, juce::dontSendNotification);
+    }
+
+    // Disable the toggle when no model is loaded (feature unavailable).
+    sonicMasterToggle_.setEnabled(engine.isAvailable());
+
+    juce::String text = "Neural Master: ";
+    if (!engine.isAvailable())
+        text += "unavailable (no model)";
+    else
+    {
+        switch (engine.getStatus())
+        {
+            case SonicMasterAnalysisEngine::Status::Disabled:           text += "off"; break;
+            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += "collecting audio..."; break;
+            case SonicMasterAnalysisEngine::Status::Applied:            text += "applied #" + juce::String((int) engine.getLastPlanId()); break;
+            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += "held (low confidence)"; break;
+            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += "error - see log"; break;
+        }
+    }
+    sonicMasterStatus_.setText(text, juce::dontSendNotification);
 }
 
 } // namespace more_phi
