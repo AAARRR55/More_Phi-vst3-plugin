@@ -50,6 +50,20 @@ void AgentRuntime::start(unsigned numWorkers)
     sharedContext_.llm       = llm_;
     registry_.prepareAll(sharedContext_);
 
+    // ponytail: subscribe each agent's declared event types to the blackboard.
+    // Without this the reactive path (AnalysisAgent → RealtimeControlAgent) is dead.
+    for (auto role : registry_.registeredRoles())
+    {
+        if (auto* a = registry_.find(role))
+        {
+            IAgent* agent = a;
+            blackboard_.subscribe(agent->id(), agent->subscribedEventTypes(),
+                [agent, this](const juce::String& type, const nlohmann::json& payload, const juce::String& source) {
+                    agent->onEvent(type, payload, source, /*runId*/ {});
+                });
+        }
+    }
+
     scheduler_.start(numWorkers);
 
     // Blackboard pump thread: periodically fans out new events to subscribers.
