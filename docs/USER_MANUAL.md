@@ -327,6 +327,23 @@ The AI status bar is always visible at the bottom of the editor.
 | Start MCP / Stop MCP | Button | Starts or stops the embedded MCP server. |
 | Copy Token | Button | Copies the current MCP bearer token to the clipboard. |
 
+## Neural Master (Preview)
+
+Above the AI status bar, **Neural Master (Preview)** drives the built-in mastering chain from a neural decision model (`masteringbrainv2`). When enabled, the plugin continuously analyses the most recent ~6 seconds of audio on a background thread and refreshes the EQ, compressor, limiter ceiling, loudness target, and stereo width roughly every 3 seconds, crossfading parameters in over 200 ms.
+
+| Control | Type | Description |
+|---|---|---|
+| Neural Master (Preview) | Toggle | Enables the background analysis loop. **Off by default.** |
+| Neural Master status | Label | `off` · `collecting audio...` · `applied #N` · `held (low confidence)` · `error - see log` · `unavailable (no model)`. |
+
+**This is a preview feature and off by default.** The model is research-grade — it failed several of its own release-quality gates (EQ MAE ≈ 2.1 dB, true-peak ≈ 0.8 dBTP) — so treat it as an assistant, not an autocrat. Every prediction is clamped by the plugin's `NeuralMasteringSafetyPolicy`, so a bad frame can never push the chain into an unsafe state; rejected frames hold the last safe setting. The toggle is disabled when no model is loaded (the plugin must be built with `MORE_PHI_ENABLE_ONNX=ON` and the model must be staged — see `tools/export_onnx/README.md`).
+
+Limitations (by design):
+
+- It cannot react faster than ~3–6 seconds. Sudden transients or level changes are not re-mastered until the next cycle. The DSP chain's own realtime limiter and loudness normalizer remain the first line of defence during the gap.
+- It is not sample-accurate: it produces static parameter settings, refreshed every cycle with a 200 ms crossfade.
+- See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md` for the full design and failure model.
+
 ## MIDI Functions
 
 | Input | Function |
@@ -398,6 +415,7 @@ Safety categories:
 | `outputGain` | Float dB | Controls final output gain. |
 | `bypass` | Bool | Bypasses processing. |
 | `smartRandomize` | Bool/trigger | DAW-automatable randomization trigger. |
+| `SonicMasterAnalysisEnabled` | Bool | Enables the neural mastering preview loop (off by default). |
 | `driftOutputX` | Float | Automation output for drift X position. |
 | `driftOutputY` | Float | Automation output for drift Y position. |
 

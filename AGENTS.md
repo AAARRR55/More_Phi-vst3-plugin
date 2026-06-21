@@ -57,6 +57,7 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
 | `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner` | VST3/AU hosting, parameter read/write |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
+| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder` | Realtime neural mastering (ONNX, preview, default OFF). Parallel to the 63→72 `OnnxNeuralMasteringRunner`; the engine analyses ~6s of audio on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
 | `src/MIDI/` | `MIDIRouter` | Note triggers + CC routing |
 | `src/Preset/` | `MetaPresetManager`, `PresetSerializer` | Meta-preset save/load |
 | `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, etc. | All UI components |
