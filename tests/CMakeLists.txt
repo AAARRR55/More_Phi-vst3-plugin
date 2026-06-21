@@ -101,6 +101,7 @@ add_executable(MorePhiTests
     Unit/TestAnalysisAgent.cpp
     Unit/TestOptimizationAgent.cpp
     Unit/TestCreativeAgent.cpp
+    Unit/TestRealtimeControlAgent.cpp
 )
 
 # Python stdio MCP server integration test. Only compiled once the C++ IPC
