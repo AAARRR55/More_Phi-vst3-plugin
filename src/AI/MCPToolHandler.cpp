@@ -6345,18 +6345,12 @@ juce::String MCPToolHandler::agentsRunCancel(const juce::var& /*params*/, MorePh
 
 juce::String MCPToolHandler::agentsBlackboardRecent(MorePhiProcessor& p)
 {
-    auto* rt = runtimeOf(p);
-    if (rt == nullptr)
+    auto* runtime = p.getAutomationRuntimeForAgents();
+    if (runtime == nullptr)
         return agentsUnavailable();
     // The blackboard is layered over the AutomationRuntime's IntegrationEventBus; we
     // surface recent bus events so MCP consumers can see what agents have published
     // without needing a direct AutomationRuntime handle.
-    auto* runtime = p.getAutomationRuntimeForAgents();
-    if (runtime == nullptr)
-        return juce::String(nlohmann::json{
-            {"error", { {"code", "agents_unavailable"},
-                        {"message", "automation runtime not started"} } }
-        }.dump());
     return juce::String(runtime->events().listRecent(32).dump());
 }
 
