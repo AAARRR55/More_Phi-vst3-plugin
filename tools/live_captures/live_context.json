@@ -1,0 +1,152 @@
+[
+  {
+    "kind": "module",
+    "base": "0x7ffd31a60000",
+    "size": 61046784
+  },
+  {
+    "kind": "hooks_set",
+    "poller": "0x7ffd3290d3e0"
+  },
+  {
+    "kind": "poller_hit",
+    "tick": 1,
+    "thread": 17040,
+    "rcx": {
+      "ptr": "0x1dde1af9bc0",
+      "inMod": false,
+      "vtable": "0x7ffd34318878",
+      "vtable_inMod": true,
+      "vtable_rva": "0x28b8878",
+      "qw": [
+        "0x7ffd34318878",
+        "0x1ddf03c61e0",
+        "0x1ddf03c61d0",
+        "0x1ddf4978d70",
+        "0x0",
+        "0x1ddf49784d0",
+        "0x0",
+        "0x7ffd34318b38"
+      ],
+      "b0": "0x78",
+      "b0x90": "0xf0",
+      "b0x98": "0xb0",
+      "b0xa0": "0xa0"
+    },
+    "rdx": {
+      "ptr": "0x1ddf7041170",
+      "inMod": false
+    },
+    "r8": {
+      "ptr": "0x0",
+      "inMod": false
+    },
+    "bt": [
+      "0x166cd0a",
+      "0x2c20072",
+      "0xd6fb00",
+      "0x2c20072",
+      "0xd4b857",
+      "0x1316337",
+      "0x10e46f5",
+      "0x10e4640",
+      "0x10e4640"
+    ]
+  },
+  {
+    "kind": "poller_hit",
+    "tick": 2,
+    "thread": 17040,
+    "rcx": {
+      "ptr": "0x1dde1af9bc0",
+      "inMod": false,
+      "vtable": "0x7ffd34318878",
+      "vtable_inMod": true,
+      "vtable_rva": "0x28b8878",
+      "qw": [
+        "0x7ffd34318878",
+        "0x1ddf03c61e0",
+        "0x1ddf03c61d0",
+        "0x1ddf4978d70",
+        "0x0",
+        "0x1ddf49784d0",
+        "0x0",
+        "0x7ffd34318b38"
+      ],
+      "b0": "0x78",
+      "b0x90": "0xf0",
+      "b0x98": "0xb0",
+      "b0xa0": "0xa0"
+    },
+    "rdx": {
+      "ptr": "0x1ddf7041170",
+      "inMod": false
+    },
+    "r8": {
+      "ptr": "0x0",
+      "inMod": false
+    },
+    "bt": [
+      "0x166cd0a",
+      "0x2c20072",
+      "0xd6fb00",
+      "0x2c20072",
+      "0xd4b857",
+      "0x1316337",
+      "0x10e46f5",
+      "0x10e4640",
+      "0x10e4640"
+    ]
+  },
+  {
+    "kind": "poller_hit",
+    "tick": 3,
+    "thread": 17040,
+    "rcx": {
+      "ptr": "0x1dde1af9bc0",
+      "inMod": false,
+      "vtable": "0x7ffd34318878",
+      "vtable_inMod": true,
+      "vtable_rva": "0x28b8878",
+      "qw": [
+        "0x7ffd34318878",
+        "0x1ddf03c61e0",
+        "0x1ddf03c61d0",
+        "0x1ddf4978d70",
+        "0x0",
+        "0x1ddf49784d0",
+        "0x0",
+        "0x7ffd34318b38"
+      ],
+      "b0": "0x78",
+      "b0x90": "0xf0",
+      "b0x98": "0xb0",
+      "b0xa0": "0xa0"
+    },
+    "rdx": {
+      "ptr": "0x1ddf7041170",
+      "inMod": false
+    },
+    "r8": {
+      "ptr": "0x0",
+      "inMod": false
+    },
+    "bt": [
+      "0x166cd0a",
+      "0x2c20072",
+      "0xd6fb00",
+      "0x2c20072",
+      "0xd4b857",
+      "0x1316337",
+      "0x10e46f5",
+      "0x10e4640",
+      "0x10e4640"
+    ]
+  },
+  {
+    "kind": "summary",
+    "poller_ticks": 83,
+    "pipeline_hits": 0,
+    "body_hits": 0
+  }
+]

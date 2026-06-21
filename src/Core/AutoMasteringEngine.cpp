@@ -179,18 +179,27 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     // terminal gain stage and catches any overshoot the normalizer introduces.
     normalizer_.processBlock(buf);
 
-    // ── Stage 9: Brickwall limiter (terminal gain stage) ─────────────────
+    // ── Stage 9: M/S decode ──────────────────────────────────────────────
+    // MSDECODE-1 FIX: decode to L/R BEFORE the brickwall limiter and the meter.
+    // Previously decode ran AFTER both (stage 11), which meant the limiter
+    // enforced the dBTP ceiling on the M/S representation while the meter also
+    // read M/S — but M/S decode is L = mid + side (MSMatrix.h:36, no /sqrt2), so
+    // two channels each near the ceiling sum to ~+6 dBFS after decode. The
+    // limiter never saw it and the meter under-read by several dB, so the model
+    // eval reported a safe -0.91 dBTP while the delivered output clipped at
+    // +3.45 dBFS. Decoding here puts the limiter on the actual delivered L/R so
+    // the ceiling holds, and the meter below reads the same signal that ships.
+    MSMatrix::decodeBuffer(buf);
+
+    // ── Stage 10: Brickwall limiter (terminal gain stage) ────────────────
     limiter_.processBlock(buf);
 
-    // ── Stage 10: Meter the FINAL delivered output ───────────────────────
-    // Both meters now read the post-normalization + post-limit signal, so the
-    // reported dBTP/LUFS match what is actually delivered, and the normalizer's
-    // feedback loop (it reads meter_->getIntegrated()) converges on the target.
+    // ── Stage 11: Meter the FINAL delivered output ───────────────────────
+    // Both meters read the post-decode + post-limit L/R signal, so the reported
+    // dBTP/LUFS match what is actually delivered, and the normalizer's feedback
+    // loop (it reads meter_->getIntegrated()) converges on the target.
     analysisTruePeak_.processBlock(buf);
     lufs_.processBlock(buf.getArrayOfReadPointers(), buf.getNumChannels(), buf.getNumSamples());
-
-    // ── Stage 11: M/S decode ──────────────────────────────────────────────
-    MSMatrix::decodeBuffer(buf);
 
     spectrumAnalyzer_.processBlock(buf);
     stereoFieldAnalyzer_.processBlock(buf);

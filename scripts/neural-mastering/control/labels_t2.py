@@ -17,7 +17,7 @@ import numpy as np
 from labels import synthesize_deltas, assert_label_semantics
 from codec import control_deltas_to_vector, vector_to_control_deltas
 from objective import loss
-from target import build_target
+from target import build_target, build_target_from_features
 
 # 43 active slots (the wired controls; 29 dead slots are fixed at 0).
 ACTIVE = (
@@ -50,7 +50,13 @@ def recover_deltas_render(frame, seg_audio, rng, genre="neutral", render_host=No
     """
     import cma
 
-    target = build_target(genre)
+    # v2 corrective target: flatten THIS input's spectrum toward its median
+    # (SonicMaster decision.py port), instead of a fixed pink line. This is the
+    # upgrade that makes the teacher score "did you correctively flatten?" — the
+    # foundation for stopping the broad-EQ overshoot the v5 model learned.
+    spec_db = list(frame.spectral_bands) if frame.spectral_bands else None
+    target = build_target_from_features(spec_db, genre=genre,
+                                        input_lufs=frame.integrated_lufs) if spec_db else build_target(genre)
     t1 = synthesize_deltas(frame, rng)
     t1_vec = np.asarray(control_deltas_to_vector(t1), dtype=np.float32)
     x0 = _to_active(t1_vec)

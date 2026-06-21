@@ -143,6 +143,7 @@ const std::set<std::string>& chatRelevantTools()
         "plugin_profile.describe_semantics", "plugin_profile.describe_semantic_map",
         "plugin_profile.apply_safe_action", "plugin_profile.restore_safe_snapshot",
         "get_mastering_state", "apply_mastering_plan",
+        "sonicmaster_decision",
         "get_queue_health",
     };
     return kTools;
@@ -254,6 +255,29 @@ const char* const LLMChatClient::kSystemPrompt =
     "- Any tool whose name starts with izotope_ipc_ (e.g. izotope_ipc_attach, "
     "izotope_ipc_dump, izotope_ipc_capture) and ozone_run_assistant  "
     "(external Ozone/iZotope IPC attach)\n"
+    "\n"
+    "Mastering decisions — use the neural model first:\n"
+    "- When the user asks to master, set loudness/levels, fix EQ, or improve the "
+    "sound, call sonicmaster_decision FIRST. It runs the neural mastering model "
+    "(masteringbrainv2) on the last ~6s of captured audio and returns a decoded "
+    "decision (8 EQ band gains in dB, target LUFS, true-peak ceiling, 3-band "
+    "compressor thresholds/ratios/times, stereo width, limiter aggressiveness, "
+    "character). This is your PRIMARY mastering source.\n"
+    "- sonicmaster_decision does NOT apply anything — it returns the decision for "
+    "you to act on. Summarize it to the user (e.g. \"the model suggests cutting "
+    "10 kHz by 4.6 dB and targeting -14 LUFS\"), then either call apply_mastering_plan "
+    "to apply the built-in chain, or map the decision onto the hosted plugin's "
+    "parameters with set_parameters_batch. Ask the user before applying if the "
+    "moves are large (>6 dB EQ, or >3 dB loudness change).\n"
+    "- sonicmaster_decision requires the SonicMaster inference server running on "
+    "127.0.0.1:8765. If it returns success=false with available=false, tell the user "
+    "to start it (`python tools/inference_server/server.py --package <package>`); if "
+    "available=true but success=false, the user needs to play audio for ~6s first. "
+    "Fall back to apply_mastering_plan (heuristic) only if the server is unavailable "
+    "and the user explicitly accepts a heuristic result.\n"
+    "- Never invent EQ gains, LUFS targets, or compressor settings yourself. Always "
+    "ground mastering moves in a sonicmaster_decision result or, as a documented "
+    "fallback, an apply_mastering_plan result.\n"
     "\n"
     "Everything else is fair game - perform direct edits and keep the user informed.";
 

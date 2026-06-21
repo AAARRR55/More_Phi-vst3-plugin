@@ -1,0 +1,7 @@
+host pid=22508  arm=True
+  {"kind": "module", "base": "0x7ffd31a60000", "size": 61046784}
+  {"kind": "hooks_set"}
+  {"kind": "captured", "this": "0x172e8cfb260", "rdx": "0x172f23e8ab0", "vtable_rva": "0x28b8878"}
+>>> ARMING (will fire the thunk via JS-thread dispatch)
+  arm -> {'armed': True, 'this_captured': True}
+  {"kind": "about_to_fire", "mode": "thunk", "thread": 26488, "rcx": "0x172e8cfb258", "controller": "0x172e8cfb260", "rdx": "0x172f23e8ab0", "r8": "0x172b26f0000"}

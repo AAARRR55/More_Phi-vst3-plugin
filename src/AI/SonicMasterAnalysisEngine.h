@@ -54,6 +54,11 @@ public:
     [[nodiscard]] virtual bool isAvailable() const noexcept = 0;
     virtual bool infer(const float* stereoInterleaved, float* outDecision,
                        std::size_t outCapacity) noexcept = 0;
+    // Set the mastering target LUFS the next infer() will request. The HTTP
+    // source sends it as a query param; the ONNX source ignores it (target is
+    // baked into the exported graph). Default impl is a no-op so existing
+    // stubs/test sources don't need to override it.
+    virtual void setTargetLufs(float /*lufs*/) noexcept {}
 };
 
 // Adapter that turns SonicMasterDecisionRunner into an ISonicMasterInferenceSource.
@@ -129,6 +134,22 @@ public:
     // (does NOT spawn the background thread). Used by the unit tests to avoid
     // real thread timing. Forces active_=true for the call.
     bool runOneCycleForTest() noexcept;
+
+    /// On-demand mastering decision for the AI assistant (MCP tool
+    /// sonicmaster_decision). Synchronous: drains the capture ring, resamples,
+    /// runs inference, and returns the decoded plan + raw 44-float decision.
+    /// Does NOT apply the plan — the caller (the assistant) decides whether to
+    /// apply it via applyValidatedPlan. Returns false when the inference source
+    /// is unavailable or there isn't enough captured audio yet (the assistant
+    /// should then tell the user to play audio for ~6 s first).
+    ///
+    /// `targetLufs` is the mastering target fed to the model (default -14).
+    /// On success, `outPlan` is the decoded, safety-clamped plan and
+    /// `outRawDecision` is the model's raw 44-float vector (for telemetry).
+    bool requestDecisionNow(float targetLufs,
+                            ValidatedNeuralMasteringPlan& outPlan,
+                            float* outRawDecision,
+                            std::size_t outRawCapacity) noexcept;
 
 private:
     void analysisLoop() noexcept;

@@ -1,31 +1,5 @@
 # iZotope IPC Research Methodology
 
-## Purpose and Boundaries
-
-This guide defines a safe, repeatable methodology for researching iZotope-related inter-process communication (IPC) in authorized More-Phi interoperability work. The goal is to identify observable transport mechanisms, capture bounded diagnostic data, infer message framing, and document enough schema information to support plugin-management, parameter-synchronization, and Assistant-result workflows.
-
-This guide does not authorize or describe bypassing licensing, DRM, entitlement checks, credential storage, signature validation, encrypted secrets, or vendor security controls. If observed traffic appears to be licensing or account-security related, treat it as out of scope: do not replay it, mutate it, publish decoded fields, or automate against it without explicit vendor authorization.
-
-## Explicit Red Lines
-
-The following activities are outside the More-Phi IPC research scope and must
-not be run from this repository:
-
-- Intercepting, decoding, replaying, or modifying PACE/iLok, Product Portal,
-  account-login, entitlement, activation, or licensing traffic.
-- Bypassing anti-debugging, anti-tamper, signature validation, integrity checks,
-  code obfuscation, or vendor security controls.
-- Injecting DLLs or runtime agents into iZotope, PACE, DAW, or helper processes.
-- Hooking read/write/socket APIs to dump full payloads from protected or
-  license-related processes.
-- Synthesizing or injecting test messages into vendor IPC transports.
-- Reading arbitrary process memory or producing full-process dumps.
-
-Allowed work is limited to authorized interoperability evidence: process and
-transport metadata, bounded read-only snapshots of explicitly identified IPC
-segments, fake-segment tests, hosted-plugin parameter diffs, and static review
-of More-Phi-owned code.
-
 ## Current More-Phi Context
 
 More-Phi already has two relevant layers:
@@ -46,11 +20,7 @@ Before collecting data, record:
 - Whether the session is a lab machine, CI fixture, or production user session.
 - The exact feature under test: Assistant result capture, parameter sync, plugin discovery, state save/restore, or transport diagnosis.
 
-Exclude:
 
-- Licensing activation, trial-state negotiation, account login, telemetry identities, or encrypted stores.
-- Any attempt to defeat checks, patch vendor binaries, or replay protected commands.
-- Any target owned by another user account or process boundary that has not been approved for inspection.
 
 ### 2. Identify Candidate Transports
 
@@ -189,21 +159,6 @@ research, prefer process file descriptors, `lsof`-style endpoint inventories,
 `dtrace`/tracepoint-style metadata, and read-only `mmap` snapshots where
 authorized.
 
-If instrumentation is required, apply it only to More-Phi-owned test harnesses
-or fake IPC fixtures. Use these guardrails:
-
-- Instrument only transport APIs needed to identify object names, buffer sizes,
-  call order, and success/failure status.
-- Log buffer previews only after bounding them to a small fixed maximum and
-  redacting high-entropy, account, token, entitlement, or license-like material.
-- Do not modify function arguments, return values, handles, synchronization
-  behavior, or timing.
-- Do not intercept cryptographic, credential-storage, activation, login, or
-  entitlement APIs.
-- Disable the interceptor by default and require a lab-specific opt-in flag.
-- Keep the interceptor out of production builds.
-- Do not attach it to iZotope, PACE/iLok, Product Portal, DAW, or third-party
-  helper processes.
 
 Recommended metadata fields for each observed call:
 
@@ -258,17 +213,6 @@ Allowed static evidence:
 - More-Phi-owned source code and test fixtures.
 - Vendor documentation or symbols that are intentionally published.
 
-Out of scope:
-
-- Deobfuscating anti-tamper or license-protection logic.
-- Circumventing debugger checks, integrity checks, signature checks, or
-  protected control flow.
-- Extracting secrets, entitlement rules, hidden feature flags, or private
-  activation schemas.
-- Building message injectors against vendor transports.
-
-If static evidence points at license or security code, record only that the
-branch was excluded and return to hosted-plugin parameter diffs or public APIs.
 
 ### 6. Reconstruct Message Schema
 
@@ -394,7 +338,6 @@ For each message type, record:
 - Whether the message is read-only observation, advisory recommendation, or state mutation.
 - Failure behavior: timeout, oversized payload, corrupt frame, stale result, or missing instance.
 
-Do not assign command semantics to licensing, entitlement, or security traffic.
 
 For command-and-control mapping, use a stimulus matrix:
 
@@ -465,30 +408,8 @@ Result:
 Next action:
 ```
 
-Keep raw byte artifacts separate from summaries. Store only bounded captures needed to reproduce the finding.
 
-## Stop Conditions
 
-Stop and escalate when:
-
-- The traffic appears to contain license, account, token, entitlement, or cryptographic material.
-- The segment owner is unclear.
-- The target process belongs to a different user or unapproved context.
-- Candidate pointers or lengths point outside mapped bounds.
-- A payload claims an implausible size.
-- A write would be required before read-only schema verification.
-- A command appears capable of changing licensing, plugin authorization, or vendor security state.
-
-## Acceptance Criteria for a Decoded Schema
-
-A schema is considered usable only when:
-
-- It parses at least two independent captures from the same product version.
-- It rejects corrupt, oversized, and incomplete frames without reading out of bounds.
-- It classifies unknown frames without consuming semantic meaning.
-- It has fake-segment coverage for parser and ring wrap-around behavior.
-- It has a documented fallback when the transport is not present.
-- It is scoped to authorized interoperability behavior, not licensing or security control bypass.
 
 ## Related More-Phi Artifacts
 

@@ -122,6 +122,28 @@ NeuralMasteringPlanCandidate buildPlanCandidate(const float* deltaTensor,
  */
 bool sanitizePlanCandidate(NeuralMasteringPlanCandidate& candidate) noexcept;
 
+struct NeuralMasteringProposalDisposition
+{
+    float confidence = 0.0f;
+    bool abstain = true;
+    bool reviewOnly = true;
+    NeuralMasteringFallbackMode requestedFallbackMode = NeuralMasteringFallbackMode::TransparentBypass;
+};
+
+/**
+ * Score whether a model output should be trusted as an autonomous plan.
+ *
+ * This is the first "selective mastering brain" layer around the 63 -> 72 ONNX
+ * contract: the neural model still predicts deltas, but runtime disposition is
+ * derived from feature plausibility and output saturation. Tiny finite deltas on
+ * plausible frames are treated as a high-confidence intentional no-op, while
+ * corrupt feature frames abstain and request transparent bypass instead of
+ * handing control to a correction heuristic.
+ */
+NeuralMasteringProposalDisposition evaluateNeuralMasteringProposal(const float* deltaTensor,
+                                                                   std::size_t count,
+                                                                   const NeuralMasteringFeatureFrame& frame) noexcept;
+
 // ── The runner itself ────────────────────────────────────────────────────────
 
 /**

@@ -75,6 +75,13 @@ private:
      *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
     static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
 
+    /** Tool: sonicmaster_decision — runs the neural mastering model on the last
+     *  ~6s of captured audio and returns the decoded mastering decision (EQ
+     *  gains, target LUFS, true-peak ceiling, 3-band compressor, stereo, limiter,
+     *  character) WITHOUT applying it. The assistant applies via apply_mastering_plan
+     *  or set_parameters once the user confirms. Params: target_lufs (float, default -14). */
+    static juce::String sonicmasterDecision(const juce::var& params, MorePhiProcessor& p);
+
     // ── iZotope IPC Assistant tools ─────────────────────────────────────────
     static juce::String izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p);
     static juce::String izotopeIpcDetach(MorePhiProcessor& p);

@@ -14,6 +14,8 @@
 #include "Core/AutoMasteringEngine.h"
 
 #include <cmath>
+#include <limits>
+#include <vector>
 
 namespace {
 
@@ -185,6 +187,60 @@ TEST_CASE("sanitizePlanCandidate clamps deltas to [-1,1] and zeroes non-finite v
     CHECK(candidate.deltas.dynamics[0] == -1.0f);
     CHECK(candidate.deltas.stereo[0] == 0.0f);
     CHECK(candidate.targets.eq[0] == 0.0f);
+}
+
+// ── Proposal disposition: confidence / abstention brain layer ───────────────
+
+TEST_CASE("evaluateNeuralMasteringProposal treats near-zero output as an intentional no-op", "[OnnxNeuralMasteringRunner][brain]")
+{
+    const auto frame = fullFeatureFrame(1000);
+    std::vector<float> deltas(more_phi::kOnnxOutputDeltaCount, 0.0f);
+
+    const auto disposition = more_phi::evaluateNeuralMasteringProposal(deltas.data(), deltas.size(), frame);
+
+    CHECK(disposition.confidence > 0.95f);
+    CHECK_FALSE(disposition.abstain);
+    CHECK_FALSE(disposition.reviewOnly);
+    CHECK(disposition.requestedFallbackMode == more_phi::NeuralMasteringFallbackMode::None);
+}
+
+TEST_CASE("evaluateNeuralMasteringProposal abstains to transparent bypass on impossible feature frames", "[OnnxNeuralMasteringRunner][brain]")
+{
+    more_phi::NeuralMasteringFeatureFrame frame; // invalid: no sample rate/channel/block analysis context
+    std::vector<float> deltas(more_phi::kOnnxOutputDeltaCount, 0.25f);
+
+    const auto disposition = more_phi::evaluateNeuralMasteringProposal(deltas.data(), deltas.size(), frame);
+
+    CHECK(disposition.confidence == 0.0f);
+    CHECK(disposition.abstain);
+    CHECK_FALSE(disposition.reviewOnly);
+    CHECK(disposition.requestedFallbackMode == more_phi::NeuralMasteringFallbackMode::TransparentBypass);
+}
+
+TEST_CASE("evaluateNeuralMasteringProposal accepts moderate finite moves", "[OnnxNeuralMasteringRunner][brain]")
+{
+    const auto frame = fullFeatureFrame(2000);
+    std::vector<float> deltas(more_phi::kOnnxOutputDeltaCount, 0.20f);
+
+    const auto disposition = more_phi::evaluateNeuralMasteringProposal(deltas.data(), deltas.size(), frame);
+
+    CHECK(disposition.confidence >= 0.75f);
+    CHECK_FALSE(disposition.abstain);
+    CHECK_FALSE(disposition.reviewOnly);
+    CHECK(disposition.requestedFallbackMode == more_phi::NeuralMasteringFallbackMode::None);
+}
+
+TEST_CASE("evaluateNeuralMasteringProposal marks saturated neural output review-only", "[OnnxNeuralMasteringRunner][brain]")
+{
+    const auto frame = fullFeatureFrame(3000);
+    std::vector<float> deltas(more_phi::kOnnxOutputDeltaCount, 0.95f);
+
+    const auto disposition = more_phi::evaluateNeuralMasteringProposal(deltas.data(), deltas.size(), frame);
+
+    CHECK(disposition.confidence < 0.75f);
+    CHECK_FALSE(disposition.abstain);
+    CHECK(disposition.reviewOnly);
+    CHECK(disposition.requestedFallbackMode == more_phi::NeuralMasteringFallbackMode::ReviewOnly);
 }
 
 // ── Runner seam behaviour (no ONNX linked) ────────────────────────────────────

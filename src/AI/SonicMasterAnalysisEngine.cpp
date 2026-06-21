@@ -234,6 +234,79 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     return true;
 }
 
+bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
+                                                    ValidatedNeuralMasteringPlan& outPlan,
+                                                    float* outRawDecision,
+                                                    std::size_t outRawCapacity) noexcept
+{
+    // On-demand path for the AI assistant's sonicmaster_decision MCP tool.
+    // Mirrors runCycle() but: (a) takes a target-LUFS argument, (b) does NOT
+    // require active_ to be set, (c) does NOT apply the plan or touch status_,
+    // (d) returns the decoded plan + raw decision for the caller to act on.
+    if (ring_ == nullptr || source_ == nullptr || !isAvailable())
+        return false;
+
+    const std::size_t hostFrames = captureL_.size();
+    const std::size_t got = ring_->readNewest(hostFrames, captureL_.data(), captureR_.data());
+    if (got < hostFrames)
+        return false;  // not enough audio captured yet
+
+    if (std::abs(sampleRate_ - 44100.0) < 0.5)
+    {
+        std::copy_n(captureL_.data(), kSonicMasterSegmentFrames, modelL_.data());
+        std::copy_n(captureR_.data(), kSonicMasterSegmentFrames, modelR_.data());
+    }
+    else
+    {
+        resampleLinear(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
+        resampleLinear(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
+    }
+
+    const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
+                                peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
+    const float gain = peak > 1e-9f ? (0.891f / peak) : 1.0f;
+    for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
+    {
+        interleaved_[2 * i + 0] = modelL_[i] * gain;
+        interleaved_[2 * i + 1] = modelR_[i] * gain;
+    }
+
+    // Propagate the requested target LUFS to the inference source (the HTTP
+    // source sends it as a query param; the ONNX source ignores it).
+    source_->setTargetLufs(targetLufs);
+
+    if (!source_->infer(interleaved_.data(), decision_.data(), decision_.size()))
+        return false;
+
+    if (outRawDecision != nullptr && outRawCapacity >= kSonicMasterDecisionWidth)
+        std::copy_n(decision_.data(), kSonicMasterDecisionWidth, outRawDecision);
+
+    ValidatedNeuralMasteringPlan plan {};
+    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan))
+        return false;
+    plan.sourcePlanId = nextPlanId_++;
+
+    NeuralMasteringRuntimeState runtime {};
+    runtime.sampleRate = sampleRate_;
+    runtime.channelCount = 2;
+    runtime.layout = NeuralMasteringLayout::Stereo;
+
+    NeuralMasteringPlanCandidate candidate {};
+    candidate.schemaVersion   = kNeuralMasteringPlanSchemaVersion;
+    candidate.runtimeMode     = NeuralMasteringRuntimeMode::MessageThread;
+    candidate.confidence      = config_.confidenceFloor;
+    candidate.evidenceLevel   = plan.evidenceLevel;
+    candidate.editableMask    = plan.appliedMask;
+    candidate.targets         = plan.projectedTargets;
+    candidate.deltas          = plan.projectedTargets;
+
+    if (!safetyPolicy_.validate(candidate, runtime).accepted)
+        return false;
+
+    outPlan = plan;
+    return true;
+}
+
 void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept
 {
     if (applicationEngine_ == nullptr) return;

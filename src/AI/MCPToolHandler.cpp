@@ -23,6 +23,7 @@
 #include "PluginSemanticMapper.h"
 #include "TrackAssistantStore.h"
 #include "MasteringCandidateScoring.h"
+#include "SonicMasterDecisionDecoder.h"
 #include "AutomationControlPlane.h"
 #include "StandaloneMcp/IZotopeIPCAssistant.h"
 #include "StandaloneMcp/IZotopeIPCDiscovery.h"
@@ -1908,6 +1909,7 @@ static const ToolDefinition kCoreTools[] = {
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a mastering plan from compact analysis metrics.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Requires the SonicMaster inference server running on 127.0.0.1:8765 (see tools/inference_server/README.md). Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6}}})"},
     {"izotope_ipc_attach", "Attach read-only to a named iZotope IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
     {"izotope_ipc_detach", "Detach from the currently mapped iZotope IPC segment.", R"({"type":"object","properties":{}})"},
     {"izotope_ipc_status", "Report iZotope IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
@@ -3079,6 +3081,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     // Ozone mastering tools
     else if (method == "get_mastering_state")  result = getMasteringState(p);
     else if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
+    else if (method == "sonicmaster_decision")  result = sonicmasterDecision(params, p);
 
     // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
     else if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
@@ -5587,6 +5590,90 @@ juce::String MCPToolHandler::applyMasteringPlan(const juce::var& params, MorePhi
     result["ozone_applied"]     = planner.hasOzoneApplicator();
     result["measured_inputs"]   = measuredInputs;
     result["rules_applied"]     = rulesApplied;
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePhiProcessor& p)
+{
+    const float targetLufs = static_cast<float>(params.getProperty("target_lufs", -14.0));
+
+    auto& engine = p.getSonicMasterEngine();
+
+    if (!engine.isAvailable())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = false;
+        err["error"] = "SonicMaster inference server is not reachable. Start it with "
+                       "`python tools/inference_server/server.py --package <package>` "
+                       "(see tools/inference_server/README.md).";
+        return toJString(err);
+    }
+
+    ValidatedNeuralMasteringPlan plan {};
+    std::array<float, more_phi::kSonicMasterDecisionWidth> raw {};
+    if (!engine.requestDecisionNow(targetLufs, plan, raw.data(), raw.size()))
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["error"] = "Not enough audio captured yet (need ~6s). Ask the user to play "
+                       "audio through the track, then retry.";
+        return toJString(err);
+    }
+
+    // Build a readable decision payload mirroring mastering_decision_adapter's
+    // slice map (see src/AI/SonicMasterDecisionDecoder.h).
+    json decision;
+    json eqBands = json::array();
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+        eqBands.push_back({ {"frequencyHz", more_phi::kSonicMasterEqFrequenciesHz[i]},
+                            {"gainDb", raw[more_phi::kSonicMasterEqGainOffset + i]},
+                            {"q", more_phi::kSonicMasterEqDefaultQ} });
+    decision["eq_bands"] = eqBands;
+    decision["target_lufs"]          = raw[more_phi::kSonicMasterTargetLufsIdx];
+    decision["true_peak_ceiling_dbtp"] = raw[more_phi::kSonicMasterTruePeakIdx];
+
+    json compBands = json::array();
+    for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
+    {
+        const std::size_t o = more_phi::kSonicMasterCompOffset + b * more_phi::kSonicMasterCompBandWidth;
+        compBands.push_back({ {"id", (int)b},
+                              {"thresholdDb", raw[o + 0]},
+                              {"ratio",       raw[o + 1]},
+                              {"attackMs",    raw[o + 2]},
+                              {"releaseMs",   raw[o + 3]},
+                              {"makeupDb",    raw[o + 4]},
+                              {"kneeDb",      raw[o + 5]} });
+    }
+    decision["compressor_bands"]      = compBands;
+    decision["limiter_aggressiveness"] = raw[more_phi::kSonicMasterAggrIdx];
+    decision["expected_gain_reduction_db"] = raw[more_phi::kSonicMasterGainRedIdx];
+
+    // Character argmax over the 3 logits.
+    const float c0 = raw[more_phi::kSonicMasterCharOffset + 0];
+    const float c1 = raw[more_phi::kSonicMasterCharOffset + 1];
+    const float c2 = raw[more_phi::kSonicMasterCharOffset + 2];
+    const char* charNames[] = { "transparent", "balanced", "aggressive" };
+    int charIdx = (c0 >= c1 && c0 >= c2) ? 0 : (c1 >= c2 ? 1 : 2);
+    decision["character"] = charNames[charIdx];
+
+    json result;
+    result["success"]      = true;
+    result["available"]    = true;
+    result["applied"]      = false;  // decision only — assistant/user applies next
+    result["model_source"] = "sonicmaster-v2 (masteringbrainv2)";
+    result["target_lufs_requested"] = targetLufs;
+    result["decision"]    = decision;
+    // The decoded + safety-clamped plan, ready for AutoMasteringEngine.
+    result["plan_eq_normalized"]      = json::array();
+    result["plan_dynamics_normalized"] = json::array();
+    result["plan_stereo_normalized"]   = json::array();
+    result["plan_loudness_normalized"] = json::array();
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringEqTargetCount; ++i) result["plan_eq_normalized"].push_back(plan.projectedTargets.eq[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringDynamicsTargetCount; ++i) result["plan_dynamics_normalized"].push_back(plan.projectedTargets.dynamics[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringStereoTargetCount; ++i) result["plan_stereo_normalized"].push_back(plan.projectedTargets.stereo[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringLoudnessTargetCount; ++i) result["plan_loudness_normalized"].push_back(plan.projectedTargets.loudness[i]);
     return toJString(result);
 }
 

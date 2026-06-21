@@ -203,6 +203,10 @@ TEST_CASE("LLM chat client system prompt encodes underscore naming and confirmat
     CHECK_FALSE(prompt.contains("more_phi.set_parameters"));
     CHECK_FALSE(prompt.contains("more_phi.parameters"));
 
+    // The neural mastering tool must be referenced so the LLM knows to call it
+    // as the primary mastering source (see the "Mastering decisions" guidance).
+    CHECK(prompt.contains("sonicmaster_decision"));
+
     // Confirm the dotted negative example appears AT MOST ONCE - i.e. it is
     // only the warning sentence and was not duplicated elsewhere in the prompt.
     const int firstDottedIdx = prompt.indexOf("hosted_plugin.load");
@@ -880,6 +884,10 @@ TEST_CASE("Chat-filtered tool surface is smaller than full surface (OpenAI)", "[
     // Heavy/rarely-used tools should NOT be in the chat subset
     CHECK(names.count("mastering_render_batch") == 0);
     CHECK(names.count("mastering_render_status") == 0);
+
+    // The neural mastering decision tool must be exposed to chat (it is the
+    // assistant's primary mastering source per the system prompt).
+    CHECK(names.count("sonicmaster_decision") == 1);
 
     // All names must still be unique
     CHECK(names.size() == chatTools.size());
