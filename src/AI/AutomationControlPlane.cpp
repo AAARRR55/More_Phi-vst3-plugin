@@ -820,6 +820,16 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
         || method == "workflow.cancel")
         return RiskLevel::LowWrite;
 
+    // ── Multi-agent orchestration layer: agents.* tools ───────────────────────
+    if (method == "agents.list" || method == "agents.run_status" || method == "agents.blackboard.recent")
+        return RiskLevel::ReadOnly;
+    if (method == "agents.run_goal" || method == "agents.run_cancel")
+        return RiskLevel::LowWrite;
+    if (method == "agents.run_task")
+        return RiskLevel::MediumWrite;
+    if (method == "agents.set_autonomy")
+        return RiskLevel::HighImpact;
+
     return RiskLevel::ReadOnly;
 }
 

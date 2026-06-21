@@ -1031,3 +1031,17 @@ TEST_CASE("TrackAssistantStore persists local track records", "[mcp][track-assis
     REQUIRE(info["history"].is_array());
     REQUIRE(info["history"].size() >= 2);
 }
+
+// ── Multi-agent orchestration: agents.* risk classification ──────────────────
+TEST_CASE("PermissionKernel classifies agents.* tools", "[agents][mcp][permissions]")
+{
+    more_phi::PermissionKernel kernel;
+    using R = more_phi::RiskLevel;
+    REQUIRE(kernel.classifyTool("agents.list", {})              == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.run_goal", {})          == R::LowWrite);
+    REQUIRE(kernel.classifyTool("agents.run_task", {})          == R::MediumWrite);
+    REQUIRE(kernel.classifyTool("agents.run_status", {})        == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.run_cancel", {})        == R::LowWrite);
+    REQUIRE(kernel.classifyTool("agents.blackboard.recent", {}) == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.set_autonomy", {})      == R::HighImpact);
+}
