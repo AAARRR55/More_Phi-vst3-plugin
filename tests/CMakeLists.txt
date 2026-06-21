@@ -103,6 +103,7 @@ add_executable(MorePhiTests
     Unit/TestCreativeAgent.cpp
     Unit/TestRealtimeControlAgent.cpp
     Unit/TestQualitySafetyAgent.cpp
+    Unit/TestMemoryAgent.cpp
     # Orchestrator facades and protocols
     Unit/TestAgentOrchestrator.cpp
     Unit/TestMcpProtocol.cpp

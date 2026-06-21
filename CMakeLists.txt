@@ -405,6 +405,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Agents/RealtimeControlAgent.cpp
     src/AI/Agents/Agents/QualitySafetyAgent.h
     src/AI/Agents/Agents/QualitySafetyAgent.cpp
+    src/AI/Agents/Agents/MemoryAgent.h
+    src/AI/Agents/Agents/MemoryAgent.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
