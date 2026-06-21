@@ -266,6 +266,8 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/AI/SonicMasterDecisionRunner.cpp
     src/AI/SonicMasterAnalysisEngine.h
     src/AI/SonicMasterAnalysisEngine.cpp
+    src/AI/SonicMasterHttpInferenceSource.h
+    src/AI/SonicMasterHttpInferenceSource.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
@@ -370,6 +372,9 @@ set(MORE_PHI_AI_DATASET_V3_SOURCES
 )
 
 set(MORE_PHI_AI_SOURCES
+    # ── Multi-agent orchestration layer (added per-task; see plan) ────────────
+    src/AI/Agents/Scheduler/PriorityScheduler.h
+    src/AI/Agents/Scheduler/PriorityScheduler.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp

@@ -81,6 +81,7 @@ add_executable(MorePhiTests
     Unit/TestSonicMasterDecisionDecoder.cpp
     Unit/TestAudioCaptureRing.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
+    Unit/TestSonicMasterHttpInferenceSource.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
@@ -92,6 +93,8 @@ add_executable(MorePhiTests
     Unit/TestLicensing.cpp
     # Spec optimization extensions (heartbeat, scoped cache invalidation, adaptive rate limit)
     Unit/TestSpecOptimizations.cpp
+    # Multi-agent orchestration layer
+    Unit/TestAgentRuntimeCore.cpp
 )
 
 # Python stdio MCP server integration test. Only compiled once the C++ IPC
