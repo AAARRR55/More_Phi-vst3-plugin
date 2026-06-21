@@ -381,6 +381,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Llm/DeterministicFallbackLlmClient.cpp
     src/AI/Agents/Tooling/DefaultToolInvoker.h
     src/AI/Agents/Tooling/DefaultToolInvoker.cpp
+    src/AI/Agents/AgentRegistry.h
+    src/AI/Agents/AgentRegistry.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp

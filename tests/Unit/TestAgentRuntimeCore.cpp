@@ -151,3 +151,67 @@ TEST_CASE("DefaultToolInvoker enforces per-agent rate budget", "[agents][invoker
     REQUIRE(c.contains("error"));
     REQUIRE(c["error"]["code"].get<std::string>() == "rate_limited");
 }
+
+// ── Task 7: AgentRegistry ────────────────────────────────────────────────────
+#include "AI/Agents/AgentRegistry.h"
+
+namespace {
+
+// Minimal IAgent for registry/scheduler/e2e plumbing tests.
+class StubAgent : public IAgent
+{
+public:
+    explicit StubAgent(AgentRole r, std::vector<juce::String> tools = {})
+        : role_(r), tools_(std::move(tools)) {}
+    AgentRole role() const noexcept override { return role_; }
+    juce::String id() const noexcept override { return id_; }
+    void setId(const juce::String& id) { id_ = id; }
+    std::vector<juce::String> allowedTools() const override { return tools_; }
+    void prepare(const AgentContext&) override { prepared_ = true; }
+    AgentResult execute(const AgentTask& task) override
+    {
+        ++execCount;
+        AgentResult r;
+        r.taskId = task.id;
+        r.success = true;
+        r.findings = { { "echo", task.intent.toStdString() } };
+        return r;
+    }
+    AgentState state() const noexcept override { return AgentState::Idle; }
+    void stop() override {}
+
+    AgentRole role_;
+    std::vector<juce::String> tools_;
+    juce::String id_ = "stub";
+    bool prepared_ = false;
+    int execCount = 0;
+};
+
+} // namespace
+
+TEST_CASE("AgentRegistry registers, finds, and lists roles", "[agents][registry]")
+{
+    AgentRegistry registry;
+    auto a = std::make_unique<StubAgent>(AgentRole::Analysis);
+    auto* raw = a.get();
+    a->setId("analysis-1");
+    registry.registerAgent(std::move(a));
+
+    REQUIRE(registry.find(AgentRole::Analysis) == raw);
+    REQUIRE(registry.find(AgentRole::Optimization) == nullptr);
+    auto roles = registry.registeredRoles();
+    REQUIRE(roles.size() == 1);
+    REQUIRE(roles[0] == AgentRole::Analysis);
+}
+
+TEST_CASE("AgentRegistry prepare wires context into every agent", "[agents][registry]")
+{
+    AgentRegistry registry;
+    auto a = std::make_unique<StubAgent>(AgentRole::Analysis);
+    auto* raw = a.get();
+    registry.registerAgent(std::move(a));
+
+    AgentContext ctx;   // members left null; stub doesn't deref them
+    registry.prepareAll(ctx);
+    REQUIRE(raw->prepared_);
+}
