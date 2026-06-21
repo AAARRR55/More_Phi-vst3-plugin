@@ -39,16 +39,16 @@ void AgentRuntime::start(unsigned numWorkers)
     if (running_.exchange(true))
         return;
 
-    // Wire the shared context into every agent.
-    AgentContext ctx;
-    ctx.processor = processor_;
-    ctx.identity  = identity_;
-    ctx.runtime   = runtime_;
-    ctx.tools     = tools_;
-    ctx.blackboard= &blackboard_;
-    ctx.logger    = &logger_;
-    ctx.llm       = llm_;
-    registry_.prepareAll(ctx);
+    // Wire the shared context into every agent. sharedContext_ is a member so
+    // the pointers agents store remain valid for the runtime's lifetime.
+    sharedContext_.processor = processor_;
+    sharedContext_.identity  = identity_;
+    sharedContext_.runtime   = runtime_;
+    sharedContext_.tools     = tools_;
+    sharedContext_.blackboard= &blackboard_;
+    sharedContext_.logger    = &logger_;
+    sharedContext_.llm       = llm_;
+    registry_.prepareAll(sharedContext_);
 
     scheduler_.start(numWorkers);
 

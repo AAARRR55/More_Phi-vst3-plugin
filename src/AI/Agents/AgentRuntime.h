@@ -81,6 +81,12 @@ private:
     IAgentLogger&           logger_;
     ILlmClient*             llm_;
 
+    // Owned context member: agents hold raw pointers into this, so it MUST
+    // outlive every registered agent. Populated in start() before any worker
+    // can execute an agent. (Previously this was a stack local in start() —
+    // agents received dangling pointers; fixed.)
+    AgentContext sharedContext_;
+
     AgentRegistry     registry_;
     PriorityScheduler scheduler_;
 
