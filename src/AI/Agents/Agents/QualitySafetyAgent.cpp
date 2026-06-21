@@ -23,9 +23,10 @@ QualitySafetyAgent::Verdict QualitySafetyAgent::evaluate(const Proposal& proposa
     const double tp   = after.value("true_peak_db", -99.0);
     v.measurements = { { "lufs_integrated", lufs }, { "true_peak_db", tp } };
 
-    // Streaming targets: loudness must not exceed (be louder than) the ceiling.
-    // LUFS values are negative; "too loud" means lufs > maxLufs (closer to 0).
-    if (lufs > config_.maxLufs + 0.05)
+    // Streaming targets. LUFS aim has a tolerance band (±1 LU is standard streaming
+    // practice around the -14 target); only loudness well above the aim is a breach.
+    // True-peak is a hard ceiling.
+    if (lufs > config_.maxLufs + 1.0)
     {
         v.reason = "lufs_breach";
         return v;

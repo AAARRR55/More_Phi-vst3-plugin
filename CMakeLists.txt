@@ -373,6 +373,14 @@ set(MORE_PHI_AI_DATASET_V3_SOURCES
 
 set(MORE_PHI_AI_SOURCES
     # ── Multi-agent orchestration layer (added per-task; see plan) ────────────
+    src/AI/Orchestrator/AgentOrchestrator.h
+    src/AI/Orchestrator/AgentOrchestrator.cpp
+    src/AI/Orchestrator/McpProtocol.h
+    src/AI/Orchestrator/McpProtocol.cpp
+    src/AI/Orchestrator/EcosystemConfig.h
+    src/AI/Orchestrator/EcosystemConfig.cpp
+    src/AI/Orchestrator/SecurityValidator.h
+    src/AI/Orchestrator/SecurityValidator.cpp
     src/AI/Agents/Scheduler/PriorityScheduler.h
     src/AI/Agents/Scheduler/PriorityScheduler.cpp
     src/AI/Agents/Blackboard/BlackboardBridge.h
