@@ -391,6 +391,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Agents/AnalysisAgent.cpp
     src/AI/Agents/Agents/OptimizationAgent.h
     src/AI/Agents/Agents/OptimizationAgent.cpp
+    src/AI/Agents/Agents/CreativeAgent.h
+    src/AI/Agents/Agents/CreativeAgent.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
