@@ -70,6 +70,26 @@ Three thread domains with strict boundaries:
 - **Message thread**: UI components, Timer callbacks (deferred plugin loading), MCP connection handling
 - **MCP thread**: `MCPServer::run()` — accepts JSON-RPC connections, enqueues parameter changes via `LockFreeQueue`
 
+### Multi-Agent Orchestration Layer
+
+An additive agent layer sits ABOVE the existing `MCPToolHandler` / `AutomationControlPlane`, reusing their permission/ledger/event subsystems rather than duplicating them. Design spec: `docs/superpowers/specs/2026-06-21-multi-agent-orchestration-layer-design.md`. Default config: `config/agents/agent_runtime.default.json`.
+
+| Layer | Key Classes | Role |
+|-------|------------|------|
+| `src/AI/Agents/` | `AgentRuntime`, `AgentRegistry`, `PriorityScheduler` | Container: registers agents, owns 2-worker pool, fans out blackboard events |
+| `src/AI/Agents/Conductor/` | `ConductorAgent` | Goal decomposition via `WorkflowOrchestrator` + `DeterministicFallbackLlmClient`; the ONLY agent that may delegate followUps |
+| `src/AI/Agents/Agents/` | `AnalysisAgent`, `OptimizationAgent`, `CreativeAgent`, `RealtimeControlAgent`, `QualitySafetyAgent`, `MemoryAgent` | Six specialists; cross-delegation is dropped with `agents.delegation_rejected` |
+| `src/AI/Agents/Blackboard/` | `BlackboardBridge` | Typed pub/sub OVER `IntegrationEventBus`; a pump thread drains + fans out |
+| `src/AI/Agents/Tooling/` | `DefaultToolInvoker` | Wraps `MCPToolHandler::handle`; enforces per-agent capability scope (fail-closed) + rate budget + attribution |
+| `src/AI/Agents/Logging/` | `NullAgentLogger`, `StructuredAgentLogger` | JSONL file logger with in-memory ring fallback |
+| `src/AI/Agents/Llm/` | `ILlmClient`, `DeterministicFallbackLlmClient`, `NullLlmClient` | LLM seam (Risk R1); real transport broken → deterministic fallback |
+
+**Threading invariant (strict):** agents execute on scheduler workers ONLY — never on the audio thread. `RealtimeCritical` priority jumps the *agent* queue, not the audio thread. `RealtimeControlAgent` writes corrections through `LockFreeQueue` / `MCPToolHandler::handle`, exactly like the UI/MCP paths.
+
+**MCP surface (7 tools):** `agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy` — dispatched in `MCPToolHandler::handle`; classified in `PermissionKernel::classifyTool`.
+
+**Lifecycle:** `MorePhiProcessor::startMCPServerIfNeeded()` lazily constructs `agentRuntime_` (after the MCP server's `AutomationRuntime` exists), registers the full cast, starts the runtime. Destructor resets `agentRuntime_` BEFORE stopping the MCP server so workers join before the runtime they reference is torn down.
+
 ### Key Concurrency Primitives
 
 - **Seqlock** in `SnapshotBank` — Audio thread reads snapshot data lock-free with retry; UI/MCP writes serialize via `SpinLock` + sequence counter
@@ -130,6 +150,7 @@ More-Phi includes a comprehensive dataset generation system for creating synthet
 Tests use Catch2 v3 and link against the `More-Phi` shared-code target. Test sources:
 
 - `tests/Unit/` — Core engine unit tests (interpolation, physics, genetics, sidechain)
+- `tests/Unit/TestAgent*.cpp`, `TestRealtimeReactive.cpp`, `TestStructuredAgentLogger.cpp` — Agent layer (unit + E2E + RT-isolation invariants)
 - `tests/Integration/` — Plugin lifecycle and MCP integration
 - `tests/Performance/` — Benchmark suite (opt-in via `MORE_PHI_BUILD_BENCHMARKS`)
 
