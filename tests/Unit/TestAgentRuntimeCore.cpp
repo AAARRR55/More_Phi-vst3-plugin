@@ -215,3 +215,72 @@ TEST_CASE("AgentRegistry prepare wires context into every agent", "[agents][regi
     registry.prepareAll(ctx);
     REQUIRE(raw->prepared_);
 }
+
+// ── Task 8: AgentRuntime ─────────────────────────────────────────────────────
+#include "AI/Agents/AgentRuntime.h"
+#include "AI/Agents/Llm/NullLlmClient.h"
+
+namespace {
+
+// A minimal AgentRuntime fixture without a real MorePhiProcessor: inject a
+// fake invoker + a real AutomationRuntime on a temp dir.
+struct RuntimeFixture
+{
+    RuntimeFixture()
+    {
+        dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                  .getNonexistentChildFile("morephi_agent_runtime_test", "");
+        more_phi::AutomationRuntime::setStoreDirectoryOverrideForTests(dir);
+    }
+    ~RuntimeFixture()
+    {
+        more_phi::AutomationRuntime::clearStoreDirectoryOverrideForTests();
+        dir.deleteRecursively();
+    }
+    juce::File dir;
+};
+
+} // namespace
+
+TEST_CASE("AgentRuntime submits a task and returns a result", "[agents][runtime]")
+{
+    RuntimeFixture fx;
+    more_phi::IntegrationEventBus bus{32};
+    BlackboardBridge bb{bus};
+    NullAgentLogger logger;
+
+    DefaultToolInvoker::DispatchFn dispatch = [](const juce::String&, const nlohmann::json&) {
+        return juce::String(nlohmann::json({ { "ok", true } }).dump());
+    };
+    DefaultToolInvoker::CapabilityFn cap = [](const juce::String&) {
+        return std::vector<juce::String>{ "analysis.get_summary" };
+    };
+    DefaultToolInvoker invoker{dispatch, cap};
+
+    AgentRuntime runtime{nullptr, nullptr, nullptr, invoker, bb, logger, nullptr};
+
+    auto a = std::make_unique<StubAgent>(AgentRole::Analysis, std::vector<juce::String>{"analysis.get_summary"});
+    a->setId("analysis-1");
+    runtime.registerAgent(std::move(a));
+    runtime.start(2);
+
+    AgentTask task;
+    task.id = "t1";
+    task.targetRole = AgentRole::Analysis;
+    task.intent = "ping";
+    task.priority = TaskPriority::Normal;
+    juce::String assigned = runtime.submitTask(task);
+
+    std::optional<AgentResult> result;
+    for (int i = 0; i < 200 && ! result.has_value(); ++i)
+    {
+        result = runtime.peekResult(assigned);
+        std::this_thread::sleep_for(5ms);
+    }
+
+    REQUIRE(result.has_value());
+    REQUIRE(result->success);
+    REQUIRE(result->findings["echo"].get<std::string>() == "ping");
+
+    runtime.stop();
+}

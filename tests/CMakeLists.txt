@@ -96,6 +96,7 @@ add_executable(MorePhiTests
     Unit/TestSpecOptimizations.cpp
     # Multi-agent orchestration layer
     Unit/TestAgentRuntimeCore.cpp
+    Unit/TestAgentIsolation.cpp
 )
 
 # Python stdio MCP server integration test. Only compiled once the C++ IPC

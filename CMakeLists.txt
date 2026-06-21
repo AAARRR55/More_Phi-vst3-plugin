@@ -383,6 +383,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Tooling/DefaultToolInvoker.cpp
     src/AI/Agents/AgentRegistry.h
     src/AI/Agents/AgentRegistry.cpp
+    src/AI/Agents/AgentRuntime.h
+    src/AI/Agents/AgentRuntime.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
