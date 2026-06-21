@@ -79,6 +79,7 @@ add_executable(MorePhiTests
     Unit/TestOnnxRunnerInference.cpp
     # SonicMaster realtime neural mastering (preview)
     Unit/TestSonicMasterDecisionDecoder.cpp
+    Unit/TestAudioCaptureRing.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
