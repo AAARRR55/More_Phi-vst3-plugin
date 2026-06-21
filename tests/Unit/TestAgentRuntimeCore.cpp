@@ -105,3 +105,49 @@ TEST_CASE("BlackboardBridge isolates subscribers by event type", "[agents][black
     REQUIRE(aHits == 2);
     REQUIRE(bHits == 1);
 }
+
+// ── Task 6: DefaultToolInvoker ───────────────────────────────────────────────
+#include "AI/Agents/Tooling/DefaultToolInvoker.h"
+
+TEST_CASE("DefaultToolInvoker enforces capability scope", "[agents][invoker]")
+{
+    std::vector<juce::String> allowed = { "analysis.get_summary", "analysis.get_spectrum" };
+    juce::String dispatchedMethod;
+    DefaultToolInvoker::DispatchFn dispatch = [&](const juce::String& method, const nlohmann::json& /*params*/) -> juce::String {
+        dispatchedMethod = method;
+        return juce::String(nlohmann::json({ { "lufs", -9.0 } }).dump());
+    };
+    DefaultToolInvoker::CapabilityFn capFor = [&](const juce::String& /*agentId*/) -> std::vector<juce::String> {
+        return allowed;
+    };
+
+    DefaultToolInvoker invoker(dispatch, capFor);
+
+    auto ok = invoker.invoke("analysis.get_summary", {}, "analysis-1");
+    REQUIRE(dispatchedMethod == "analysis.get_summary");
+    REQUIRE(ok["lufs"].get<double>() == Approx(-9.0));
+
+    auto blocked = invoker.invoke("set_parameter", { { "index", 0 } }, "analysis-1");
+    REQUIRE(blocked.contains("error"));
+    REQUIRE(blocked["error"]["code"].get<std::string>() == "capability_denied");
+}
+
+TEST_CASE("DefaultToolInvoker enforces per-agent rate budget", "[agents][invoker]")
+{
+    std::vector<juce::String> allowed = { "analysis.get_summary" };
+    DefaultToolInvoker::DispatchFn dispatch = [](const juce::String&, const nlohmann::json&) -> juce::String {
+        return juce::String(nlohmann::json({ { "ok", true } }).dump());
+    };
+    DefaultToolInvoker::CapabilityFn capFor = [&](const juce::String&) { return allowed; };
+
+    DefaultToolInvoker invoker(dispatch, capFor, /*maxCallsPerAgentPerSecond*/ 2);
+
+    auto a = invoker.invoke("analysis.get_summary", {}, "analysis-1");
+    auto b = invoker.invoke("analysis.get_summary", {}, "analysis-1");
+    auto c = invoker.invoke("analysis.get_summary", {}, "analysis-1");
+
+    REQUIRE_FALSE(a.contains("error"));
+    REQUIRE_FALSE(b.contains("error"));
+    REQUIRE(c.contains("error"));
+    REQUIRE(c["error"]["code"].get<std::string>() == "rate_limited");
+}
