@@ -102,6 +102,12 @@ MorePhiProcessor::MorePhiProcessor()
     licenseManager_ = std::make_unique<licensing::LicenseManager>(licenseRuntimeState_);
     requestMessageThreadMaintenance();
 
+    // SonicMaster realtime neural mastering (preview): wire the engine to the
+    // inference source (no-op until a model is loaded) and to the built-in
+    // mastering chain. prepare()/release() run in prepareToPlay/releaseResources.
+    sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
+    sonicMasterEngine_.setApplicationEngine(&autoMasteringEngine_);
+
     // Wire MIDI router callbacks (plain C function pointers + void* context)
     midiRouter.setSnapshotCallback([](int slot, void* ctx)
     {
@@ -1034,6 +1040,14 @@ MorePhiProcessor::createParameterLayout()
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"throttleParamCommits", 1}, "Throttle Param Commits", false));
 
+    // SonicMaster realtime neural mastering (preview). Default OFF — the
+    // checkpoint is research-grade; see
+    // docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"SonicMasterAnalysisEnabled", 1},
+        "Neural Master (Preview)",
+        false));
+
     return { params.begin(), params.end() };
 }
 
@@ -1061,6 +1075,7 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     autoMasteringEngine_.prepare(sampleRate, samplesPerBlock, false);
     neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
     neuralMasteringController_.resetStatus();
+    sonicMasterEngine_.prepare(sampleRate, samplesPerBlock);
 
     // Pre-allocate morph processor buffers
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
@@ -1126,6 +1141,9 @@ void MorePhiProcessor::releaseResources()
     hostManagerB_.setPlayHead(nullptr);
     hostManager.releaseResources();
     hostManagerB_.releaseResources();
+    // Join the SonicMaster analysis thread BEFORE the mastering chain resets,
+    // so the analysis thread never touches a torn-down AutoMasteringEngine.
+    sonicMasterEngine_.release();
     autoMasteringEngine_.reset();
     neuralMasteringController_.resetStatus();
     spectralEngine_.reset();
@@ -1286,6 +1304,13 @@ void MorePhiProcessor::syncStateFromAPVTS()
         latencyConfigDirty_.store(true, std::memory_order_release);
     }
 
+    // SonicMaster realtime neural mastering toggle (preview). Reads the APVTS
+    // bool directly — it's not in RawParameters because it only needs to be
+    // read on the message thread here, not on the audio thread.
+    if (auto* sonicParam = dynamic_cast<juce::AudioParameterBool*>(
+            apvts.getParameter("SonicMasterAnalysisEnabled")))
+        sonicMasterEngine_.setActive(sonicParam->get());
+
     if (audioDomainConfigDirty_.load(std::memory_order_acquire)
         || latencyConfigDirty_.load(std::memory_order_acquire))
         requestMessageThreadMaintenance();
@@ -1385,6 +1410,13 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     processMIDIAndSidechain(midi, buffer);
     applyMorphAndParameters(buffer, cachedParamCount, canTouchHostedParameters);
     applyOutputGainAndMetering(buffer, isBypassed);
+
+    // SonicMaster analysis capture: lock-free ring write only (no locks, no
+    // allocation). Early-returns when the feature is OFF or unprepared.
+    if (buffer.getNumChannels() >= 2)
+        sonicMasterEngine_.capture(buffer.getReadPointer(0),
+                                   buffer.getReadPointer(1),
+                                   static_cast<std::size_t>(buffer.getNumSamples()));
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────────

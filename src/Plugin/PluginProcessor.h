@@ -36,6 +36,8 @@
 #include "Core/PerformanceProfiler.h"
 #include "Core/AutoMasteringEngine.h"
 #include "AI/NeuralMasteringController.h"
+#include "AI/SonicMasterAnalysisEngine.h"
+#include "AI/SonicMasterDecisionRunner.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include "Licensing/LicenseManager.h"
@@ -329,6 +331,8 @@ public:
     // ── Automated mastering engine ────────────────────────────────────────────
     AutoMasteringEngine& getAutoMasteringEngine() noexcept { return autoMasteringEngine_; }
     const AutoMasteringEngine& getAutoMasteringEngine() const noexcept { return autoMasteringEngine_; }
+    SonicMasterAnalysisEngine& getSonicMasterEngine() noexcept { return sonicMasterEngine_; }
+    const SonicMasterAnalysisEngine& getSonicMasterEngine() const noexcept { return sonicMasterEngine_; }
     NeuralMasteringController& getNeuralMasteringController() noexcept { return neuralMasteringController_; }
     const NeuralMasteringController& getNeuralMasteringController() const noexcept { return neuralMasteringController_; }
     bool hasLastSafeNeuralMasteringPlan() const noexcept { return autoMasteringEngine_.hasLastSafeNeuralMasteringPlan(); }
@@ -459,6 +463,11 @@ private:
     NeuralMasteringController            neuralMasteringController_;
     std::unique_ptr<OzoneParameterMap>   ozoneParamMap_;
     std::unique_ptr<OzonePlanApplicator> ozonePlanApplicator_;
+
+    // ── SonicMaster realtime neural mastering (preview, default OFF) ──────────
+    SonicMasterDecisionRunner            sonicMasterRunner_;
+    SonicMasterAnalysisEngine            sonicMasterEngine_;
+    SonicMasterRunnerInferenceSource     sonicMasterSource_ { sonicMasterRunner_ };
 
     // ── V2 components ──────────────────────────────────────────────────────
     PluginHostManager  hostManagerB_;
