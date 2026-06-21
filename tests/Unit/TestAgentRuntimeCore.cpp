@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <juce_core/juce_core.h>
 
 #include <atomic>
@@ -9,6 +10,7 @@
 #include "AI/Agents/Scheduler/PriorityScheduler.h"
 
 using namespace more_phi::agents;
+using Catch::Approx;
 using namespace std::chrono_literals;
 
 TEST_CASE("PriorityScheduler runs submitted tasks", "[agents][scheduler]")
@@ -57,4 +59,49 @@ TEST_CASE("PriorityScheduler honors priority ordering under single worker", "[ag
     REQUIRE(order[2] == 1);
 
     scheduler.stop();
+}
+
+// ── Task 4: BlackboardBridge ─────────────────────────────────────────────────
+#include "AI/AutomationControlPlane.h"
+#include "AI/Agents/Blackboard/BlackboardBridge.h"
+
+TEST_CASE("BlackboardBridge publishes and fans out to subscribers", "[agents][blackboard]")
+{
+    more_phi::IntegrationEventBus bus{16};
+    BlackboardBridge bb{bus};
+
+    int received = 0;
+    juce::String seenType;
+    nlohmann::json seenPayload;
+    bb.subscribe("analysis-1", { "analysis.finding" },
+        [&](const juce::String& type, const nlohmann::json& payload, const juce::String& /*source*/) {
+            ++received;
+            seenType = type;
+            seenPayload = payload;
+        });
+
+    bb.publish("analysis-1", "analysis.finding", { { "lufs", -9.2 } });
+    bb.poll();
+
+    REQUIRE(received == 1);
+    REQUIRE(seenType == "analysis.finding");
+    REQUIRE(seenPayload["lufs"].get<double>() == Approx(-9.2));
+}
+
+TEST_CASE("BlackboardBridge isolates subscribers by event type", "[agents][blackboard]")
+{
+    more_phi::IntegrationEventBus bus{16};
+    BlackboardBridge bb{bus};
+
+    int aHits = 0, bHits = 0;
+    bb.subscribe("agent-a", { "alpha" }, [&](auto&&...) { ++aHits; });
+    bb.subscribe("agent-b", { "beta" },  [&](auto&&...) { ++bHits; });
+
+    bb.publish("src", "alpha", {});
+    bb.publish("src", "beta", {});
+    bb.publish("src", "alpha", {});
+    bb.poll();
+
+    REQUIRE(aHits == 2);
+    REQUIRE(bHits == 1);
 }
