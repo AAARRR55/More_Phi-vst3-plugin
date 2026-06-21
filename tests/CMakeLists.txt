@@ -165,6 +165,33 @@ if(MORE_PHI_HAS_ONNX)
             COMMENT "Copying onnxruntime.dll next to test exe"
             VERBATIM)
     endif()
+
+    # ── SonicMaster realtime neural mastering (preview) ──────────────────────
+    # The live smoke test compiles only with ONNX linked. It loads the exported
+    # masteringbrain_v2 model + contract if they are staged (produced by
+    # tools/export_onnx/masteringbrain_to_onnx.py), and skips cleanly otherwise.
+    target_sources(MorePhiTests PRIVATE Unit/TestSonicMasterRunnerLive.cpp)
+
+    set(MOREPHI_SONICMASTER_MODEL    "masteringbrain_v2_decision.onnx")
+    set(MOREPHI_SONICMASTER_CONTRACT "masteringbrain_v2_contract.json")
+    set(MOREPHI_SONICMASTER_SRC_DIR  "${CMAKE_SOURCE_DIR}/build/sonicmaster")
+    set(MOREPHI_SONICMASTER_DST_DIR  "$<TARGET_FILE_DIR:MorePhiTests>")
+    if(EXISTS "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_MODEL}"
+            COMMENT "Staging ${MOREPHI_SONICMASTER_MODEL} next to test exe"
+            VERBATIM)
+    endif()
+    if(EXISTS "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_CONTRACT}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_CONTRACT}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_CONTRACT}"
+            COMMENT "Staging ${MOREPHI_SONICMASTER_CONTRACT} next to test exe"
+            VERBATIM)
+    endif()
 endif()
 if(COMMAND more_phi_apply_build_tuning)
     more_phi_apply_build_tuning(MorePhiTests)
