@@ -11,6 +11,7 @@ set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable 
 option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
+option(MORE_PHI_ENABLE_PROFILING "Enable PerformanceProfiler instrumentation and the MorePhiDiagnostics 10s message-thread sampler (writes diagnostics-<pid>.log)" OFF)
 set(MORE_PHI_ONNX_VERSION "1.22.1" CACHE STRING "ONNX Runtime prebuilt release version (used when MORE_PHI_ENABLE_ONNX=ON)")
 
 if(MORE_PHI_ENABLE_CLANG_TIDY)
@@ -223,6 +224,8 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/SIMDAudio.cpp
     src/Core/PerformanceProfiler.h
     src/Core/PerformanceProfiler.cpp
+    src/Core/MorePhiDiagnostics.h
+    src/Core/MorePhiDiagnostics.cpp
     src/Core/AllocationTracker.h
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
@@ -743,6 +746,10 @@ target_compile_definitions(MorePhi
         MORE_PHI_ENABLE_DATASET_V3=1
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
+
+if(MORE_PHI_ENABLE_PROFILING)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_PROFILING=1)
+endif()
 
 if(APPLE)
     target_compile_definitions(MorePhi PUBLIC JUCE_PLUGINHOST_AU=1)

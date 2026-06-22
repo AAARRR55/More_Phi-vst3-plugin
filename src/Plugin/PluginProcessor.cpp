@@ -107,7 +107,8 @@ MorePhiProcessor::MorePhiProcessor()
       morphProcessor(snapshotBank),
       mcpServer(*this),
       ipcDiscovery_(standalone_mcp::createIZotopeIPCDiscovery()),
-      ipcAssistant_(standalone_mcp::createIZotopeIPCAssistant())
+      ipcAssistant_(standalone_mcp::createIZotopeIPCAssistant()),
+      diagnostics_(*this, profiler_)
 {
     processorGenerationToken_ = gNextProcessorGenerationToken.fetch_add(1, std::memory_order_relaxed);
     // Constructor is kept minimal for FL Studio validation.
@@ -650,30 +651,112 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
         }
         else
         {
-            writeParameter(cmd.paramIndex, cmd.value);
-
-            if (cmd.paramIndex >= 0 &&
-                static_cast<size_t>(cmd.paramIndex) < lastApplied_.size())
+            // PERF-BATCH: the MCP-flush path (exclusivePlugin != nullptr) writes
+            // through immediately because it holds the exclusive lease and is
+            // already O(1) in acquire cost. The audio-thread path (nullptr)
+            // stashes into drainScratch_ and defers the plugin setValue to a
+            // single batched ParameterBridge::applyParameterState call below —
+            // collapsing N×(acquire+throttle+syscall) to one lock per block.
+            if (exclusivePlugin == nullptr)
             {
-                const auto paramIndex = static_cast<size_t>(cmd.paramIndex);
-                lastApplied_[paramIndex] = juce::jlimit(0.0f, 1.0f, cmd.value);
-                touchCooldown_[paramIndex] = 0;
+                if (cmd.paramIndex >= 0 &&
+                    static_cast<size_t>(cmd.paramIndex) < drainScratch_.size())
+                {
+                    const auto paramIndex = static_cast<size_t>(cmd.paramIndex);
+                    const float clamped = juce::jlimit(0.0f, 1.0f, cmd.value);
+                    drainScratch_[paramIndex] = clamped;
+                    drainTouched_[paramIndex] = 1;
 
-                if (cmd.holdAgainstMorph && paramIndex < liveEditHold_.size())
-                {
-                    liveEditHold_[paramIndex] = 1;
-                    liveEditX_[paramIndex] = morphX_.load(std::memory_order_relaxed);
-                    liveEditY_[paramIndex] = morphY_.load(std::memory_order_relaxed);
-                    liveEditFader_[paramIndex] = faderPos_.load(std::memory_order_relaxed);
+                    if (paramIndex < lastApplied_.size())
+                    {
+                        lastApplied_[paramIndex] = clamped;
+                        touchCooldown_[paramIndex] = 0;
+
+                        if (cmd.holdAgainstMorph && paramIndex < liveEditHold_.size())
+                        {
+                            liveEditHold_[paramIndex] = 1;
+                            liveEditX_[paramIndex] = morphX_.load(std::memory_order_relaxed);
+                            liveEditY_[paramIndex] = morphY_.load(std::memory_order_relaxed);
+                            liveEditFader_[paramIndex] = faderPos_.load(std::memory_order_relaxed);
+                        }
+                        else if (paramIndex < liveEditHold_.size())
+                        {
+                            liveEditHold_[paramIndex] = 0;
+                        }
+                    }
                 }
-                else if (paramIndex < liveEditHold_.size())
+            }
+            else
+            {
+                writeParameter(cmd.paramIndex, cmd.value);
+
+                if (cmd.paramIndex >= 0 &&
+                    static_cast<size_t>(cmd.paramIndex) < lastApplied_.size())
                 {
-                    liveEditHold_[paramIndex] = 0;
+                    const auto paramIndex = static_cast<size_t>(cmd.paramIndex);
+                    lastApplied_[paramIndex] = juce::jlimit(0.0f, 1.0f, cmd.value);
+                    touchCooldown_[paramIndex] = 0;
+
+                    if (cmd.holdAgainstMorph && paramIndex < liveEditHold_.size())
+                    {
+                        liveEditHold_[paramIndex] = 1;
+                        liveEditX_[paramIndex] = morphX_.load(std::memory_order_relaxed);
+                        liveEditY_[paramIndex] = morphY_.load(std::memory_order_relaxed);
+                        liveEditFader_[paramIndex] = faderPos_.load(std::memory_order_relaxed);
+                    }
+                    else if (paramIndex < liveEditHold_.size())
+                    {
+                        liveEditHold_[paramIndex] = 0;
+                    }
                 }
             }
         }
 
         ++drainedCommands;
+    }
+
+    // PERF-BATCH: one batched apply for everything the audio-thread path stashed.
+    // applyParameterState takes a single plugin lease + one throttle lock for
+    // the whole drain, regardless of how many commands were queued. MCP-flush
+    // path skipped (it wrote through directly above).
+    if (exclusivePlugin == nullptr)
+    {
+        // Coalesce dirty entries to the front of a contiguous span so the
+        // batched apply only touches live parameters, not the full MAX_PARAMETERS.
+        const int scratchSize = static_cast<int>(drainScratch_.size());
+        int firstTouched = -1;
+        int lastTouched = -1;
+        for (int i = 0; i < scratchSize; ++i)
+        {
+            if (drainTouched_[static_cast<size_t>(i)] != 0)
+            {
+                if (firstTouched < 0) firstTouched = i;
+                lastTouched = i;
+            }
+        }
+
+        if (firstTouched >= 0)
+        {
+            // Mark untouched indices inside the span by rewriting the span from
+            // lastApplied_ so applyParameterState doesn't clobber them with 0.
+            // Only indices between firstTouched..lastTouched that were NOT
+            // written this drain need this — cheap, bounded by the dirty span.
+            for (int i = firstTouched; i <= lastTouched; ++i)
+            {
+                const auto idx = static_cast<size_t>(i);
+                if (drainTouched_[idx] == 0 && idx < lastApplied_.size()
+                    && lastApplied_[idx] >= 0.0f)
+                    drainScratch_[idx] = lastApplied_[idx];
+            }
+
+            paramBridge.applyParameterState(drainScratch_.data() + firstTouched,
+                                            lastTouched - firstTouched + 1);
+
+            // Clear the dirty bitmap for the span we just flushed.
+            std::fill(drainTouched_.begin() + firstTouched,
+                      drainTouched_.begin() + lastTouched + 1,
+                      uint8_t{0});
+        }
     }
 
     if (hasTouchLock)
@@ -698,7 +781,12 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
     // audio thread may be in the middle of a callback, or another message-thread
     // operation (state capture/restore) may hold the exclusive lease.  A single
     // short timeout is often too aggressive in a loaded DAW.
-    constexpr int kMaxRetries = 2;
+    // PERF-BATCH: bumped from 2 to 4 retries, lowered backoff (20-50ms -> 5-25ms).
+    // During sustained AI edit floods the audio thread holds the lease across
+    // block boundaries; 2 retries failed often and spilled commands to the
+    // (formerly per-command) audio-thread drain. More retries with smaller
+    // backoff keeps edits on the batched MCP flush path.
+    constexpr int kMaxRetries = 4;
     juce::AudioPluginInstance* plugin = nullptr;
     for (int attempt = 0; attempt < kMaxRetries; ++attempt)
     {
@@ -725,7 +813,7 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
 
         // Brief backoff before retrying, but not on the last attempt.
         if (attempt + 1 < kMaxRetries)
-            juce::Thread::sleep(juce::jmin(20 * (attempt + 1), 50));
+            juce::Thread::sleep(juce::jmin(5 * (attempt + 1), 25));
     }
 
     if (plugin == nullptr)
@@ -1105,6 +1193,9 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     currentParamSnapshot_.resize(MAX_PARAMETERS, 0.0f); // PERF-C2: batch snapshot buffer
     lastApplied_.resize(MAX_PARAMETERS, -1.0f);     // -1 = never applied
     touchCooldown_.resize(MAX_PARAMETERS, 0);
+    // PERF-BATCH: command-drain scratch (sized once; never resized on audio thread).
+    drainScratch_.assign(MAX_PARAMETERS, 0.0f);
+    drainTouched_.assign(MAX_PARAMETERS, uint8_t{0});
     touchMorphX_.resize(MAX_PARAMETERS, -1.0f);     // Morph X when touch detected
     touchMorphY_.resize(MAX_PARAMETERS, -1.0f);     // Morph Y when touch detected
     liveEditHold_.assign(MAX_PARAMETERS, uint8_t{0});
@@ -1153,11 +1244,13 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
     prepared = true;
     requestMessageThreadMaintenance();
+    diagnostics_.start();
 }
 
 void MorePhiProcessor::releaseResources()
 {
     prepared = false;
+    diagnostics_.stop();
     hostManager.setPlayHead(nullptr);
     hostManagerB_.setPlayHead(nullptr);
     hostManager.releaseResources();
@@ -1420,7 +1513,12 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // Still forward audio through the host if it's loaded
         if (!isBypassed)
             hostManager.processBlock(buffer, midi);
-        autoMasteringEngine_.analyzeBlock(buffer);
+        // ponytail: same throttle as the main path (see 7b).
+        if (++analysisSkipCounter_ >= ANALYSIS_THROTTLE_BLOCKS)
+        {
+            analysisSkipCounter_ = 0;
+            autoMasteringEngine_.analyzeBlock(buffer);
+        }
         return;
     }
 
@@ -1995,7 +2093,14 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
     }
 
     // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools.
-    autoMasteringEngine_.analyzeBlock(buffer);
+    // ponytail: throttle — the analysis runs LUFS+FFT+true-peak+stereo, and the
+    // downstream decision chain only acts every ~30s. Per-block analysis was the
+    // idle-CPU cause of the host-wide lag. RMS tap below uses the same pattern.
+    if (++analysisSkipCounter_ >= ANALYSIS_THROTTLE_BLOCKS)
+    {
+        analysisSkipCounter_ = 0;
+        autoMasteringEngine_.analyzeBlock(buffer);
+    }
 
     // 8) RMS for UI visualization — M-2 FIX: throttle to every N blocks
     if (buffer.getNumChannels() > 0)
@@ -2702,16 +2807,16 @@ void MorePhiProcessor::timerCallback()
         startTimer(50);
     }
 
-    loadCachedLicenseIfNeeded();
-    refreshLicenseIfNeeded();
-    startMCPServerIfNeeded();
+    { MSG_TRACE(diagnostics_, "loadCachedLicenseIfNeeded"); loadCachedLicenseIfNeeded(); }
+    { MSG_TRACE(diagnostics_, "refreshLicenseIfNeeded");   refreshLicenseIfNeeded(); }
+    { MSG_TRACE(diagnostics_, "startMCPServerIfNeeded");   startMCPServerIfNeeded(); }
 
     if (audioDomainConfigDirty_.load(std::memory_order_acquire))
-        reconfigureAudioDomainProcessing();
+    { MSG_TRACE(diagnostics_, "reconfigureAudioDomainProcessing"); reconfigureAudioDomainProcessing(); }
     else if (latencyConfigDirty_.load(std::memory_order_acquire))
-        updateReportedLatency();
+    { MSG_TRACE(diagnostics_, "updateReportedLatency"); updateReportedLatency(); }
 
-    applyPendingFullStateRecall();
+    { MSG_TRACE(diagnostics_, "applyPendingFullStateRecall"); applyPendingFullStateRecall(); }
 
     // Timer fires on the message thread — exactly where we need to load plugins.
     if (!hasPendingPluginLoad_.load(std::memory_order_acquire))

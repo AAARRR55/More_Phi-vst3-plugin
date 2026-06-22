@@ -34,6 +34,7 @@
 #include "Core/OversamplingWrapper.h"
 #include "Core/LatencyManager.h"
 #include "Core/PerformanceProfiler.h"
+#include "Core/MorePhiDiagnostics.h"
 #include "Core/AutoMasteringEngine.h"
 #include "AI/NeuralMasteringController.h"
 #include "AI/SonicMasterAnalysisEngine.h"
@@ -511,6 +512,12 @@ private:
 
     // Performance profiler for CPU spike diagnosis
     PerformanceProfiler profiler_;
+    MorePhiDiagnostics diagnostics_;
+
+public:
+    /** Diagnostic accessor (profiling builds only; otherwise the object is inert). */
+    MorePhiDiagnostics& getDiagnostics() noexcept { return diagnostics_; }
+private:
 
     // Audio-domain morph state
     std::atomic<bool>  audioDomainEnabled_{false};
@@ -561,6 +568,12 @@ private:
     std::vector<float> touchMorphX_;        // Morph X position when touch was detected
     std::vector<float> touchMorphY_;        // Morph Y position when touch was detected
     mutable juce::SpinLock touchStateLock_; // Protects lastApplied_ and touchCooldown_
+    // PERF-BATCH: scratch + dirty bitmap for coalescing the audio-thread command
+    // drain into a single ParameterBridge::applyParameterState call instead of
+    // one setParameterNormalized (acquire+throttle+syscall) per queued command.
+    // Audio thread only; written under touchStateLock_ alongside lastApplied_.
+    std::vector<float> drainScratch_;      // last-write-wins value per param index
+    std::vector<uint8_t> drainTouched_;    // 1 = index written this drain
     static constexpr float TOUCH_THRESHOLD = 0.005f;   // Min delta to detect manual touch
     static constexpr float MORPH_POS_THRESHOLD = 0.01f; // Min morph position change to resume
     // M-6 FIX: Dynamic cooldown — computed in prepareToPlay from sample rate & block size.
@@ -746,6 +759,13 @@ private:
     std::atomic<float> rmsLevel_{0.0f};
     int rmsSkipCounter_ = 0;
     static constexpr int RMS_THROTTLE_BLOCKS = 8;
+
+    // ponytail: throttle the per-block LUFS/FFT/stereo analysis tap. It feeds the
+    // MCP/AI decision chain, which only acts every 30s — running full analysis on
+    // every audio block (750x/s at 64-sample/48k) was the idle-CPU cause of the
+    // host-wide lag. LUFS integrates over time, so ~8-block resolution is fine.
+    int analysisSkipCounter_ = 0;
+    static constexpr int ANALYSIS_THROTTLE_BLOCKS = 8;
 
     // M9 FIX: Output gain smoothing state (audio thread only)
     std::atomic<float> smoothedGain_{1.0f};
