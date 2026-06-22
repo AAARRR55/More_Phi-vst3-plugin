@@ -16,17 +16,42 @@
  *   [10] LoudnessNormalizer       LUFS → target correction gain
  *   [11] MSMatrix::decode         M/S → L/R
  *
- * Intelligence (all on message thread):
+ * Intelligence (timers on the message thread):
  *   - EQParameterTranslator applies genre warm-start to EQ bands 0–7
  *   - ChainPlanExecutor runs a 5-step heuristic rule planner every 30s
  *   - GenreClassifier classifies genre every 30s
  *   - LoudnessNormalizer.updateCorrectionGain() called every 100ms
  *   - MonoCompatibilityChecker checks fold-down every 1s
  *
- * Thread safety:
- *   processBlock() — audio thread, noexcept.
- *   prepare() — message thread only.
- *   All intelligence timers — message thread only.
+ * Thread safety (THREADSWEEP-2026-06):
+ *   - processBlock()       — audio thread, noexcept.
+ *   - analyzeBlock()       — AUDIO thread (called throttled from the host's
+ *                            processBlock in PluginProcessor). Despite the name
+ *                            it is NOT a message-thread path; its meter writes
+ *                            are safe only because LUFSMeter /
+ *                            RealtimeSpectrumAnalyzer / StereoFieldAnalyzer /
+ *                            TruePeakEstimator / MeterWindowAccumulator /
+ *                            GenreClassifier publish their cross-thread outputs
+ *                            via atomic floats or seqlocks. Do NOT add a second
+ *                            analyzeBlock caller on another thread — that would
+ *                            create a two-writer race on the meters' raw state.
+ *   - prepare/reset        — message thread only, and the JUCE contract
+ *                            guarantees the host is NOT calling processBlock /
+ *                            analyzeBlock during them. That mutual exclusion is
+ *                            what makes the non-atomic analysis accumulators
+ *                            below (analysisSumSquares_, analysisSampleCount_,
+ *                            analysisElapsedSeconds_, analysisSamplesSinceWindow
+ *                            Sample_) and sampleRate_/blockSize_ safe: they have
+ *                            a single writer during playback (the audio thread)
+ *                            and are only mutated otherwise by prepare/reset,
+ *                            which run with playback stopped. Atomizing them
+ *                            would be cargo-cult — the host already serializes
+ *                            the access.
+ *   - Intelligence timers  — message thread only.
+ *   - applyValidatedPlan() — message thread only. The SonicMaster analysis
+ *                            thread hops to the message thread via callAsync
+ *                            (SonicMasterAnalysisEngine::applyRamped) before
+ *                            calling it, so DSP setter semantics hold.
  */
 #pragma once
 
@@ -82,9 +107,15 @@ public:
     void processBlock(juce::AudioBuffer<float>& buf) noexcept;
 
     /**
-     * Non-mutating live analysis tap. Updates LUFS, true peak, spectrum, and
-     * stereo-field meters from the supplied buffer without applying mastering
-     * processing or changing the audio.
+     * Live analysis tap: updates LUFS, true peak, spectrum, stereo-field meters
+     * and the genre classifier from the supplied buffer WITHOUT applying
+     * mastering processing or changing the audio.
+     *
+     * THREADSWEEP-2026-06: AUDIO THREAD ONLY. Despite "analyze" in the name this
+     * is called throttled from the host's processBlock (PluginProcessor:1520,
+     * 2102), not from a message-thread timer. Its cross-thread meter reads below
+     * are safe only via the meters' atomic/seqlock publications. A second caller
+     * on any other thread would race the meters' raw (pre-publication) state.
      */
     void analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept;
 
@@ -166,8 +197,15 @@ private:
     juce::AudioBuffer<float> bandBuffers_[MultibandSplitter::kNumBands];
 
     std::atomic<bool> active_ { false };
+    // THREADSWEEP-2026-06: sampleRate_/blockSize_ are written by prepare()
+    // (message thread) and read by updateAnalysisWindow()/analyzeBlock() (audio
+    // thread). Safe only under the JUCE contract that prepare runs with playback
+    // stopped — NOT atomics. If you ever reconfigure the chain while audio is
+    // flowing, gate that path on the audio thread first (or make these atomic).
     double sampleRate_  = 48000.0;
     int    blockSize_   = 512;
+    // Same lifecycle invariant: single audio-thread writer during playback,
+    // mutated by reset()/prepare() only when the host has stopped playback.
     double analysisElapsedSeconds_ = 0.0;
     int    analysisSamplesSinceWindowSample_ = 0;
     double analysisSumSquares_ = 0.0;
