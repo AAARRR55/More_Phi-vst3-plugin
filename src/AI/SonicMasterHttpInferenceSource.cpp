@@ -95,14 +95,22 @@ void SonicMasterHttpInferenceSource::invalidateAvailability() const noexcept
 
 bool SonicMasterHttpInferenceSource::isAvailable() const noexcept
 {
+    // ponytail: pure cache read. MUST NOT do blocking I/O — this is called from
+    // the editor timer on the message thread, and a blocking /health probe to a
+    // dead server stalls the whole UI for ~2s every time the 5s cache expires.
+    // The probe is refreshed by refreshProbe() on a background thread.
+    return cachedAvailable_;
+}
+
+void SonicMasterHttpInferenceSource::refreshProbe() noexcept
+{
     using clock = std::chrono::steady_clock;
     const auto now = clock::now().time_since_epoch().count() / 1000000; // ms
     const int64_t last = lastProbeMs_.load(std::memory_order_acquire);
     if (probeFresh_.load(std::memory_order_acquire) && (now - last) < 5000)
-        return cachedAvailable_;
+        return;
 
-    // Probe /health. Blocking but cheap (localhost, empty body). Wrapped so a
-    // missing/unreachable server reports false rather than throwing.
+    // Probe /health. Blocking — call from a background thread only.
     bool ok = false;
     try
     {
@@ -111,16 +119,15 @@ bool SonicMasterHttpInferenceSource::isAvailable() const noexcept
                               .withConnectionTimeoutMs(800);
         if (auto stream = url.createInputStream(opts))
         {
-            stream->readEntireStreamAsString();  // drain; we only care it connected
+            stream->readEntireStreamAsString();
             ok = true;
         }
     }
     catch (...) { ok = false; }
 
-    cachedAvailable_ = ok;
+    cachedAvailable_.store(ok, std::memory_order_release);
     probeFresh_.store(true, std::memory_order_release);
     lastProbeMs_.store(now, std::memory_order_release);
-    return ok;
 }
 
 bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
@@ -136,7 +143,7 @@ bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
     juce::MemoryBlock body(stereoInterleaved, 2 * kSonicMasterSegmentFrames * sizeof(float));
 
     juce::URL url(baseUrl_ + ":" + std::to_string(port_)
-                  + "/infer?target_lufs=" + juce::String(targetLufs_, 3).toStdString());
+                  + "/infer?target_lufs=" + juce::String(targetLufs_.load(std::memory_order_relaxed), 3).toStdString());
     const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
                           .withConnectionTimeoutMs(10000);
 

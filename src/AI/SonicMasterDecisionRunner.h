@@ -28,8 +28,12 @@ namespace more_phi {
 
 struct SonicMasterSessionHandle; // pimpl — defined in the .cpp
 
-// Stereo sample count the model ingests (~6 s @ 44.1 kHz). Matches
+// Stereo sample count the model ingests (~5.94 s @ 44.1 kHz). Matches
 // MasteringDecisionNet.segment_samples for this checkpoint.
+// AUDIT-7: this window is shorter than the ITU-R BS.1770 LUFS-M 400 ms gate by
+// ~15x and far shorter than Integrated LUFS (whole-program, minutes). Decisions
+// derived from it are at best LUFS-S/short-term, never Integrated. Treat any
+// "integrated loudness" label downstream as mislabeled short-term.
 inline constexpr std::size_t kSonicMasterSegmentFrames = 262138;
 
 // ONNX session wrapper for the waveform->decision contract.

@@ -64,11 +64,14 @@ public:
     // target LUFS is sent per-request by the caller (we expose a setter for the
     // default applied when the caller doesn't override).
     void setEndpoint(std::string baseUrl, int port = 8765);
-    void setTargetLufs(float lufs) noexcept { targetLufs_ = lufs; }
+    void setTargetLufs(float lufs) noexcept { targetLufs_.store(lufs, std::memory_order_relaxed); }
 
-    // Probes /health with a short timeout. Caches the result for ~5 s so the
-    // UI status refresh doesn't spam the server. Thread-safe (atomic).
+    // Pure cache read — safe to call from the message thread (never blocks).
     [[nodiscard]] bool isAvailable() const noexcept override;
+
+    // Probes /health and updates the cache. BLOCKING — call from a background
+    // thread only, never the message thread. Throttled to once per ~5 s.
+    void refreshProbe() noexcept;
 
     // Runs one inference. Blocking (analysis thread only). Returns false on
     // any network/parse error; the analysis engine then skips the cycle.
@@ -82,7 +85,7 @@ public:
 private:
     std::string baseUrl_ { "http://127.0.0.1" };
     int  port_  = 8765;
-    float targetLufs_ = -14.0f;
+    std::atomic<float> targetLufs_ { -14.0f };   // AUDIT-1: written by analysis thread, read in infer()
     mutable std::atomic<int64_t> lastProbeMs_   { 0 };     // cache window (ms)
     mutable std::atomic<bool>    cachedAvailable_{ false };
     mutable std::atomic<bool>    probeFresh_     { false };

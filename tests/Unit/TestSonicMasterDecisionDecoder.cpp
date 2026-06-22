@@ -73,6 +73,26 @@ TEST_CASE("decodeSonicMasterDecision maps target LUFS into loudness band",
     CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
 }
 
+TEST_CASE("decodeSonicMasterDecision clamps LUFS to engine's [-23,-8] range",
+          "[SonicMaster][Decoder]")
+{
+    // AUDIT-4 regression: an extreme target of -6 LUFS is beyond the engine's
+    // output clamp. The decoder must clamp it to -8 (value = 1.0) so the
+    // round-trip math matches what applyValidatedPlan actually delivers — not
+    // value=1.33, which would silently drop to -8 and lie to telemetry.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[more_phi::kSonicMasterTargetLufsIdx] = -6.0f;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(1.0f, 1e-4f));
+
+    decision[more_phi::kSonicMasterTargetLufsIdx] = -30.0f;
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    // -23 -> (-23+14)/6 = -1.5
+    CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(-1.5f, 1e-4f));
+}
+
 TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band (telemetry, mask off)",
           "[SonicMaster][Decoder]")
 {
@@ -107,9 +127,32 @@ TEST_CASE("decodeSonicMasterDecision fills the 3-band compressor block",
     REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
 
     REQUIRE(plan.appliedMask.dynamics);
-    // applyValidatedPlan maps dynamics[band] = value -> threshold = -20 + value*8,
-    // ratio = 2.5 + value*1.5. So threshold=-20 -> value 0, ratio=2.5 -> value 0.
+    // AUDIT-3: paired layout — dynamics[2*band]=threshold value, [2*band+1]=ratio value.
+    // threshold=-20 -> 0.0, ratio=2.5 -> 0.0.
     CHECK_THAT(plan.projectedTargets.dynamics[0], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
+    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
+}
+
+TEST_CASE("decodeSonicMasterDecision decodes threshold and ratio independently",
+          "[SonicMaster][Decoder]")
+{
+    // AUDIT-3 regression: a high threshold + LOW ratio must be expressible.
+    // Old code coupled them through one scalar; this would have forced ratio up.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[more_phi::kSonicMasterCompOffset + 0] = -12.0f;  // high threshold
+    decision[more_phi::kSonicMasterCompOffset + 1] = 1.5f;    // gentle ratio
+    decision[more_phi::kSonicMasterCompOffset + 6] = -16.0f;  // band 1 threshold
+    decision[more_phi::kSonicMasterCompOffset + 7] = 4.0f;    // band 1 ratio
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+
+    // Band 0: threshold -12 -> (-12+20)/8 = 1.0; ratio 1.5 -> (1.5-2.5)/1.5 = -0.667
+    CHECK_THAT(plan.projectedTargets.dynamics[0], Catch::Matchers::WithinAbs(1.0f, 1e-3f));
+    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(-0.6667f, 1e-3f));
+    // Band 1: threshold -16 -> 0.5; ratio 4.0 -> 1.0
+    CHECK_THAT(plan.projectedTargets.dynamics[2], Catch::Matchers::WithinAbs(0.5f, 1e-3f));
+    CHECK_THAT(plan.projectedTargets.dynamics[3], Catch::Matchers::WithinAbs(1.0f, 1e-3f));
 }
 
 TEST_CASE("decodeSonicMasterDecision coerces NaN to neutral without throwing",

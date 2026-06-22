@@ -29,6 +29,12 @@ float peakAbs(const float* a, std::size_t n) noexcept
 
 // Linear resample (matches sonicmaster_engine.api.preprocess_audio so the
 // model sees input consistent with how it was validated offline).
+// ponytail: linear interpolation resampling — introduces mirror-image aliasing
+// above ~0.4 * min(Nyquist_src, Nyquist_dst). At 96 kHz hosts -> 44.1 kHz this
+// contaminates content above ~9 kHz. Intentional and in-distribution: the
+// model was trained on the same aliased preprocessing, so analysis is
+// self-consistent. A polyphase FIR would de-alias but change the model's input
+// distribution. Upgrade path: re-preprocess + retrain, not a runtime swap.
 void resampleLinear(const float* src, std::size_t srcLen, std::size_t dstLen, float* dst) noexcept
 {
     if (srcLen == 0 || dstLen == 0) return;
@@ -135,6 +141,12 @@ void SonicMasterAnalysisEngine::analysisLoop() noexcept
         nextDeadline += std::chrono::milliseconds(
             static_cast<int>(config_.analysisIntervalSeconds * 1000.0));
 
+        // ponytail: keep the availability cache warm on this background thread so
+        // the editor's isAvailable() (message thread) never blocks on a /health
+        // probe to a dead server. Throttled internally to ~5 s inside refreshProbe.
+        if (source_ != nullptr)
+            source_->refreshProbe();
+
         if (!active_.load(std::memory_order_relaxed)) continue;
         runCycle();
     }
@@ -155,6 +167,13 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
         status_.store(Status::Disabled, std::memory_order_release);
         return false;
     }
+
+    // AUDIT-1: serialize the capture/infer scratch path. runCycle runs on the
+    // analysis thread; requestDecisionNow runs on the message thread (MCP tool
+    // sonicmaster_decision). Both touch captureL_/captureR_/modelL_/modelR_/
+    // interleaved_/decision_. Without this lock, concurrent on-demand + cycle
+    // inferences corrupt each other's input nondeterministically.
+    std::lock_guard<std::mutex> inferLock(inferMutex_);
 
     const std::size_t hostFrames = captureL_.size();
     const std::size_t got = ring_->readNewest(hostFrames, captureL_.data(), captureR_.data());
@@ -177,6 +196,12 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     }
 
     // Peak-normalize to -1 dBFS so the model sees a consistent operating level.
+    // AUDIT-7: this DESTROYS absolute loudness information — a -23 LUFS track
+    // and a -8 LUFS track both arrive at the model at -1 dBFS peak. The model
+    // cannot infer absolute LUFS from the waveform; the only loudness signal
+    // it gets is the target_lufs param the CALLER supplies. Do NOT treat any
+    // model "loudness analysis" output as a measurement of the input — it is a
+    // function of the caller's target. Consistent with training preprocessing.
     const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
                                 peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
     const float gain = peak > 1e-9f ? (0.891f / peak) : 1.0f; // 10^(-1/20) ~ 0.891
@@ -245,6 +270,9 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     // (d) returns the decoded plan + raw decision for the caller to act on.
     if (ring_ == nullptr || source_ == nullptr || !isAvailable())
         return false;
+
+    // AUDIT-1: see runCycle() — serialize against the analysis thread's scratch use.
+    std::lock_guard<std::mutex> inferLock(inferMutex_);
 
     const std::size_t hostFrames = captureL_.size();
     const std::size_t got = ring_->readNewest(hostFrames, captureL_.data(), captureR_.data());

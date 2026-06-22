@@ -23,6 +23,17 @@ inline constexpr std::size_t kSonicMasterCompGateIdx   = 10;
 inline constexpr std::size_t kSonicMasterCompOffset    = 11; // 18 floats: 3 x (thr,ratio,atk,rel,makeup,knee)
 inline constexpr std::size_t kSonicMasterCompBandCount = 3;
 inline constexpr std::size_t kSonicMasterCompBandWidth = 6;
+
+// AUDIT-2/3: the model emits these counts; AutoMasteringEngine applies ONLY
+// these many bands from a SonicMaster plan and leaves the rest to the genre
+// translator / heuristic warm-start. (The engine's own DSP modules expose more
+// bands — 32 EQ, 4 dynamics, 4 stereo regions — but the model decides fewer.)
+inline constexpr std::size_t kSonicMasterStereoRegionCount = 2;  // decision[35..36] = width region 0,1
+
+// AUDIT-3: dynamics slot layout in projectedTargets.dynamics.
+//   dynamics[2*band + 0] = threshold value (forward map: -20 + v*8 dB)
+//   dynamics[2*band + 1] = ratio value     (forward map:  2.5 + v*1.5)
+inline constexpr std::size_t kSonicMasterDynamicsSlotsPerBand = 2;
 inline constexpr std::size_t kSonicMasterExciterGateIdx = 29;
 inline constexpr std::size_t kSonicMasterSatOffset     = 30; // 4 floats: 2 x (drive,mix)
 inline constexpr std::size_t kSonicMasterStereoGateIdx = 34;

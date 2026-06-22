@@ -2,6 +2,7 @@
  * More-Phi — Core/AutoMasteringEngine.cpp
  */
 #include "AutoMasteringEngine.h"
+#include "AI/SonicMasterDecisionDecoder.h"   // AUDIT-2/3: model band counts + dynamics slot layout
 #include <algorithm>
 #include <cmath>
 
@@ -234,6 +235,10 @@ void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noex
     analysisTruePeak_.processBlock(buf);
     spectrumAnalyzer_.processBlock(buf);
     stereoFieldAnalyzer_.processBlock(buf);
+    // ponytail: feed the genre classifier here (the only place we have a full
+    // audio buffer on a non-RT message-thread path). Without this the classifier
+    // starves and the whole AI decision chain is stuck on the default genre.
+    genreClassifier_.feedAudio(buf, sampleRate_);
     updateAnalysisWindow(buf);
 }
 
@@ -360,7 +365,12 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
 
     if (plan.appliedMask.eq)
     {
-        for (int band = 0; band < AdaptiveEQ::kNumBands; ++band)
+        // AUDIT-2: apply ONLY the EQ bands the SonicMaster model decides on
+        // (kSonicMasterEqGainCount = 8). The AdaptiveEQ exposes 32 bands; the
+        // other 24 stay on the genre translator's warm-start. Previously the
+        // loop ran to kNumBands and force-wrote bands 8..31 to 0 dB, wiping the
+        // genre character (warmth/presence) the translator had set.
+        for (int band = 0; band < static_cast<int>(kSonicMasterEqGainCount); ++band)
             eq_.setBandGain(band, std::clamp(plan.projectedTargets.eq[static_cast<std::size_t>(band)]
                                              * AdaptiveEQ::kMaxGainDB,
                                              -AdaptiveEQ::kMaxGainDB,
@@ -369,19 +379,26 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
 
     if (plan.appliedMask.dynamics)
     {
-        for (int band = 0; band < MultibandDynamicsProcessor::kNumBands; ++band)
+        // AUDIT-2/3: apply only the 3 model bands; band 3 (High) stays on the
+        // heuristic warm-start. Read threshold and ratio independently from the
+        // paired slots — no more threshold-derives-ratio coupling.
+        for (int band = 0; band < static_cast<int>(kSonicMasterCompBandCount); ++band)
         {
             auto params = dynamics_.getBandParams(band);
-            const auto value = plan.projectedTargets.dynamics[static_cast<std::size_t>(band)];
-            params.thresholdDB = std::clamp(-20.0f + value * 8.0f, -40.0f, -6.0f);
-            params.ratio = std::clamp(2.5f + value * 1.5f, 1.0f, 6.0f);
+            const std::size_t base = static_cast<std::size_t>(band) * kSonicMasterDynamicsSlotsPerBand;
+            const auto thrValue = plan.projectedTargets.dynamics[base + 0];
+            const auto ratValue = plan.projectedTargets.dynamics[base + 1];
+            params.thresholdDB = std::clamp(-20.0f + thrValue * 8.0f, -40.0f, -6.0f);
+            params.ratio = std::clamp(2.5f + ratValue * 1.5f, 1.0f, 6.0f);
             dynamics_.setBandParams(band, params);
         }
     }
 
     if (plan.appliedMask.stereo)
     {
-        for (int region = 0; region < StereoImager::kNumRegions; ++region)
+        // AUDIT-2: apply only the 2 model width regions; the other 2 regions
+        // (Mid/High) stay on the genre translator / mono-checker callback.
+        for (int region = 0; region < static_cast<int>(kSonicMasterStereoRegionCount); ++region)
         {
             const auto value = plan.projectedTargets.stereo[static_cast<std::size_t>(region)];
             stereo_.setWidth(region, std::clamp(1.0f + value, 0.0f, 2.0f));

@@ -52,6 +52,10 @@ class ISonicMasterInferenceSource
 public:
     virtual ~ISonicMasterInferenceSource() = default;
     [[nodiscard]] virtual bool isAvailable() const noexcept = 0;
+    // Refresh any cached availability from a background thread. Default no-op;
+    // sources whose isAvailable() reads a cache should override this and do the
+    // (possibly blocking) work here, never on the message thread.
+    virtual void refreshProbe() noexcept {}
     virtual bool infer(const float* stereoInterleaved, float* outDecision,
                        std::size_t outCapacity) noexcept = 0;
     // Set the mastering target LUFS the next infer() will request. The HTTP
@@ -169,7 +173,8 @@ private:
     NeuralMasteringSafetyPolicy safetyPolicy_ {};
 
     std::thread thread_;
-    std::mutex mutex_;
+    std::mutex mutex_;          // guards the cv wait below
+    std::mutex inferMutex_;     // AUDIT-1: serializes runCycle vs requestDecisionNow scratch use
     std::condition_variable cv_;
     std::atomic<bool> active_ { false };
     std::atomic<bool> stopRequested_ { false };
