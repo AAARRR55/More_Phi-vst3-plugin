@@ -478,7 +478,16 @@ TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[process
     juce::AudioBuffer<float> buffer(2, 512);
     juce::MidiBuffer midi;
 
-    for (int block = 0; block < 48; ++block)
+    // PERF-THROTTLE: processBlock throttles AutoMasteringEngine::analyzeBlock to
+    // every ANALYSIS_THROTTLE_BLOCKS (8) blocks, and LUFS needs ≥4 committed
+    // 100 ms blocks (historyCount_ >= 4) before it publishes an integrated
+    // value. 48 blocks gave only 6 throttled analyzeBlock calls → 0 LUFS commits
+    // → getLUFSIntegrated() stayed -inf. Feed enough to cross all gates with
+    // margin: 320 blocks → 40 analyzeBlock calls → 20480 samples → ≥4 LUFS
+    // commits (each 4800 samples) so integrated, momentary (≥4) and snapshots
+    // (≥1) all populate.
+    constexpr int kBlocks = 320;
+    for (int block = 0; block < kBlocks; ++block)
     {
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
