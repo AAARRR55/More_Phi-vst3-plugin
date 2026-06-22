@@ -20,4 +20,7 @@ async function main() {
   console.log("License key:", key, "Hash:", licenseKeyHash(key));
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

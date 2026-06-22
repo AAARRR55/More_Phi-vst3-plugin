@@ -22,7 +22,7 @@
     "db:reset:test": "cross-env NODE_ENV=test dotenv -e .env.test -- prisma migrate reset --force",
     "test": "cross-env NODE_ENV=test vitest run",
     "test:watch": "cross-env NODE_ENV=test vitest",
-    "lint": "eslint src test prisma --ext .ts",
+    "lint": "eslint src test prisma scripts --ext .ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma/**/*.ts\""
   },
   "dependencies": {
