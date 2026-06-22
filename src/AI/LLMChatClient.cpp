@@ -265,10 +265,19 @@ const char* const LLMChatClient::kSystemPrompt =
     "character). This is your PRIMARY mastering source.\n"
     "- sonicmaster_decision does NOT apply anything — it returns the decision for "
     "you to act on. Summarize it to the user (e.g. \"the model suggests cutting "
-    "10 kHz by 4.6 dB and targeting -14 LUFS\"), then either call apply_mastering_plan "
-    "to apply the built-in chain, or map the decision onto the hosted plugin's "
-    "parameters with set_parameters_batch. Ask the user before applying if the "
-    "moves are large (>6 dB EQ, or >3 dB loudness change).\n"
+    "10 kHz by 4.6 dB, and chose a -14 LUFS mastering target\"), then either call "
+    "apply_mastering_plan to apply the built-in chain, or map the decision onto "
+    "the hosted plugin's parameters with set_parameters_batch. Ask the user before "
+    "applying if the moves are large (>6 dB EQ, or >3 dB loudness change).\n"
+    "- AUDIT-7 / labeling: the decision's `target_lufs` is the MASTERING TARGET the "
+    "model picked for the caller-supplied target_lufs input — NOT a measurement of "
+    "the input audio's loudness. The model sees only the last ~6s, peak-normalized "
+    "to -1 dBFS, so it cannot know the input's absolute LUFS. Describe target_lufs "
+    "to the user as a chosen goal (\"mastering toward -14 LUFS\"), never as \"the "
+    "track measures -14 LUFS.\" For an actual loudness measurement of the track, "
+    "use the analyze_audio / ozone.track.analyze tools (real ITU-R BS.1770 meter), "
+    "not sonicmaster_decision. Likewise, frame EQ/dynamics moves as the model's "
+    "recommendation on a ~6s window, not a whole-track verdict.\n"
     "- sonicmaster_decision requires the SonicMaster inference server running on "
     "127.0.0.1:8765. If it returns success=false with available=false, tell the user "
     "to start it (`python tools/inference_server/server.py --package <package>`); if "
@@ -1180,54 +1189,92 @@ void LLMChatClient::chat(const LLMSettings& settings,
                 break;
             }
 
-            // Build request body
+            // Build request body. The model is asked with tools first; if it
+            // returns an empty 200 (no text AND no tool calls) we retry the
+            // SAME turn once WITHOUT tools. That recovers two common NVIDIA NIM
+            // failure modes that both surface as an empty body: (a) a model that
+            // doesn't support function calling going silent when tool_choice=auto
+            // is forced, and (b) a reasoning model exhausting its token budget
+            // against the tools array before emitting any visible content. The
+            // toolless retry lets either model answer in plain text.
             const std::string messagesStr = messages.dump();
-            const juce::String body =
-                isAnthropic
-                    ? buildAnthropicRequestBody(providerSettings, model, messagesStr, toolsArray)
-                    : buildOpenAIRequestBody   (providerSettings, model, messagesStr, toolsArray);
-
-            if (body == "{}")
+            ParsedResponse parsed;
+            for (int withTools = 1; withTools >= 0; --withTools)
             {
-                errorText = "Failed to build LLM request.";
+                const json& toolsForRequest = (withTools == 1) ? toolsArray : json::array();
+                const juce::String body =
+                    isAnthropic
+                        ? buildAnthropicRequestBody(providerSettings, model, messagesStr, toolsForRequest)
+                        : buildOpenAIRequestBody   (providerSettings, model, messagesStr, toolsForRequest);
+
+                if (body == "{}")
+                {
+                    errorText = "Failed to build LLM request.";
+                    break;
+                }
+
+                // Execute HTTP request
+                const auto request  = buildHttpRequest(providerId, providerSettings, body);
+                const auto response = httpClient_->execute(request);
+                if (response.statusCode <= 0)
+                {
+                    // Transport-layer failure (timeout, DNS, TLS, connection refused, etc.).
+                    // Surface a friendly, actionable message FIRST and append the raw
+                    // platform detail (e.g. "WinHTTP receive response failed with error 12002")
+                    // in parentheses so users have something to share when reporting issues.
+                    const juce::String friendly = (providerId == LLMProviderId::NVIDIA)
+                        ? juce::String("NVIDIA chat request failed at the transport layer. "
+                                       "The selected NVIDIA model may be cold-starting, may not support "
+                                       "tool/function calling, or your NVIDIA account may not have Public "
+                                       "API Endpoints access for this model. Try Fetch Models and pick a "
+                                       "tool-capable model (e.g. meta/llama-3.1-70b-instruct, "
+                                       "meta/llama-3.1-405b-instruct, or nv-mistralai/mistral-nemo-12b-instruct), "
+                                       "then retry.")
+                        : juce::String("Chat request failed at the transport layer (network/TLS/timeout). "
+                                       "Check your internet connection, base URL, API key, and any "
+                                       "corporate proxy, then retry.");
+                    const juce::String detail = response.body.trim();
+                    errorText = detail.isNotEmpty()
+                        ? friendly + " (" + detail + ")"
+                        : friendly;
+                    break;
+                }
+
+                parsed = isAnthropic
+                             ? parseAnthropicResponse(response.statusCode, response.body)
+                             : parseOpenAIResponse(response.statusCode, response.body);
+
+                // Hard error (auth, HTTP 4xx/5xx, malformed body) — never retry.
+                // Detected by an error message that is NOT the empty-200 phrase.
+                if (parsed.errorMessage.isNotEmpty()
+                    && !parsed.errorMessage.contains("no visible content"))
+                {
+                    errorText = parsed.errorMessage;
+                    break;
+                }
+
+                // Success (has text and/or tool calls) — stop retrying.
+                if (parsed.errorMessage.isEmpty())
+                    break;
+
+                // Empty 200. Retry without tools if we just tried with them;
+                // otherwise both attempts failed and we surface the error below.
+                if (withTools == 1 && !toolsArray.empty())
+                    continue;
                 break;
             }
 
-            // Execute HTTP request
-            const auto request  = buildHttpRequest(providerId, providerSettings, body);
-            const auto response = httpClient_->execute(request);
-            if (response.statusCode <= 0)
-            {
-                // Transport-layer failure (timeout, DNS, TLS, connection refused, etc.).
-                // Surface a friendly, actionable message FIRST and append the raw
-                // platform detail (e.g. "WinHTTP receive response failed with error 12002")
-                // in parentheses so users have something to share when reporting issues.
-                const juce::String friendly = (providerId == LLMProviderId::NVIDIA)
-                    ? juce::String("NVIDIA chat request failed at the transport layer. "
-                                   "The selected NVIDIA model may be cold-starting, may not support "
-                                   "tool/function calling, or your NVIDIA account may not have Public "
-                                   "API Endpoints access for this model. Try Fetch Models and pick a "
-                                   "tool-capable model (e.g. meta/llama-3.1-70b-instruct, "
-                                   "meta/llama-3.1-405b-instruct, or nv-mistralai/mistral-nemo-12b-instruct), "
-                                   "then retry.")
-                    : juce::String("Chat request failed at the transport layer (network/TLS/timeout). "
-                                   "Check your internet connection, base URL, API key, and any "
-                                   "corporate proxy, then retry.");
-                const juce::String detail = response.body.trim();
-                errorText = detail.isNotEmpty()
-                    ? friendly + " (" + detail + ")"
-                    : friendly;
+            if (!errorText.isEmpty())
                 break;
-            }
 
-            // Parse response
-            const auto parsed = isAnthropic
-                                     ? parseAnthropicResponse(response.statusCode, response.body)
-                                     : parseOpenAIResponse(response.statusCode, response.body);
-
-            if (!parsed.errorMessage.isEmpty())
+            if (parsed.errorMessage.isNotEmpty())
             {
-                errorText = parsed.errorMessage;
+                // Both the with-tools and toolless attempts came back empty.
+                // Annotate the original message with the active model so the
+                // user can act on it (raise max_tokens for reasoning models, or
+                // pick a different model in LLM Settings).
+                errorText = parsed.errorMessage + " (active model: "
+                          + (model.isEmpty() ? juce::String("<none>") : model) + ")";
                 break;
             }
 
