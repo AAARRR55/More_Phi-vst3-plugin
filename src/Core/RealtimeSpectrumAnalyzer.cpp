@@ -37,9 +37,10 @@ void RealtimeSpectrumAnalyzer::prepare(double sampleRate, int /*maxBlockSize*/)
     window_.assign(static_cast<size_t>(fftSize_), 0.0f);
     inputBuffer_.assign(static_cast<size_t>(fftSize_), 0.0f);
     linearFrame_.assign(static_cast<size_t>(fftSize_), 0.0f);
+    rawFrame_.assign(static_cast<size_t>(fftSize_), 0.0f);
     fftScratch_.assign(static_cast<size_t>(fftSize_ * 2), 0.0f);
     rawMagnitude_.assign(static_cast<size_t>(numBins_), 0.0f);
-    previousMagnitude_.assign(static_cast<size_t>(numBins_), 0.0f);
+    previousMagnitudeDb_.assign(static_cast<size_t>(numBins_), kMinDB);
     computeHannWindow();
     reset();
 }
@@ -48,9 +49,10 @@ void RealtimeSpectrumAnalyzer::reset() noexcept
 {
     std::fill(inputBuffer_.begin(), inputBuffer_.end(), 0.0f);
     std::fill(linearFrame_.begin(), linearFrame_.end(), 0.0f);
+    std::fill(rawFrame_.begin(), rawFrame_.end(), 0.0f);
     std::fill(fftScratch_.begin(), fftScratch_.end(), 0.0f);
     std::fill(rawMagnitude_.begin(), rawMagnitude_.end(), 0.0f);
-    std::fill(previousMagnitude_.begin(), previousMagnitude_.end(), 0.0f);
+    std::fill(previousMagnitudeDb_.begin(), previousMagnitudeDb_.end(), kMinDB);
 
     writePos_ = 0;
     hopCounter_ = 0;
@@ -119,10 +121,14 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     // Previously samples were packed contiguously (scratch[i]=x[i]) which JUCE's
     // performRealOnlyForwardTransform interprets as x[0]=real[0], x[1]=imag[0],
     // x[2]=real[1], ... — corrupting the entire spectrum from bin 0 upward.
+    // AUDIT-FIX (M2): also keep an UN-WINDOWED copy (rawFrame_) so peak/RMS/crest
+    // are measured on the true signal, not the Hann-attenuated frame.
     for (int i = 0; i < fftSize_; ++i)
     {
         const int src = (writePos_ + i) % fftSize_;
-        const float sample = inputBuffer_[static_cast<size_t>(src)] * window_[static_cast<size_t>(i)];
+        const float raw = inputBuffer_[static_cast<size_t>(src)];
+        rawFrame_[static_cast<size_t>(i)] = raw;
+        const float sample = raw * window_[static_cast<size_t>(i)];
         linearFrame_[static_cast<size_t>(i)] = sample;
         fftScratch_[static_cast<size_t>(i * 2)]     = sample;   // real
         fftScratch_[static_cast<size_t>(i * 2 + 1)] = 0.0f;     // imag = 0 (purely real input)
@@ -141,23 +147,26 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     float energySum = 0.0f;
     float weightedFreqSum = 0.0f;
     float fluxSum = 0.0f;
+    // AUDIT-FIX (M2): peak / RMS computed over the UN-WINDOWED raw frame. The
+    // previous code used linearFrame_ (= raw * Hann), which biases the reported
+    // peak down by up to -6 dB whenever the true peak does not sit at the
+    // window centre, and skews RMS by the window's mean gain.
     float peak = 0.0f;
-    float rmsSum = 0.0f;
+    double rmsSum = 0.0;
 
     for (int i = 0; i < fftSize_; ++i)
     {
-        const float s = linearFrame_[static_cast<size_t>(i)];
-        peak = std::max(peak, std::abs(s));
-        rmsSum += s * s;
+        const float s = rawFrame_[static_cast<size_t>(i)];
+        const float a = std::abs(s);
+        if (a > peak) peak = a;
+        rmsSum += static_cast<double>(s) * static_cast<double>(s);
     }
 
+    int fluxCount = 0;
     for (int bin = 0; bin < numBins_; ++bin)
     {
-        float real = 0.0f;
-        float imag = 0.0f;
-
-        real = fftScratch_[static_cast<size_t>(bin * 2)];
-        imag = fftScratch_[static_cast<size_t>(bin * 2 + 1)];
+        const float real = fftScratch_[static_cast<size_t>(bin * 2)];
+        const float imag = fftScratch_[static_cast<size_t>(bin * 2 + 1)];
 
         const float mag = std::sqrt(real * real + imag * imag) / static_cast<float>(fftSize_);
         const float energy = mag * mag;
@@ -166,16 +175,30 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
         energySum += energy;
         weightedFreqSum += freq * energy;
 
-        const float delta = mag - previousMagnitude_[static_cast<size_t>(bin)];
-        if (delta > 0.0f)
-            fluxSum += delta * delta;
+        // AUDIT-FIX (H1): spectral flux in the dB domain, one-sided (onset-only).
+        // The previous linear-magnitude form scaled 1/N with FFT size and was
+        // level-dependent — a louder signal reported higher flux for an identical
+        // spectral-change rate. dB-domain flux is level-invariant and matches the
+        // onset-detection convention. Only positive deltas (rising energy) count.
+        const float magDb = amplitudeToDB(mag);
+        const float deltaDb = magDb - previousMagnitudeDb_[static_cast<size_t>(bin)];
+        if (deltaDb > 0.0f)
+        {
+            fluxSum += deltaDb * deltaDb;
+            ++fluxCount;
+        }
     }
 
     snapshot.spectralCentroid = energySum > kEps ? weightedFreqSum / energySum : 0.0f;
-    snapshot.spectralFlux = std::sqrt(fluxSum / static_cast<float>(std::max(1, numBins_)));
+    // RMS-of-the-one-sided-dB-deltas: divide by the number of bins that actually
+    // contributed a positive delta (not by numBins_, which would dilute it by the
+    // many stationary bins). Yields a meaningful, level-invariant flux magnitude.
+    snapshot.spectralFlux = fluxCount > 0
+        ? std::sqrt(fluxSum / static_cast<float>(fluxCount))
+        : 0.0f;
 
-    const float rms = std::sqrt(rmsSum / static_cast<float>(std::max(1, fftSize_)));
-    snapshot.crestFactor = rms > kEps ? peak / rms : 0.0f;
+    const double rms = std::sqrt(rmsSum / static_cast<double>(std::max(1, fftSize_)));
+    snapshot.crestFactor = rms > kEps ? peak / static_cast<float>(rms) : 0.0f;
 
     const float rolloffTarget = energySum * 0.85f;
     float cumulative = 0.0f;
@@ -231,7 +254,12 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
         ? (static_cast<float>(regressionCount) * sumXY - sumX * sumY) / denom
         : 0.0f;
 
-    std::copy(rawMagnitude_.begin(), rawMagnitude_.end(), previousMagnitude_.begin());
+    // AUDIT-FIX (H1): persist the dB-domain magnitudes for next frame's flux
+    // delta. The previous code stored linear magnitudes and differenced those,
+    // which coupled flux to signal level; now both sides of the delta are in dB.
+    for (int bin = 0; bin < numBins_; ++bin)
+        previousMagnitudeDb_[static_cast<size_t>(bin)] =
+            amplitudeToDB(rawMagnitude_[static_cast<size_t>(bin)]);
     publishSnapshot(snapshot);
 }
 

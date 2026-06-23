@@ -17,6 +17,11 @@ MorphPad::MorphPad(MorePhiProcessor& processor)
     // Initialize trail buffer
     trailBuffer_.fill(juce::Point<float>{0.5f, 0.5f});
     showGrid_ = true;  // Enable grid by default (Stitch design)
+    setTooltip(
+        "XY Morph Pad: drag the cursor to morph between snapshot positions arranged "
+        "around the clock face. Click a numbered dot to recall a snapshot. "
+        "Right-click or double-click to capture the current sound to a slot. "
+        "The trail shows recent cursor movement.");
     startTimerHz(30);   // 30 FPS for smooth animation
 }
 
@@ -144,6 +149,14 @@ void MorphPad::timerCallback()
         needsRepaint_ = false;
         repaint();
     }
+
+    // Flash message countdown
+    if (flashTicks_ > 0)
+    {
+        --flashTicks_;
+        if (flashTicks_ == 0)
+            repaint();  // clear the flash
+    }
 }
 
 // OPTIMIZATION: Ring buffer implementation - zero allocations
@@ -190,6 +203,8 @@ int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
 void MorphPad::captureSnapshotAtSlot(int slot)
 {
     proc_.captureSnapshotToSlot(slot, true);
+    flashMessage_ = "Captured to slot " + juce::String(slot + 1);
+    flashTicks_ = 90;
     repaint();
 }
 
@@ -290,7 +305,18 @@ void MorphPad::paint(juce::Graphics& g)
 
         // Node ring
         g.setColour(occupied ? cyanBright() : border());
-        g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+        if (occupied)
+            g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+        else
+        {
+            // Dashed outline for empty slots — shape+colour distinction for accessibility
+            const float dashLen[] = { 2.0f, 2.5f };
+            juce::Path dashedCircle;
+            dashedCircle.addEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+            juce::PathStrokeType stroke(1.0f);
+            stroke.createDashedStroke(dashedCircle, dashedCircle, dashLen, 2);
+            g.strokePath(dashedCircle, stroke);
+        }
 
         // Slot number centered inside the node
         g.setColour(occupied ? cyanBright() : textSlot());
@@ -428,6 +454,19 @@ void MorphPad::paint(juce::Graphics& g)
     g.drawText(juce::String(sourceNames[srcIdx]) + " \u00B7 " + juce::String(physNames[physIdx]),
                bounds.toNearestInt().withHeight(20).translated(8, 4),
                juce::Justification::centredLeft);
+
+    // ── Flash message (capture/recall feedback) ────────────────────────────────
+    if (flashTicks_ > 0 && flashMessage_.isNotEmpty())
+    {
+        float flashAlpha = flashTicks_ > 60 ? 1.0f
+                         : static_cast<float>(flashTicks_) / 60.0f;  // fade to zero
+        float flashY = bounds.getBottom() - 28.0f;
+        g.setColour(green().withAlpha(flashAlpha));
+        g.setFont(juce::Font(juce::jlimit(10.0f, 13.0f, bounds.getHeight() * 0.07f), juce::Font::bold));
+        g.drawText(flashMessage_,
+                   juce::Rectangle<float>(bounds.getX(), flashY, bounds.getWidth(), 20.0f),
+                   juce::Justification::centred);
+    }
 }
 
 void MorphPad::mouseDown(const juce::MouseEvent& e)

@@ -39,7 +39,10 @@ void LoudnessNormalizer::updateCorrectionGain() noexcept
     if (measuredLUFS <= -200.0f)
         return;
 
-    const float target = targetLUFS_.load(std::memory_order_relaxed);
+    // AUDIT-FIX (M3): subtract the target margin so the limiter has headroom.
+    // Effective target = targetLUFS - margin. Default margin 0.0 => unchanged.
+    const float target = targetLUFS_.load(std::memory_order_relaxed)
+                       - targetMarginLU_.load(std::memory_order_relaxed);
     const float corrDB = std::clamp(target - measuredLUFS,
                                     kMinCorrectionDB,
                                     kMaxCorrectionDB);

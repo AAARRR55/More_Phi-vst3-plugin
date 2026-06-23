@@ -17,6 +17,9 @@ PluginBrowserPanel::PluginBrowserPanel(MorePhiProcessor& proc)
     loadBtn_.addListener(this);
     showBtn_.addListener(this);
     captureBtn_.addListener(this);
+    captureBtn_.setTooltip(
+        "Capture: saves the current state of all hosted plugin parameters "
+        "to the next empty snapshot slot on the MorphPad clock face.");
 
     showBtn_.setEnabled(false);
     captureBtn_.setEnabled(false);

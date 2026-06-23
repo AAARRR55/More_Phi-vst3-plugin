@@ -1949,7 +1949,7 @@ static const ToolDefinition kCoreTools[] = {
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Requires the SonicMaster inference server running on 127.0.0.1:8765 (see tools/inference_server/README.md). Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (echoing the caller-supplied target_lufs param), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use analyze_audio for a real ITU-R BS.1770 loudness reading. NOTE (application target, AUDIT-FIX-4): the neural mastering decision is applied to More-Phi's INTERNAL mastering chain (AutoMasteringEngine: 4-band comp, 32-band EQ, stereo imager, true-peak limiter), NOT to the hosted Ozone plugin. The hosted plugin is driven separately via ozone.audit_parameters + the heuristic apply_mastering_plan path. Do not tell the user the AI 'masters through Ozone' — it masters the internal chain in series ahead of whatever the user has loaded.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6}}})"},
+    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses ONNX in-process inference when available; falls back to the local Python HTTP inference server at 127.0.0.1:8765 (see tools/inference_server/README.md). Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (echoing the caller-supplied target_lufs param), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use analyze_audio for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response now includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, and mid-correlation from the engine's live meters. These are MEASUREMENTS (not model estimates) — use them to distinguish input loudness from the model's target_lufs. NOTE (application target, AUDIT-FIX-4): the neural mastering decision is applied to More-Phi's INTERNAL mastering chain (AutoMasteringEngine: 4-band comp, 32-band EQ, stereo imager, true-peak limiter), NOT to the hosted Ozone plugin. The hosted plugin is driven separately via ozone.audit_parameters + the heuristic apply_mastering_plan path. Do not tell the user the AI 'masters through Ozone' — it masters the internal chain in series ahead of whatever the user has loaded.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6}}})"},
     {"izotope_ipc_attach", "Attach read-only to a named iZotope IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
     {"izotope_ipc_detach", "Detach from the currently mapped iZotope IPC segment.", R"({"type":"object","properties":{}})"},
     {"izotope_ipc_status", "Report iZotope IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
@@ -5730,6 +5730,22 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
 {
     const float targetLufs = static_cast<float>(params.getProperty("target_lufs", -14.0));
 
+    // AUDIT-FIX-R10: short-TTL cache (3s) for repeated calls with the same
+    // target_lufs. Audio changes slowly enough that a 3s window is safe for
+    // caching, and it prevents unnecessary re-inference when the assistant
+    // queries the same decision twice (e.g. to report it + to confirm it).
+    {
+        const auto cached = toolResultCache().get("sonicmaster_decision", params,
+                                                   p.getProcessorGenerationToken(),
+                                                   p.getInstanceIdentity().instanceId);
+        if (cached.has_value())
+        {
+            json wrapper = *cached;
+            wrapper["cached"] = true;
+            return toJString(wrapper);
+        }
+    }
+
     auto& engine = p.getSonicMasterEngine();
 
     if (!engine.isAvailable())
@@ -5880,7 +5896,16 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     engineMapping["stereo_regions"] = engineStereo;
     engineMapping["loudness"] = {
         {"target_lufs", std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f, -23.0f, -8.0f)},
-        {"applied_if_confirmed", plan.appliedMask.loudness}
+        {"applied_if_confirmed", plan.appliedMask.loudness},
+        // AUDIT-FIX (H2): machine-readable semantic discriminator. This loudness
+        // slot is the mastering TARGET (the SonicMaster input is peak-normalized,
+        // so the model cannot measure absolute input LUFS — see
+        // SonicMasterAnalysisEngine AUDIT-7). Genuine input-loudness measurements
+        // come only from the BS.1770-4 meter surfaced via the measurements
+        // snapshot. The boolean + "kind" let programmatic clients branch without
+        // parsing the warnings array.
+        {"kind", "target"},
+        {"is_input_measurement", plan.loudnessIsMeasurement}
     };
     engineMapping["limiter"] = {
         {"ceiling_dbtp", std::clamp(-1.0f + plan.projectedTargets.limiter[0] * 0.5f, -3.0f, -0.1f)},
@@ -5904,6 +5929,36 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     result["raw_model_decision"] = rawModelDecision;
     result["projected_plan"] = projectedPlan;
     result["actual_engine_mapping"] = engineMapping;
+
+    // AUDIT-FIX-R2: include genuine BS.1770-4 / EBU R128 measurements from the
+    // AutoMasteringEngine's already-running meters. These are MEASUREMENTS
+    // (K-weighting, gated integration, 4x polyphase ISP), distinct from the
+    // model ESTIMATE which is peak-normalized and target-dependent. The assistant
+    // should report both, clearly labeled, so it never presents the model's
+    // target_lufs as a measurement of the input audio.
+    {
+        const auto m = engine.getLiveMeasurements();
+        json meas;
+        meas["valid"]               = m.valid;
+        meas["source"]              = "more_phi_auto_mastering_engine_live_meters";
+        meas["loudness_method"]     = "ITU-R_BS1770-4_gated_K_weighting";
+        meas["true_peak_method"]    = "ITU-R_BS1770-4_4x_polyphase_oversampled";
+        if (m.valid)
+        {
+            meas["lufs_integrated"]     = m.lufsIntegrated;
+            meas["lufs_short_term"]     = m.lufsShortTerm;
+            meas["lufs_momentary"]      = m.lufsMomentary;
+            meas["lra"]                 = m.lra;
+            meas["true_peak_dbtp"]      = m.truePeakDbtp;
+            meas["spectral_centroid_hz"] = m.spectralCentroidHz;
+            meas["spectral_tilt"]       = m.spectralTilt;
+            meas["stereo_width"]        = m.stereoWidth;
+            meas["correlation_mid"]     = m.correlationMid;
+            meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
+        }
+        result["live_measurements"] = meas;
+    }
+
     result["warnings"] = json::array({
         "decision_contains_raw_model_telemetry_not_applied_parameters",
         "target_lufs_is_requested_target_not_input_loudness_measurement",
@@ -5920,6 +5975,14 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     for (std::size_t i = 0; i < more_phi::kNeuralMasteringDynamicsTargetCount; ++i) result["plan_dynamics_normalized"].push_back(plan.projectedTargets.dynamics[i]);
     for (std::size_t i = 0; i < more_phi::kNeuralMasteringStereoTargetCount; ++i) result["plan_stereo_normalized"].push_back(plan.projectedTargets.stereo[i]);
     for (std::size_t i = 0; i < more_phi::kNeuralMasteringLoudnessTargetCount; ++i) result["plan_loudness_normalized"].push_back(plan.projectedTargets.loudness[i]);
+
+    // AUDIT-FIX-R10: cache the result with a 3-second TTL so repeated calls
+    // from the assistant within a short window don't re-run inference.
+    toolResultCache().put("sonicmaster_decision", params,
+                          p.getProcessorGenerationToken(), result,
+                          p.getInstanceIdentity().instanceId,
+                          std::chrono::seconds(3));
+
     return toJString(result);
 }
 

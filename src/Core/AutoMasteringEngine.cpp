@@ -151,11 +151,15 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     MSMatrix::encodeBuffer(buf);
 
     // ── Stage 2: 4-band split ──────────────────────────────────────────────
+    // AUDIT-FIX (M1): The previous loop body contained a dead expression
+    // statement `bandBuffers_[ch < ... ? ch : 0];` that indexed the array and
+    // discarded the result — a leftover from a refactor that produced no code.
+    // Removed: setSize + copyFrom already establish per-band channel counts and
+    // contents, and the splitter overwrites the band data immediately after.
     for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
     {
         bandBuffers_[b].setSize(nch, ns, false, false, true);
-        for (int ch = 0; ch < nch; ++ch)
-            bandBuffers_[ch < bandBuffers_[b].getNumChannels() ? ch : 0];
+        jassert(bandBuffers_[b].getNumChannels() >= nch); // setSize must give us nch channels
         // Copy M/S buf into each band buffer for splitting
         for (int ch = 0; ch < nch; ++ch)
             bandBuffers_[b].copyFrom(ch, 0, buf, ch, 0, ns);
@@ -349,25 +353,34 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
 {
     // AUDIT-FIX-9: reconcile dual writers. The 30s heuristic timer used to call
     // setTargetLUFS / setWidth unconditionally, clobbering whatever the neural
-    // path (applyValidatedPlan) had just set. Now the heuristic defers loudness
-    // and stereo width to a recent neural plan when one exists — those are the
-    // two knobs both paths fight over. EQ/ceiling/exciter still come from the
-    // heuristic because the neural path only decides EQ bands 0-7 and (optionally)
-    // the ceiling; band 8-31 EQ and exciter enable are heuristic-authoritative.
-    const bool deferToNeural = hasLastSafeNeuralPlan_
-        && lastSafeNeuralPlan_.appliedMask.loudness;
+    // path (applyValidatedPlan) had just set. Now the heuristic defers loudness,
+    // stereo width, AND EQ (AUDIT-FIX-R6) to a recent neural plan when one
+    // exists — those are the three knobs both paths fight over.
+    // EQ/ceiling/exciter still come from the heuristic because the neural path
+    // only decides EQ bands 0-7 and (optionally) the ceiling; band 8-31 EQ and
+    // exciter enable are heuristic-authoritative when the neural plan doesn't
+    // touch EQ.
+    const bool hasNeuralPlan = hasLastSafeNeuralPlan_;
+    const bool neuralHasEq     = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.eq;
+    const bool neuralHasLoud   = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.loudness;
+    const bool neuralHasStereo = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.stereo;
 
-    // Apply EQ prescription
-    if (plan.eqPrescriptionJSON.isNotEmpty())
+    // Apply EQ prescription — defer to neural if it controls EQ bands 0-7.
+    // AUDIT-FIX-R6: previously the heuristic always applied its full 32-band
+    // genre curve, overwriting the neural EQ bands 0-7 after the neural path
+    // had just set them. Now we skip the heuristic EQ when the neural plan
+    // holds the EQ mask. Bands 8-31 retain whatever the last heuristic or
+    // genre-translator pass set them to.
+    if (!neuralHasEq && plan.eqPrescriptionJSON.isNotEmpty())
         eqTranslator_.applyFromJSON(plan.eqPrescriptionJSON);
 
     // Apply stereo widths — only when the neural path is NOT controlling stereo.
-    if (!deferToNeural || !lastSafeNeuralPlan_.appliedMask.stereo)
+    if (!neuralHasStereo)
         for (int b = 0; b < 4; ++b)
             stereo_.setWidth(b, plan.widthCurve[b]);
 
     // Apply loudness target — only when the neural path is NOT controlling it.
-    if (!deferToNeural)
+    if (!neuralHasLoud)
         normalizer_.setTargetLUFS(plan.targetLUFS);
 
     // AUDIT-FIX-2 / AUDIT-FIX-9: cap the heuristic ceiling at streaming-safe.

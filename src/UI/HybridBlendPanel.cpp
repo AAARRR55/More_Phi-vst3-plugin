@@ -40,6 +40,9 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     audioDomainToggle_.setToggleState(proc_.getAudioDomainEnabled(),
                                        juce::dontSendNotification);
     ParameterBinding::bindToggleButton(audioDomainToggle_, apvts, "audioDomainEnabled");
+    audioDomainToggle_.setTooltip(
+        "Audio Domain: enables frequency-domain processing (spectral, granular, formant engines) "
+        "in addition to regular parameter morphing. Disable to save CPU when using parameter-only morphing.");
 
     // ── Oversampling combo ────────────────────────────────────────────────────
     oversamplingCombo_.addItem("x1", 1);
@@ -73,6 +76,16 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
         [this]() { beginBlendGesture(); };
     paramSlider_.onDragEnd = spectralSlider_.onDragEnd = granularSlider_.onDragEnd =
         [this]() { endBlendGesture(); };
+
+    paramSlider_.setTooltip(
+        "Direct blend weight: how much of the raw parameter morph (no frequency processing) "
+        "is mixed into the final output. The three weights automatically normalize to sum to 1.0.");
+    spectralSlider_.setTooltip(
+        "Spectral blend weight: how much of the spectral morph (frequency-domain crossfade) "
+        "is mixed into the final output.");
+    granularSlider_.setTooltip(
+        "Granular blend weight: how much of the granular morph (time-domain grain resynthesis) "
+        "is mixed into the final output.");
 
     // Slider axis labels
     const auto setupSliderLabel = [this](juce::Label& lbl, const juce::String& text)

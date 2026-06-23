@@ -30,8 +30,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     setResizable(true, true);
     setResizeLimits(720, 600, 1600, 1120);
 
-    paramToggleBtn_.setButtonText("Params >");
-    paramToggleBtn_.setTooltip("Show or hide hosted plugin parameters.");
+    paramToggleBtn_.setButtonText("All Parameters \u25B8");
+    paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");
     openPluginBtn_.setTooltip("Open the hosted plugin editor in a separate window.");
 
     // ── Always-visible components ──────────────────────────────────────────────
@@ -57,8 +57,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         paramPanel.setVisible(paramPanelVisible_);
         paramToggleBtn_.setButtonText(
         paramPanelVisible_
-            ? juce::String("< Params")
-            : juce::String("Params >"));
+            ? juce::String("\u25C2 All Parameters")
+            : juce::String("All Parameters \u25B8"));
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
@@ -259,6 +259,22 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("OUT", meterArea.translated(-28, 0).withWidth(24),
                juce::Justification::centredRight);
 
+    // Tick marks at key levels — shape+position fallback for color-only meter zones
+    {
+        const float tickLevels[] = { 40.0f / 60.0f, 50.0f / 60.0f, 54.0f / 60.0f };  // -20, -10, -6 dB
+        const juce::String tickLabels[] = { "-20", "-10", "-6" };
+        g.setFont(lnf.makeScaledFont(7.0f, 7.0f));
+        for (int i = 0; i < 3; ++i)
+        {
+            const float tx = meterArea.getX() + meterArea.getWidth() * tickLevels[i];
+            g.setColour(lnf.textDim.withAlpha(0.45f));
+            g.drawLine(tx, meterArea.getBottom() - 3.0f, tx, meterArea.getBottom(), 0.5f);
+            g.drawText(tickLabels[i],
+                       juce::Rectangle<float>(tx - 12.0f, meterArea.getBottom() + 1.0f, 24.0f, 10.0f),
+                       juce::Justification::centred);
+        }
+    }
+
     // Title bar border
     g.setColour(lnf.borderColour);
     g.drawLine(0, 48, static_cast<float>(getWidth()), 48, 1.0f);
@@ -274,8 +290,8 @@ void MorePhiEditor::resized()
     // Title bar (painted) — increased from 44 to 48
     area.removeFromTop(48);
 
-    // Position Deactivate License button in the title bar next to the level meter
-    deactivateBtn_.setBounds(getWidth() - 250, 10, 120, 28);
+    // Deactivate License — moved to bottom bar for less visual intrusion
+    // (positioned later, next to AI status)
 
     // Parameter panel (right side, togglable)
     const int paramWidth = paramPanelVisible_
@@ -297,7 +313,12 @@ void MorePhiEditor::resized()
 
     // ── Bottom: AI status bar ──────────────────────────────────────────────────
     auto bottomBar = area.removeFromBottom(32);
-    aiPanel.setBounds(bottomBar);
+    {
+        auto aiArea = bottomBar.reduced(4, 2);
+        // Deactivate license on the far right of the bottom bar (small, low-profile)
+        deactivateBtn_.setBounds(aiArea.removeFromRight(130));
+        aiPanel.setBounds(aiArea);
+    }
 
     // ── SonicMaster neural-mastering toggle + status (just above AI bar) ───────
     auto sonicRow = area.removeFromBottom(28);
@@ -485,16 +506,22 @@ void MorePhiEditor::refreshSonicMasterStatus()
 
     juce::String text = "Neural Master: ";
     if (!engine.isAvailable())
-        text += "unavailable (no model)";
+    {
+        text += "model not installed";
+        sonicMasterStatus_.setTooltip(
+            "The ONNX neural model file was not found. Download the mastering model "
+            "from the More-Phi website to enable this feature.");
+    }
     else
     {
+        sonicMasterStatus_.setTooltip({});
         switch (engine.getStatus())
         {
             case SonicMasterAnalysisEngine::Status::Disabled:           text += "off"; break;
-            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += "collecting audio..."; break;
-            case SonicMasterAnalysisEngine::Status::Applied:            text += "applied #" + juce::String((int) engine.getLastPlanId()); break;
-            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += "held (low confidence)"; break;
-            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += "error - see log"; break;
+            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += "listening\u2026"; break;
+            case SonicMasterAnalysisEngine::Status::Applied:            text += "active #" + juce::String((int) engine.getLastPlanId()); break;
+            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += "waiting for clearer signal\u2026"; break;
+            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += "paused \u2014 check diagnostics"; break;
         }
     }
     sonicMasterStatus_.setText(text, juce::dontSendNotification);

@@ -74,6 +74,20 @@ GranularControlPanel::GranularControlPanel(MorePhiProcessor& proc)
         addAndMakeVisible(knobLabels_[i]);
     }
 
+    knobs_[0].setTooltip(
+        "Grain Size: duration of each audio grain in milliseconds. "
+        "Larger grains = smoother, more legato morphing. Smaller = more textured.");
+    knobs_[1].setTooltip(
+        "Grain Density: number of grains generated per second. "
+        "Higher density = thicker, more continuous sound. Lower = sparser, more rhythmic.");
+    knobs_[2].setTooltip(
+        "Pitch Randomization: random pitch deviation per grain in semitones. "
+        "0 = no pitch variation. Adds chorus-like thickening at low values, "
+        "atonal shimmer at high values.");
+    knobs_[3].setTooltip(
+        "Scatter: random position offset within the source audio buffer. "
+        "0 = grains read sequentially. Higher values scatter read positions for chaotic textures.");
+
     updateEnabledState();  // H5: sync sub-control enabled state to the active toggle
 }
 

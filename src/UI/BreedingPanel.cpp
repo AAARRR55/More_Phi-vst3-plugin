@@ -15,8 +15,17 @@ BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
     : proc_(processor)
 {
     breedButton_.onClick = [this]() { breedSnapshots(); };
+    breedButton_.setTooltip(
+        "Breed: crosses two randomly selected occupied snapshots using genetic "
+        "crossover, storing the result in the next empty slot.");
     mutateButton_.onClick = [this]() { mutateSnapshot(); };
+    mutateButton_.setTooltip(
+        "Mutate: applies random perturbation to a randomly selected snapshot's "
+        "parameters, stored in the next empty slot. Only affects learned/exposed parameters.");
     randomizeButton_.onClick = [this]() { randomizeMorphPosition(); };
+    randomizeButton_.setTooltip(
+        "Randomize: jumps the morph cursor to a random position on the pad "
+        "for unexpected sound exploration.");
 
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffa0a0b0));

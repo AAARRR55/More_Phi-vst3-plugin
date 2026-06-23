@@ -62,6 +62,16 @@ DriftControlPanel::DriftControlPanel(MorePhiProcessor& proc)
         addAndMakeVisible(knobs_[i]);
         addAndMakeVisible(knobLabels_[i]);
     }
+
+    knobs_[0].setTooltip(
+        "Drift Speed: how fast the cursor wanders across the morph surface. "
+        "Higher values = more active movement.");
+    knobs_[1].setTooltip(
+        "Drift Distance: maximum radius the cursor can wander from the target position. "
+        "0 = stays on target, 1 = can reach the pad edges.");
+    knobs_[2].setTooltip(
+        "Drift Chaos: randomness of the drift path. Low values = smooth, orbital motion. "
+        "High values = erratic, jittery jumps.");
 }
 
 void DriftControlPanel::paint(juce::Graphics& g)

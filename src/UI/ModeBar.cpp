@@ -30,6 +30,12 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
         addAndMakeVisible(sourceButtons_[i]);
     }
     sourceButtons_[0].setToggleState(true, juce::dontSendNotification);
+    sourceButtons_[0].setTooltip(
+        "2D Pad: morph by dragging the cursor on the XY pad between snapshot positions "
+        "arranged around the clock face.");
+    sourceButtons_[1].setTooltip(
+        "Fader: morph along a single axis using the vertical slider, interpolating "
+        "between occupied snapshots in clock order.");
 
     // ── Physics mode buttons: Direct | Elastic | Drift ──────────────────────
     const juce::StringArray modeLabels = {"Direct", "Elastic", "Drift"};
@@ -43,6 +49,15 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
         addAndMakeVisible(modeButtons_[i]);
     }
     modeButtons_[0].setToggleState(true, juce::dontSendNotification);
+    modeButtons_[0].setTooltip(
+        "Direct mode: cursor position drives morph instantly with no physics simulation. "
+        "Parameters update at the raw cursor position.");
+    modeButtons_[1].setTooltip(
+        "Elastic mode: spring-physics cursor with momentum and inertia. "
+        "Feels like a weighted object pulled toward your target. Three presets available.");
+    modeButtons_[2].setTooltip(
+        "Drift mode: Perlin-noise wandering around the target position. "
+        "Adjust speed, distance, and chaos on the Engine tab for evolving, organic movement.");
 
     modeLabel_.setText("Mode", juce::dontSendNotification);
     modeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
@@ -55,6 +70,9 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     smoothSlider_.setValue(0.95);
     smoothSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     smoothSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 18);
+    smoothSlider_.setTooltip(
+        "Smoothing: blends morph output over time. 0 = instant jumps between positions, "
+        "higher values = gradual, gliding transitions.");
     smoothSlider_.onDragStart = [this]() {
         if (!smoothingGestureActive_)
         {

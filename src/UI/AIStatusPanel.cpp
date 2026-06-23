@@ -17,7 +17,13 @@ AIStatusPanel::AIStatusPanel(MorePhiProcessor& p) : proc_(p)
     clientsLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff888888));
 
     toggleBtn_.addListener(this);
+    toggleBtn_.setTooltip(
+        "Start or stop the built-in MCP server. When running, AI tools and external "
+        "applications can connect on the displayed port to control More-Phi.");
     copyTokenBtn_.addListener(this);
+    copyTokenBtn_.setTooltip(
+        "Copy the MCP authentication token to the clipboard. "
+        "Paste this into your AI client to authorize the connection.");
 
     startTimerHz(2);  // Update status 2x/sec
 }
@@ -25,11 +31,11 @@ AIStatusPanel::AIStatusPanel(MorePhiProcessor& p) : proc_(p)
 void AIStatusPanel::resized()
 {
     auto b = getLocalBounds().reduced(6, 2);
-    statusLabel_.setBounds(b.removeFromLeft(60));
-    b.removeFromLeft(8);
-    portLabel_.setBounds(b.removeFromLeft(90));
-    b.removeFromLeft(8);
-    clientsLabel_.setBounds(b.removeFromLeft(80));
+    statusLabel_.setBounds(b.removeFromLeft(72));
+    b.removeFromLeft(6);
+    portLabel_.setBounds(b.removeFromLeft(72));
+    b.removeFromLeft(6);
+    clientsLabel_.setBounds(b.removeFromLeft(72));
     b.removeFromLeft(8);
     copyTokenBtn_.setBounds(b.removeFromRight(80));
     b.removeFromRight(6);
@@ -49,15 +55,15 @@ void AIStatusPanel::timerCallback()
     auto& mcp = proc_.getMCPServer();
     bool running = mcp.isRunning();
 
-    statusLabel_.setText(running ? "MCP: ON" : "MCP: OFF", juce::dontSendNotification);
+    statusLabel_.setText(running ? "AI Ready" : "AI Offline", juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId,
                            running ? juce::Colour(0xff34d399)  // green
                                    : juce::Colour(0xff888888));
 
-    portLabel_.setText(running ? "Port: " + juce::String(mcp.getPort()) : "",
+    portLabel_.setText(running ? "Port " + juce::String(mcp.getPort()) : "",
                        juce::dontSendNotification);
     const int clients = mcp.getConnectedClients();
-    clientsLabel_.setText(running && clients > 0 ? "Ext.clients: " + juce::String(clients) : "",
+    clientsLabel_.setText(running ? (clients > 0 ? juce::String(clients) + " client" + (clients != 1 ? "s" : "") : "no clients") : "",
                            juce::dontSendNotification);
 
     toggleBtn_.setButtonText(running ? "Stop MCP" : "Start MCP");

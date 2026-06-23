@@ -63,9 +63,13 @@ private:
     std::vector<float> window_;
     std::vector<float> inputBuffer_;
     std::vector<float> linearFrame_;
+    // AUDIT-FIX (M2): un-windowed copy of the current frame. crestFactor /
+    // peak / RMS must be computed on the raw signal, not the Hann-windowed
+    // linearFrame_ (the window biases peak down by up to −6 dB and skews RMS).
+    std::vector<float> rawFrame_;
     std::vector<float> fftScratch_;
     std::vector<float> rawMagnitude_;
-    std::vector<float> previousMagnitude_;
+    std::vector<float> previousMagnitudeDb_;
 
     mutable std::atomic<uint32_t> version_ { 0 };
     SpectrumSnapshot publishedSnapshot_;

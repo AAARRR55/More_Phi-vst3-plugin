@@ -123,6 +123,13 @@ void SonicMasterAnalysisEngine::ensureRing() noexcept
     // Idempotent — only allocates on first call when ring is nullptr.
     if (ring_ != nullptr) return;
     if (!prepared_.load(std::memory_order_relaxed)) return;
+
+    // AUDIT-FIX-R11: sanity-check the ring size. At the default 8*192000=1,536,000
+    // frames, the power-of-2 round-up yields 2,097,152 frames × 2 ch × 4 bytes =
+    // ~16.8 MB. This is within budget but debug builds assert a reasonable ceiling.
+    jassert(config_.captureRingFrames >= 2u * 44100u);           // at least 2s @ 44.1k
+    jassert(config_.captureRingFrames <= 32u * 192000u);         // at most 32s @ 192k
+
     ring_ = std::make_unique<AudioCaptureRing>(config_.captureRingFrames);
 }
 
@@ -186,6 +193,17 @@ void SonicMasterAnalysisEngine::capture(const float* left, const float* right,
         || ring_ == nullptr || left == nullptr || right == nullptr)
         return;
     ring_->write(left, right, n);
+}
+
+void SonicMasterAnalysisEngine::flushCaptureRing() noexcept
+{
+    // AUDIT-FIX-R7: Reset the ring discarding all previously captured audio.
+    // Safe to call on the message thread while the audio thread is writing
+    // (AudioCaptureRing::reset() only touches atomics). The analysis thread
+    // will see an empty ring on its next readNewest() call and skip the cycle
+    // with "CollectingAudio" status until enough new audio accumulates.
+    if (ring_ != nullptr)
+        ring_->reset();
 }
 
 void SonicMasterAnalysisEngine::analysisLoop() noexcept
@@ -422,20 +440,44 @@ void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& 
         }
     }
 
-    // If we have a JUCE message manager and we're NOT on the message thread
-    // (i.e. the real analysis-thread path), hop to the message thread so the
-    // DSP setter semantics hold. In the unit-test path there is no message
-    // manager, so apply synchronously on the calling thread.
+    // AUDIT-FIX-R5: pending-plan handoff replaces MessageManager::callAsync.
+    // callAsync can silently drop callbacks in headless hosts (FL Studio on
+    // Linux, offline-render configurations). Instead we store the plan with
+    // release semantics and let the processor's message-thread timer poll
+    // hasPendingApplication() / processPendingApplication(). This matches the
+    // project's morphPositionNotifyPending_ pattern exactly.
+    //
+    // If the JUCE MessageManager exists and we ARE on the message thread (e.g.
+    // unit-test path with no background analysis thread), apply synchronously
+    // for backward compatibility.
     auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-    if (mm != nullptr && !mm->isThisTheMessageThread())
-    {
-        juce::MessageManager::callAsync(
-            [engine = applicationEngine_, p = plan]() { engine->applyValidatedPlan(p); });
-    }
-    else
+    if (mm != nullptr && mm->isThisTheMessageThread())
     {
         applicationEngine_->applyValidatedPlan(plan);
+        return;
     }
+
+    // Analysis thread: store the plan and signal the message thread.
+    // Only runCycle writes here (under inferMutex_), so no concurrent writer.
+    pendingPlan_ = plan;
+    pendingApplication_.store(true, std::memory_order_release);
+
+    // Request message-thread maintenance so the processor's timer fires and
+    // calls processPendingApplication(). This replaces the old callAsync hop.
+    if (maintenanceRequestCb_)
+        maintenanceRequestCb_();
+}
+
+void SonicMasterAnalysisEngine::processPendingApplication() noexcept
+{
+    // Message thread only — apply the stored plan and clear the flag.
+    if (!pendingApplication_.load(std::memory_order_acquire))
+        return;
+
+    if (applicationEngine_ != nullptr)
+        applicationEngine_->applyValidatedPlan(pendingPlan_);
+
+    pendingApplication_.store(false, std::memory_order_release);
 }
 
 SonicMasterMeasurementSnapshot SonicMasterAnalysisEngine::getLiveMeasurements() const noexcept

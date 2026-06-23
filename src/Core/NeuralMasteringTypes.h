@@ -242,6 +242,15 @@ struct ValidatedNeuralMasteringPlan
     // false and applyValidatedPlan falls back to the normalized dynamics pair.
     std::array<NeuralMasteringCompBand, kNeuralMasteringCompBandCount> compParams {};
     bool hasCompParams = false;
+
+    // AUDIT-FIX (H2): semantic guard. projectedTargets.loudness is a TARGET the
+    // model was asked to reach (the SonicMaster input is peak-normalized, so the
+    // model cannot measure absolute input LUFS — see SonicMasterAnalysisEngine
+    // AUDIT-7). It must NEVER be read as a measurement of the input. Genuine
+    // measurements live in SonicMasterMeasurementSnapshot (BS.1770-4 / true-peak).
+    // This flag is set false by every plan producer and asserted at decode time;
+    // any future path that genuinely measures input loudness must set it true.
+    bool loudnessIsMeasurement = false;
 };
 
 } // namespace more_phi

@@ -72,10 +72,19 @@ void ParameterRow::refresh()
 
 ParameterMapPanel::ParameterMapPanel(MorePhiProcessor& proc) : proc_(proc)
 {
-    headerLabel_.setText("Parameter Mapping", juce::dontSendNotification);
+    headerLabel_.setText("All Parameters", juce::dontSendNotification);
     headerLabel_.setFont(MorePhiLookAndFeel::bodyFont(13.0f, juce::Font::bold));
     headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe5c057));
     addAndMakeVisible(headerLabel_);
+
+    searchField_.setTextToShowWhenEmpty("Filter parameters…", juce::Colour(0xff5a5a60));
+    searchField_.setFont(MorePhiLookAndFeel::bodyFont(11.0f));
+    searchField_.setColour(juce::TextEditor::textColourId, juce::Colour(0xffeeeef2));
+    searchField_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff17181c));
+    searchField_.setColour(juce::TextEditor::outlineColourId, juce::Colour(0xff323237));
+    searchField_.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xffe5c057));
+    searchField_.addListener(this);
+    addAndMakeVisible(searchField_);
 
     viewport_.setViewedComponent(&rowContainer_, false);
     viewport_.setScrollBarsShown(true, false);
@@ -88,15 +97,25 @@ void ParameterMapPanel::resized()
 {
     auto b = getLocalBounds();
     auto headerRow = b.removeFromTop(28);
-    headerLabel_.setBounds(headerRow);
+    headerLabel_.setBounds(headerRow.removeFromLeft(130));
+    headerRow.removeFromLeft(8);
+    searchField_.setBounds(headerRow.withHeight(22));
 
     viewport_.setBounds(b);
 
-    // Size the container to fit all rows
+    // Count visible rows and reposition them stacked without gaps
     const int rowH = 24;
-    rowContainer_.setBounds(0, 0, b.getWidth() - 14, rowH * static_cast<int>(rows_.size()));
-    for (int i = 0; i < static_cast<int>(rows_.size()); ++i)
-        rows_[i]->setBounds(0, i * rowH, rowContainer_.getWidth(), rowH);
+    int visibleCount = 0;
+    int containerWidth = b.getWidth() - 14;
+    for (auto& row : rows_)
+    {
+        if (row->isVisible())
+        {
+            row->setBounds(0, visibleCount * rowH, containerWidth, rowH);
+            ++visibleCount;
+        }
+    }
+    rowContainer_.setBounds(0, 0, containerWidth, rowH * visibleCount);
 }
 
 void ParameterMapPanel::paint(juce::Graphics& g)
@@ -145,6 +164,35 @@ void ParameterMapPanel::rebuildForPlugin()
         auto row = std::make_unique<ParameterRow>(i, proc_);
         rowContainer_.addAndMakeVisible(row.get());
         rows_.push_back(std::move(row));
+    }
+
+    applyFilter();
+    resized();
+}
+
+void ParameterMapPanel::textEditorTextChanged(juce::TextEditor&)
+{
+    filterText_ = searchField_.getText().toLowerCase().trim();
+    applyFilter();
+}
+
+void ParameterMapPanel::applyFilter()
+{
+    auto& bridge = proc_.getParameterBridge();
+    const bool filtering = filterText_.isNotEmpty();
+
+    for (auto& row : rows_)
+    {
+        if (filtering)
+        {
+            juce::String name = bridge.getParameterName(row->getParamIndex());
+            bool matches = name.toLowerCase().contains(filterText_);
+            row->setVisible(matches);
+        }
+        else
+        {
+            row->setVisible(true);
+        }
     }
 
     resized();

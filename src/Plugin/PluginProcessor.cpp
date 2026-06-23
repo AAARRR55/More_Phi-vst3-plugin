@@ -170,6 +170,17 @@ void MorePhiProcessor::initializeSonicMaster()
 {
     sonicMasterEngine_.setApplicationEngine(&autoMasteringEngine_);
 
+    // AUDIT-FIX-R5: wire the engine to the processor's message-thread maintenance
+    // timer. When the analysis thread has a plan ready, the engine stores it,
+    // sets the pending flag, and invokes this callback which requests a timer tick.
+    // On the next tick, the processor calls sonicMasterEngine_.processPendingApplication()
+    // on the message thread. This replaces the old MessageManager::callAsync hop
+    // which can silently drop in headless hosts.
+    sonicMasterEngine_.setMaintenanceRequestCallback([this]()
+    {
+        requestMessageThreadMaintenance();
+    });
+
     // Search for the exported ONNX model + contract alongside the plugin binary.
     const auto pluginDir = juce::File::getSpecialLocation(
         juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
@@ -1651,12 +1662,25 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // SonicMaster analysis capture: lock-free ring write only (no locks, no
     // allocation). Early-returns when the feature is OFF or unprepared.
-    if (buffer.getNumChannels() >= 2)
+    // AUDIT-FIX-R3: support mono capture by duplicating channel 0 to both L and
+    // R. Mono vocal/podcast tracks are a primary mastering use case.
+    const int numCaptureChannels = buffer.getNumChannels();
+    if (numCaptureChannels >= 1)
     {
         MORE_PHI_PROFILE(profiler_, "sonicmaster_capture");
-        sonicMasterEngine_.capture(buffer.getReadPointer(0),
-                                   buffer.getReadPointer(1),
-                                   static_cast<std::size_t>(buffer.getNumSamples()));
+        if (numCaptureChannels >= 2)
+        {
+            sonicMasterEngine_.capture(buffer.getReadPointer(0),
+                                       buffer.getReadPointer(1),
+                                       static_cast<std::size_t>(buffer.getNumSamples()));
+        }
+        else
+        {
+            // Mono: duplicate channel 0 into both L and R.
+            sonicMasterEngine_.capture(buffer.getReadPointer(0),
+                                       buffer.getReadPointer(0),
+                                       static_cast<std::size_t>(buffer.getNumSamples()));
+        }
     }
 }
 
@@ -2677,6 +2701,11 @@ bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& 
     if (loaded)
     {
         DBG("loadHostedPluginFromState: Successfully loaded plugin: " + desc.name);
+
+        // AUDIT-FIX-R7: flush the SonicMaster capture ring so the next inference
+        // cycle starts with fresh audio from the new plugin, not stale samples
+        // from the previous source.
+        sonicMasterEngine_.flushCaptureRing();
         
         // Re-apply the hosted plugin's saved opaque state (EQ curves, etc.)
         if (auto* plugin = host.beginExclusivePluginUse(500))
@@ -2781,7 +2810,8 @@ bool MorePhiProcessor::hasPendingMessageThreadWork() const noexcept
         || latencyConfigDirty_.load(std::memory_order_acquire)
         || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_
         || pendingStateRestore_.load(std::memory_order_acquire)
-        || morphPositionNotifyPending_.load(std::memory_order_acquire);
+        || morphPositionNotifyPending_.load(std::memory_order_acquire)
+        || sonicMasterEngine_.hasPendingApplication();  // AUDIT-FIX-R5: Timer-deferred neural plan application
 }
 
 void MorePhiProcessor::loadCachedLicenseIfNeeded()
@@ -3149,6 +3179,13 @@ void MorePhiProcessor::timerCallback()
             p->endChangeGesture();
         }
     }
+
+    // AUDIT-FIX-R5: Process pending SonicMaster neural mastering plan on the
+    // message thread. Replaces the old MessageManager::callAsync hop which can
+    // silently drop in headless hosts. The analysis thread stores the plan and
+    // sets a flag; the processor's timer applies it here.
+    if (sonicMasterEngine_.hasPendingApplication())
+        sonicMasterEngine_.processPendingApplication();
 
     // Timer fires on the message thread — exactly where we need to load plugins.
     if (!hasPendingPluginLoad_.load(std::memory_order_acquire))

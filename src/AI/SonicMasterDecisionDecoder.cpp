@@ -55,6 +55,12 @@ bool decodeSonicMasterDecision(const float* decision,
         out.projectedTargets.loudness[1] = value;
         out.projectedTargets.loudness[2] = value;
         out.appliedMask.loudness = true;
+        // AUDIT-FIX (H2): the SonicMaster input is peak-normalized before
+        // inference, so the model cannot measure absolute input LUFS. This
+        // loudness slot is the mastering TARGET the caller/decoder supplied,
+        // not a measurement. Lock the semantic flag so no downstream consumer
+        // can read it as an input-loudness measurement by accident.
+        out.loudnessIsMeasurement = false;
     }
 
     // ── Limiter: true-peak ceiling decoded for telemetry. The default safety

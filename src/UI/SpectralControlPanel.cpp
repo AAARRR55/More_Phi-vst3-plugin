@@ -72,11 +72,17 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     // ── Transient toggle ──────────────────────────────────────────────────────
     setupToggleButton(transientToggle_, "Transient");
     transientToggle_.setToggleState(true, juce::dontSendNotification); // default on
+    transientToggle_.setTooltip(
+        "Transient preservation: retains percussive attack transients when "
+        "morphing in the frequency domain, preventing smearing of sharp hits.");
     ParameterBinding::bindToggleButton(transientToggle_, apvts, "spectralTransient");
 
     // ── Formant toggle ────────────────────────────────────────────────────────
     setupToggleButton(formantToggle_, "Formant");
     formantToggle_.setToggleState(false, juce::dontSendNotification); // default off
+    formantToggle_.setTooltip(
+        "Formant preservation: retains vocal/synth formant structure when "
+        "morphing in the frequency domain, preserving the character of resonant bodies.");
     ParameterBinding::bindToggleButton(formantToggle_, apvts, "spectralFormant");
 
     addAndMakeVisible(activeToggle_);

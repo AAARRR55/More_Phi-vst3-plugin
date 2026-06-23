@@ -35,6 +35,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -102,10 +103,14 @@ struct SonicMasterMeasurementSnapshot
 struct SonicMasterAnalysisEngineConfig
 {
     double analysisIntervalSeconds = 3.0;
-    double rampDurationSeconds     = 0.2;   // informational; apply is via applyValidatedPlan
     float  confidenceFloor         = kSonicMasterDefaultConfidence;
     int    consecutiveFailureLimit = 3;
     // 8 s @ 192 kHz, rounded up to a power of two by AudioCaptureRing.
+    // At the default 1,536,000 frames, the power-of-2 round-up produces
+    // 2,097,152 frames × 2 channels × 4 bytes = ~16.8 MB. This is within
+    // budget on 64-bit hosts (~12-17 MB of the plugin's ~30 MB baseline)
+    // but may be tight on 32-bit hosts. Reduce this for 32-bit targets or
+    // when memory profiling shows contention.
     std::size_t captureRingFrames = 8u * 192000u;
 };
 
@@ -134,6 +139,12 @@ public:
     // Audio thread: copy a stereo block into the capture ring. noexcept, no
     // locks, no allocation. Early-returns when inactive or unprepared.
     void capture(const float* left, const float* right, std::size_t n) noexcept;
+
+    // Message thread: reset the capture ring, discarding all previously captured
+    // audio. Call this when the hosted plugin or audio source changes to prevent
+    // inference from mixing old and new content. Safe to call while the engine is
+    // active — the analysis thread will see an empty ring on its next cycle.
+    void flushCaptureRing() noexcept;
 
     // Any thread (atomic). When true, capture + cycling run; when false, capture
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
@@ -187,6 +198,27 @@ public:
     /// Returns valid=false when no application engine is attached.
     SonicMasterMeasurementSnapshot getLiveMeasurements() const noexcept;
 
+    // ── Pending-plan handoff (AUDIT-FIX-R5) ───────────────────────────────
+    // Replaces MessageManager::callAsync which can silently drop in headless
+    // hosts. The analysis thread stores a validated plan and sets a flag, then
+    // optionally invokes a callback (set by the processor) to request message-
+    // thread maintenance. The processor's timer polls hasPendingApplication()
+    // and calls processPendingApplication() to apply the plan.
+    //
+    // Set this callback once after construction to wire the engine to the
+    // processor's maintenance timer (see morphPositionNotifyPending_ pattern).
+    void setMaintenanceRequestCallback(std::function<void()> cb) noexcept
+    {
+        maintenanceRequestCb_ = std::move(cb);
+    }
+    [[nodiscard]] bool hasPendingApplication() const noexcept
+    {
+        return pendingApplication_.load(std::memory_order_acquire);
+    }
+    // Message thread only — applies the stored plan via applyValidatedPlan()
+    // and clears the pending flag.
+    void processPendingApplication() noexcept;
+
 private:
     void analysisLoop() noexcept;
     bool runCycle() noexcept; // returns true if a plan was applied
@@ -226,6 +258,15 @@ private:
     // inference latency past). Written on the analysis thread under inferMutex_,
     // read on the same thread; relaxed atomic only because it is advisory.
     std::uint64_t captureTimeNs_ = 0;
+
+    // AUDIT-FIX-R5: pending-plan handoff replaces MessageManager::callAsync.
+    // The analysis thread writes the plan, then sets the flag (release).
+    // The message thread reads the flag (acquire), then reads the plan.
+    // Protected by the flag ordering — only one analysis thread writes (under
+    // inferMutex_ in runCycle) and only one message thread reads/clears.
+    std::atomic<bool> pendingApplication_ { false };
+    ValidatedNeuralMasteringPlan pendingPlan_ {};
+    std::function<void()> maintenanceRequestCb_;  // set by processor; called after flag is set
 };
 
 } // namespace more_phi

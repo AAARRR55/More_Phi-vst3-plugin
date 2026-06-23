@@ -8,17 +8,27 @@
 namespace more_phi {
 
 // ── Elastic Spring-Damper ────────────────────────────────────────────────────
+//
+// AUDIT-FIX (L1): MODEL SEMANTICS. This is a *perceptual* spring that moves the
+// morph cursor through a dimensionless [−1,1] XY space, NOT a physical spring
+// over audio units. The "stiffness" k below is therefore a normalized rate
+// constant (cursor units / s²), not a material stiffness in N/m. The presets
+// were tuned by feel at 44.1 kHz / 512-sample blocks. Sample-rate independence
+// comes from advancing the spring by the true wall-clock dt (seconds) via the
+// adaptive sub-stepping below, NOT from k having physical units. Do not "tune k
+// to real stiffness" — that would change the feel at every sample rate.
 
 void PhysicsEngine::updateElastic(ElasticState& s,
                                    float targetX, float targetY,
                                    ElasticPreset preset, float dt) noexcept
 {
-    // H-2 FIX: The preset constants below are the TRUE physical stiffness and
-    // damping, tuned at 44100 Hz / 512-sample block (where dt == kRefDt and the
-    // previous dtScale compensation was a no-op). Sample-rate independence comes
-    // from the adaptive sub-stepping below: it advances the spring by the full
-    // physical dt every block regardless of how that dt is sliced, so the spring
-    // settles in the same wall-clock time at any sample rate / block size.
+    // H-2 FIX: The preset constants below are the normalized stiffness and
+    // damping ratio, tuned at 44100 Hz / 512-sample block (where dt == kRefDt
+    // and the previous dtScale compensation was a no-op). Sample-rate
+    // independence comes from the adaptive sub-stepping below: it advances the
+    // spring by the full physical dt every block regardless of how that dt is
+    // sliced, so the spring settles in the same wall-clock time at any sample
+    // rate / block size.
     //
     // The previous code ALSO multiplied stiffness & damping by kRefDt/dt, which
     // double-compensated: scaling k and c by s scales BOTH the natural frequency
