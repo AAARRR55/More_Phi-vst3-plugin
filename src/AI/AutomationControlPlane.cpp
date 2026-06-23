@@ -368,7 +368,8 @@ json toJson(const IntegrationEvent& value)
         {"workflowRunId", value.workflowRunId.toStdString()},
         {"transactionId", value.transactionId.toStdString()},
         {"payload", value.payload},
-        {"timestamp", isoTime(value.timestamp)}
+        {"timestamp", isoTime(value.timestamp)},
+        {"sequence", value.sequence}
     };
 }
 
@@ -1057,6 +1058,7 @@ IntegrationEvent IntegrationEventBus::publish(IntegrationEvent event)
 
     std::lock_guard<std::mutex> lock(mutex_);
     ++revision_;
+    event.sequence = ++sequenceCounter_;
     events_.push_back(event);
     while (events_.size() > capacity_)
         events_.erase(events_.begin());
@@ -1073,6 +1075,35 @@ json IntegrationEventBus::listRecent(int limit) const
     for (auto it = events_.rbegin(); it != events_.rend() && emitted < safeLimit; ++it, ++emitted)
         out.push_back(toJson(*it));
     return out;
+}
+
+json IntegrationEventBus::listRecentSince(uint64_t sinceSequence, int limit) const
+{
+    // Cursor-based forward read (audit C1): return only events with sequence >
+    // sinceSequence, oldest-first, capped at safeLimit. Because sequence is stamped
+    // under the lock and never recycled, a consumer that stores its last-seen
+    // sequence cannot lose events to ring eviction or re-deliver ones it already saw.
+    std::lock_guard<std::mutex> lock(mutex_);
+    const int safeLimit = juce::jlimit(1, 512, limit <= 0 ? 256 : limit);
+
+    auto it = events_.begin();
+    // Ring may have evicted older entries since our last cursor. Skip forward to
+    // the first live event past the cursor; events older than the oldest live one
+    // are simply lost (acceptable — they predate the consumer's window).
+    while (it != events_.end() && it->sequence <= sinceSequence)
+        ++it;
+
+    json out = json::array();
+    int emitted = 0;
+    for (; it != events_.end() && emitted < safeLimit; ++it, ++emitted)
+        out.push_back(toJson(*it));
+    return out;   // already oldest-first (events_ grows in publish order)
+}
+
+uint64_t IntegrationEventBus::lastSequence() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return sequenceCounter_;
 }
 
 SyncEnvelope IntegrationEventBus::exportState(const juce::String& instanceId, const juce::String& sessionId) const

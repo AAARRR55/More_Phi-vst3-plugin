@@ -17,8 +17,8 @@ OVERCORRECT="${OVERCORRECT:-0.02}"
 RESTRAINT_GATE_MAX_DELTA="${RESTRAINT_GATE_MAX_DELTA:-0.08}"
 NEUTRAL_TRAIN_COUNT="${NEUTRAL_TRAIN_COUNT:-10000}"
 NEUTRAL_VAL_COUNT="${NEUTRAL_VAL_COUNT:-1000}"
-RUN_DIR="${RUN_DIR:-runs/blackwell_restraint_v5}"
-MODEL_OUT="${MODEL_OUT:-$RUN_DIR/model_blackwell_restraint_v5.onnx}"
+RUN_DIR="${RUN_DIR:-runs/restraint}"
+MODEL_OUT="${MODEL_OUT:-$RUN_DIR/model_restraint.onnx}"
 
 echo "=== 1. ensure CUDA torch (current venv is +cpu) ==="
 if ! .venv/bin/python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
@@ -83,4 +83,4 @@ echo "=== 7. Restraint characterization gate (already-good input should stay sub
 
 echo ""
 echo "DONE. If contract + restraint gates PASSed, copy $MODEL_OUT"
-echo "to scripts/neural-mastering/control/model_blackwell_restraint_v5.onnx for plugin/test staging."
+echo "to scripts/neural-mastering/control/ for plugin/test staging."

@@ -102,6 +102,12 @@ private:
 
         // MULTIBAND-2/3: single stereo-linked, per-sample detector envelope.
         float envLinked = 0.0f;
+
+        // AUDIT-FIX: Pre-computed per-sample attack/release coefficients.
+        // Computed once in setBandParams()/prepare(), read atomically in
+        // processBlock() so std::exp never runs on the audio thread.
+        std::atomic<float> attackCoeffPerSample  { 0.0f };
+        std::atomic<float> releaseCoeffPerSample { 0.0f };
     };
 
     std::array<BandState, kNumBands> bands_{};

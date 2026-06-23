@@ -10,8 +10,11 @@
 #pragma once
 
 #include "IPluginHostManager.h"
+#include <atomic>
+#include <limits>
 #include <vector>
 #include <utility>
+#include <cstdint>
 #include <juce_core/juce_core.h>
 
 namespace more_phi {
@@ -90,6 +93,19 @@ public:
                                          int index,
                                          const juce::String& name) const;
 
+    // B4 FIX: number of times a hosted-plugin setValue() threw during apply.
+    // Apply is on the audio thread (silent catch), so without this counter a
+    // hosted plugin that throws on every write would no-op forever with no
+    // diagnostic. Saturating to avoid wraparound. Safe to read from any thread.
+    uint64_t getApplyExceptionCount() const noexcept
+    {
+        return applyExceptionCount_.load(std::memory_order_relaxed);
+    }
+    void resetApplyExceptionCount() noexcept
+    {
+        applyExceptionCount_.store(0, std::memory_order_relaxed);
+    }
+
 private:
     struct ThrottleState
     {
@@ -104,8 +120,20 @@ private:
     mutable std::vector<ThrottleState> throttleStates_;
     std::vector<ParameterDescriptor> testDescriptors_;
 
+    // B4 FIX: saturating counter for hosted-plugin setValue() exceptions on the
+    // apply path (audio thread can't log). Stops at uint64 max to avoid wrap.
+    mutable std::atomic<uint64_t> applyExceptionCount_{0};
+
     bool shouldThrottle(int index, float newValue, juce::uint32 now) const;
     void updateThrottleState(int index, float value, juce::uint32 now);
+
+    // B4 FIX: saturating increment of applyExceptionCount_ (audio-safe).
+    void bumpApplyException() const noexcept
+    {
+        uint64_t cur = applyExceptionCount_.load(std::memory_order_relaxed);
+        if (cur != std::numeric_limits<uint64_t>::max())
+            applyExceptionCount_.fetch_add(1, std::memory_order_relaxed);
+    }
 
     template<typename Ret, typename Fn>
     static Ret withPlugin(IPluginHostManager& host, PluginHostManager* cachedHost,

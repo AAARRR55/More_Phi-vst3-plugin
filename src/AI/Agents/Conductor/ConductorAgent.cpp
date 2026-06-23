@@ -49,21 +49,6 @@ nlohmann::json ConductorAgent::decomposeGoal(const juce::String& intent)
     return DeterministicFallbackLlmClient::decomposeIntent(intent);
 }
 
-void ConductorAgent::dispatchProposedActions(const std::vector<nlohmann::json>& actions)
-{
-    if (! ctx_ || ! ctx_->tools || actions.empty())
-        return;
-    for (const auto& action : actions)
-    {
-        const auto tool = action.value("tool", std::string());
-        const auto params = action.value("params", nlohmann::json::object());
-        if (tool.empty())
-            continue;
-        // Re-dispatch through the chokepoint so permission/ledger/event side-effects happen.
-        ctx_->tools->invoke(juce::String(tool), params, id());
-    }
-}
-
 AgentResult ConductorAgent::execute(const AgentTask& task)
 {
     state_.store(AgentState::Busy);
@@ -98,7 +83,11 @@ AgentResult ConductorAgent::execute(const AgentTask& task)
             continue;
         AgentTask sub;
         sub.id = task.id + "-" + step.value("agent", std::string());
-        sub.runId = runId.toStdString();
+        // H4: correlate subtasks back to the originating GOAL task id (task.id) so
+        // AgentRuntime can tell when the run is truly complete and rewrite the goal
+        // result. (The workflow runId is still captured in findings["runId"] above
+        // for auditability; it is not the correlation key.)
+        sub.runId = task.id;
         sub.targetRole = role;
         sub.intent = juce::String(step.value("intent", ""));
         sub.priority = followUpPriority(role);

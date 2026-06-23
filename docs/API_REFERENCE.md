@@ -300,14 +300,39 @@ Set a single parameter value. Identify the target by `stableId` when available, 
     "index": 0,
     "value": 0.5,
     "queued": 1,
-    "rejected": 0
+    "rejected": 0,
+    "appliedNow": 1,
+    "pendingAfter": 0,
+    "flush": {
+        "pending_before": 1,
+        "drained": 1,
+        "pending_after": 0,
+        "plugin_unavailable": false,
+        "exclusive_access_timed_out": false,
+        "retry_count": 0,
+        "waited_ms": 5,
+        "out_of_range_count": 0
+    },
+    "verification": {
+        "status": "success",
+        "requested_value": 0.5,
+        "value_before": 0.25,
+        "value_after": 0.5,
+        "human_before": "25%",
+        "human_after": "50%",
+        "execution_time_ms": 8.3,
+        "verified": true
+    }
 }
 ```
 
 **Notes:**
 - Value must be normalized (0.0 - 1.0)
-- Changes are applied audio-thread safe via lock-free queue
-- Effect may be delayed by one audio buffer
+- Changes are applied audio-thread safe via lock-free queue with immediate assistant flush
+- **AUDIT-FIX 4.3:** `success` is gated on `verification.verified == true`. If the edit is queued but not yet applied, `success` is `false` and `verification.status` is `"queued"`.
+- **AUDIT-FIX 4.7:** If the parameter index exceeds the hosted plugin's actual parameter count, `flush.out_of_range_count > 0` and `verification.status` is `"parameter_index_out_of_range"`.
+- **AUDIT-FIX 4.1:** For discrete parameters, verification uses a step-aware tolerance. A snap to the wrong step returns `"value_drift_discrete"`.
+- **AUDIT-FIX 4.5:** If the morph engine overwrites the edit, `verification.status` reports `"morph_overwrite_risk"`.
 - A full queue returns `success: false`, `error: "queue_full"`, and `queued: 0`
 
 ---
@@ -338,14 +363,53 @@ Queue multiple parameter edits in one request. Each item accepts `stableId`, `in
     "success": true,
     "queued": 3,
     "applied": 3,
+    "appliedNow": 3,
     "requested": 3,
     "rejected": 0,
-    "queueFailures": 0
+    "queueFailures": 0,
+    "verifiedCount": 3,
+    "pendingAfter": 0,
+    "flush": {
+        "pending_before": 3,
+        "drained": 3,
+        "pending_after": 0,
+        "plugin_unavailable": false,
+        "exclusive_access_timed_out": false,
+        "retry_count": 0,
+        "waited_ms": 12,
+        "out_of_range_count": 0
+    },
+    "verification": [
+        {
+            "index": 0,
+            "verification": {
+                "status": "success",
+                "requested_value": 0.5,
+                "value_before": 1.0,
+                "value_after": 0.5,
+                "verified": true
+            }
+        },
+        {
+            "index": 1,
+            "verification": {
+                "status": "success",
+                "requested_value": 0.75,
+                "value_before": 0.5,
+                "value_after": 0.75,
+                "verified": true
+            }
+        }
+    ]
 }
 ```
 
 If any item cannot be resolved or queued, `success` is `false` and the response includes
 `rejected`, `queueFailures`, and an `error` such as `partial_rejected` or `queue_full`.
+
+**AUDIT-FIX 4.3:** `verifiedCount` reports how many edits passed verification. If all items
+were queued but none verified as applied, `success` is `false` with a warning suggesting
+the plugin may not be ready.
 
 ---
 

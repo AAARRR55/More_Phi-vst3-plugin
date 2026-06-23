@@ -51,6 +51,20 @@ void MultibandDynamicsProcessor::setBandParams(int band, const BandParams& p) no
     bd.makeupLinear.store(std::pow(10.f, p.makeupDB / 20.f), std::memory_order_relaxed);
     bd.kneeDB.store(p.kneeDB, std::memory_order_relaxed);
 
+    // AUDIT-FIX: Pre-compute per-sample attack/release coefficients so
+    // processBlock() never calls std::exp on the audio thread. Follows the
+    // same pattern as EnvelopeFollower's pre-computed per-block coefficients.
+    const float sr = static_cast<float>(sampleRate_);
+    if (sr > 0.0f)
+    {
+        bd.attackCoeffPerSample.store(
+            std::exp(-1.0f / (p.attackMs * 0.001f * sr)),
+            std::memory_order_relaxed);
+        bd.releaseCoeffPerSample.store(
+            std::exp(-1.0f / (p.releaseMs * 0.001f * sr)),
+            std::memory_order_relaxed);
+    }
+
     // Recompute envelope follower coefficients now
     for (int ch = 0; ch < kMaxChannels; ++ch)
     {
@@ -84,9 +98,20 @@ void MultibandDynamicsProcessor::setBandEnabled(int band, bool enabled) noexcept
 void MultibandDynamicsProcessor::prepare(double sampleRate, int /*maxBlockSize*/)
 {
     sampleRate_ = sampleRate;
+    const float sr = static_cast<float>(sampleRate);
     for (int b = 0; b < kNumBands; ++b)
     {
         auto& bd = bands_[b];
+
+        // AUDIT-FIX: Pre-compute per-sample attack/release coefficients so
+        // processBlock() reads atomics instead of calling std::exp.
+        bd.attackCoeffPerSample.store(
+            std::exp(-1.0f / (bd.attackMs.load(std::memory_order_relaxed) * 0.001f * sr)),
+            std::memory_order_relaxed);
+        bd.releaseCoeffPerSample.store(
+            std::exp(-1.0f / (bd.releaseMs.load(std::memory_order_relaxed) * 0.001f * sr)),
+            std::memory_order_relaxed);
+
         for (int ch = 0; ch < kMaxChannels; ++ch)
         {
             bd.followers[ch].prepare(sampleRate);
@@ -118,27 +143,37 @@ float MultibandDynamicsProcessor::computeCompressorGain(float rmsLinear,
                                                          float kneeDB,
                                                          float makeup) const noexcept
 {
-    const float rmsDB  = (rmsLinear > 1e-12f) ? 20.f * std::log10(rmsLinear) : -120.f;
-    const float thrDB  = (threshLinear > 1e-12f) ? 20.f * std::log10(threshLinear) : -120.f;
-    const float excess = rmsDB - thrDB;
+    // W1 FIX: replace std::log10 / std::pow(10,...) (per-sample on the audio
+    // thread, ~4 bands × N samples) with std::log / std::exp using the
+    // identities log10(x) = log(x)/ln10 and 10^(y) = exp(y*ln10).
+    // expf/logf are measurably faster than the base-10 variants on the common
+    // libm paths and avoid the internal table lookups the base-10 versions do.
+    // Math is preserved within float precision (same gain curve).
+    constexpr float kLn10 = 2.30258509299404568402f;
+    constexpr float kDbToLog = kLn10 / 20.0f;   // 20*log10(x) == log(x)/kDbToLogInv; here: dB->natural log
+    const float rmsLogN = (rmsLinear    > 1e-12f) ? std::log(rmsLinear)    : (-120.f * kDbToLog);
+    const float thrLogN = (threshLinear > 1e-12f) ? std::log(threshLinear) : (-120.f * kDbToLog);
+    // excess in dB-equivalent natural-log units: (dB difference) * ln10/20.
+    const float excessLogN = (rmsLogN - thrLogN) / kDbToLog;   // back to dB for the knee math
     const float kneeH  = kneeDB * 0.5f;
 
     float gainDB = 0.f;
-    if (excess <= -kneeH)
+    if (excessLogN <= -kneeH)
     {
         gainDB = 0.f;  // below knee: no reduction
     }
-    else if (excess < kneeH)
+    else if (excessLogN < kneeH)
     {
         // Soft-knee interpolation (quadratic blend into compression)
-        gainDB = (1.f / ratio - 1.f) * (excess + kneeH) * (excess + kneeH) / (2.f * kneeDB);
+        gainDB = (1.f / ratio - 1.f) * (excessLogN + kneeH) * (excessLogN + kneeH) / (2.f * kneeDB);
     }
     else
     {
-        gainDB = excess / ratio - excess;  // = excess * (1/ratio - 1)
+        gainDB = excessLogN / ratio - excessLogN;  // = excess * (1/ratio - 1)
     }
 
-    return makeup * std::pow(10.f, gainDB / 20.f);
+    // makeup * 10^(gainDB/20) == makeup * exp(gainDB * ln10/20)
+    return makeup * std::exp(gainDB * kDbToLog);
 }
 
 void MultibandDynamicsProcessor::processBlock(juce::AudioBuffer<float> bands[kNumBands]) noexcept
@@ -174,10 +209,12 @@ void MultibandDynamicsProcessor::processBlock(juce::AudioBuffer<float> bands[kNu
         // linked peak detector feeds one gain applied equally to both channels,
         // updated every sample (which also makes the attack/release coefficients
         // — already per-sample — behave with the correct time constant).
-        const float attackCoeff  = std::exp(-1.f / (bd.attackMs.load(std::memory_order_relaxed)
-                                            * 0.001f * static_cast<float>(sampleRate_)));
-        const float releaseCoeff = std::exp(-1.f / (bd.releaseMs.load(std::memory_order_relaxed)
-                                            * 0.001f * static_cast<float>(sampleRate_)));
+        //
+        // AUDIT-FIX: attack/release coefficients are pre-computed in setBandParams()
+        // and prepare() (stored as atomics). Reading them here avoids four std::exp
+        // calls per block on the audio thread.
+        const float attackCoeff  = bd.attackCoeffPerSample.load(std::memory_order_relaxed);
+        const float releaseCoeff = bd.releaseCoeffPerSample.load(std::memory_order_relaxed);
 
         float* L = (nch >= 1) ? buf.getWritePointer(0) : nullptr;
         float* R = (nch >= 2) ? buf.getWritePointer(1) : nullptr;

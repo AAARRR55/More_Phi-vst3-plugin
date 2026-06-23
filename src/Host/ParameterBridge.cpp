@@ -47,7 +47,10 @@ ParameterBridge::ParameterBridge(IPluginHostManager& host)
     : host_(host)
     , cachedConcreteHost_(dynamic_cast<PluginHostManager*>(&host))
 {
-    throttleStates_.resize(8192);
+    // PERF-MEM: Reduced from 8192 to 4096. The throttleStates_ vector is
+    // indexed by parameter index; 4096 is sufficient for any realistic
+    // VST3 plugin (most have < 2000 params) and saves ~64 KB.
+    throttleStates_.resize(4096);
 }
 
 template<typename Ret, typename Fn>
@@ -135,7 +138,9 @@ void ParameterBridge::setParameterNormalized(int index, float value) noexcept
         try {
             params[index]->setValue(clamped);
         } catch (...) {
-            // Silent — hosted plugin setValue threw, but we can't log on audio thread
+            // Silent — hosted plugin setValue threw, but we can't log on audio thread.
+            // B4 FIX: count it so the failure is visible to diagnostics.
+            bumpApplyException();
         }
 
         updateThrottleState(index, clamped, now);
@@ -157,7 +162,9 @@ void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, 
     try {
         params[index]->setValue(clamped);
     } catch (...) {
-        // Silent — hosted plugin setValue threw, but we can't log on audio thread
+        // Silent — hosted plugin setValue threw, but we can't log on audio thread.
+        // B4 FIX: count it so the failure is visible to diagnostics.
+        bumpApplyException();
     }
 
     updateThrottleState(index, clamped, now);
@@ -221,6 +228,8 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
             try {
                 params[i]->setValue(clamped);
             } catch (...) {
+                // B4 FIX: count it so the failure is visible to diagnostics.
+                bumpApplyException();
                 continue;
             }
 

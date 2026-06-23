@@ -161,6 +161,10 @@ struct IntegrationEvent
     juce::String transactionId;
     nlohmann::json payload = nlohmann::json::object();
     juce::Time timestamp;
+    // Monotonic, gap-free per-bus sequence stamped by IntegrationEventBus::publish().
+    // Used by BlackboardBridge to cursor forward without losing or re-delivering
+    // events when the bus's bounded ring evicts old entries (audit C1).
+    uint64_t sequence = 0;
 };
 
 struct SyncEnvelope
@@ -347,6 +351,13 @@ public:
 
     IntegrationEvent publish(IntegrationEvent event);
     nlohmann::json listRecent(int limit) const;
+    // Returns events with sequence > sinceSequence, oldest-first (causal order),
+    // capped at limit. Lets a cursor-based consumer advance forward without
+    // re-delivering events even when the bounded ring has evicted old entries.
+    nlohmann::json listRecentSince(uint64_t sinceSequence, int limit) const;
+    // Highest sequence number published so far (0 before any event). A consumer
+    // can cheaply check whether new work exists without pulling the full window.
+    uint64_t lastSequence() const;
     SyncEnvelope exportState(const juce::String& instanceId, const juce::String& sessionId) const;
     IntegrationEvent applyEnvelope(const SyncEnvelope& envelope);
     uint64_t revision() const;
@@ -356,6 +367,7 @@ private:
     mutable std::mutex mutex_;
     std::vector<IntegrationEvent> events_;
     uint64_t revision_ = 0;
+    uint64_t sequenceCounter_ = 0;   // gap-free; advanced under mutex_ in publish()
 };
 
 class WorkflowOrchestrator

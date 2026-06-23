@@ -115,14 +115,20 @@ bool RealtimeSpectrumAnalyzer::getSnapshot(SpectrumSnapshot& out) const noexcept
 
 void RealtimeSpectrumAnalyzer::processFrame() noexcept
 {
+    // AUDIT-FIX: Write windowed samples in JUCE's interleaved real/imag format.
+    // Previously samples were packed contiguously (scratch[i]=x[i]) which JUCE's
+    // performRealOnlyForwardTransform interprets as x[0]=real[0], x[1]=imag[0],
+    // x[2]=real[1], ... — corrupting the entire spectrum from bin 0 upward.
     for (int i = 0; i < fftSize_; ++i)
     {
         const int src = (writePos_ + i) % fftSize_;
         const float sample = inputBuffer_[static_cast<size_t>(src)] * window_[static_cast<size_t>(i)];
         linearFrame_[static_cast<size_t>(i)] = sample;
-        fftScratch_[static_cast<size_t>(i)] = sample;
+        fftScratch_[static_cast<size_t>(i * 2)]     = sample;   // real
+        fftScratch_[static_cast<size_t>(i * 2 + 1)] = 0.0f;     // imag = 0 (purely real input)
     }
-    std::fill(fftScratch_.begin() + fftSize_, fftScratch_.end(), 0.0f);
+    // The loop above now fills the entire fftScratch_ (positions 0..2*fftSize_-1),
+    // so the old trailing-zero fill is no longer needed.
 
     fft_->performRealOnlyForwardTransform(fftScratch_.data(), true);
 

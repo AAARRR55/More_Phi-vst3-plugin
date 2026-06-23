@@ -79,6 +79,26 @@ private:
     SonicMasterDecisionRunner& runner_;
 };
 
+// AUDIT-FIX-1: genuine classical measurements pulled from AutoMasteringEngine's
+// already-running BS.1770-4 LUFS meter, true-peak estimator, spectrum analyzer,
+// and stereo-field analyzer. These are MEASUREMENTS (traceable to ITU-R
+// BS.1770-4 / EBU R128), to be reported alongside the model ESTIMATE in
+// requestDecisionNow's output so the assistant can never again present the
+// peak-normalized model target as a measurement of the input.
+struct SonicMasterMeasurementSnapshot
+{
+    float lufsIntegrated  = 0.0f;
+    float lufsShortTerm   = 0.0f;
+    float lufsMomentary   = 0.0f;
+    float lra             = 0.0f;
+    float truePeakDbtp    = 0.0f;
+    float spectralCentroidHz = 0.0f;
+    float spectralTilt    = 0.0f;
+    float stereoWidth     = 0.0f;   // 0..1
+    float correlationMid  = 0.0f;   // -1..+1
+    bool  valid           = false;
+};
+
 struct SonicMasterAnalysisEngineConfig
 {
     double analysisIntervalSeconds = 3.0;
@@ -117,7 +137,12 @@ public:
 
     // Any thread (atomic). When true, capture + cycling run; when false, capture
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
-    void setActive(bool active) noexcept { active_.store(active, std::memory_order_relaxed); }
+    // PERF-MEM: First activation lazily allocates the ~12.3 MB capture ring.
+    void setActive(bool active) noexcept
+    {
+        active_.store(active, std::memory_order_relaxed);
+        if (active) ensureRing();
+    }
     [[nodiscard]] bool isActive() const noexcept { return active_.load(std::memory_order_relaxed); }
 
     [[nodiscard]] bool isAvailable() const noexcept;
@@ -155,10 +180,22 @@ public:
                             float* outRawDecision,
                             std::size_t outRawCapacity) noexcept;
 
+    /// AUDIT-FIX-1: genuine classical measurements of the live input, pulled
+    /// from AutoMasteringEngine's already-running BS.1770-4 / true-peak /
+    /// spectrum / stereo meters. These are MEASUREMENTS, to be reported
+    /// alongside the model estimate so the assistant never confuses the two.
+    /// Returns valid=false when no application engine is attached.
+    SonicMasterMeasurementSnapshot getLiveMeasurements() const noexcept;
+
 private:
     void analysisLoop() noexcept;
     bool runCycle() noexcept; // returns true if a plan was applied
     void applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept;
+
+    // PERF-MEM: Lazily allocates the capture ring (~12.3 MB) on first use.
+    // Called from setActive(true), requestDecisionNow, and runOneCycleForTest.
+    // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
+    void ensureRing() noexcept;
 
     SonicMasterAnalysisEngineConfig config_ {};
     AutoMasteringEngine* applicationEngine_ = nullptr;
@@ -184,6 +221,11 @@ private:
     std::uint64_t lastPlanId_ = 0;
     std::uint64_t nextPlanId_ = 1;
     double sampleRate_ = 48000.0;
+    // AUDIT-IX-8: steady-clock ns of the most recent capture window end. Stamped
+    // into each plan so applyRamped can drop stale plans (analysisInterval +
+    // inference latency past). Written on the analysis thread under inferMutex_,
+    // read on the same thread; relaxed atomic only because it is advisory.
+    std::uint64_t captureTimeNs_ = 0;
 };
 
 } // namespace more_phi

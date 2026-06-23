@@ -4,6 +4,7 @@
 #include "GenreClassifier.h"
 #include <algorithm>
 #include <cmath>
+#include <juce_core/juce_core.h>
 
 namespace more_phi {
 
@@ -82,14 +83,79 @@ void GenreClassifier::feedAudio(const juce::AudioBuffer<float>& audio, double sa
 
 void GenreClassifier::runClassification()
 {
-    // ONNX inference stub — model not loaded; keep default genre.
-    if (!modelLoaded_.load(std::memory_order_relaxed)) return;
+    if (modelLoaded_.load(std::memory_order_relaxed))
+    {
+        // ONNX path: see header comment for the intended pipeline.
+        // (Not wired — model export is blocked. Falls through to heuristic.)
+    }
 
-    // When model is loaded:
-    // 1. Compute mel spectrogram of audioAccum_ (128 bins, 10 s, hop 512)
-    // 2. Run ONNX session: input [1, 128, frames] → output [1, 12]
-    // 3. Apply softmax
-    // 4. Write to back buffer, swap, update topGenre_ / topConf_
+    // ponytail: no model available, so guess the genre from cheap time-domain
+    // features of the accumulated mono buffer. Coarse by design — only good
+    // enough to unstick the AI decision chain so LUFS/EQ/exciter react to what's
+    // playing. The 12-class CNN remains the upgrade path.
+    if (accumulatedSamples_ <= 0 || sampleRate_ <= 0.0)
+        return;
+
+    const float* d = audioAccum_.getReadPointer(0);
+    const int N = audioAccum_.getNumSamples();
+    if (d == nullptr || N <= 0)
+        return;
+
+    // AUDIT-FIX-7: split low vs high band energy at ~200 Hz. The previous code
+    // hardcoded a one-pole alpha of 0.05 (claiming "~200 Hz at 48k") but that is
+    // actually ~402 Hz at 48k and ~837 Hz at 96k, AND computed a `split` index
+    // it then threw away (juce::ignoreUnused). Derive alpha from the actual
+    // sample rate for a true -3 dB point at 200 Hz: fc = alpha*fs / (2*pi*(1-alpha)).
+    // Solving for alpha: alpha = 2*pi*fc / (fs + 2*pi*fc).
+    constexpr double kTargetCutoffHz = 200.0;
+    const double alpha = (2.0 * juce::MathConstants<double>::pi * kTargetCutoffHz)
+                         / (sampleRate_ + 2.0 * juce::MathConstants<double>::pi * kTargetCutoffHz);
+    double lowE = 0.0, highE = 0.0;
+    double lp = 0.0;  // one-pole low-pass state (also acts as DC-blocker via residual)
+    for (int i = 0; i < N; ++i)
+    {
+        lp += alpha * (static_cast<double>(d[i]) - lp);
+        const double lo = lp;
+        const double hi = static_cast<double>(d[i]) - lp;
+        lowE  += lo * lo;
+        highE += hi * hi;
+    }
+
+    // Zero-crossing rate → brightness/noise proxy.
+    int crossings = 0;
+    for (int i = 1; i < N; ++i)
+        crossings += (d[i] >= 0.f) != (d[i - 1] >= 0.f);
+
+    const double zcr = static_cast<double>(crossings) / static_cast<double>(N);
+    const double lowFrac = lowE / (lowE + highE + 1e-12);
+
+    // Map features → one of a few representative genres. Index reference:
+    // 0 electronic_dance, 1 house_techno, 2 hip_hop_rnb, 3 pop, 4 rock,
+    // 5 folk_acoustic, 6 jazz, 7 classical, 8 ambient, 9 metal,
+    // 10 streaming_default, 11 broadcast
+    int guess = 10;
+    float conf = 0.6f;
+    if (lowFrac > 0.55 && zcr < 0.08)        { guess = 2;  conf = 0.65f; }  // hip_hop/rnb: bass-heavy, dark
+    else if (lowFrac > 0.45 && zcr < 0.10)   { guess = 1;  conf = 0.6f;  }  // house/techno: punchy low end
+    else if (lowFrac < 0.30 && zcr < 0.06)   { guess = 7;  conf = 0.6f;  }  // classical: bright-ish, low ZCR
+    else if (lowFrac < 0.25)                 { guess = 5;  conf = 0.55f; }  // folk/acoustic: sparse low end
+    else if (zcr > 0.18)                     { guess = 9;  conf = 0.6f;  }  // metal: bright/noisy
+    else if (zcr > 0.13)                     { guess = 4;  conf = 0.55f; }  // rock
+    else if (lowFrac > 0.40)                 { guess = 0;  conf = 0.55f; }  // electronic_dance
+    else                                      { guess = 3;  conf = 0.5f;  }  // pop fallback
+
+    topGenre_.store(guess, std::memory_order_relaxed);
+    topConf_.store(conf,  std::memory_order_relaxed);
+
+    // Publish the full probability vector (sparse: top = conf, rest spread).
+    const int back = frontBuffer_.load(std::memory_order_relaxed) == 0 ? 1 : 0;
+    auto& out = (back == 0) ? probsA_ : probsB_;
+    out.fill(0.f);
+    out[guess] = conf;
+    const float rest = (1.f - conf) / static_cast<float>(kNumGenres - 1);
+    for (int i = 0; i < kNumGenres; ++i)
+        if (i != guess) out[i] = rest;
+    frontBuffer_.store(back, std::memory_order_release);
 }
 
 void GenreClassifier::timerCallback()
@@ -100,9 +166,12 @@ void GenreClassifier::timerCallback()
 
     if (!hasNewAudio_.load(std::memory_order_acquire)) return;
     hasNewAudio_.store(false, std::memory_order_relaxed);
-    accumulatedSamples_ = 0;
 
     runClassification();
+
+    // ponytail: reset the accumulator AFTER classification so runClassification's
+    // accumulatedSamples_ guard sees the freshly captured window, not zero.
+    accumulatedSamples_ = 0;
 }
 
 } // namespace more_phi

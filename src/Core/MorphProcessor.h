@@ -16,6 +16,8 @@
 #include <atomic>
 #include <memory>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace more_phi {
 
@@ -66,7 +68,12 @@ public:
     bool getListenMode() const { return listenMode_.load(std::memory_order_relaxed); }
 
     // ATS-H2: Double-buffer pattern — truly lock-free (no shared_ptr ref-count contention)
-    void setDiscreteMap(const std::vector<bool>& map)
+    // W5 FIX: take the map by value. The previous && overload forwarded back
+    // into the const& overload by name (decaying to an lvalue ref), so no move
+    // ever happened — the signature was misleading. By-value is honest: callers
+    // can pass an lvalue (copied once) or a moved/temporary (move-constructed
+    // into this parameter), and the body always iterates a contiguous vector.
+    void setDiscreteMap(std::vector<bool> map)
     {
         int current = discreteActiveIndex_.load(std::memory_order_acquire);
         int next = 1 - current;
@@ -78,10 +85,6 @@ public:
             buf[i] = map[i] ? 1u : 0u;
         discreteActiveIndex_.store(next, std::memory_order_release);
     }
-    void setDiscreteMap(std::vector<bool>&& map)
-    {
-        setDiscreteMap(map);
-    }
 
     // Sentinel value written to morph output for params that should NOT be applied
     static constexpr float SKIP_SENTINEL = -1.0f;
@@ -91,9 +94,20 @@ public:
     float getProcessedY() const { return processedY_.load(std::memory_order_relaxed); }
 
     // Cursor trail ring buffer (written by audio, read by UI)
+    // C3 FIX: Each trail point is published as a single atomic 64-bit value
+    // (two floats packed together) so the UI paint thread reads a consistent
+    // {x,y} pair with no torn-read data race. The old std::array<TrailPoint>
+    // was written element-wise by the audio thread and read element-wise by
+    // the UI thread — UB under the C++ memory model.
     static constexpr int TRAIL_SIZE = 64;
     struct TrailPoint { float x, y; };
-    const std::array<TrailPoint, TRAIL_SIZE>& getTrail() const { return trail_; }
+    TrailPoint getTrailPoint(int index) const
+    {
+        const uint64_t packed = trail_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+        TrailPoint p;
+        std::memcpy(&p, &packed, sizeof(p));   // type-pun via memcpy (no aliasing UB)
+        return p;
+    }
     int getTrailHead() const { return trailHead_.load(std::memory_order_relaxed); }
 
 private:
@@ -131,7 +145,8 @@ private:
     std::vector<float> smoothedValues_;
 
     // Trail
-    std::array<TrailPoint, TRAIL_SIZE> trail_{};
+    // C3 FIX: atomic-packed trail points (two floats per uint64_t) — see getTrailPoint.
+    std::array<std::atomic<uint64_t>, TRAIL_SIZE> trail_{};
     std::atomic<int> trailHead_{0};
     float trailTimer_ = 0.0f;
     static constexpr float TRAIL_INTERVAL = 0.016f;  // ~60 Hz trail sampling

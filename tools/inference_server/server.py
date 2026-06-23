@@ -98,6 +98,17 @@ def infer(waveform_np: np.ndarray, target_lufs: float) -> np.ndarray:
     return decision[:STATE.output_width]
 
 
+def decode_interleaved_stereo(samples: np.ndarray) -> np.ndarray:
+    """Convert [L0,R0,L1,R1,...] float samples to contiguous [2, frames]."""
+    samples = np.asarray(samples, dtype=np.float32)
+    expected_samples = 2 * SEGMENT_FRAMES
+    if samples.size < expected_samples:
+        raise ValueError(f"not enough samples: {samples.size}, need {expected_samples}")
+
+    frames_lr = samples[:expected_samples].reshape(SEGMENT_FRAMES, 2)
+    return np.ascontiguousarray(frames_lr.T)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -137,10 +148,10 @@ async def infer_endpoint(request: Request,
                 status_code=400,
                 detail=f"body too short: {len(raw)} bytes, need {expected}")
         samples = np.frombuffer(raw[:expected], dtype="<f4").astype(np.float32)
-        # Interleaved L,R,L,R -> split into [2, SEGMENT_FRAMES].
-        interleaved = samples.reshape(2, SEGMENT_FRAMES)
+        # Interleaved L,R,L,R -> channels-first [2, SEGMENT_FRAMES].
+        waveform = decode_interleaved_stereo(samples)
         t0 = time.perf_counter()
-        decision = infer(interleaved, target_lufs)
+        decision = infer(waveform, target_lufs)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return JSONResponse({
             "decision": [float(x) for x in decision],

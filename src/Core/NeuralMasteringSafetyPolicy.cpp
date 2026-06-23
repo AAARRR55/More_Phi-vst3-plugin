@@ -342,6 +342,11 @@ NeuralMasteringValidationResult NeuralMasteringSafetyPolicy::validate(const Neur
     result.plan.fallbackMode = NeuralMasteringFallbackMode::None;
     result.plan.gateResults = makeDefaultGates();
     result.plan.evidenceLevel = candidate.evidenceLevel;
+    // AUDIT-FIX: propagate the compressor sidecar from the candidate so the
+    // verdict preserves the model's full per-band params. Previously dropped.
+    result.plan.compParams    = candidate.compParams;
+    result.plan.hasCompParams = candidate.hasCompParams;
+    result.plan.capturedAtSteadyClockNs = candidate.capturedAtSteadyClockNs;
 
     if (candidate.schemaVersion != config_.planSchemaVersion)
         result.addIssue(NeuralMasteringValidationIssue::SchemaVersionMismatch);

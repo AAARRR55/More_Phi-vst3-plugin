@@ -16,6 +16,7 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <mutex>
 
 namespace more_phi {
 
@@ -119,6 +120,15 @@ public:
     /** Check if a plugin swap is currently in progress. */
     bool isPluginSwapping() const noexcept { return isSwapping_.load(std::memory_order_acquire); }
 
+    /**
+     * C1 FIX: Destroy any plugin instances whose teardown was deferred because
+     * audio-thread leases were still held when unloadPlugin() timed out.
+     * Safe to call repeatedly; no-op when nothing is pending. Call from the
+     * message thread (e.g. on the maintenance timer) so destruction can run
+     * without blocking real-time audio.
+     */
+    void drainDeferredDoomedPlugins();
+
 private:
     // Suspend (bypass audio) a misbehaving plugin after this many consecutive
     // exceptions. Raised from 5 to tolerate short DAW reconfiguration bursts.
@@ -188,6 +198,14 @@ private:
 
     // C3 FIX: Callback invoked when plugin is unloaded so editor can close UI windows
     std::function<void()> windowCloseCallback_;
+
+    // C1 FIX: Plugin instances detached from live use but not yet destroyed
+    // because audio-thread leases were held at unload time. Drained from the
+    // message thread by drainDeferredDoomedPlugins() once users reach zero.
+    // A mutex is acceptable here: only touched on the message thread, and
+    // the drain is best-effort (a missed drain just defers to the destructor).
+    std::mutex deferredDoomMutex_;
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> deferredDoomedPlugins_;
 };
 
 } // namespace more_phi

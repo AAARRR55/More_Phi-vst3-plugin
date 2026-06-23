@@ -178,6 +178,27 @@ int countMapped(const OzoneParameterMap& map) noexcept
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+// AUDIT-FIX-5
+bool OzoneParameterMap::hasAnyMapping() const noexcept
+{
+    for (int i = 0; i < kEQBands; ++i)
+    {
+        const auto& b = eq[static_cast<std::size_t>(i)];
+        if (b.freqIdx >= 0 || b.gainIdx >= 0 || b.qIdx >= 0
+            || b.typeIdx >= 0 || b.enabledIdx >= 0)
+            return true;
+    }
+    if (dynamics.thresholdIdx >= 0 || dynamics.ratioIdx >= 0
+        || dynamics.attackIdx >= 0 || dynamics.releaseIdx >= 0)
+        return true;
+    for (int i = 0; i < 4; ++i)
+        if (imager.widthIdx[static_cast<std::size_t>(i)] >= 0)
+            return true;
+    if (maximizer.outputLevelIdx >= 0 || maximizer.ceilingIdx >= 0)
+        return true;
+    return false;
+}
+
 OzoneParameterMap OzoneParameterMap::buildForOzone11()
 {
     OzoneParameterMap m;

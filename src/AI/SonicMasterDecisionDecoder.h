@@ -24,6 +24,14 @@ inline constexpr std::size_t kSonicMasterCompOffset    = 11; // 18 floats: 3 x (
 inline constexpr std::size_t kSonicMasterCompBandCount = 3;
 inline constexpr std::size_t kSonicMasterCompBandWidth = 6;
 
+// AUDIT-FIX-3: the agreed compressor-ratio range, shared by the decoder
+// (SonicMasterDecisionDecoder.cpp) and the engine (AutoMasteringEngine.cpp
+// applyValidatedPlan). Both must clamp to the same range or the decoded plan
+// and the applied DSP disagree by up to 3.3x. Raise BOTH together (and verify
+// MultibandDynamicsProcessor supports the wider range) before widening.
+inline constexpr float kSonicMasterCompRatioMin = 1.0f;
+inline constexpr float kSonicMasterCompRatioMax = 6.0f;
+
 // AUDIT-2/3: the model emits these counts; AutoMasteringEngine applies ONLY
 // these many bands from a SonicMaster plan and leaves the rest to the genre
 // translator / heuristic warm-start. (The engine's own DSP modules expose more

@@ -191,9 +191,15 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     if (!isLicensed)
         licenseOverlay.toFront(false);
 
+    // ponytail: FL Studio composites an unbuffered plugin window every frame,
+    // re-running paint() (incl. a ColourGradient alloc) on the shared message
+    // thread — that's the host-wide UI lag. Buffering the editor to an image
+    // makes FL blit the cache and only re-paint invalidated regions (meter).
+    setBufferedToImage(true);
+
     // M-16 FIX: Reduced from 30Hz to 15Hz — sufficient for UI updates,
     // reduces CPU overhead and message-thread contention.
-    startTimerHz(30);  // 30 FPS for smooth meter-glide animation
+    startTimerHz(15);  // meter-glide + status refresh; 15Hz is plenty visible
 }
 
 MorePhiEditor::~MorePhiEditor()
@@ -425,6 +431,7 @@ void MorePhiEditor::setAITabVisible(bool visible)
 
 void MorePhiEditor::timerCallback()
 {
+    MSG_TRACE(processor.getDiagnostics(), "Editor::timerCallback");
     // Check license state changes
     const bool isLicensed = processor.getLicenseRuntimeState().premiumFeaturesEnabled.load(std::memory_order_relaxed);
     if (licenseOverlay.isVisible() == isLicensed)

@@ -1,9 +1,18 @@
 # SonicMaster v2 → VST3 Realtime Neural Mastering Integration
 
-**Date:** 2026-06-21
-**Status:** Design — approved (pending implementation plan)
+**Date:** 2026-06-21 (updated 2026-06-23)
+**Status:** Implemented — ONNX export solved, in-process inference active, HTTP fallback retained
 **Source model:** `sonicmaster-v3-decision-engine-20260530T121536Z` → `models/v3/mastering-brain-v2-fullchain-best/checkpoints/best.ckpt`
 **Target host:** More-Phi VST3 (`src/`), `AutoMasteringEngine` realtime DSP chain
+
+> **2026-06-23 update:** The ONNX export blocker (§2) has been resolved.
+> `tools/export_onnx/export_patched.py` patches three ONNX-incompatible ops:
+> (1) `nn.TransformerEncoder` → manual Multi-Head Attention with identical
+> state-dict, (2) `torch.fft.rfft`/`rfftfreq` → STFT-based spectral injection,
+> (3) `torch.stft(return_complex=True)` → `return_complex=False` with manual
+> magnitude. Parity verified (max abs diff 4.01×10⁻⁵). The plugin now uses
+> ONNX in-process inference as primary, with HTTP server as fallback
+> (`MorePhiProcessor::initializeSonicMaster()`). See `tools/export_onnx/README.md`.
 
 ---
 

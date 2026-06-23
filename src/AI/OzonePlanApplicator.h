@@ -44,8 +44,16 @@ public:
      *
      * Parameters with index == -1 in the map are silently skipped.
      * Returns the number of parameters actually enqueued.
+     *
+     * AUDIT-FIX-5: if the map is all-stubs (no audit_ozone_parameters run yet),
+     * this logs a loud warning so the silent no-op cannot be mistaken for a
+     * successful apply. The return count is still 0; callers that care should
+     * prefer isReady() before calling apply().
      */
     int apply(const MultiEffectPlan& plan) override;
+
+    /** AUDIT-FIX-5: true iff the map has at least one mapped parameter. */
+    [[nodiscard]] bool isReady() const noexcept { return map_.hasAnyMapping(); }
 
     /** Read back the number of parameters applied in the last apply() call. */
     int getLastAppliedCount() const noexcept override { return lastAppliedCount_; }

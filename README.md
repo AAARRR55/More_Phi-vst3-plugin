@@ -19,6 +19,18 @@
 
 ---
 
+## Technical Architecture
+
+Under the hood, More-Phi is organized into specific layers ensuring strict real-time safety:
+
+- **Core Audio & MIDI**: The `MorphProcessor` and `MIDIRouter` leverage complete `noexcept` lock-free constraints to evaluate 2D parameter physics bounds (Elastic/Drift algorithms) mathematically, ensuring flawless DAW integration free of dropouts.
+- **Embedded MCP Subsystem**: A dedicated multithreaded AI routing agent featuring JSON RPC connectivity with caching, built on bounded queues designed intentionally for real-time plugin parameter adjustments at rapid latency responses. Runs independently on localhost.
+- **Plugin Hosting**: An abstract Host Manager lifecycle bridging opaque 3rd-party audio frameworks (VST3/AU) onto mathematical standard float structures to ensure synchronized internal memory configurations across parameters and serialized components seamlessly.
+
+*See `docs/TECHNICAL_DOCUMENTATION.md` and `docs/DEVELOPER_GUIDE.md` for deep developer architecture specifications.*
+
+---
+
 ## Installation
 
 ### Windows

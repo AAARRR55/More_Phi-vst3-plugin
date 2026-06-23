@@ -49,6 +49,12 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 3. **MorphProcessor** — Orchestrates: physics engine → interpolation engine → smoothing → output vector
 4. **ParameterBridge** — Applies normalized float vector to hosted plugin's parameters
 
+**C-3 fix (2026-07-15):** The command drain is gated by `commandConsumerLock_` try-lock (`canDrainCommands`). Morph-to-parameter application always proceeds independently — it has its own `touchStateLock_` try-lock. This prevents parameter-write dropouts when the assistant flush path holds `commandConsumerLock_`. `liveEditHold_` reads are now inside the `hasTouchLock` guard.
+
+**C-1 fix (2025-07-21):** `reconfigureAudioDomainProcessing()` uses a 100ms hard-timeout spin-wait for `audioDomainUsers_` to reach zero. On expiry it re-dirties the config flag and returns, retrying on the next timer tick — this prevents message-thread stalls when the audio thread is mid-processing with large FFT sizes.
+
+**W-5 fix (2025-07-21):** `prepareToPlay` stores `prepared` with `memory_order_release`; `processBlock` loads with `memory_order_acquire`. This explicit pairing avoids the implicit `seq_cst` overhead of the old `prepared = false` / `if (!prepared)` pattern. Same convention applies to `releaseResources`.
+
 ### Layer Responsibilities
 
 | Layer | Key Classes | Role |
@@ -57,18 +63,20 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
 | `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner` | VST3/AU hosting, parameter read/write |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
-| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses ~6s of audio on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. The HTTP source drives the local Python inference server (`tools/inference_server/`) — the working path while the checkpoint's ONNX export remains blocked. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
+| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses ~6s of audio on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. The primary inference path is the in-process ONNX runner (`SonicMasterDecisionRunner`, loads `masteringbrain_v2_decision.onnx`); the HTTP source (`tools/inference_server/`) is the fallback. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
 | `src/MIDI/` | `MIDIRouter` | Note triggers + CC routing |
 | `src/Preset/` | `MetaPresetManager`, `PresetSerializer` | Meta-preset save/load |
 | `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, etc. | All UI components |
 
 ### Threading Model
 
-Three thread domains with strict boundaries:
+Three thread domains with strict boundaries, plus agent-owned workers:
 
 - **Audio thread**: `processBlock()`, `MorphProcessor::process()`, `InterpolationEngine`, `PhysicsEngine` — all `noexcept`, zero allocations after `prepare()`, no locks
 - **Message thread**: UI components, Timer callbacks (deferred plugin loading), MCP connection handling
 - **MCP thread**: `MCPServer::run()` — accepts JSON-RPC connections, enqueues parameter changes via `LockFreeQueue`
+- **Agent scheduler workers (2 threads)**: `PriorityScheduler::workerLoop()` — executes agent tasks (sync, on workers only). Uses 4-level multi-queue with O(1) operations. Starvation guard 1000ms
+- **Blackboard pump thread**: Polls `IntegrationEventBus` every 50ms, fans out to agent subscribers
 
 ### Multi-Agent Orchestration Layer
 
@@ -92,18 +100,77 @@ An additive agent layer sits ABOVE the existing `MCPToolHandler` / `AutomationCo
 
 ### Key Concurrency Primitives
 
-- **Seqlock** in `SnapshotBank` — Audio thread reads snapshot data lock-free with retry; UI/MCP writes serialize via `SpinLock` + sequence counter
-- **SPSC LockFreeQueue** — Power-of-2 ring buffer with cache-line-aligned indices; used for `ParamCommand` from UI/MCP → audio thread
-- **Atomics** (`memory_order_relaxed`) — All morph position, physics mode, and toggle state transferred between UI and audio threads
-- **Touch detection** — Prevents morph from overwriting manual knob changes using per-parameter cooldown counters
+- **Seqlock** in `SnapshotBank` — Audio thread reads snapshot data lock-free with retry; UI/MCP writes serialize via `SpinLock` + sequence counter. `findParameterIndex()` uses `ScopedTryLockType` to avoid blocking the audio thread.
+- **SPSC LockFreeQueue** — Power-of-2 ring buffer with cache-line-aligned indices; multi-producer safe via internal `SpinLock` on push. Used for `ParamCommand` from UI/MCP → audio thread.
+- **Multi-queue PriorityScheduler** — 4 per-priority-level `std::queue` for agent task scheduling with O(1) push/pop/starvation-promotion (H-1/M-4 fix, 2026-07-15). Starvation guard: 1000ms.
+- **SpinLock try-lock gates** — `commandConsumerLock_` try-lock gates only command drain (not morph application — C-3 fix). `touchStateLock_` try-lock protects touch detection vectors during morph apply. Both non-blocking on audio thread.
+- **Atomics** (`memory_order_relaxed`) — All morph position, physics mode, and toggle state transferred between UI and audio threads. See Memory Ordering table above for the full convention.
+- **Timer-deferred notification** — `morphPositionNotifyPending_` flag + `requestMessageThreadMaintenance()` replaces `callAsync()` for APVTS morph-position sync. Timer fires reliably on message thread even with editor closed.
+- **Touch detection** — Prevents morph from overwriting manual knob changes using per-parameter cooldown counters. Dynamic cooldown duration (~200ms) computed from sample rate / block size in `prepareToPlay()`.
+- **PERF-IA: Interleaved touch sampling** (2026-07-16) — Instead of calling `getValue()` on all 2,048 parameters every block (the dominant CPU cost), only samples 1/`kTouchSamplingStride` (4) params per block using a rotating `touchSamplingPhase_`. Touch detection is gated to sampled params only. Cooldown tick-down and morph setValue still run for all params. Reduces getValue virtual-call cost by ~75%, touch detection latency ~20ms (well within ~200ms cooldown).
+- **PERF-CPU: CPU Saver mode** (2026-07-16) — New `cpuSaver` APVTS bool parameter (default OFF). When enabled, halves audio-domain FFT size (min 512) and caps oversampling at ×2. Reduces audio-domain CPU by ~40-60%. Applied in both `prepareToPlay` and `syncStateFromAPVTS`.
+- **PERF-MEM: SonicMaster lazy ring allocation** (2026-07-16) — The 12.3 MB `AudioCaptureRing` is now allocated lazily via `ensureRing()` on first `setActive(true)`, `requestDecisionNow()`, or `runCycle()`. `prepare()` resets the ring to nullptr. Saves ~60% of More-Phi's owned memory when SonicMaster is inactive.
+- **PERF-MEM: throttleStates_ reduction** (2026-07-16) — Reduced from 8192 to 4096 entries (~64 KB saved).
 
 ### Interfaces for Testability
 
 `IPluginHostManager`, `IParameterBridge`, `IMCPServer` (all in `Host/IPluginHostManager.h`) — abstract interfaces that enable mock injection in tests.
 
+## Coding Conventions (2025-07-21 audit)
+
+### Memory Ordering
+
+**Rule:** Always use explicit `.load(memory_order)` / `.store(value, memory_order)` on `std::atomic<T>`. Never rely on implicit `operator T()` / `operator=(T)` which default to `seq_cst`.
+
+**Default choices by use case:**
+| Use case | Load order | Store order | Rationale |
+|----------|-----------|-------------|-----------|
+| UI→audio hints (morph XY, physics mode, toggles) | `relaxed` | `relaxed` | No dependent data; eventual visibility is fine |
+| Lifecycle flags (`prepared`, `shuttingDown_`) | `acquire` | `release` | Pairs with prepare/release → processBlock handoff |
+| Pending-work flags (`mcpStartPending_`, `morphPositionNotifyPending_`) | `acquire` | `release` | Ensure payload writes are visible when flag is observed |
+| Reference counts (`audioThreadActive_`, `audioDomainUsers_`) | `acq_rel` (fetch_add/sub) | — | Modify-and-read in one operation |
+
+Avoid `seq_cst` unless multiple atomics must be globally ordered across threads — it's the most expensive barrier.
+
+### Logging
+
+- **`DBG()` is the only approved logging macro.** Never use `std::cout`, `printf`, `std::cerr`, or `Logger::writeToLog` directly.
+- On potentially-audio-thread paths (e.g. `getStateInformation` during offline render), wrap `DBG()` calls in `#if JUCE_DEBUG` blocks so Release builds emit zero code — even an empty `if` branch with a no-op `DBG()` triggers MSVC warning C4390.
+- Example pattern:
+```cpp
+if (!isAudioThread)  // runtime guard — skip all logging on audio thread
+{
+#if JUCE_DEBUG
+    DBG("message: " + someString);
+#endif
+}
+```
+
+### Profiling
+
+- **`MORE_PHI_PROFILE(profiler_, "section_name")`** — RAII timer macro (opt-in via `MORE_PHI_ENABLE_PROFILING=ON`). Expands to no-op in Release builds without the flag. **CRITICAL:** Sections MUST be registered via `profiler_.registerSection("section_name")` in `prepareToPlay()` BEFORE audio starts — otherwise all timing data is silently dropped (the audio-thread `updateStats()` path skips unregistered sections to avoid allocation).
+- **13 sections currently registered** (2026-07-16): `processBlock_total`, `command_queue_drain`, `midi_processing`, `morph_computation`, `modulation_engine`, `parameter_application`, `hosted_plugin_process`, `sonicmaster_capture`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`.
+- **`MorePhiProcessor::getProfilingReport()`** — Returns a formatted string with per-section avg/max/percentage. Called from MCP tools and UI diagnostics.
+- **`MorePhiDiagnostics`** — 250ms watchdog timer detects message-thread stalls. Enabled with `MORE_PHI_ENABLE_PROFILING`. Writes to `diagnostics-<pid>.log`.
+
+### Thread-Safe Patterns
+
+- **Prefer Timer-deferred notification over `MessageManager::callAsync()`.** `callAsync()` can silently drop callbacks in headless hosts (FL Studio, Linux) or when the editor is closed. Instead: set an atomic flag, call `requestMessageThreadMaintenance()`, and handle the work in `timerCallback()` on the message thread. See `morphPositionNotifyPending_` for the canonical example.
+- **Spin-waits on the message thread MUST have a hard timeout.** See `reconfigureAudioDomainProcessing()` — 100ms deadline with re-dirty + retry on next timer tick. Unbounded spin-waits cause UI jank.
+- **`pendingStateMutex_` is a spinlock that protects a `MemoryBlock` copy which may heap-allocate.** It is only acquired on the message thread (never audio). This is acceptable because contention is effectively zero (single-threaded message loop).
+- **`hostManager` is `mutable`** — `acquirePluginForUse()`/`releasePluginFromUse()` only mutate atomics and are logically const. This eliminates `const_cast` in `getTailLengthSeconds()` and similar const methods.
+
+### Interface Documentation
+
+- **`IPluginHostManager::getPlugin()` returns a raw pointer whose lifetime is bound to the owning `PluginHostManager`.** It is NOT stable across plugin load/unload cycles. For audio-thread and parameter-bridge access, use `acquirePluginForUse()`/`releasePluginFromUse()` which provide ref-counted safety. `getPlugin()` is provided primarily for test stubs and single-call check-then-use with no intervening yield.
+
 ### State Persistence
 
 `getStateInformation`/`setStateInformation` serialize: APVTS parameters + snapshot bank (base64-encoded floats in XML) + hosted plugin description + opaque VST3 state chunk. Plugin reload on state restore uses Timer-based deferred loading with retry logic (max 10 attempts) to handle DAW threading constraints.
+
+**Thread-safety note:** `getStateInformation()` detects audio-thread callers (offline render/export) via `MessageManager::isThisTheMessageThread()`. On the audio thread it skips `beginExclusivePluginUse()` entirely and falls back to the buffered pending state copy from `pendingStateMutex_`. All `DBG()` calls in this function are guarded by `if (!isAudioThread)` + `#if JUCE_DEBUG`.
+
+**VST3 Program Interface:** Exposes all 12 snapshot slots as DAW "programs" for preset-browser integration. Empty slots appear as "Empty N" and are selectable (no-op on recall). `setCurrentProgram()` calls `recallSnapshotQueued()` which enqueues parameter writes through the multi-producer-safe `LockFreeQueue`.
 
 ### Parameter Classification (v3.3.0)
 
@@ -162,7 +229,8 @@ Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 - `cmake/PatchJuceForMSVC.cmake` patches JUCE headers that conflict with Windows macros
 - AU format only built on macOS; Windows builds VST3 only
 - `ParameterState` uses fixed `std::array<float, 2048>` (no heap allocation) for real-time safety
-- `SnapshotBank` heap-allocates its 12-slot array (~384 KB) to avoid stack overflow in hosts with small thread stacks
+- `SnapshotBank` heap-allocates its 12-slot array (~97 KB: 12 × 2048 × 4 B + overhead) to avoid stack overflow in hosts with small thread stacks
+- `SnapshotBank::toXml()` contains a `static_assert` verifying the local `nameBuf[64]` matches `ParameterState::name[64]` to prevent silent truncation
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,

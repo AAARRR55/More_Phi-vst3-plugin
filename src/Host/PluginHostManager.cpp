@@ -8,7 +8,6 @@
  */
 #include "PluginHostManager.h"
 #include <exception>
-#include <iostream>
 
 namespace more_phi {
 
@@ -20,6 +19,36 @@ PluginHostManager::PluginHostManager()
 PluginHostManager::~PluginHostManager()
 {
     unloadPlugin();
+    // C1 FIX: final drain — anything still deferred (audio leases held at the
+    // very end) is destroyed now. By this point the AudioProcessor is gone and
+    // no processBlock caller can exist.
+    drainDeferredDoomedPlugins();
+}
+
+void PluginHostManager::drainDeferredDoomedPlugins()
+{
+    // Message-thread only. Destroy any plugin whose teardown was deferred
+    // because audio-thread leases were still held when unloadPlugin() timed
+    // out. If a lease is STILL held (host misbehaving), leave it for next
+    // drain or the destructor rather than creating a use-after-free.
+    if (activePluginUsers_.load(std::memory_order_acquire) > 0)
+        return;
+
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> toDestroy;
+    {
+        std::lock_guard<std::mutex> guard(deferredDoomMutex_);
+        toDestroy.swap(deferredDoomedPlugins_);
+    }
+    // Destroy outside the lock — releaseResources() may be slow.
+    for (auto& doomed : toDestroy)
+    {
+        if (doomed)
+        {
+            try { doomed->releaseResources(); }
+            catch (...) { /* silent during teardown */ }
+            doomed.reset();
+        }
+    }
 }
 
 juce::AudioPluginInstance* PluginHostManager::acquirePluginForUse() noexcept
@@ -198,8 +227,9 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
     if (!newPlugin)
     {
         DBG("Failed to load plugin: " + errorMessage);
-        std::cerr << "[PluginHostManager] createPluginInstance failed: "
-                  << errorMessage << std::endl;
+        // B1 FIX: replaced std::cerr with DBG (AGENTS.md: DBG is the only
+        // approved logging macro). This is the message-thread load path.
+        DBG("[PluginHostManager] createPluginInstance failed: " + errorMessage);
         // IMPORTANT: do NOT unload the current plugin — keep it running
         return false;
     }
@@ -292,31 +322,52 @@ void PluginHostManager::unloadPlugin()
         if (windowCloseCallback_)
             juce::MessageManager::callAsync([cb = windowCloseCallback_]() { cb(); });
 
-        // FIX C2: Bounded wait for active audio-thread leases. An unbounded spin
-        // here can hang the DAW forever if a lease holder is stalled. After a
-        // 500 ms grace window we proceed; the lease holder may still touch the
-        // (now detached) plugin instance, but that is preferable to freezing the
-        // host. The plugin instance itself is kept alive until hostedPlugin.reset().
+        // FIX C2/C1: Bounded wait for active audio-thread leases. An unbounded
+        // spin here can hang the DAW forever if a lease holder is stalled. After
+        // a 500 ms grace window we detach the plugin from live use
+        // (hostedPluginPtr_ is already nulled above, so new acquirePluginForUse()
+        // calls return nullptr) but we do NOT destroy it while a lease is held —
+        // that would be a use-after-free. Instead we move it to the deferred-doom
+        // queue, which the message-thread maintenance timer drains once
+        // activePluginUsers_ returns to zero (see drainDeferredDoomedPlugins).
         const auto waitStart = juce::Time::getMillisecondCounter();
-        while (activePluginUsers_.load(std::memory_order_acquire) > 0)
-        {
-            if (static_cast<int>(juce::Time::getMillisecondCounter() - waitStart) > 500)
+        const bool leasesDrained = [&, this]() {
+            while (activePluginUsers_.load(std::memory_order_acquire) > 0)
             {
-                DBG("PluginHostManager::unloadPlugin — timeout waiting for audio thread lease");
-                break;
+                if (static_cast<int>(juce::Time::getMillisecondCounter() - waitStart) > 500)
+                {
+                    DBG("PluginHostManager::unloadPlugin — timeout waiting for audio thread lease; deferring destruction");
+                    return false;
+                }
+                juce::Thread::sleep(1);
             }
-            juce::Thread::sleep(1);
-        }
+            return true;
+        }();
 
-        try
+        if (leasesDrained)
         {
-            hostedPlugin->releaseResources();
+            try
+            {
+                hostedPlugin->releaseResources();
+            }
+            catch (...)
+            {
+                // Silently handle during unload
+            }
+            hostedPlugin.reset();
         }
-        catch (...)
+        else
         {
-            // Silently handle during unload
+            // C1 FIX: leases still held. Move the instance to the deferred-doom
+            // queue. It stays alive until all in-flight audio leases drop, then
+            // the maintenance timer (or destructor) destroys it. No UAF.
+            std::unique_ptr<juce::AudioPluginInstance> doomed = std::move(hostedPlugin);
+            // hostedPlugin is now nullptr. Queue for later teardown.
+            {
+                std::lock_guard<std::mutex> guard(deferredDoomMutex_);
+                deferredDoomedPlugins_.push_back(std::move(doomed));
+            }
         }
-        hostedPlugin.reset();
     }
 
     hasPreparedConfiguration_ = false;
@@ -601,6 +652,28 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
 {
     const auto pluginPath = pluginFile.getFullPathName();
 
+    // B1 FIX: discovery progress used to go to std::cerr, violating the
+    // AGENTS.md "DBG is the only approved logging macro" rule. All verbose
+    // diagnostics now route through DBG. `verbose` still gates output so the
+    // default behavior is silent.
+    auto verboseLog = [&](const juce::String& message)
+    {
+        if (verbose)
+        {
+#if JUCE_DEBUG
+            DBG("[Discovery] " + message);
+#else
+            // Release: DBG expands to nothing; reference message to avoid
+            // C4100/C4390 (unreferenced param / empty controlled statement).
+            juce::ignoreUnused(message);
+#endif
+        }
+        else
+        {
+            juce::ignoreUnused(message);
+        }
+    };
+
     // Helper: acquire MessageManagerLock if a MessageManager exists.
     // Many VST3 plugins require the message pump during scanning/creation.
     auto withMessageLock = [](auto&& fn) -> bool
@@ -618,8 +691,7 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
     // ------------------------------------------------------------------
     //  Stage 1: Direct file query — fast path for well-behaved plugins
     // ------------------------------------------------------------------
-    if (verbose)
-        std::cerr << "[Discovery] Stage 1: findAllTypesForFile for " << pluginPath << "\n";
+    verboseLog("Stage 1: findAllTypesForFile for " + pluginPath);
 
     bool stage1Success = false;
 
@@ -638,29 +710,24 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
                 if (!descriptions.isEmpty())
                 {
                     outDescription = *descriptions.getFirst();
-                    if (verbose)
-                        std::cerr << "[Discovery] Stage 1 succeeded: "
-                                  << outDescription.name << " ("
-                                  << format->getName() << ")\n";
+                    verboseLog("Stage 1 succeeded: " + outDescription.name
+                               + " (" + format->getName() + ")");
                     return true;
                 }
 
-                if (verbose)
-                    std::cerr << "[Discovery] Stage 1: " << format->getName()
-                              << " recognised file but found 0 types\n";
+                verboseLog("Stage 1: " + format->getName()
+                           + " recognised file but found 0 types");
             }
             return false;
         });
     }
     catch (const std::exception& e)
     {
-        if (verbose)
-            std::cerr << "[Discovery] Stage 1 exception: " << e.what() << "\n";
+        verboseLog(juce::String("Stage 1 exception: ") + e.what());
     }
     catch (...)
     {
-        if (verbose)
-            std::cerr << "[Discovery] Stage 1 unknown exception\n";
+        verboseLog("Stage 1 unknown exception");
     }
 
     if (stage1Success)
@@ -671,9 +738,7 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
     //  This is more thorough and can discover complex bundles (e.g.
     //  FabFilter Pro-Q 4) that fail the simpler findAllTypesForFile.
     // ------------------------------------------------------------------
-    if (verbose)
-        std::cerr << "[Discovery] Stage 2: PluginDirectoryScanner for parent of "
-                  << pluginPath << "\n";
+    verboseLog("Stage 2: PluginDirectoryScanner for parent of " + pluginPath);
 
     bool stage2Success = false;
 
@@ -694,9 +759,7 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
                 juce::String nameBeingScanned;
                 while (scanner.scanNextFile(true, nameBeingScanned))
                 {
-                    if (verbose)
-                        std::cerr << "[Discovery] Stage 2: scanning "
-                                  << nameBeingScanned << "\n";
+                    verboseLog("Stage 2: scanning " + nameBeingScanned);
                 }
 
                 // Look for a match in the scanned results
@@ -707,18 +770,16 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
                                pluginFile.getFileName()))
                     {
                         outDescription = desc;
-                        if (verbose)
-                            std::cerr << "[Discovery] Stage 2 succeeded: "
-                                      << outDescription.name << "\n";
+                        verboseLog("Stage 2 succeeded: " + outDescription.name);
                         return true;
                     }
                 }
 
-                if (verbose && !tempList.getTypes().isEmpty())
+                if (!tempList.getTypes().isEmpty())
                 {
-                    std::cerr << "[Discovery] Stage 2: " << format->getName()
-                              << " found " << tempList.getTypes().size()
-                              << " plugin(s) but none matched target path\n";
+                    verboseLog("Stage 2: " + format->getName()
+                               + " found " + juce::String(tempList.getTypes().size())
+                               + " plugin(s) but none matched target path");
                 }
             }
             return false;
@@ -726,13 +787,11 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
     }
     catch (const std::exception& e)
     {
-        if (verbose)
-            std::cerr << "[Discovery] Stage 2 exception: " << e.what() << "\n";
+        verboseLog(juce::String("Stage 2 exception: ") + e.what());
     }
     catch (...)
     {
-        if (verbose)
-            std::cerr << "[Discovery] Stage 2 unknown exception\n";
+        verboseLog("Stage 2 unknown exception");
     }
 
     if (stage2Success)
@@ -748,8 +807,7 @@ bool PluginHostManager::discoverPlugin(juce::AudioPluginFormatManager& formatMan
     outDescription.name = pluginFile.getFileNameWithoutExtension();
 
     errorDetails = "All discovery stages failed for: " + pluginPath;
-    if (verbose)
-        std::cerr << "[Discovery] " << errorDetails << "\n";
+    verboseLog(errorDetails);
     return false;
 }
 

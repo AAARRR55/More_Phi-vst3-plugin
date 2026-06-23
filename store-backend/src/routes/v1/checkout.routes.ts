@@ -8,6 +8,7 @@ import { requireAuth } from "../../plugins/auth.js";
 import { validate } from "../../lib/validate.js";
 import { ApiError, ErrorCode } from "../../lib/errors.js";
 import { env } from "../../config/env.js";
+import { LicenseService } from "../../services/LicenseService.js";
 
 const checkoutSchema = z.object({
   productSlug: z.string().min(1),
@@ -112,19 +113,62 @@ export async function checkoutRoutes(app: FastifyInstance) {
         throw new ApiError(ErrorCode.NOT_FOUND, "Order not found");
       }
 
-      const license = order.licenses[0];
+      let activeOrder = order;
+
+      if (env.NODE_ENV === "development" && activeOrder.status === "PENDING") {
+        const paymentIntentId = "pi_mock_" + Math.random().toString(36).substring(7);
+        await prisma.$transaction(async (tx) => {
+          const updatedOrder = await tx.order.update({
+            where: { id: activeOrder.id },
+            data: {
+              status: "PAID",
+              paidAt: new Date(),
+              stripePaymentIntentId: paymentIntentId,
+            },
+            include: {
+              product: true,
+            },
+          });
+
+          await LicenseService.create(
+            {
+              customerId: activeOrder.customerId,
+              orderId: activeOrder.id,
+              productId: activeOrder.productId,
+              maxActivations: updatedOrder.product.maxActivations,
+            },
+            tx
+          );
+        });
+
+        const refreshed = await prisma.order.findUnique({
+          where: { id: activeOrder.id },
+          include: {
+            licenses: {
+              include: {
+                activations: { where: { status: "ACTIVE" } },
+              },
+            },
+          },
+        });
+        if (refreshed) {
+          activeOrder = refreshed;
+        }
+      }
+
+      const license = activeOrder.licenses[0];
 
       return reply.send({
-        status: order.status,
-        payment_status: mapPaymentStatus(order.status),
+        status: activeOrder.status,
+        payment_status: mapPaymentStatus(activeOrder.status),
         order: {
-          id: order.id,
-          product_id: order.productId,
-          amount: order.amountCents / 100,
-          currency: order.currency,
-          status: order.status,
-          created_at: order.createdAt.toISOString(),
-          checkout_session_id: order.stripeCheckoutSessionId,
+          id: activeOrder.id,
+          product_id: activeOrder.productId,
+          amount: activeOrder.amountCents / 100,
+          currency: activeOrder.currency,
+          status: activeOrder.status,
+          created_at: activeOrder.createdAt.toISOString(),
+          checkout_session_id: activeOrder.stripeCheckoutSessionId,
         },
         license: license
           ? {
@@ -143,8 +187,8 @@ export async function checkoutRoutes(app: FastifyInstance) {
               })),
             }
           : null,
-        amount_total: order.amountCents,
-        currency: order.currency,
+        amount_total: activeOrder.amountCents,
+        currency: activeOrder.currency,
       });
     }
   );

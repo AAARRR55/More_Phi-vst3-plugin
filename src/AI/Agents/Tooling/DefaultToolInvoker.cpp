@@ -23,6 +23,15 @@ bool DefaultToolInvoker::consumeRateSlotLocked(const juce::String& agentId)
     if (rateLimit_ <= 0)
         return true;
     const auto t = nowMs();
+    // M1: opportunistic eviction. Drop buckets whose window expired so the map
+    // cannot grow unbounded across many distinct agent ids over a long session.
+    for (auto it = buckets_.begin(); it != buckets_.end(); )
+    {
+        if (it->second.windowStartMs != 0 && (t - it->second.windowStartMs) >= 1000)
+            it = buckets_.erase(it);
+        else
+            ++it;
+    }
     auto& bucket = buckets_[agentId.toStdString()];
     if (bucket.windowStartMs == 0 || (t - bucket.windowStartMs) >= 1000)
     {

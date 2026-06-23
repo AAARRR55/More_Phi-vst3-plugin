@@ -40,6 +40,16 @@ public:
 
 private:
     // ── Scrollable canvas ────────────────────────────────────────────────────
+    // ponytail: each message is a read-only TextEditor so the user can select
+    // and copy arbitrary spans. The role label + bubble are still painted; the
+    // selectable text is the TextEditor's, not drawn.
+    class MessageEditor final : public juce::TextEditor
+    {
+    public:
+        MessageEditor();
+        void colourChanged() override;
+    };
+
     class Canvas final : public juce::Component
     {
     public:
@@ -48,6 +58,11 @@ private:
         void paint(juce::Graphics& g) override;
         /** Resize canvas height to fit all messages at the given viewport width. */
         void layout(int viewportWidth, int viewportHeight);
+        /** Rebuild the read-only TextEditors to match `messages`. */
+        void rebuildEditors();
+
+        // ponytail: one editor per message, kept in lockstep with `messages`.
+        juce::OwnedArray<MessageEditor> editors;
     };
 
     juce::Viewport viewport_;
@@ -58,6 +73,8 @@ private:
     void scrollBy(int deltaY);
     void scrollTo(int y);
     int getMaxScrollY() const;
+    /** Full transcript as "Role: text" lines, for copy-all-to-clipboard. */
+    juce::String getAllTranscriptText() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChatDisplay)
 };

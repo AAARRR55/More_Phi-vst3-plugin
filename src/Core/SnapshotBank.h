@@ -102,8 +102,12 @@ public:
     int findParameterIndex(int slot, const juce::String& paramName) const
     {
         if (slot < 0 || slot >= NUM_SLOTS) return -1;
-        // FIX C4: paramNames_ is written under writeLock_; read must serialize too.
-        const juce::SpinLock::ScopedLockType lock(writeLock_);
+        // M-7 FIX: Use try-lock to avoid blocking the audio thread during
+        // MIDI-triggered recall. If a writer holds writeLock_, return -1
+        // (caller falls back to index-based recall).
+        const juce::SpinLock::ScopedTryLockType tryLock(writeLock_);
+        if (! tryLock.isLocked())
+            return -1;
         const auto& names = paramNames_[slot];
         int idx = names.indexOf(paramName);
         return (idx >= 0) ? idx : -1;
@@ -117,6 +121,23 @@ public:
 
         for (int i = 0; i < NUM_SLOTS; ++i)
         {
+            // B3 FIX: read the lock-protected side data ONCE, outside the
+            // seqlock retry loop. paramNames_ (writeLock_) and stateChunks_
+            // (chunksLock_) are independent of the seqlock sequence —
+            // re-acquiring their locks on every retry iteration starved MCP
+            // write traffic that needs writeLock_ to capture. The seqlock only
+            // protects the slot struct itself (occupied/count/name/values).
+            juce::StringArray namesBuf;
+            {
+                const juce::SpinLock::ScopedLockType lock(writeLock_);
+                namesBuf = paramNames_[i];
+            }
+            juce::MemoryBlock chunkBuf;
+            {
+                const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+                chunkBuf = stateChunks_[i];   // copy unconditionally; sized check below
+            }
+
             // Read slot data into local buffers under seqlock, then construct XML outside.
             bool occupied = false;
             int count = 0;
@@ -132,20 +153,10 @@ public:
                 occupied = (*slots_)[i].occupied;
                 count = (*slots_)[i].parameterCount;
                 std::memcpy(nameBuf, (*slots_)[i].name, sizeof(nameBuf));
+                static_assert(sizeof(nameBuf) == sizeof(ParameterState::name),
+                              "SnapshotBank::toXml nameBuf must match ParameterState::name size");
                 if (occupied && count > 0)
                     std::copy_n((*slots_)[i].values.begin(), count, valuesBuf.begin());
-
-                juce::StringArray namesBuf;
-                {
-                    const juce::SpinLock::ScopedLockType lock(writeLock_);
-                    namesBuf = paramNames_[i];
-                }
-                juce::MemoryBlock chunkBuf;
-                {
-                    const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
-                    if (occupied)
-                        chunkBuf = stateChunks_[i];
-                }
 
                 std::atomic_thread_fence(std::memory_order_acquire);
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);

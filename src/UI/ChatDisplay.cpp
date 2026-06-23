@@ -73,9 +73,49 @@ static int measureTextHeight(const juce::String& text, int textWidth, float font
 }
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
+ChatDisplay::MessageEditor::MessageEditor()
+{
+    // Read-only, transparent, word-wrapped: selectable with the mouse, no chrome.
+    setReadOnly(true);
+    setMultiLine(true, true);
+    setWantsKeyboardFocus(false);
+    setInterceptsMouseClicks(true, false);
+    setCaretVisible(false);
+    setScrollbarsShown(false);
+    setFont(juce::FontOptions(kFontSize));
+    setTextToShowWhenEmpty({}, {});
+    setColour(juce::TextEditor::backgroundColourId, juce::Colour(0x00000000));
+    setColour(juce::TextEditor::outlineColourId,    juce::Colour(0x00000000));
+    setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0x00000000));
+    setColour(juce::TextEditor::textColourId,       juce::Colour(0xffe6e9ef));
+    setColour(juce::TextEditor::highlightColourId,  juce::Colour(0xff3a6ea5));
+    setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xffffffff));
+    setBorder(juce::BorderSize<int>(0));
+    setIndents(0, 0);
+    setJustification(juce::Justification::topLeft);
+    setLineSpacing(1.15f);
+}
+
+void ChatDisplay::MessageEditor::colourChanged() {}
+
 ChatDisplay::Canvas::Canvas()
 {
-    setInterceptsMouseClicks(false, false);
+    setInterceptsMouseClicks(false, true);  // canvas ignores clicks; editors handle their own
+}
+
+void ChatDisplay::Canvas::rebuildEditors()
+{
+    editors.clear();
+    for (const auto& msg : messages)
+    {
+        auto* ed = editors.add(new MessageEditor());
+        ed->setText(msg.text, juce::dontSendNotification);
+        // Editors tint per role so bubbles still read visually.
+        ed->setColour(juce::TextEditor::textColourId,
+                      msg.role == Role::User ? juce::Colour(0xffcfe4ff)
+                                             : juce::Colour(0xffe6e9ef));
+        addAndMakeVisible(*ed);
+    }
 }
 
 void ChatDisplay::Canvas::layout(int viewportWidth, int viewportHeight)
@@ -83,8 +123,18 @@ void ChatDisplay::Canvas::layout(int viewportWidth, int viewportHeight)
     const int textW = juce::jmax(1, viewportWidth - 2 * kPadX - kLabelW - kLabelGap);
 
     int totalH = kPadY;
+    int idx = 0;
     for (const auto& msg : messages)
-        totalH += measureTextHeight(msg.text, textW, kFontSize) + kGap;
+    {
+        const int rowH = measureTextHeight(msg.text, textW, kFontSize);
+        if (idx < editors.size())
+            editors[idx]->setBounds(kPadX + kLabelW + kLabelGap,
+                                    totalH,
+                                    textW,
+                                    rowH);
+        totalH += rowH + kGap;
+        ++idx;
+    }
     totalH += kPadY;
 
     setSize(viewportWidth, juce::jmax(1, juce::jmax(viewportHeight, totalH)));
@@ -101,17 +151,17 @@ void ChatDisplay::Canvas::paint(juce::Graphics& g)
     const int textW = juce::jmax(1, w - 2 * kPadX - kLabelW - kLabelGap);
 
     auto labelFont = juce::Font(juce::FontOptions(kFontSize, juce::Font::bold));
-    auto textFont  = juce::Font(juce::FontOptions(kFontSize));
-    const float lineH = std::ceil(textFont.getHeight() + 2.0f);
+    auto textFont  = juce::FontOptions(kFontSize);
+    juce::ignoreUnused(textFont);
+    const float lineH = std::ceil(labelFont.getHeight() + 2.0f);
 
     int y = kPadY;
     for (const auto& msg : messages)
     {
         const int rowH      = measureTextHeight(msg.text, textW, kFontSize);
-        const int maxLines  = juce::jmax(1, static_cast<int>(std::ceil(static_cast<float>(rowH) / lineH)));
         const int bubblePad = 5;
 
-        // Background bubble
+        // Background bubble (text itself is now in a TextEditor — not painted)
         const auto bubbleCol = roleBubbleColour(msg.role);
         if (bubbleCol.getAlpha() > 0)
         {
@@ -128,15 +178,6 @@ void ChatDisplay::Canvas::paint(juce::Graphics& g)
         g.drawText(roleLabel(msg.role),
                    kPadX, y, kLabelW, static_cast<int>(lineH),
                    juce::Justification::centredLeft, false);
-
-        // Message text (word-wrapped)
-        g.setFont(textFont);
-        g.setColour(juce::Colour(0xffe6e9ef));
-        g.drawFittedText(msg.text,
-                         kPadX + kLabelW + kLabelGap, y,
-                         textW, rowH,
-                         juce::Justification::topLeft,
-                         maxLines);
 
         y += rowH + kGap;
     }
@@ -201,6 +242,20 @@ void ChatDisplay::resized()
 
 bool ChatDisplay::keyPressed(const juce::KeyPress& key)
 {
+    // Ctrl/Cmd+C with no editor selection: copy the whole transcript to clipboard.
+    // ponytail: lets the user grab everything when nothing is highlighted.
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+        && key.getKeyCode() == 'C')
+    {
+        // If a child editor has its own selection, let it handle the copy itself.
+        for (auto* ed : canvas_.editors)
+            if (ed->getHighlightedRegion().getLength() > 0)
+                return false;
+
+        juce::SystemClipboard::copyTextToClipboard(getAllTranscriptText());
+        return true;
+    }
+
     if (key == juce::KeyPress::upKey)
     {
         scrollBy(-36);
@@ -261,6 +316,7 @@ void ChatDisplay::pushAndScroll()
 {
     const int vw = viewport_.getMaximumVisibleWidth();
     if (vw <= 0) return;
+    canvas_.rebuildEditors();
     canvas_.layout(vw, viewport_.getHeight());
     canvas_.repaint();
     scrollTo(getMaxScrollY());
@@ -279,6 +335,14 @@ void ChatDisplay::scrollTo(int y)
 int ChatDisplay::getMaxScrollY() const
 {
     return juce::jmax(0, canvas_.getHeight() - viewport_.getHeight());
+}
+
+juce::String ChatDisplay::getAllTranscriptText() const
+{
+    juce::String out;
+    for (const auto& msg : canvas_.messages)
+        out << roleLabel(msg.role) << ": " << msg.text << "\n\n";
+    return out.trimEnd();
 }
 
 } // namespace more_phi

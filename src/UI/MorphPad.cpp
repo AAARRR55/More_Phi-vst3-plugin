@@ -239,8 +239,9 @@ void MorphPad::paint(juce::Graphics& g)
     }
 
     // ── Cursor trail (from audio thread) ───────────────────────────────────────
+    // C3 FIX: read each trail point via the atomic getTrailPoint() accessor so
+    // the UI never sees a torn {x,y} pair written mid-store by the audio thread.
     auto& morph = proc_.getMorphProcessor();
-    const auto& trail = morph.getTrail();
     int head = morph.getTrailHead();
     constexpr int trailLen = MorphProcessor::TRAIL_SIZE;
 
@@ -249,11 +250,14 @@ void MorphPad::paint(juce::Graphics& g)
         int idx0 = (head - trailLen + i + trailLen * 2) % trailLen;
         int idx1 = (idx0 + 1) % trailLen;
 
+        const auto p0 = morph.getTrailPoint(idx0);
+        const auto p1 = morph.getTrailPoint(idx1);
+
         float alpha = static_cast<float>(i) / static_cast<float>(trailLen) * 0.5f;
-        float px0 = centre.x + (trail[idx0].x * 2.0f - 1.0f) * radius;
-        float py0 = centre.y + (trail[idx0].y * 2.0f - 1.0f) * radius;
-        float px1 = centre.x + (trail[idx1].x * 2.0f - 1.0f) * radius;
-        float py1 = centre.y + (trail[idx1].y * 2.0f - 1.0f) * radius;
+        float px0 = centre.x + (p0.x * 2.0f - 1.0f) * radius;
+        float py0 = centre.y + (p0.y * 2.0f - 1.0f) * radius;
+        float px1 = centre.x + (p1.x * 2.0f - 1.0f) * radius;
+        float py1 = centre.y + (p1.y * 2.0f - 1.0f) * radius;
 
         g.setColour(padTrail().withAlpha(alpha));
         g.drawLine(px0, py0, px1, py1, 1.5f);

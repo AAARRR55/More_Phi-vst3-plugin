@@ -30,7 +30,6 @@ public:
 
 private:
     nlohmann::json decomposeGoal(const juce::String& intent);
-    void dispatchProposedActions(const std::vector<nlohmann::json>& actions);
 
     const AgentContext* ctx_ = nullptr;
     std::atomic<AgentState> state_{ AgentState::Idle };

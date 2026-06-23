@@ -14,7 +14,7 @@ that the plan actually masters real audio toward the target.
 
 Usage (run on the remote where the .so + audio live):
   python evaluate_student_audio.py \
-      --model runs/blackwell_restraint_v5/model_blackwell_restraint_v5.onnx \
+      --model runs/restraint/model_restraint.onnx \
       --lib ~/more-phi-cpp/build/tools/headless_mastering_render/libmore_phi_headless_render.so \
       --manifest data/manifest_fma_clean/val.jsonl \
       --max-segments 25 --genre neutral

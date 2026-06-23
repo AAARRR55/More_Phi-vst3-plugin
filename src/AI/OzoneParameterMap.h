@@ -89,6 +89,14 @@ public:
     static OzoneParameterMap buildFromHostedPlugin(const IParameterBridge& bridge);
 
     /**
+     * AUDIT-FIX-5: return true if at least one parameter index is mapped (>= 0).
+     * Used by OzonePlanApplicator to fail LOUD (log + signal) instead of silently
+     * no-op'ing when the map is still all-stubs (the buildForOzone11() factory
+     * default, before audit_ozone_parameters runs against a hosted plugin).
+     */
+    [[nodiscard]] bool hasAnyMapping() const noexcept;
+
+    /**
      * Return true if the given plugin display name appears to be iZotope Ozone 11.
      * Checked case-insensitively; matches "Ozone 11" or "iZotope Ozone 11".
      */
@@ -108,7 +116,8 @@ public:
                                float maxHz = 20000.0f) noexcept;
 
     /** Map threshold in dBFS to VST3 normalized [0..1].
-     *  Range [-60, 0] dBFS, 0 = unity / no compression. */
+     *  Range [-60, 0] dBFS. 0 dBFS = most aggressive threshold (full-scale),
+     *  -60 dBFS = barely compresses. AUDIT-FIX-10: prior comment inverted this. */
     static float normalizeThreshold(float dBFS,
                                     float minDBFS = -60.0f,
                                     float maxDBFS =   0.0f) noexcept;

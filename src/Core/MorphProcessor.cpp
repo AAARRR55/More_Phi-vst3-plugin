@@ -25,8 +25,13 @@ MorphProcessor::MorphProcessor(SnapshotBank& bank)
 void MorphProcessor::prepare(int maxParamCount)
 {
     smoothedValues_.resize(static_cast<size_t>(maxParamCount), 0.0f);
-    trail_.fill({0.5f, 0.5f});
-    trailHead_ = 0;
+    // C3 FIX: initialize atomic-packed trail points to centre {0.5, 0.5}.
+    TrailPoint centre{ 0.5f, 0.5f };
+    uint64_t packedCentre = 0;
+    std::memcpy(&packedCentre, &centre, sizeof(packedCentre));
+    for (auto& slot : trail_)
+        slot.store(packedCentre, std::memory_order_relaxed);
+    trailHead_.store(0, std::memory_order_relaxed);
 
     // C-3 FIX: Reset all physics state so stale values from a previous
     // sample rate / block size don't cause large initial displacement.
@@ -75,13 +80,17 @@ void MorphProcessor::process(float rawX, float rawY, float faderPos,
     if (trailTimer_ >= TRAIL_INTERVAL)
     {
         trailTimer_ -= TRAIL_INTERVAL;
-        // Map back to [0,1] for UI
-        trail_[trailHead_] = {
+        // C3 FIX: publish {x,y} as one atomic 64-bit store so the UI reads a
+        // consistent pair (no torn x/y across blocks).
+        TrailPoint p{
             (processedX_.load(std::memory_order_relaxed) + 1.0f) * 0.5f,
             (processedY_.load(std::memory_order_relaxed) + 1.0f) * 0.5f
         };
-        trailHead_.store((trailHead_.load(std::memory_order_relaxed) + 1) % TRAIL_SIZE,
-                         std::memory_order_relaxed);
+        uint64_t packed = 0;
+        std::memcpy(&packed, &p, sizeof(packed));
+        const int head = trailHead_.load(std::memory_order_relaxed);
+        trail_[static_cast<size_t>(head)].store(packed, std::memory_order_relaxed);
+        trailHead_.store((head + 1) % TRAIL_SIZE, std::memory_order_relaxed);
     }
 }
 

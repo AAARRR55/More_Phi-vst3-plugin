@@ -311,53 +311,81 @@ Every write-capable tool passes through `dispatchWithAutomationTransaction`, whi
 
 ### 4.2 Verification Payload
 
+Write-capable tools (`set_parameter`, `set_parameters_batch`, `more_phi.set_parameter`,
+etc.) return a per-edit `verification` object that classifies the outcome.
+
+**Single-parameter verification:**
 ```json
 {
   "success": true,
-  "transaction_id": "txn_a1b2c3d4",
-  "tool": "set_parameters_batch",
-  "latency_ms": 8.7,
-  "params_applied": 12,
-  "changes": {
-    "hosted_parameter_changed_count": 12,
-    "hosted_parameter_max_delta": 0.18,
-    "more_phi_morph_delta": 0.0
+  "index": 0,
+  "value": 0.75,
+  "queued": 1,
+  "appliedNow": 1,
+  "pendingAfter": 0,
+  "flush": {
+    "pending_before": 1,
+    "drained": 1,
+    "pending_after": 0,
+    "plugin_unavailable": false,
+    "exclusive_access_timed_out": false,
+    "retry_count": 0,
+    "waited_ms": 5,
+    "out_of_range_count": 0
   },
-  "before_state_checksum": 1234567890,
-  "after_state_checksum": 9876543210,
-  "rollback_available": true,
-  "rollback_plan": {
-    "available": true,
-    "kind": "hosted_parameter_state",
-    "method": "automation.rollback"
-  },
-  "queue": {
-    "healthy": true,
-    "usage": 0.12,
-    "pending": 0
-  },
-  "automation": {
-    "risk": "low_write",
-    "autonomy_level": "assist"
+  "verification": {
+    "status": "success",
+    "requested_value": 0.75,
+    "value_before": 0.5,
+    "value_after": 0.75,
+    "human_before": "50%",
+    "human_after": "75%",
+    "execution_time_ms": 12.4,
+    "verified": true
   }
 }
 ```
+
+**Verification status values (AUDIT-FIX 4.1/4.3/4.5/4.7):**
+
+| Status | `verified` | Meaning |
+|--------|-----------|---------|
+| `success` | `true` | Value applied and confirmed within tolerance |
+| `queued` | `false` | Command enqueued but not yet drained to plugin |
+| `value_drift` | `false` | Continuous parameter: applied value differs from requested |
+| `value_drift_discrete` | `false` | Discrete parameter: snapped to different step than requested |
+| `morph_overwrite_risk` | `false` | Morph engine likely overwrote the edit on the next block |
+| `parameter_index_out_of_range` | `false` | Index exceeds hosted plugin's actual parameter count |
+| `failure` | `false` | Queue full, parameter unresolved, or other error |
+
+**IMPORTANT (AUDIT-FIX 4.3):** The top-level `success` field is now gated on
+`verification.verified == true`. A response with `success: false` and
+`verification.status: "queued"` means the edit is pending — not rejected.
+Always check `verification.status` before assuming failure.
 
 ### 4.3 AI-Side Validation
 
 The AI assistant MUST validate:
 
-1. `success == true`.
-2. The set of changed parameters matches the requested action.
-3. `queue.healthy == true`.
-4. No high-impact parameters were modified unexpectedly.
-5. Rollback is available for writes (`rollback_available == true`).
+1. `success == true` — but note AUDIT-FIX 4.3: `success` is gated on actual
+   verification. A `false` with `verification.status == "queued"` is transient.
+2. `verification.status == "success"` for each edited parameter.
+3. The set of changed parameters matches the requested action.
+4. `flush.out_of_range_count == 0` — non-zero means some indices exceeded the
+   plugin's parameter count (AUDIT-FIX 4.7).
+5. `queue.healthy == true`.
+6. No high-impact parameters were modified unexpectedly.
+7. `verification.status` is not `"morph_overwrite_risk"` — if it is, suggest
+   pausing morph before re-applying the edit (AUDIT-FIX 4.5).
+8. For discrete parameters, check for `"value_drift_discrete"` and suggest
+   choosing a valid step value (AUDIT-FIX 4.1).
 
 If validation fails, the AI assistant should:
 
-1. Call `automation.rollback` with the `transaction_id`.
-2. Report the discrepancy to the user.
-3. Suggest a corrected request.
+1. Call `automation.rollback` with the `transaction_id` if rollback is available.
+2. Report the specific `verification.status` and `verification.corrective_action`
+   to the user.
+3. Suggest a corrected request based on the error reason.
 
 ---
 
@@ -601,4 +629,5 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-06-17 | Kimi Code CLI | Initial architecture, tool mapping, verification, and optimization spec |
-| 1.1 | 2026-06-20 | Kimi Code CLI | Added `AgentOrchestrator` to architecture diagram and component table; added §2.4 `EcosystemConfig` (unified configuration) and §2.5 `SecurityValidator` (security layer); added §3.4 `McpProtocol` explicit schemas; updated §6.2 pseudocode to use `McpProtocol` helpers; updated §8 references to include new Orchestrator headers.
+| 1.1 | 2026-06-20 | Kimi Code CLI | Added `AgentOrchestrator` to architecture diagram and component table; added §2.4 `EcosystemConfig` (unified configuration) and §2.5 `SecurityValidator` (security layer); added §3.4 `McpProtocol` explicit schemas; updated §6.2 pseudocode to use `McpProtocol` helpers; updated §8 references to include new Orchestrator headers. |
+| 1.2 | 2026-07-23 | Codex Audit | Updated §4.2 verification payload with per-edit verification schema and 7 status codes (success/queued/value_drift/value_drift_discrete/morph_overwrite_risk/parameter_index_out_of_range/failure); updated §4.3 AI-side validation with 8-point checklist covering discrete tolerance, morph overwrite detection, out-of-range detection, and verification-status-gated success; added flush.out_of_range_count field. |

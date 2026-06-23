@@ -23,6 +23,13 @@ import json
 import sys
 from pathlib import Path
 
+# Force UTF-8 stdout on Windows — torch.onnx prints emoji in its log output
+# which crashes cp1252 terminals.
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import numpy as np
 import torch
 
@@ -44,6 +51,43 @@ def _load_module(package_root: Path):
     ckpt, _ = _resolve_paths(package_root)
     module, hparams = load_module_from_checkpoint(ckpt, torch.device("cpu"))
     module.eval()
+
+    # ONNX export: monkey-patch the isfinite() validation guards that the dynamo-
+    # based torch.onnx.export in PyTorch >=2.6 cannot trace (data-dependent control
+    # flow). The computations are fine — only the if-not-isfinite-then-raise checks
+    # prevent tracing. We replace them with no-ops while keeping the actual math.
+    import model as _model_module  # type: ignore
+    _model_module.validate_waveform = lambda waveform, channels=2: None  # type: ignore
+    _orig_lcf = _model_module.loudness_conditioning_features
+    def _traceable_lcf(waveform, features=2, target_lufs_db=None, get_lufs=None):
+        """Same as loudness_conditioning_features but without the isfinite guard."""
+        validate_waveform = lambda w, channels=2: None  # already patched; local ref
+        rms = waveform.float().pow(2).mean(dim=(1, 2)).sqrt().clamp_min(1.0e-8)
+        rms_db = 20.0 * torch.log10(rms)
+        peak = waveform.float().abs().flatten(1).amax(dim=1).clamp_min(1.0e-8)
+        peak_db = 20.0 * torch.log10(peak)
+        base = torch.stack((rms_db / 60.0, peak_db / 60.0), dim=1)
+        include_target_lufs = (
+            target_lufs_db is not None if get_lufs is None else bool(get_lufs)
+        )
+        if include_target_lufs:
+            target = torch.as_tensor(target_lufs_db, device=base.device, dtype=base.dtype)
+            if target.ndim == 0:
+                target = target.expand(base.shape[0])
+            else:
+                target = target.reshape(-1)
+                if target.numel() == 1 and base.shape[0] != 1:
+                    target = target.expand(base.shape[0])
+            base = torch.cat((base, (target / 60.0).unsqueeze(1)), dim=1)
+            if features >= 4:
+                required_gain_db = target - rms_db
+                base = torch.cat((base, (required_gain_db / 60.0).unsqueeze(1)), dim=1)
+        if features <= base.shape[1]:
+            return base[:, :features]
+        padding = base.new_zeros((base.shape[0], features - base.shape[1]))
+        return torch.cat((base, padding), dim=1)
+    _model_module.loudness_conditioning_features = _traceable_lcf  # type: ignore
+
     return module, hparams
 
 
@@ -94,16 +138,40 @@ def main() -> int:
 
     onnx_path = args.output_dir / "masteringbrain_v2_decision.onnx"
     with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
-            (waveform, target_lufs),
-            str(onnx_path),
-            input_names=["waveform", "target_lufs"],
-            output_names=["decision"],
-            dynamic_axes={"waveform": {0: "batch"}, "decision": {0: "batch"}},
-            opset_version=args.opset,
-            do_constant_folding=True,
-        )
+        # Try dynamo-based export first (PyTorch >=2.6 default). If it fails due to
+        # FFT ops without ONNX decompositions, fall back to the legacy TorchScript
+        # path (dynamo=False). The model uses aten.fft_rfftfreq which the new
+        # exporter cannot translate; TorchScript may inline it as a constant since
+        # it's data-independent.
+        try:
+            torch.onnx.export(
+                wrapper,
+                (waveform, target_lufs),
+                str(onnx_path),
+                input_names=["waveform", "target_lufs"],
+                output_names=["decision"],
+                dynamic_axes={"waveform": {0: "batch"}, "decision": {0: "batch"}},
+                opset_version=args.opset,
+                do_constant_folding=True,
+            )
+        except Exception as e_dynamo:
+            print(f"[warn] dynamo export failed, falling back to TorchScript path")
+            # The model uses nn.TransformerEncoder which exports as a fused ATen op
+            # (aten::_transformer_encoder_layer_fwd) that normal ONNX opsets don't
+            # support. Use ONNX_ATEN_FALLBACK to keep those ops as-is; ONNX Runtime
+            # can execute them via its PyTorch ATen fallback if configured.
+            torch.onnx.export(
+                wrapper,
+                (waveform, target_lufs),
+                str(onnx_path),
+                input_names=["waveform", "target_lufs"],
+                output_names=["decision"],
+                dynamic_axes={"waveform": {0: "batch"}, "decision": {0: "batch"}},
+                opset_version=args.opset,
+                do_constant_folding=True,
+                dynamo=False,
+                operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK,
+            )
         pt_out = wrapper(waveform, target_lufs).detach().cpu().numpy().reshape(-1)
 
     # ── Parity: PyTorch vs ONNX on the same seed ─────────────────────────────

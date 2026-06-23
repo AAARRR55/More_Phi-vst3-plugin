@@ -131,17 +131,19 @@ morephi/
 │   │   ├── PluginHostManager.h/cpp
 │   │   ├── ParameterBridge.h/cpp
 │   │   └── PluginScanner.h/cpp
-│   ├── AI/                 # MCP server
+│   ├── AI/                 # Embedded MCP Server & Core AI Integrations
 │   │   ├── MCPServer.h/cpp
 │   │   ├── MCPToolHandler.h/cpp
+│   │   ├── StandaloneMcp/    # Isolated STDIO workflows bridging headless contexts
+│   │   ├── Dataset/          # Machine learning pipeline tools
 │   │   └── Orchestrator/     # Agent orchestration layer
 │   │       ├── AgentOrchestrator.h/cpp
 │   │       ├── EcosystemConfig.h/cpp
 │   │       ├── SecurityValidator.h/cpp
 │   │       └── McpProtocol.h/cpp
-│   ├── MIDI/               # MIDI processing
+│   ├── MIDI/               # MIDI processing (wait-free CC routing)
 │   │   └── MIDIRouter.h/cpp
-│   ├── Preset/             # State persistence
+│   ├── Preset/             # State persistence and encryption validations
 │   │   ├── MetaPresetManager.h/cpp
 │   │   └── PresetSerializer.h/cpp
 │   └── UI/                 # User interface
@@ -158,7 +160,16 @@ morephi/
 
 ---
 
-## Architecture Overview
+## Architecture Detailed Overview
+
+### Sub-System Domain Responsibility
+
+To sustain real-time capabilities alongside advanced AI components, More-Phi separates concerns into rigid domains:
+
+- **AI & CLI Integration**: Integrates a highly constrained embedding of MCP bridging LLMs to VST frameworks. Operates via the dedicated `MCPServer` relaying calls sequentially via `LockFreeQueue` bridges to protect audio thread operations. It additionally incorporates Dataset tooling for bulk AI synthetic generation completely unlinked from UI blocks.
+- **Core DSP & MIDI**: Functions as the pure mathematically isolated root logic path spanning the `PhysicsEngine` bounding logic and Interpolations mapping states to discrete normalized values, completely divorced from `std` vector re-allocations or heap boundaries.
+- **Host Abstractions & Presets**: Responsible exclusively for integrating and bounding third-party opaque states (VST3 components), ensuring they are predictably managed, suspended when unstable, and perfectly cached into structured JSON `PresetSerializer` mappings for disk retrieval without blocking operations in real-time execution.
+- **Plugin Runtime & Tools**: Maintains active integration and translation of graphical input arrays via decoupled visualization tools such as the `MorphPad` executing render cycles optimized for `juce::Graphics`.
 
 ### Audio Thread Safety
 

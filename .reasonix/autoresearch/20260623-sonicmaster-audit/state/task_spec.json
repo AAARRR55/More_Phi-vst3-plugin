@@ -1,0 +1,37 @@
+{
+  "goal": "Conduct a comprehensive technical audit of the SonicMaster AI mastering workflow within the More-Phi VST3 plugin",
+  "scope": [
+    "SonicMasterAnalysisEngine — audio analysis pipeline (frequency, dynamics, loudness, spectral, phase)",
+    "SonicMasterDecisionRunner — mastering plan generation",
+    "SonicMasterDecisionDecoder — plan-to-parameter translation",
+    "SonicMasterHttpInferenceSource — neural inference integration",
+    "AutoMasteringEngine — plan application to parameter chains",
+    "Related parameter bridge, plugin host integration for mastering"
+  ],
+  "non_goals": [
+    "General MCP server audit",
+    "Non-mastering audio engines (morph, modulation, genetics)",
+    "UI/editor code",
+    "Build system, tests, CI",
+    "Performance benchmarking"
+  ],
+  "allowed_operations": [
+    "Read source files, headers, and documentation",
+    "Search for symbols and patterns with grep/code_index",
+    "Analyze code structure and logic",
+    "Produce audit report as Markdown"
+  ],
+  "success_criteria": [
+    "Audio analysis verification: identify what measurements are taken, assess accuracy/completeness vs professional standards",
+    "Mastering plan evaluation: trace from analysis output → plan generation → whether plan logically addresses issues",
+    "Parameter implementation audit: trace from plan → parameter settings → whether values, ranges, and ordering are correct",
+    "Quality assessment: identify potential artifacts, phase issues, or side effects from the implementation",
+    "Audit report with specific findings, correct vs failed instances, technical details on misconfigurations, and recommendations"
+  ],
+  "verification_gates": [
+    "All SonicMaster source files read and understood",
+    "All mastering-related source files read and understood",
+    "Signal flow traced end-to-end from audio in to parameter out",
+    "Findings backed by code citations"
+  ]
+}

@@ -1,20 +1,140 @@
 # Critical Bugs Fixed — Production Readiness Audit 2026
 
-**Audit Date:** 2026-06-18  
-**Branch:** `feat/store-backend`  
-**Commit:** `d67fdc3` (and subsequent doc updates)  
-**Auditors:** 6 parallel sub-agents (Threading, Host/Processing, Persistence/Serialization, AI/MCP, DSP/Testing, Build/Cleanup)  
-**Files Reviewed:** 170+ source, header, and test files  
-**Issues Found:** 47 (16 Critical, 14 High, 14 Medium, 6 Low)  
-**Status:** All resolved. Plugin cleared for RC after build verification + full test suite.
+**Audit Date:** 2026-06-18 (original), 2026-07-15 (multi-agent orchestration follow-up), 2026-07-23 (AI assistant parameter pipeline audit)
+**Branch:** `feat/store-backend` (original), `chore/audit-fixes` (follow-up)
+**Commit:** `d67fdc3` (original)
+**Issues Found:** 47 (original) + 11 (follow-up) + 7 (pipeline audit) = 65 total
+**Status:** All resolved.
 
 ---
 
-## Executive Summary
+## 2026-07-23 Follow-up: AI Assistant Parameter Pipeline Audit
 
-A comprehensive production-readiness audit identified 47 issues across threading, memory safety, DSP correctness, serialization, AI/MCP security, and build stability. All 16 critical blockers have been resolved. The remaining 31 issues (High/Medium/Low) were also fixed. This document records every fix with file path, root cause, and resolution.
+A comprehensive audit of the AI assistant → MCP → LockFreeQueue → ParameterBridge →
+hosted VST3 plugin pipeline found 7 issues in edit application verification. 5 were
+code-fixed; 2 are longer-term architectural improvements. See the full audit report
+inline below for details.
+
+### A1 (new): Silent no-op for out-of-bounds parameter indices
+- **File:** `src/Plugin/PluginProcessor.{h,cpp}`, `src/AI/MCPToolHandler.cpp`
+- **Root Cause:** `enqueueParameterSet()` accepted any `index < MAX_PARAMETERS` (2048).
+  During drain, the `writeParameter` lambda silently dropped writes where `index >=
+  params.size()` — the command was consumed from the queue but the plugin was never
+  touched. The verification read-back saw `valueAfter == 0.0` and reported `value_drift`,
+  giving the AI no indication that the index was out of range.
+- **Fix:** Added `outOfRangeCount` to `ParameterCommandFlushResult`. `writeParameter`
+  now returns `bool` and increments a counter when the index exceeds the plugin's
+  actual parameter count. `flushPendingParameterCommandsForAssistant` threads the
+  counter through. `setParameter` and `setParametersBatch` detect it and return
+  `"parameter_index_out_of_range"` with a corrective action instead of `value_drift`.
+- **Impact:** AI assistants now receive a clear, actionable error when they request
+  a parameter index that doesn't exist in the hosted plugin.
+
+### A2 (new): `success: true` masks queued-but-not-applied edits
+- **File:** `src/AI/MCPToolHandler.cpp`
+- **Root Cause:** `setParameter` unconditionally set `"success": true` in its response,
+  even when `flush.drained == 0` (the edit was queued but never applied to the plugin).
+  The verification object correctly showed `"status": "queued"` with `"verified": false`,
+  but an AI reading only the top-level `success` field would believe the edit took effect.
+- **Fix:** Top-level `success` is now gated on `verification.status == "success"`.
+  When the edit is queued or drifted, `success` is `false` and the `error` field
+  contains the verification error reason. `setParametersBatch` now tracks `verifiedCount`
+  and requires at least one verified item for `batchSuccess`, with an explicit warning
+  when all items are queued but none verified.
+- **Impact:** AI assistants can no longer misinterpret queued edits as applied.
+  The `success` field now reliably indicates actual plugin state change.
+
+### A3 (new): `more_phi.*` vs `hosted_plugin.*` namespace ambiguity
+- **File:** `src/AI/MCPToolHandler.cpp` (tool descriptions in `kCoreTools[]`)
+- **Root Cause:** Tool descriptions for `set_parameter`, `hosted_plugin.set_parameter`,
+  `more_phi.set_parameter`, `list_parameters`, `get_parameter`, and
+  `hosted_plugin.set_parameters` did not clearly distinguish which parameter space
+  they operate on. An AI could call `set_parameter` with a More-Phi control name
+  (e.g. "cpuSaver") and get `invalid_param_id`, or call `more_phi.set_parameter`
+  with a hosted plugin parameter name and silently fail.
+- **Fix:** Updated all 6 tool descriptions to explicitly state which parameter
+  space each tool targets and cross-reference the alternative namespace. Example:
+  `set_parameter` now says "IMPORTANT: this changes the HOSTED VST3 plugin's
+  parameters, NOT More-Phi's own controls. To change More-Phi's internal
+  parameters use more_phi.set_parameter instead."
+- **Impact:** AI assistants are now unambiguously guided to the correct tool for
+  the parameter space they intend to modify.
+
+### A4 (new): Verification tolerance too coarse for discrete parameters
+- **File:** `src/AI/MCPToolHandler.cpp`
+- **Root Cause:** `kVerificationDriftTolerance = 0.01f` (1% of normalized range)
+  was used for all parameter types. For a discrete parameter with 128 steps,
+  0.01 spans ~1.28 steps — a snap to the wrong step could pass verification
+  silently. For dB-scaled parameters (60 dB range), 0.01 = 0.6 dB — potentially audible.
+- **Fix:** `classifyVerification` now accepts `isDiscrete` and `numSteps` parameters.
+  Tolerance for discrete params = `max(0.5f / numSteps, 0.001f)` (half a step).
+  New status `"value_drift_discrete"` with distinct error reason and corrective
+  action. Both `setParameter` and `setParametersBatch` query the bridge for
+  discrete info and pass it through.
+- **Impact:** Discrete parameter misapplication is now correctly detected and
+  reported with step-aware precision.
+
+### A5 (new): No morph-overwrite detection in verification
+- **File:** `src/AI/MCPToolHandler.cpp`
+- **Root Cause:** When the morph engine overwrites an AI's parameter edit on the
+  next audio block, the verification read-back sees `valueAfter == valueBefore`
+  (despite the write being enqueued and flushed) and reports `value_drift`. The
+  AI has no way to distinguish "morph overwrote my edit" from "the plugin rejected
+  my value" — two very different situations requiring different corrective actions.
+- **Fix:** `classifyVerification` now accepts a `morphOverwriteRisk` flag. When
+  `true` and the value drifted, status = `"morph_overwrite_risk"` with corrective
+  action: "Pause morph or increase live-edit hold threshold before re-applying
+  the edit." Both `setParameter` and `setParametersBatch` compute a heuristic:
+  morph is active (`snapshotBank.hasAnyOccupied()`) and `valueAfter == valueBefore`
+  despite our write → morph likely overwrote.
+- **Impact:** AI assistants can now give users accurate guidance when morph
+  overwrites their edits, instead of reporting a generic "value drift" error.
+
+### Longer-Term Findings (not code-fixed in this pass)
+
+- **A6:** Batch verification misses cross-parameter side effects — when setting
+  parameter A triggers internal normalization in the plugin that alters parameter B,
+  the verification attributes B's delta to the AI's request for B, not to the
+  side effect of A.
+- **A7:** Ozone dual-path (`apply_mastering_plan` drives both internal chain and
+  Ozone plugin) has no Ozone-specific read-back verification — the response only
+  reports `ozone_applied: true/false` without confirming Ozone's parameters
+  actually reached target values.
 
 ---
+
+## 2026-07-15 Follow-up: Multi-Agent Orchestration Audit
+
+A targeted audit of `src/AI/Agents/` and the audio-thread parameter-application
+pipeline found 11 issues. See `CHANGELOG.md §2026-07-15` for full details.
+
+### C-2 (new): BlackboardBridge::publish() discards eventId
+- **File:** `src/AI/Agents/Blackboard/BlackboardBridge.cpp`
+- **Root Cause:** `publish()` called `makeAutomationId("evt")`, stored it in `ev.eventId`, published via `bus_.publish(std::move(ev))`, then returned `{}` (empty string) instead of the generated ID.
+- **Fix:** Capture `const auto eventId = ev.eventId` before `std::move`, return it.
+- **Impact:** All agent blackboard events were untraceable. Now each `publish()` returns a trackable event ID.
+
+### C-3 (new): Command drain try-lock silently drops morph parameter writes
+- **File:** `src/Plugin/PluginProcessor.{h,cpp}`
+- **Root Cause:** The audio thread's `commandConsumerLock_` try-lock gated BOTH the command queue drain AND the morph-to-parameter application loop. When the assistant flush path held `commandConsumerLock_` (blocking), the audio thread's try-lock failed and skipped parameter writes for that entire block.
+- **Fix:** Split the gate: `canDrainCommands` (from try-lock) only gates the drain. Morph application always proceeds — it has its own `touchStateLock_.tryEnter()`. `liveEditHold_` reads moved inside `hasTouchLock` guard to prevent data race with concurrent assistant flush.
+- **Impact:** Eliminates audible parameter stutter when MCP/agent edits contend with the audio thread.
+
+### H-3 (new): APVTS restore silently skipped on root-tag mismatch
+- **File:** `src/Plugin/PluginProcessor.cpp`
+- **Root Cause:** `setStateInformation` checked only the root XML tag against APVTS state type. Some DAWs wrap state XML in an extra element.
+- **Fix:** Recursive search for the APVTS state element using `std::function`.
+- **Impact:** Prevents silent parameter loss when loading state in DAWs that wrap XML.
+
+### H-4 (new): getStateInformation blocks on audio thread
+- **File:** `src/Plugin/PluginProcessor.cpp`
+- **Root Cause:** `beginExclusivePluginUse(500)` called unconditionally. Some DAWs invoke `getStateInformation` from the audio thread during offline render.
+- **Fix:** Detect calling thread via `MessageManager::isThisTheMessageThread()`. Only block on message thread; fall back to buffered `pendingHostedState_` on audio thread.
+- **Impact:** Prevents audio-thread blocking during DAW export/bounce.
+
+---
+
+## Original Audit (2026-06-18)
 
 ## Critical Fixes (C1–C16)
 

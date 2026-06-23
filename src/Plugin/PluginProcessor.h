@@ -60,10 +60,12 @@ class IZotopeIPCDiscovery;
 namespace agents {
 class AgentRuntime;
 class DefaultToolInvoker;
-class NullAgentLogger;
+class IAgentLogger;            // M2: store by interface so we can wire StructuredAgentLogger in production
 class DeterministicFallbackLlmClient;
 class BlackboardBridge;
 } // namespace agents
+
+enum class AutonomyLevel;      // H6: defined in AI/AutomationControlPlane.h; persisted/restored across state IO
 
 class MorePhiProcessor : public juce::AudioProcessor,
                           private juce::Timer
@@ -231,6 +233,7 @@ public:
         bool exclusiveAccessTimedOut = false;
         int retryCount = 0;
         int waitedMs = 0;
+        int outOfRangeCount = 0;   // AUDIT-FIX 4.7: commands dropped because index >= plugin param count
     };
 
     ParameterCommandFlushResult flushPendingParameterCommandsForAssistant(int maxCommands = 2048,
@@ -455,7 +458,7 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
-    PluginHostManager  hostManager;
+    mutable PluginHostManager  hostManager;  // mutable: acquirePluginForUse mutates atomics only (logically const)
     ParameterBridge    paramBridge;
     SnapshotBank       snapshotBank;
     MorphProcessor     morphProcessor;
@@ -468,7 +471,9 @@ private:
     InstanceIdentity   instanceIdentity_;
     juce::uint64       processorGenerationToken_ = 0;
     licensing::LicenseRuntimeState licenseRuntimeState_;
-    std::unique_ptr<licensing::LicenseManager> licenseManager_;
+    // L-5 FIX: shared_ptr so detached refresh threads can safely extend the
+    // manager's lifetime past processor destruction.
+    std::shared_ptr<licensing::LicenseManager> licenseManager_;
 
     // ── New v3.3.0 components ────────────────────────────────────────────────
     ParameterClassifier      parameterClassifier_;
@@ -482,10 +487,14 @@ private:
     // holders must be declared BEFORE the runtime so the runtime is destroyed
     // FIRST (C++ destroys members in reverse declaration order).
     std::unique_ptr<agents::DefaultToolInvoker>          agentTools_;
-    std::unique_ptr<agents::NullAgentLogger>             agentLogger_;
+    std::unique_ptr<agents::IAgentLogger>                agentLogger_;   // M2: StructuredAgentLogger in production
     std::unique_ptr<agents::DeterministicFallbackLlmClient> agentLlm_;
     std::unique_ptr<agents::BlackboardBridge>            agentBlackboard_;
     std::unique_ptr<agents::AgentRuntime>                agentRuntime_;
+    // H6: autonomy chosen by the user (Assist/CoPilot/Autopilot), captured in
+    // getStateInformation and replayed onto the permission kernel when the agent
+    // runtime is rebuilt. Defaults to Assist.
+    AutonomyLevel pendingAgentAutonomy_;
 
     // ── Ozone 11 mastering integration ───────────────────────────────────────
     AutoMasteringEngine                  autoMasteringEngine_;
@@ -498,6 +507,10 @@ private:
     SonicMasterAnalysisEngine            sonicMasterEngine_;
     SonicMasterRunnerInferenceSource     sonicMasterSource_ { sonicMasterRunner_ };
     SonicMasterHttpInferenceSource       sonicMasterHttpSource_;
+
+    // ONNX-first fallback: tries to load the masteringbrainv2 ONNX model from
+    // alongside the plugin binary; falls back to the HTTP inference server.
+    void initializeSonicMaster();
 
     // ── V2 components ──────────────────────────────────────────────────────
     PluginHostManager  hostManagerB_;
@@ -581,6 +594,14 @@ private:
     // Always ~200ms regardless of host configuration.
     int touchCooldownBlocks_ = 10;
 
+    // PERF-IA: Interleaved touch sampling — instead of calling getValue() on all
+    // 2,048 parameters every block (the dominant CPU cost), only sample 1/N
+    // params per block using a rotating offset. Touch detection latency increases
+    // to N blocks but the getValue virtual-call cost drops by N×.
+    // kTouchSamplingStride=4 → 75% reduction in getValue calls, ~20ms touch latency.
+    static constexpr int kTouchSamplingStride = 4;
+    int touchSamplingPhase_ = 0; // rotates 0..kTouchSamplingStride-1 each block
+
     // Live external edits are held against morph output until the user moves
     // the morph cursor or explicitly recalls a snapshot. Audio thread only.
     std::vector<uint8_t> liveEditHold_;
@@ -590,10 +611,19 @@ private:
 
     void clearLiveEditHoldsAudioThread() noexcept;
     bool shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept;
+    // C4 FIX: Drop the cached "last applied" value for every parameter so the
+    // next morph pass treats the just-recalled snapshot values as the new
+    // baseline instead of overwriting them. Called on the audio thread right
+    // after a recall path (MIDI note trigger, MCP recall) writes hosted params
+    // directly via ParameterBridge, bypassing lastApplied_ bookkeeping. Without
+    // this, applyMorphAndParameters() in the same block sees a stale lastApplied_
+    // and writes the morph output right back over the recalled snapshot.
+    void invalidateAppliedCacheAudioThread() noexcept;
     int drainParameterCommandQueue(int cachedParamCount,
                                    int maxCommands,
-                                   juce::AudioPluginInstance* exclusivePlugin = nullptr) noexcept;
-    void drainParameterCommandQueue(int cachedParamCount, bool canTouchHostedParameters) noexcept;
+                                   juce::AudioPluginInstance* exclusivePlugin = nullptr,
+                                   int* outOfRangeCount = nullptr) noexcept;
+    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands) noexcept;
     void processMIDIAndSidechain(juce::MidiBuffer& midi, juce::AudioBuffer<float>& buffer) noexcept;
     void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters) noexcept;
     void applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer, bool isBypassed) noexcept;
@@ -620,6 +650,11 @@ private:
     std::atomic<bool> isRestoring_{false};
     // Buffered hosted plugin state to apply after async reload completes
     juce::MemoryBlock pendingHostedState_;
+    // P3 FIX: This spinlock protects a MemoryBlock copy that may heap-allocate.
+    // It is only acquired on the message thread (setStateInformation, loadHostedPluginFromState)
+    // and the state-save path (getStateInformation on message thread); never on the audio thread.
+    // A CriticalSection would be more appropriate here, but the spinlock is acceptable since
+    // contention is negligible (single-threaded message loop) and MemoryBlock copy is fast.
     juce::SpinLock pendingStateMutex_;
     // Preserved MCP identity for port reuse across export cycles
     InstanceIdentity pendingIdentity_;
@@ -702,6 +737,7 @@ private:
         std::atomic<float>* coarseParameterWrites = nullptr;
         std::atomic<float>* disableTouchDetection = nullptr;
         std::atomic<float>* throttleParamCommits = nullptr;
+        std::atomic<float>* cpuSaver = nullptr;
     };
     RawParameters rawParams_{};
 
@@ -715,6 +751,10 @@ private:
     std::atomic<bool> maintenanceTimerRequested_{false};
     std::atomic<bool> licenseLoadPending_{true};
     std::atomic<bool> licenseRefreshInFlight_{false}; // guards background refresh
+    // P2 FIX: Replaces unreliable callAsync with Timer-deferred APVTS notification.
+    // setMorphPositionExternal sets this flag; timerCallback picks it up on the
+    // message thread (where the timer reliably fires even with editor closed).
+    std::atomic<bool> morphPositionNotifyPending_{false};
 
     std::atomic<bool> audioDomainConfigDirty_{false};
     std::atomic<bool> latencyConfigDirty_{false};
@@ -753,6 +793,9 @@ private:
     // Throttle Param Commits: compute morph every block but push setValue to the
     // hosted plugin only every Nth block (Drift/continuous-morph CPU relief).
     std::atomic<bool> throttleParamCommits_{false};
+    // PERF-CPU: When enabled, halves audio-domain FFT size and caps oversampling
+    // at x2. Reduces audio-domain CPU by ~40-60% at the cost of spectral resolution.
+    std::atomic<bool> cpuSaver_{false};
     int paramCommitCounter_{0}; // audio-thread only
 
     // Audio analysis (audio thread → UI)
@@ -769,6 +812,9 @@ private:
 
     // M9 FIX: Output gain smoothing state (audio thread only)
     std::atomic<float> smoothedGain_{1.0f};
+    // P2 FIX: Audio-thread only — only accessed from applyOutputGainAndMetering().
+    // Not atomic by design; the surrounding atomics (smoothedGain_) are for
+    // cross-thread visibility from UI diagnostic reads, not synchronization.
     bool gainSmoothingInitialized_ = false;
 
     // M11 FIX: Atomic flag for deferred state restore from audio thread

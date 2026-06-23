@@ -32,25 +32,25 @@ void PriorityScheduler::stop()
 {
     if (! running_.exchange(false))
         return;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-    }
     cv_.notify_all();
     for (auto& t : workers_)
         if (t.joinable())
             t.join();
     workers_.clear();
     // Drain anything left unexecuted so we don't keep dangling lambdas.
-    while (! queue_.empty())
-        queue_.pop();
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (int i = 0; i < kNumPriorityLevels; ++i)
+        while (! queues_[i].empty())
+            queues_[i].pop();
 }
 
 void PriorityScheduler::submit(std::function<void()> task, TaskPriority priority)
 {
     if (! task)
         return;
+    const int ord = Entry::ordinal(priority);
     std::lock_guard<std::mutex> lock(mutex_);
-    queue_.push(Entry{ std::move(task), priority, nowMs() });
+    queues_[ord].push(Entry{ std::move(task), priority, nowMs() });
     cv_.notify_one();
 }
 
@@ -61,14 +61,39 @@ void PriorityScheduler::workerLoop()
         Entry entry;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return ! running_.load() || ! queue_.empty(); });
-            if (! running_.load() && queue_.empty())
-                return;
+            cv_.wait(lock, [this] {
+                if (! running_.load()) return true;
+                for (int i = 0; i < kNumPriorityLevels; ++i)
+                    if (! queues_[i].empty()) return true;
+                return false;
+            });
+            if (! running_.load())
+            {
+                bool anyLeft = false;
+                for (int i = 0; i < kNumPriorityLevels; ++i)
+                    if (! queues_[i].empty()) { anyLeft = true; break; }
+                if (! anyLeft)
+                    return;
+            }
+
             bumpStarvingBackground();
-            if (queue_.empty())
+            escalateStarving();
+
+            // H-1/M-4: Check queues in priority order (highest first).
+            // O(1) per level — no heap rebuild.
+            bool found = false;
+            for (int ord = kNumPriorityLevels - 1; ord >= 0; --ord)
+            {
+                if (! queues_[ord].empty())
+                {
+                    entry = queues_[ord].front();
+                    queues_[ord].pop();
+                    found = true;
+                    break;
+                }
+            }
+            if (! found)
                 continue;
-            entry = queue_.top();
-            queue_.pop();
         }
         try
         {
@@ -84,48 +109,90 @@ void PriorityScheduler::workerLoop()
 
 void PriorityScheduler::bumpStarvingBackground()
 {
-    // Called under mutex_. If the oldest Background entry has waited past the guard,
-    // promote it to Normal so it can't starve indefinitely under sustained high-prio load.
-    if (queue_.empty() || starvationGuardMs_ <= 0)
+    // H-1/M-4 FIX: O(1) starvation promotion — splice the entire Background
+    // queue (ordinal 0) into the Normal queue (ordinal 1) when any entry in
+    // it has waited longer than starvationGuardMs_. Much cheaper than the
+    // previous O(n log n) drain+scan+rebuild under the same lock.
+    //
+    // Called under mutex_.
+    constexpr int kBackgroundOrd = Entry::ordinal(TaskPriority::Background);
+    constexpr int kNormalOrd = Entry::ordinal(TaskPriority::Normal);
+
+    if (queues_[kBackgroundOrd].empty() || starvationGuardMs_ <= 0)
         return;
-    // We cannot mutate std::priority_queue in place; rebuild if needed.
-    std::vector<Entry> snapshot;
-    snapshot.reserve(queue_.size());
+
     const auto t = nowMs();
-    bool promoted = false;
-    while (! queue_.empty())
+    const auto& oldest = queues_[kBackgroundOrd].front();
+    if ((t - oldest.submitTimeMs) <= starvationGuardMs_)
+        return;  // nothing starving yet
+
+    // Splice the entire Background queue into Normal, preserving FIFO order.
+    // All entries that were Background get promoted to Normal priority.
+    while (! queues_[kBackgroundOrd].empty())
     {
-        Entry e = queue_.top();
-        queue_.pop();
-        if (e.priority == TaskPriority::Background && (t - e.submitTimeMs) > starvationGuardMs_)
-        {
-            e.priority = TaskPriority::Normal;
-            promoted = true;
-        }
-        snapshot.push_back(std::move(e));
+        auto e = queues_[kBackgroundOrd].front();
+        queues_[kBackgroundOrd].pop();
+        e.priority = TaskPriority::Normal;
+        queues_[kNormalOrd].push(std::move(e));
     }
-    for (auto& e : snapshot)
-        queue_.push(std::move(e));
-    if (promoted)
-        starvationBumps_.fetch_add(1, std::memory_order_relaxed);
+    starvationBumps_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void PriorityScheduler::escalateStarving()
+{
+    // M4: second-tier escalation. bumpStarvingBackground() only lifts Background→Normal
+    // at starvationGuardMs_. Under sustained High-priority load, Normal (and even High)
+    // tasks can sit behind an unbroken stream of more-urgent work and effectively
+    // starve. Promote any entry that has waited longer than escalationTier2Ms_ up by
+    // one level so memory compaction / telemetry / memory-recall bookkeeping is
+    // guaranteed to run within ~5s regardless of High traffic. Called under mutex_.
+    if (escalationTier2Ms_ <= 0)
+        return;
+
+    const auto t = nowMs();
+
+    // Promote Normal → High for old-enough entries. std::queue is FIFO, so if the
+    // FRONT is not yet old enough, nothing behind it can be either (they arrived
+    // later). We process as many leading entries as qualify.
+    auto drainAged = [&](int fromOrd, int toOrd) {
+        if (fromOrd == toOrd || fromOrd < 0 || toOrd >= kNumPriorityLevels)
+            return;
+        while (! queues_[fromOrd].empty())
+        {
+            auto& front = queues_[fromOrd].front();
+            if ((t - front.submitTimeMs) <= escalationTier2Ms_)
+                break;
+            auto e = queues_[fromOrd].front();
+            queues_[fromOrd].pop();
+            e.priority = [toOrd]() -> TaskPriority {
+                switch (toOrd)
+                {
+                    case 3: return TaskPriority::RealtimeCritical;
+                    case 2: return TaskPriority::High;
+                    case 1: return TaskPriority::Normal;
+                    default: return TaskPriority::Background;
+                }
+            }();
+            queues_[toOrd].push(std::move(e));
+        }
+    };
+
+    constexpr int kNormalOrd          = Entry::ordinal(TaskPriority::Normal);
+    constexpr int kHighOrd            = Entry::ordinal(TaskPriority::High);
+    constexpr int kRealtimeCriticalOrd= Entry::ordinal(TaskPriority::RealtimeCritical);
+
+    drainAged(kNormalOrd, kHighOrd);
+    drainAged(kHighOrd, kRealtimeCriticalOrd);
 }
 
 PriorityScheduler::Stats PriorityScheduler::stats() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     Stats s;
-    auto q = queue_;   // copy; priority_queue only exposes top()/pop()
-    while (! q.empty())
-    {
-        switch (q.top().priority)
-        {
-            case TaskPriority::Background:        ++s.depthBackground; break;
-            case TaskPriority::Normal:            ++s.depthNormal; break;
-            case TaskPriority::High:              ++s.depthHigh; break;
-            case TaskPriority::RealtimeCritical:  ++s.depthRealtimeCritical; break;
-        }
-        q.pop();
-    }
+    s.depthBackground       = static_cast<int>(queues_[0].size());
+    s.depthNormal           = static_cast<int>(queues_[1].size());
+    s.depthHigh             = static_cast<int>(queues_[2].size());
+    s.depthRealtimeCritical = static_cast<int>(queues_[3].size());
     s.executed = executed_.load(std::memory_order_relaxed);
     s.starvationBumps = starvationBumps_.load(std::memory_order_relaxed);
     return s;

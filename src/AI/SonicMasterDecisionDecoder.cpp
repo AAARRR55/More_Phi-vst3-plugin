@@ -75,6 +75,14 @@ bool decodeSonicMasterDecision(const float* decision,
         out.appliedMask.limiter = false;
     }
 
+    // AUDIT-FIX-3: decoder and engine must clamp ratio to the SAME range or
+    // telemetry lies by up to 3.3x. applyValidatedPlan re-clamps via the same
+    // kSonicMasterCompRatioMax constant (AutoMasteringEngine.cpp). The model may
+    // emit up to 20, but the DSP cannot honour it; clamping at decode time keeps
+    // the decoded plan byte-for-byte consistent with what reaches the compressor.
+    // Upgrade path: raise both bounds together once MultibandDynamicsProcessor is
+    // verified to support ratio > 6.
+
     // ── Dynamics: 3 x (threshold,ratio,attack,release,makeup,knee).
     //    AUDIT-2.1: the model emits all six params per band. Decode them into the
     //    compParams sidecar in real units (the full set), AND mirror threshold +
@@ -87,13 +95,14 @@ bool decodeSonicMasterDecision(const float* decision,
     {
         const std::size_t o = kSonicMasterCompOffset + band * kSonicMasterCompBandWidth;
         const float thresholdDb = clamp(decision[o + 0], -40.0f, -6.0f);
-        const float ratioRaw    = clamp(decision[o + 1], 1.0f, 20.0f);
+        const float ratioRaw    = clamp(decision[o + 1], kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
         const float attackMs    = clamp(decision[o + 2],   0.1f, 100.0f);
         const float releaseMs   = clamp(decision[o + 3],  10.0f, 500.0f);
         const float makeupDb    = clamp(decision[o + 4],   0.0f,  12.0f);
         const float kneeDb      = clamp(decision[o + 5],   0.0f,  12.0f);
 
-        // Normalized pair for the safety policy's delta math.
+        // Normalized pair for the safety policy's delta math. Map ratio over the
+        // agreed [1,6] band: ratio=2.5 -> 0.0, ratio=1 -> -1.0, ratio=6 -> +3.5.
         out.projectedTargets.dynamics[2 * band + 0] = clamp((thresholdDb + 20.0f) / 8.0f, -1.0f, 1.0f);
         out.projectedTargets.dynamics[2 * band + 1] = clamp((ratioRaw - 2.5f) / 1.5f, -1.0f, 5.0f);
 

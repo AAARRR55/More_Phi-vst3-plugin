@@ -1,10 +1,12 @@
 # SonicMaster Inference Server
 
 Local Python bridge that hosts the `masteringbrainv2` checkpoint and serves
-mastering decisions to the More-Phi plugin over HTTP. This is the path that
-works **today** while the checkpoint's faithful ONNX export remains an open
-problem (the model uses fused-kernel transformer/MHA ops + an FFT-based
-spectral injection that torch's ONNX exporter cannot trace).
+mastering decisions to the More-Phi plugin over HTTP. This is the **fallback**
+path — the plugin's primary inference path is the in-process ONNX runner
+(`SonicMasterDecisionRunner`), which loads the exported ONNX graph produced by
+`tools/export_onnx/export_patched.py` (manual Multi-Head Attention + STFT-based
+spectral injection; parity verified). This HTTP server is used when the ONNX
+model is not staged alongside the plugin binary or not linked into the build.
 
 ## Why this exists
 
@@ -12,13 +14,13 @@ The plugin's realtime path is built around `ISonicMasterInferenceSource`. Two
 implementations exist:
 
 1. **`SonicMasterRunnerInferenceSource`** — runs an ONNX model in-process.
-   *Not usable yet* because the checkpoint won't export faithfully to ONNX.
+   **Primary path.** Loads the exported `masteringbrain_v2_decision.onnx`.
 2. **`SonicMasterHttpInferenceSource`** — POSTs a 6 s stereo window to this
-   server and parses the 44-float decision back. **Default; works today.**
+   server and parses the 44-float decision back. **Fallback.**
 
-The plugin defaults to the HTTP source. If the server isn't reachable the
-"Neural Master" toggle reads "unavailable (no model)" and the feature is a
-no-op. Start this server to enable it.
+The plugin tries ONNX first at construction; if the model is not found or
+fails to load, it falls back to this HTTP server. If neither source is
+available the "Neural Master" toggle reads "unavailable (no model)".
 
 ## Prerequisites
 

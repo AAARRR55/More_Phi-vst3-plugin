@@ -207,6 +207,16 @@ struct NeuralMasteringPlanCandidate
     MasteringControlMask editableMask {};
     std::array<NeuralMasteringGateResult, kNeuralMasteringGateCount> gateResults {};
     NeuralMasteringFallbackMode requestedFallbackMode = NeuralMasteringFallbackMode::None;
+
+    // AUDIT-FIX: carry the full compressor sidecar through the safety policy
+    // so the verdict preserves the model's attack/release/makeup/knee values.
+    // Previously these were dropped because the candidate had no slot for them.
+    std::array<NeuralMasteringCompBand, kNeuralMasteringCompBandCount> compParams {};
+    bool hasCompParams = false;
+
+    // Staleness guard: capture instant (steady_clock ns) when the audio window
+    // was captured. Plans applied much later can be discarded.
+    std::uint64_t capturedAtSteadyClockNs = 0;
 };
 
 struct ValidatedNeuralMasteringPlan
@@ -219,6 +229,13 @@ struct ValidatedNeuralMasteringPlan
     NeuralMasteringEvidenceLevel evidenceLevel = NeuralMasteringEvidenceLevel::Planning;
     bool valid = false;
     bool projected = false;
+
+    // AUDIT-IX-8: steady-clock nanoseconds at which the audio window feeding this
+    // plan was captured. Set by SonicMasterAnalysisEngine at capture time; checked
+    // at apply time so a plan older than the staleness budget is discarded rather
+    // than applied against audio it no longer describes. 0 = untimestamped (legacy
+    // producers), which skips the check.
+    std::uint64_t capturedAtSteadyClockNs = 0;
 
     // AUDIT-2.1: full per-band compressor params. Set by the SonicMaster decoder
     // (it has all six from the decision vector); other plan producers leave this

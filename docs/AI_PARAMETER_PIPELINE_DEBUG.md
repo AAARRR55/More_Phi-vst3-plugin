@@ -103,7 +103,7 @@ This is where `params[index]->setValue(clamped)` is called on the hosted plugin.
 2. **Without exclusive plugin** (audio-thread path): writes via `paramBridge.setParameterNormalized()`.
 
 **Failure modes:**
-- Index out of range: `index >= params.size()` is silently skipped.
+- Index out of range: `index >= params.size()` is silently skipped on the exclusive-flush path (path 1). **AUDIT-FIX 4.7:** `drainParameterCommandQueue` now tracks out-of-range writes via an `outOfRangeCount` counter threaded through `ParameterCommandFlushResult`. The MCP tool response includes `flush.out_of_range_count` and returns `error: "parameter_index_out_of_range"` in the verification payload instead of falling through to `value_drift`.
 - ParameterBridge throttling (path 2 only): `shouldThrottle()` returns true if the same value (within 0.01) was written less than 2ms ago. Write is **silently dropped**. This is designed to prevent flooding but can suppress legitimate rapid edits.
 - Hosted plugin `setValue()` throws and is caught silently.
 
@@ -116,6 +116,8 @@ This is where `params[index]->setValue(clamped)` is called on the hosted plugin.
 **Files:** `src/Plugin/PluginProcessor.cpp`
 
 **This is the most common cause of "edits don't stick."** After draining the command queue, processBlock runs the morph engine which computes `finalOutput_` values and writes them to all parameters via `paramBridge.setParameterNormalized()`. This **overwrites** the value just set by the assistant on the very same processBlock cycle.
+
+**AUDIT-FIX 4.5:** The MCP tool response now includes `morph_overwrite_risk` detection. If `valueAfter` equals `valueBefore` (despite the write being enqueued and flushed), the verification status reports `"morph_overwrite_risk"` with a corrective action suggesting the user pause morph or increase the live-edit hold threshold. This helps AI assistants distinguish "my edit was overwritten by morph" from "the plugin rejected my value."
 
 **Protection mechanism:** When `cmd.holdAgainstMorph == true` (which MCP and Assistant sources always set), the drain code sets `liveEditHold_[paramIndex] = 1` along with the morph position at time of edit. The morph-apply loop checks this flag and **skips** writing the morph value for that parameter until the user moves the morph pad/fader past `MORPH_POS_THRESHOLD`.
 
@@ -135,19 +137,32 @@ This is where `params[index]->setValue(clamped)` is called on the hosted plugin.
 ```
 1. Does the tool response show "success": true?
    NO  -> Check Stage 1 (tool name) or Stage 2 (parameter resolution)
+          AUDIT-FIX 4.3: success is now gated on actual verification.
+          Check "verification" → "status" field for the true outcome.
    YES |
 
-2. Does "appliedNow" > 0 in the flush result?
+2. Does the verification show "status": "success"?
+   NO  -> "queued" = still pending in queue (Stage 4/5)
+          "value_drift" = plugin snapped value differently (Stage 6)
+          "value_drift_discrete" = discrete parameter snapped to wrong step
+          "morph_overwrite_risk" = morph likely overwrote the edit (Stage 7)
+          "parameter_index_out_of_range" = index exceeds plugin param count
+          "failure" = queue full or parameter unresolved
+   YES |
+
+3. Does "appliedNow" > 0 in the flush result?
    NO  -> Check Stage 4 (pluginUnavailable? exclusiveAccessTimedOut?)
           If both false, commands are queued for processBlock -> Stage 5
    YES |
 
-3. Does the hosted plugin's parameter value change momentarily?
+4. Does the hosted plugin's parameter value change momentarily?
    NO  -> Stage 6: throttle, index mismatch, or hosted plugin rejecting setValue
+          Check flush.out_of_range_count > 0 for index-out-of-range
    YES |
 
-4. Does the value revert after a moment?
-   YES -> Stage 7: morph engine overwrite. Check liveEditHold and morph position.
+5. Does the value revert after a moment?
+   YES -> Stage 7: morph engine overwrite. Check verification.status for
+          "morph_overwrite_risk". Use liveEditHold and morph position.
    NO  -> Edit is applied successfully. If UI doesn't reflect it, it's a UI refresh issue.
 ```
 
@@ -172,7 +187,20 @@ After identifying and fixing the issue:
 3. **Manual test in DAW:**
    - Load More-Phi, then load a hosted plugin
    - Open AI chat, send "set parameter 0 to 0.75"
-   - Verify the tool response JSON shows `"success":true, "appliedNow":1`
+   - Verify the tool response JSON shows `"success":true, "verification":{"status":"success"}`
    - Verify the hosted plugin's first parameter reads 0.75
    - Move the morph pad, verify the value yields to morph interpolation (liveEditHold released)
    - Set the parameter again, verify it holds until morph pad moves
+   - Check for `"morph_overwrite_risk"` in verification when morph is active and edit reverts
+   - Set an out-of-range parameter index (e.g., 9999 on a small plugin) and verify `"parameter_index_out_of_range"` error
+4. **Verification status reference:**
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `success` | Value applied and verified within tolerance | Edit confirmed |
+| `queued` | Command in queue, not yet applied | Wait for audio callback or retry |
+| `value_drift` | Applied value differs from requested (continuous param) | Re-read parameter, adjust value |
+| `value_drift_discrete` | Discrete parameter snapped to different step | Choose a valid step value |
+| `morph_overwrite_risk` | Morph engine likely overwrote the edit | Pause morph or increase live-edit hold |
+| `parameter_index_out_of_range` | Index exceeds plugin parameter count | Use `list_parameters` to find valid indices |
+| `failure` | Queue full or parameter unresolved | Check error_reason for details |

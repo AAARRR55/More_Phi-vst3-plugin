@@ -11,6 +11,7 @@
 #include "Core/NeuralMasteringTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -31,6 +32,9 @@ public:
         // Neutral: -14 LUFS, -1 dBTP, zero EQ, zero comp offsets.
         decision_[more_phi::kSonicMasterTargetLufsIdx] = -14.0f;
         decision_[more_phi::kSonicMasterTruePeakIdx]   = -1.0f;
+        for (std::size_t i = 0; i < decisionOverrides_.size(); ++i)
+            if (decisionOverrideEnabled_[i])
+                decision_[i] = decisionOverrides_[i];
         std::copy_n(decision_, more_phi::kSonicMasterDecisionWidth, outDecision);
         ++callCount_;
         return shouldSucceed_;
@@ -38,9 +42,19 @@ public:
 
     int callCount() const { return callCount_; }
     void setShouldSucceed(bool v) { shouldSucceed_ = v; }
+    void setDecisionValue(std::size_t index, float value)
+    {
+        if (index < decisionOverrides_.size())
+        {
+            decisionOverrides_[index] = value;
+            decisionOverrideEnabled_[index] = true;
+        }
+    }
 
 private:
     float decision_[more_phi::kSonicMasterDecisionWidth] {};
+    std::array<float, more_phi::kSonicMasterDecisionWidth> decisionOverrides_ {};
+    std::array<bool, more_phi::kSonicMasterDecisionWidth> decisionOverrideEnabled_ {};
     int callCount_ = 0;
     bool shouldSucceed_ = true;
     bool available_ = true;
@@ -90,6 +104,65 @@ TEST_CASE("AnalysisEngine applies a plan once enough audio is captured",
     REQUIRE(source.callCount() == 1);
     CHECK(eng.getStatus() == more_phi::SonicMasterAnalysisEngine::Status::Applied);
     CHECK(engine.hasLastSafeNeuralMasteringPlan());
+
+    eng.release();
+}
+
+TEST_CASE("AnalysisEngine applies the safety-projected plan, not the raw decoded target",
+          "[SonicMaster][Engine][Safety]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    source.setDecisionValue(more_phi::kSonicMasterEqGainOffset + 0,
+                            more_phi::kAdaptiveEqMaxGainDb);
+    source.setDecisionValue(more_phi::kSonicMasterTargetLufsIdx, -8.0f);
+    eng.setInferenceSource(&source);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+
+    eng.setActive(true);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    REQUIRE(eng.runOneCycleForTest());
+    REQUIRE(engine.hasLastSafeNeuralMasteringPlan());
+
+    const auto& applied = engine.getLastSafeNeuralMasteringPlan();
+    CHECK(applied.valid);
+    CHECK(applied.projected);
+    CHECK(std::abs(applied.projectedTargets.eq[0] - 0.15f) < 1.0e-5f);
+    CHECK(std::abs(applied.projectedTargets.loudness[0] - 0.10f) < 1.0e-5f);
+
+    eng.release();
+}
+
+TEST_CASE("AnalysisEngine decision-only requests do not advance safety baseline",
+          "[SonicMaster][Engine][Safety]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    source.setDecisionValue(more_phi::kSonicMasterEqGainOffset + 0,
+                            more_phi::kAdaptiveEqMaxGainDb);
+    source.setDecisionValue(more_phi::kSonicMasterTargetLufsIdx, -8.0f);
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+
+    eng.setActive(true);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    more_phi::ValidatedNeuralMasteringPlan first {};
+    more_phi::ValidatedNeuralMasteringPlan second {};
+    REQUIRE(eng.requestDecisionNow(-14.0f, first, nullptr, 0));
+    REQUIRE(eng.requestDecisionNow(-14.0f, second, nullptr, 0));
+
+    CHECK(first.projected);
+    CHECK(second.projected);
+    CHECK(std::abs(first.projectedTargets.eq[0] - 0.15f) < 1.0e-5f);
+    CHECK(std::abs(second.projectedTargets.eq[0] - 0.15f) < 1.0e-5f);
+    CHECK(std::abs(first.projectedTargets.loudness[0] - 0.10f) < 1.0e-5f);
+    CHECK(std::abs(second.projectedTargets.loudness[0] - 0.10f) < 1.0e-5f);
 
     eng.release();
 }

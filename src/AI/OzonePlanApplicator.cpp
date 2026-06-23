@@ -22,6 +22,20 @@ int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
     if (!plan.valid)
         return 0;
 
+    // AUDIT-FIX-5: fail loud. If no parameter has been audited/mapped yet, log a
+    // warning so the silent no-op cannot masquerade as a successful apply. Until
+    // audit_ozone_parameters(apply=true) runs against the hosted Ozone instance,
+    // every plan field writes nothing — callers deserve to know.
+    if (!map_.hasAnyMapping())
+    {
+        juce::Logger::writeToLog(
+            "OzonePlanApplicator: WARNING — parameter map is all-stubs; "
+            "no Ozone parameters will be set. Run audit_ozone_parameters(apply=true) "
+            "against the hosted plugin to populate the map.");
+        lastAppliedCount_ = 0;
+        return 0;
+    }
+
     int total = 0;
     total += applyEQ(plan);
     total += applyDynamics(plan);

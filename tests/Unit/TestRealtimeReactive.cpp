@@ -39,12 +39,12 @@ struct ScopedStore
     juce::File dir;
 };
 
-// Captures the set_parameter tool call so we can assert the reaction happened.
+// Captures the more_phi.set_parameter tool call so we can assert the reaction happened.
 struct Capture
 {
     std::atomic<bool> invoked{false};
-    std::atomic<int>  param{-1};
     std::atomic<float> value{0.0f};
+    std::atomic<bool> sawParamId{false};
 };
 
 } // namespace
@@ -58,17 +58,20 @@ TEST_CASE("Reactive: blackboard clipping event reaches RealtimeControlAgent", "[
     NullAgentLogger logger;
 
     Capture cap;
+    // C3: the reactive agent now trims the More-Phi OUTPUT GAIN via
+    // more_phi.set_parameter (by parameter_id), not a hosted-plugin index.
     DefaultToolInvoker::DispatchFn dispatch = [&](const juce::String& method, const nlohmann::json& params) {
-        if (method == "set_parameter")
+        if (method == "more_phi.set_parameter")
         {
             cap.invoked.store(true);
-            cap.param.store(params.value("index", -1));
             cap.value.store(static_cast<float>(params.value("value", 0.0)));
+            // Record that we received a parameter_id (the configured output gain name).
+            cap.sawParamId.store(params.value("parameter_id", std::string{}) == "outputGain");
         }
         return juce::String(nlohmann::json({ {"ok", true} }).dump());
     };
     DefaultToolInvoker::CapabilityFn capFn = [](const juce::String&) {
-        return std::vector<juce::String>{ "set_parameter" };
+        return std::vector<juce::String>{ "more_phi.set_parameter" };
     };
     DefaultToolInvoker invoker{dispatch, capFn};
 
@@ -76,7 +79,7 @@ TEST_CASE("Reactive: blackboard clipping event reaches RealtimeControlAgent", "[
 
     auto rt = std::make_unique<RealtimeControlAgent>();
     RealtimeControlAgent::Config cfg;
-    cfg.outputGainParamIndex = 7;
+    cfg.outputGainParamName = "outputGain";   // C3: target by parameter id
     cfg.clipTrimStepDb = 1.5f;
     rt->setConfig(cfg);
     agentRuntime.registerAgent(std::move(rt));
@@ -91,7 +94,8 @@ TEST_CASE("Reactive: blackboard clipping event reaches RealtimeControlAgent", "[
         std::this_thread::sleep_for(2ms);
 
     REQUIRE(cap.invoked.load());
-    REQUIRE(cap.param.load() == 7);          // routed to the configured output-gain param
+    REQUIRE(cap.sawParamId.load());        // routed to the configured output-gain param by id
+    REQUIRE(cap.value.load() < 1.0f);      // absolute normalized target, trimmed below unity
 
     agentRuntime.stop();
 }
@@ -110,13 +114,13 @@ TEST_CASE("Reactive: unrelated event type is ignored by RealtimeControlAgent", "
         return juce::String(nlohmann::json({ {"ok", true} }).dump());
     };
     DefaultToolInvoker::CapabilityFn capFn = [](const juce::String&) {
-        return std::vector<juce::String>{ "set_parameter" };
+        return std::vector<juce::String>{ "more_phi.set_parameter" };
     };
     DefaultToolInvoker invoker{dispatch, capFn};
 
     AgentRuntime agentRuntime(nullptr, nullptr, &runtime, invoker, bb, logger, nullptr);
     auto rt = std::make_unique<RealtimeControlAgent>();
-    RealtimeControlAgent::Config cfg; cfg.outputGainParamIndex = 0;
+    RealtimeControlAgent::Config cfg; cfg.outputGainParamName = "outputGain";
     rt->setConfig(cfg);
     agentRuntime.registerAgent(std::move(rt));
     agentRuntime.start(1);

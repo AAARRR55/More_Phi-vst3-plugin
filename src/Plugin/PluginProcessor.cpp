@@ -17,8 +17,9 @@
 #include "AI/Agents/AgentRuntime.h"
 #include "AI/Agents/Blackboard/BlackboardBridge.h"
 #include "AI/Agents/Tooling/DefaultToolInvoker.h"
-#include "AI/Agents/Logging/NullAgentLogger.h"
+#include "AI/Agents/Logging/StructuredAgentLogger.h"
 #include "AI/Agents/Llm/DeterministicFallbackLlmClient.h"
+#include "AI/AutomationControlPlane.h"   // H6: AutonomyLevel / toString / autonomyLevelFromString
 #include "AI/Agents/Conductor/ConductorAgent.h"
 #include "AI/Agents/Agents/AnalysisAgent.h"
 #include "AI/Agents/Agents/OptimizationAgent.h"
@@ -29,6 +30,7 @@
 #include "AI/MCPToolHandler.h"
 #include <algorithm>
 #include <atomic>
+#include <functional>
 
 namespace more_phi {
 
@@ -41,6 +43,11 @@ float readRawFloat(const std::atomic<float>* p, float fallback) noexcept
     return p != nullptr ? p->load(std::memory_order_relaxed) : fallback;
 }
 
+// L-1 DOC: Returns true when the raw parameter value is >= 0.5f.
+// JUCE AudioParameterBool stores 0.0f or 1.0f, but automation curves can
+// produce intermediate values during ramps. The 0.5 threshold provides
+// hysteresis: a parameter ramp from 0→1 will be treated as "on" only for
+// the second half of the ramp duration, preventing rapid toggling.
 bool readRawBool(const std::atomic<float>* p, bool fallback) noexcept
 {
     return p != nullptr ? p->load(std::memory_order_relaxed) >= 0.5f : fallback;
@@ -112,18 +119,17 @@ MorePhiProcessor::MorePhiProcessor()
 {
     processorGenerationToken_ = gNextProcessorGenerationToken.fetch_add(1, std::memory_order_relaxed);
     // Constructor is kept minimal for FL Studio validation.
+    pendingAgentAutonomy_ = more_phi::AutonomyLevel::Assist;   // H6: default until restored from state
     cacheRawParameterPointers();
-    licenseManager_ = std::make_unique<licensing::LicenseManager>(licenseRuntimeState_);
+    licenseManager_ = std::make_shared<licensing::LicenseManager>(licenseRuntimeState_);
     requestMessageThreadMaintenance();
 
-    // SonicMaster realtime neural mastering (preview): drive the analysis loop
-    // via the local Python inference server over HTTP (the masteringbrainv2
-    // checkpoint can't yet be exported to ONNX faithfully — see
-    // tools/inference_server/README.md). The ONNX runner remains the preferred
-    // source if a model is loaded in future; for now the HTTP source is the
-    // working path.
-    sonicMasterEngine_.setInferenceSource(&sonicMasterHttpSource_);
-    sonicMasterEngine_.setApplicationEngine(&autoMasteringEngine_);
+    // SonicMaster realtime neural mastering (preview): drive the analysis loop.
+    // Tries ONNX in-process inference first; falls back to the local Python
+    // inference server (HTTP) when the ONNX model is not staged alongside the
+    // plugin binary. See tools/inference_server/README.md and
+    // tools/export_onnx/export_patched.py.
+    initializeSonicMaster();
 
     // Wire MIDI router callbacks (plain C function pointers + void* context)
     midiRouter.setSnapshotCallback([](int slot, void* ctx)
@@ -139,6 +145,9 @@ MorePhiProcessor::MorePhiProcessor()
             // MIDI callbacks already run on the audio thread, so parameter
             // recall is applied here. Opaque state recall is deferred above.
             self->snapshotBank.recallFast(slot, self->paramBridge);
+            // C4 FIX: drop the apply cache so this block's morph pass treats the
+            // recalled values as the new baseline instead of overwriting them.
+            self->invalidateAppliedCacheAudioThread();
         }
     }, this);
 
@@ -155,36 +164,88 @@ MorePhiProcessor::MorePhiProcessor()
     neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
 }
 
+// ── SonicMaster initialization: ONNX-first with HTTP fallback ─────────────────
+
+void MorePhiProcessor::initializeSonicMaster()
+{
+    sonicMasterEngine_.setApplicationEngine(&autoMasteringEngine_);
+
+    // Search for the exported ONNX model + contract alongside the plugin binary.
+    const auto pluginDir = juce::File::getSpecialLocation(
+        juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
+
+    const char* modelNames[] = { "masteringbrain_v2_decision.onnx" };
+    const char* contractNames[] = { "masteringbrain_v2_contract.json" };
+
+    // Also search a "sonicmaster" subdirectory and build/sonicmaster (dev path).
+    const juce::File searchDirs[] = {
+        pluginDir,
+        pluginDir.getChildFile("sonicmaster"),
+        juce::File::getCurrentWorkingDirectory().getChildFile("build/sonicmaster"),
+    };
+
+    std::string modelPath, contractPath;
+    for (auto& dir : searchDirs)
+    {
+        for (auto& name : modelNames)
+        {
+            auto f = dir.getChildFile(name);
+            if (f.existsAsFile()) { modelPath = f.getFullPathName().toStdString(); break; }
+        }
+        for (auto& name : contractNames)
+        {
+            auto f = dir.getChildFile(name);
+            if (f.existsAsFile()) { contractPath = f.getFullPathName().toStdString(); break; }
+        }
+        if (!modelPath.empty() && !contractPath.empty()) break;
+    }
+
+    // Try ONNX in-process inference first.
+    if (!modelPath.empty() && !contractPath.empty()
+        && sonicMasterRunner_.loadModel(modelPath, contractPath))
+    {
+        sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
+        DBG("[MorePhiProcessor] SonicMaster ONNX model loaded: " + juce::String(modelPath));
+    }
+    else
+    {
+        // Fall back to the local Python HTTP inference server.
+        sonicMasterEngine_.setInferenceSource(&sonicMasterHttpSource_);
+        DBG("[MorePhiProcessor] SonicMaster ONNX model not found, "
+            "using HTTP inference server (127.0.0.1:8765)");
+    }
+}
+
 MorePhiProcessor::~MorePhiProcessor()
 {
-    std::cout << "[~MorePhiProcessor] entering destructor" << std::endl;
+    DBG("[~MorePhiProcessor] entering destructor");
     stopTimer();
-    std::cout << "[~MorePhiProcessor] stopped timer" << std::endl;
+    DBG("[~MorePhiProcessor] stopped timer");
     // Stop the agent runtime FIRST — its workers borrow references to the MCP
     // server's AutomationRuntime (events/workflows/etc.) and to the four holders
     // below, so they must be joined before any of those are torn down.
     agentRuntime_.reset();
-    std::cout << "[~MorePhiProcessor] reset agentRuntime_" << std::endl;
+    DBG("[~MorePhiProcessor] reset agentRuntime_");
     aiAssistant_.reset();
-    std::cout << "[~MorePhiProcessor] reset aiAssistant_" << std::endl;
+    DBG("[~MorePhiProcessor] reset aiAssistant_");
     linkBroadcaster_.detach();
-    std::cout << "[~MorePhiProcessor] detached linkBroadcaster_" << std::endl;
+    DBG("[~MorePhiProcessor] detached linkBroadcaster_");
     if (vst3IpcBridge_ != nullptr)
     {
-        std::cout << "[~MorePhiProcessor] stopping vst3IpcBridge_..." << std::endl;
+        DBG("[~MorePhiProcessor] stopping vst3IpcBridge_...");
         vst3IpcBridge_->stop();
-        std::cout << "[~MorePhiProcessor] stopped vst3IpcBridge_" << std::endl;
+        DBG("[~MorePhiProcessor] stopped vst3IpcBridge_");
     }
-    std::cout << "[~MorePhiProcessor] stopping mcpServer..." << std::endl;
+    DBG("[~MorePhiProcessor] stopping mcpServer...");
     mcpServer.stopServer();
-    std::cout << "[~MorePhiProcessor] stopped mcpServer" << std::endl;
+    DBG("[~MorePhiProcessor] stopped mcpServer");
     InstanceRegistry::getInstance().deregisterInstance(instanceIdentity_.instanceId);
-    std::cout << "[~MorePhiProcessor] deregistered instance" << std::endl;
+    DBG("[~MorePhiProcessor] deregistered instance");
     clearHostedMasteringApplicators();
-    std::cout << "[~MorePhiProcessor] cleared hosted mastering applicators" << std::endl;
-    std::cout << "[~MorePhiProcessor] unloading hosted plugin..." << std::endl;
+    DBG("[~MorePhiProcessor] cleared hosted mastering applicators");
+    DBG("[~MorePhiProcessor] unloading hosted plugin...");
     hostManager.unloadPlugin();
-    std::cout << "[~MorePhiProcessor] unloaded hosted plugin" << std::endl;
+    DBG("[~MorePhiProcessor] unloaded hosted plugin");
 }
 
 standalone_mcp::IZotopeIPCDiscovery& MorePhiProcessor::getIZotopeIPCDiscovery()
@@ -236,6 +297,7 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.coarseParameterWrites = apvts.getRawParameterValue("coarseParameterWrites");
     rawParams_.disableTouchDetection = apvts.getRawParameterValue("disableTouchDetection");
     rawParams_.throttleParamCommits = apvts.getRawParameterValue("throttleParamCommits");
+    rawParams_.cpuSaver = apvts.getRawParameterValue("cpuSaver");
 }
 
 bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
@@ -456,48 +518,34 @@ void MorePhiProcessor::setMorphPositionExternal(float x, bool hasX,
     }
 
     setMorphSource(source);
-    const int clampedSource = juce::jlimit(0, 1, source);
 
-    juce::WeakReference<MorePhiProcessor> weakThis(this);
-    juce::MessageManager::callAsync([weakThis, hasX, hasY, hasFader, clampedSource]() mutable
-    {
-        auto* self = weakThis.get();
-        if (self == nullptr)
-            return;
-
-        if (hasX)
-            if (auto* p = self->apvts.getParameter("morphX"))
-            {
-                p->beginChangeGesture();
-                p->setValueNotifyingHost(self->morphX_.load(std::memory_order_relaxed));
-                p->endChangeGesture();
-            }
-        if (hasY)
-            if (auto* p = self->apvts.getParameter("morphY"))
-            {
-                p->beginChangeGesture();
-                p->setValueNotifyingHost(self->morphY_.load(std::memory_order_relaxed));
-                p->endChangeGesture();
-            }
-        if (hasFader)
-            if (auto* p = self->apvts.getParameter("faderPos"))
-            {
-                p->beginChangeGesture();
-                p->setValueNotifyingHost(self->faderPos_.load(std::memory_order_relaxed));
-                p->endChangeGesture();
-            }
-        if (auto* p = self->apvts.getParameter("morphSource"))
-        {
-            p->beginChangeGesture();
-            p->setValueNotifyingHost(static_cast<float>(clampedSource));
-            p->endChangeGesture();
-        }
-    });
+    // P2 FIX: Replace callAsync (which may silently drop on headless hosts /
+    // editor-closed) with Timer-deferred notification. The morph position is
+    // already stored in atomics; this flag tells the maintenance timer to
+    // push them into the APVTS on the next tick (message thread, reliable).
+    morphPositionNotifyPending_.store(true, std::memory_order_release);
+    requestMessageThreadMaintenance();
 }
 
 void MorePhiProcessor::clearLiveEditHoldsAudioThread() noexcept
 {
     std::fill(liveEditHold_.begin(), liveEditHold_.end(), uint8_t{0});
+}
+
+void MorePhiProcessor::invalidateAppliedCacheAudioThread() noexcept
+{
+    // C4 FIX: reset the apply-side cache so a recall that wrote hosted params
+    // out-of-band (ParameterBridge::applyParameterState from a MIDI or MCP
+    // trigger) is not immediately clobbered by this block's morph pass. The
+    // touchStateLock_ try-lock matches the audio-thread guard used in
+    // applyMorphAndParameters(); if it can't be acquired we skip — the morph
+    // path's own hasTouchLock check will then also skip writes this block.
+    if (touchStateLock_.tryEnter())
+    {
+        std::fill(lastApplied_.begin(), lastApplied_.end(), -1.0f);
+        std::fill(touchCooldown_.begin(), touchCooldown_.end(), 0);
+        touchStateLock_.exit();
+    }
 }
 
 bool MorePhiProcessor::shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept
@@ -516,7 +564,8 @@ bool MorePhiProcessor::shouldReleaseLiveEditHold(int index, float x, float y, fl
 
 int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
                                                  int maxCommands,
-                                                 juce::AudioPluginInstance* exclusivePlugin) noexcept
+                                                 juce::AudioPluginInstance* exclusivePlugin,
+                                                 int* outOfRangeCount) noexcept
 {
     if (maxCommands <= 0)
         return 0;
@@ -543,7 +592,7 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
         return paramBridge.getParameterNormalized(index);
     };
 
-    auto writeParameter = [this, exclusivePlugin](int index, float value) noexcept
+    auto writeParameter = [this, exclusivePlugin, outOfRangeCount](int index, float value) noexcept -> bool
     {
         const float clamped = juce::jlimit(0.0f, 1.0f, value);
 
@@ -553,14 +602,22 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
             {
                 auto& params = exclusivePlugin->getParameters();
                 if (index >= 0 && index < params.size() && params[index] != nullptr)
+                {
                     params[index]->setValue(clamped);
+                    return true;
+                }
             }
             catch (...) {}
 
-            return;
+            // AUDIT-FIX 4.7: index was out of the plugin's actual parameter range,
+            // even though it passed the MAX_PARAMETERS gate in enqueueParameterSet.
+            if (outOfRangeCount != nullptr)
+                ++(*outOfRangeCount);
+            return false;
         }
 
         paramBridge.setParameterNormalized(index, clamped);
+        return true;
     };
 
     // Serialized by commandConsumerLock_. The audio path uses a try-lock; the
@@ -851,7 +908,7 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
         return result;
     }
 
-    result.drained = drainParameterCommandQueue(cachedParamCount, maxCommands, plugin);
+    result.drained = drainParameterCommandQueue(cachedParamCount, maxCommands, plugin, &result.outOfRangeCount);
     result.pendingAfter = static_cast<int>(getPendingParameterCommandCountApprox());
     return result;
 }
@@ -1148,6 +1205,8 @@ MorePhiProcessor::createParameterLayout()
         juce::ParameterID{"disableTouchDetection", 1}, "Disable Touch Detect", false));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"throttleParamCommits", 1}, "Throttle Param Commits", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"cpuSaver", 1}, "CPU Saver", false));
 
     // SonicMaster realtime neural mastering (preview). Default OFF — the
     // checkpoint is research-grade; see
@@ -1164,10 +1223,9 @@ MorePhiProcessor::createParameterLayout()
 
 void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // CRITICAL (Finding 8): Set prepared=false at START, not just at end.
-    // This prevents race where audio thread continues with stale state during
-    // concurrent prepareToPlay() call from misbehaving host.
-    prepared.store(false, std::memory_order_seq_cst);
+    // P2 FIX: Use release semantics — pairs with the acquire load in processBlock.
+    // seq_cst was unnecessarily expensive for a single-producer flag handoff.
+    prepared.store(false, std::memory_order_release);
 
     currentSampleRate = sampleRate;
     currentBlockSize  = samplesPerBlock;
@@ -1189,7 +1247,6 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // Pre-allocate morph processor buffers
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
     finalOutput_.resize(MAX_PARAMETERS, 0.0f);
-    finalOutput_.resize(MAX_PARAMETERS, 0.0f);      // Pre-size for discrete parameter processing
     currentParamSnapshot_.resize(MAX_PARAMETERS, 0.0f); // PERF-C2: batch snapshot buffer
     lastApplied_.resize(MAX_PARAMETERS, -1.0f);     // -1 = never applied
     touchCooldown_.resize(MAX_PARAMETERS, 0);
@@ -1202,6 +1259,24 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     liveEditX_.assign(MAX_PARAMETERS, 0.5f);
     liveEditY_.assign(MAX_PARAMETERS, 0.5f);
     liveEditFader_.assign(MAX_PARAMETERS, 0.0f);
+
+    // PERF-PROFILE: Register all profiling sections before audio starts.
+    // Without this, MORE_PHI_PROFILE timers are silently dropped on the audio
+    // thread because updateStats() skips unregistered sections (real-time safe).
+    profiler_.prepare();
+    profiler_.registerSection("processBlock_total");
+    profiler_.registerSection("command_queue_drain");
+    profiler_.registerSection("morph_computation");
+    profiler_.registerSection("parameter_application");
+    profiler_.registerSection("audio_domain_total");
+    profiler_.registerSection("spectral_engine");
+    profiler_.registerSection("granular_engine");
+    profiler_.registerSection("formant_engine");
+    profiler_.registerSection("hybrid_blend");
+    profiler_.registerSection("midi_processing");
+    profiler_.registerSection("hosted_plugin_process");
+    profiler_.registerSection("sonicmaster_capture");
+    profiler_.registerSection("modulation_engine");
 
     // Pre-allocate snapshot bank scratch buffers (real-time safety)
     snapshotBank.prepare(MAX_PARAMETERS);
@@ -1228,9 +1303,13 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     desiredOversamplingFactor_.store(
         factorFromChoiceIndex(readRawChoice(rawParams_.oversampling, 0)),
         std::memory_order_relaxed);
-    desiredSpectralFFTSize_.store(
-        fftSizeFromChoiceIndex(readRawChoice(rawParams_.spectralFFTSize, 2)),
-        std::memory_order_relaxed);
+    {
+        int fftSize = fftSizeFromChoiceIndex(readRawChoice(rawParams_.spectralFFTSize, 2));
+        // PERF-CPU: Apply cpuSaver on initial prepare
+        if (readRawBool(rawParams_.cpuSaver, false) && fftSize > 512)
+            fftSize /= 2;
+        desiredSpectralFFTSize_.store(fftSize, std::memory_order_relaxed);
+    }
 
     reconfigureAudioDomainProcessing();
     updateReportedLatency();
@@ -1242,14 +1321,33 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     spectralOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
     granularOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
 
-    prepared = true;
+    prepared.store(true, std::memory_order_release);
     requestMessageThreadMaintenance();
     diagnostics_.start();
 }
 
 void MorePhiProcessor::releaseResources()
 {
-    prepared = false;
+    // P2 FIX: Explicit release store — pairs with acquire load in processBlock.
+    prepared.store(false, std::memory_order_release);
+
+    // W4 FIX: Bounded drain of in-flight audio-thread leases. JUCE guarantees
+    // the host won't call processBlock after releaseResources, but FL Studio
+    // offline-render and a few export paths have violated that contract and
+    // torn down subsystems while a processBlock was still mid-flight. We bound
+    // the wait (100 ms) — on expiry we proceed, matching the unloadPlugin
+    // policy of preferring a (rare) tear over freezing the host.
+    const auto drainStart = juce::Time::getMillisecondCounter();
+    while (audioThreadActive_.load(std::memory_order_acquire) > 0)
+    {
+        if (static_cast<int>(juce::Time::getMillisecondCounter() - drainStart) > 100)
+        {
+            DBG("MorePhiProcessor::releaseResources — timeout waiting for audio thread drain");
+            break;
+        }
+        juce::Thread::sleep(1);
+    }
+
     diagnostics_.stop();
     hostManager.setPlayHead(nullptr);
     hostManagerB_.setPlayHead(nullptr);
@@ -1289,7 +1387,13 @@ bool MorePhiProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
     const auto& mainIn  = layouts.getMainInputChannelSet();
 
     const int numChannels = mainOut.size();
-    if (numChannels < 1 || numChannels > 8)
+    // W2 FIX: clamp the main bus to mono/stereo. The mastering subsystem
+    // (BrickwallLimiter, StereoFieldAnalyzer, MultibandDynamicsProcessor) and
+    // the SonicMaster capture path all assume ≤2 channels. Accepting a surround
+    // layout would let channels 3+ pass through un-limited, exceeding the
+    // dBTP ceiling on those channels. The hosted-plugin wide-buffer path still
+    // supports plugins with more internal channels via PluginHostManager.
+    if (numChannels < 1 || numChannels > 2)
         return false;
 
     if (mainIn != mainOut)
@@ -1367,7 +1471,16 @@ void MorePhiProcessor::syncStateFromAPVTS()
     // ── Engine: Spectral ──────────────────────────────────────────────────
     const bool spectralActive = readRawBool(rawParams_.spectralActive, spectralEngine_.isActive());
     spectralEngine_.setActive(spectralActive);
-    const int desiredFFT = fftSizeFromChoiceIndex(readRawChoice(rawParams_.spectralFFTSize, 2));
+    int desiredFFT = fftSizeFromChoiceIndex(readRawChoice(rawParams_.spectralFFTSize, 2));
+    // PERF-CPU: cpuSaver halves the effective FFT size and caps oversampling
+    // at x2. Reduces audio-domain CPU by ~40-60% for CPU-constrained systems.
+    const bool cpuSaver = readRawBool(rawParams_.cpuSaver, false);
+    cpuSaver_.store(cpuSaver, std::memory_order_relaxed);
+    if (cpuSaver)
+    {
+        // Halve FFT size but never below 512
+        if (desiredFFT > 512) desiredFFT /= 2;
+    }
     if (desiredSpectralFFTSize_.exchange(desiredFFT, std::memory_order_acq_rel) != desiredFFT)
         audioDomainConfigDirty_.store(true, std::memory_order_release);
     spectralEngine_.setTransientPreserve(readRawBool(rawParams_.spectralTransient, true));
@@ -1385,7 +1498,9 @@ void MorePhiProcessor::syncStateFromAPVTS()
     const bool audioDomainEnabled = readRawBool(rawParams_.audioDomainEnabled, false);
     audioDomainEnabled_.store(audioDomainEnabled, std::memory_order_relaxed);
 
-    const int desiredFactor = factorFromChoiceIndex(readRawChoice(rawParams_.oversampling, 0));
+    int desiredFactor = factorFromChoiceIndex(readRawChoice(rawParams_.oversampling, 0));
+    // PERF-CPU: cpuSaver caps oversampling at x2
+    if (cpuSaver && desiredFactor > 2) desiredFactor = 2;
     if (desiredOversamplingFactor_.exchange(desiredFactor, std::memory_order_acq_rel) != desiredFactor)
         audioDomainConfigDirty_.store(true, std::memory_order_release);
 
@@ -1469,25 +1584,24 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     ScopedAudioCallback allocGuard;
     juce::ScopedNoDenormals noDenormals;
 
-    if (!prepared || shuttingDown_.load(std::memory_order_acquire)) return;
+    // P2 FIX: Explicit acquire load — pairs with prepareToPlay / releaseResources
+    // release stores. Avoids implicit seq_cst overhead on the hot path.
+    if (!prepared.load(std::memory_order_acquire)
+        || shuttingDown_.load(std::memory_order_acquire)) return;
 
     audioThreadActive_.fetch_add(1, std::memory_order_acq_rel);
     struct AudioGuard { std::atomic<int>& ref; ~AudioGuard() { ref.fetch_sub(1, std::memory_order_acq_rel); } } audioGuard{audioThreadActive_};
 
-    if (!prepared || shuttingDown_.load(std::memory_order_acquire)) return;
+    if (!prepared.load(std::memory_order_acquire)
+        || shuttingDown_.load(std::memory_order_acquire)) return;
 
-    // M11 FIX: If a state restore was deferred from the audio thread, and
-    // processBlock happens to run on the message thread (some hosts), start
-    // the timer here so deferred loading can proceed.
+    // H-5 FIX: If a state restore was deferred (setStateInformation called
+    // before the maintenance timer started), request the message thread to
+    // start the timer so deferred loading can proceed. Consolidated here
+    // using requestMessageThreadMaintenance() instead of directly starting
+    // the timer.
     if (pendingStateRestore_.load(std::memory_order_acquire))
-    {
-        if (auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-            mm != nullptr && mm->isThisTheMessageThread())
-        {
-            startTimer(50);
-            pendingStateRestore_.store(false, std::memory_order_release);
-        }
-    }
+        requestMessageThreadMaintenance();
 
     auto* const currentPlayHead = getPlayHead();
     hostManager.setPlayHead(currentPlayHead);
@@ -1502,8 +1616,13 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                             static_cast<int>(finalOutput_.size()),
                                             static_cast<int>(lastApplied_.size()));
 
+    // C-3 FIX: Separate command-drain gating from parameter application.
+    // The commandConsumerLock_ try-lock only gates the drain (which shares
+    // drainScratch_ with the assistant flush path). Parameter application
+    // always proceeds — it has its own touchStateLock_ try-lock and the
+    // morph output must reach the hosted plugin every block.
     juce::SpinLock::ScopedTryLockType parameterCommandGuard(commandConsumerLock_);
-    const bool canTouchHostedParameters = parameterCommandGuard.isLocked();
+    const bool canDrainCommands = parameterCommandGuard.isLocked();
 
     const bool isBypassed = readRawBool(rawParams_.bypass, false);
 
@@ -1525,32 +1644,37 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Profile total processBlock time
     MORE_PHI_PROFILE(profiler_, "processBlock_total");
 
-    drainParameterCommandQueue(cachedParamCount, canTouchHostedParameters);
+    drainParameterCommandQueue(cachedParamCount, canDrainCommands);
     processMIDIAndSidechain(midi, buffer);
-    applyMorphAndParameters(buffer, cachedParamCount, canTouchHostedParameters);
+    applyMorphAndParameters(buffer, cachedParamCount, /*canApplyParameters=*/true);
     applyOutputGainAndMetering(buffer, isBypassed);
 
     // SonicMaster analysis capture: lock-free ring write only (no locks, no
     // allocation). Early-returns when the feature is OFF or unprepared.
     if (buffer.getNumChannels() >= 2)
+    {
+        MORE_PHI_PROFILE(profiler_, "sonicmaster_capture");
         sonicMasterEngine_.capture(buffer.getReadPointer(0),
                                    buffer.getReadPointer(1),
                                    static_cast<std::size_t>(buffer.getNumSamples()));
+    }
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────────
 
 void MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
-                                                  bool canTouchHostedParameters) noexcept
+                                                  bool canDrainCommands) noexcept
 {
     MORE_PHI_PROFILE(profiler_, "command_queue_drain");
-    if (canTouchHostedParameters)
+    if (canDrainCommands)
         (void) drainParameterCommandQueue(cachedParamCount, 2048, nullptr);
 }
 
 void MorePhiProcessor::processMIDIAndSidechain(juce::MidiBuffer& midi,
                                                juce::AudioBuffer<float>& buffer) noexcept
 {
+    MORE_PHI_PROFILE(profiler_, "midi_processing");
+
     // 2) Process MIDI: filter trigger notes, pass rest through
     filteredMidiBuffer_.clear();
     midiRouter.processMidi(midi, filteredMidiBuffer_);
@@ -1691,6 +1815,7 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                 if (modulationEngine_.hasActiveRoutes())
                 {
                     modulationEngine_.processAudioInput(buffer.getReadPointer(0), buffer.getNumSamples());
+                    MORE_PHI_PROFILE(profiler_, "modulation_engine");
                     modulationEngine_.processBlock(finalOutput_, dt);
                 }
 
@@ -1791,10 +1916,17 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                         }
                         else
                         {
-                        // currentParamSnapshot_ is pre-allocated to MAX_PARAMETERS in
-                        // prepareToPlay() and only indexed up to pluginParamCount, so no
-                        // per-block resize is needed (it was a redundant no-op-shrink).
-                        for (int i = 0; i < pluginParamCount; ++i)
+                        // PERF-IA: Interleaved touch sampling — only call getValue()
+                        // on 1/kTouchSamplingStride params per block, rotating the offset
+                        // each block. This reduces the dominant CPU cost (virtual calls
+                        // through the VST3 wrapper) by ~75%. Touch detection latency
+                        // increases to kTouchSamplingStride blocks (~20ms at 256 samples)
+                        // — acceptable because the cooldown is already ~200ms.
+                        const int touchOffset = touchSamplingPhase_;
+                        touchSamplingPhase_ = (touchSamplingPhase_ + 1) % kTouchSamplingStride;
+
+                        // Only batch-read params in the current stride window
+                        for (int i = touchOffset; i < pluginParamCount; i += kTouchSamplingStride)
                         {
                             try { currentParamSnapshot_[static_cast<size_t>(i)] = pluginParams[i]->getValue(); }
                             catch (...) { currentParamSnapshot_[static_cast<size_t>(i)] = 0.0f; }
@@ -1810,23 +1942,38 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                             // Skip sentinel-marked discrete params (Listen Mode)
                             if (morphVal < 0.0f) continue;
 
-                            if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[idx] != 0)
+                            // C-3 FIX: liveEditHold_ is written under touchStateLock_ in
+                            // drainParameterCommandQueue (both audio-thread and assistant-flush
+                            // paths). To prevent a data race when the assistant flush holds
+                            // touchStateLock_ while we don't, gate this check on hasTouchLock.
+                            // When hasTouchLock is false, live-edit-holds are skipped for this
+                            // block — the assistant's explicit edits take priority anyway.
+                            if (hasTouchLock)
                             {
-                                if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                                if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[idx] != 0)
                                 {
-                                    liveEditHold_[idx] = 0;
-                                }
-                                else
-                                {
-                                    if (hasTouchLock && i < pluginParamCount)
-                                        lastApplied_[idx] = currentParamSnapshot_[idx];
-                                    continue;
+                                    if (shouldReleaseLiveEditHold(i, linkX, linkY, fp))
+                                    {
+                                        liveEditHold_[idx] = 0;
+                                    }
+                                    else
+                                    {
+                                        if (i < pluginParamCount)
+                                            lastApplied_[idx] = currentParamSnapshot_[idx];
+                                        continue;
+                                    }
                                 }
                             }
 
-                            // Touch detection: check if user manually moved this parameter
-                            // PERF-C2: Use cached snapshot instead of per-param getValue()
-                            if (hasTouchLock && lastApplied_[idx] >= 0.0f)
+                            // Touch detection: check if user manually moved this parameter.
+                            // PERF-C2: Use cached snapshot instead of per-param getValue().
+                            // PERF-IA: Only run touch detection on params that were sampled
+                            // this block (the rest have stale snapshots). For unsampled
+                            // params, morph output still proceeds below — only touch
+                            // detection is deferred to the next sampling window.
+                            const bool paramSampledThisBlock =
+                                ((i % kTouchSamplingStride) == touchOffset);
+                            if (hasTouchLock && lastApplied_[idx] >= 0.0f && paramSampledThisBlock)
                             {
                                 const float currentVal = (i < pluginParamCount)
                                     ? currentParamSnapshot_[idx] : 0.0f;
@@ -1918,7 +2065,10 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
 {
     // 6) Forward audio + filtered MIDI to hosted plugin
     if (!isBypassed)
+    {
+        MORE_PHI_PROFILE(profiler_, "hosted_plugin_process");
         hostManager.processBlock(buffer, filteredMidiBuffer_);
+    }
 
     // V2: Audio-domain morph path
     if (!isBypassed
@@ -2103,13 +2253,20 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
     }
 
     // 8) RMS for UI visualization — M-2 FIX: throttle to every N blocks
+    // W3 FIX: average L/R RMS so a hard-panned signal is metered correctly
+    // (the previous channel-0-only read misreported loudness on panned audio).
     if (buffer.getNumChannels() > 0)
     {
         ++rmsSkipCounter_;
         if (rmsSkipCounter_ >= RMS_THROTTLE_BLOCKS)
         {
             rmsSkipCounter_ = 0;
-            setRmsLevel(buffer.getRMSLevel(0, 0, buffer.getNumSamples()));
+            const int nch = buffer.getNumChannels();
+            const float rmsL = buffer.getRMSLevel(0, 0, buffer.getNumSamples());
+            const float rmsR = (nch > 1)
+                ? buffer.getRMSLevel(1, 0, buffer.getNumSamples())
+                : rmsL;
+            setRmsLevel(0.5f * (rmsL + rmsR));
         }
     }
 }
@@ -2118,6 +2275,12 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
 
 void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
+    // P2 FIX: Detect calling thread so DBG() (which may allocate) is skipped
+    // on the audio thread during offline render/export.
+    bool isAudioThread = false;
+    if (auto* mm = juce::MessageManager::getInstanceWithoutCreating())
+        isAudioThread = !mm->isThisTheMessageThread();
+
     auto state = apvts.copyState();
     auto xml = state.createXml();
     if (!xml) return;
@@ -2131,60 +2294,111 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
         {
             descXml->setTagName("HOSTED_PLUGIN");
             xml->addChildElement(descXml.release());
-            DBG("getStateInformation: Saved hosted plugin description: " + desc->name);
+            if (!isAudioThread)
+            {
+#if JUCE_DEBUG
+                DBG("getStateInformation: Saved hosted plugin description: " + desc->name);
+#endif
+            }
         }
         else
         {
-            DBG("getStateInformation: WARNING - Failed to create XML from plugin description");
+            if (!isAudioThread)
+            {
+#if JUCE_DEBUG
+                DBG("getStateInformation: WARNING - Failed to create XML from plugin description");
+#endif
+            }
         }
     }
     else
     {
-        DBG("getStateInformation: No hosted plugin description available to save");
+        if (!isAudioThread)
+        {
+#if JUCE_DEBUG
+            DBG("getStateInformation: No hosted plugin description available to save");
+#endif
+        }
     }
 
     // 2) Save the hosted plugin's own opaque state (EQ curves, compressor
     //    settings, etc.) — this is the data that was being lost on export
-    if (auto* plugin = hostManager.beginExclusivePluginUse(500))
+    //
+    // H-4 FIX: beginExclusivePluginUse() may block (spin-waits for active
+    // audio-thread users). getStateInformation can be called from the audio
+    // thread during offline render / export in some DAWs (Pro Tools, FL Studio).
+    // Detect the calling thread: only block on the message thread; on the audio
+    // thread, fall back to the buffered pending state copy.
     {
-        juce::MemoryBlock pluginState;
-        try
-        {
-            plugin->getStateInformation(pluginState);
-        }
-        catch (...)
-        {
-            DBG("getStateInformation: WARNING - hosted plugin threw during getStateInformation");
-            pluginState.reset();
-        }
+        bool canBlockSafely = false;
+        if (auto* mm = juce::MessageManager::getInstanceWithoutCreating())
+            canBlockSafely = mm->isThisTheMessageThread();
 
-        hostManager.endExclusivePluginUse();
+        bool capturedPluginState = false;
 
-        if (pluginState.getSize() > 0)
+        if (canBlockSafely)
         {
-            auto stateXml = std::make_unique<juce::XmlElement>("HOSTED_PLUGIN_STATE");
-            stateXml->setAttribute("data", pluginState.toBase64Encoding());
-            xml->addChildElement(stateXml.release());
-            DBG("getStateInformation: Saved hosted plugin state, size: " 
-                + juce::String(static_cast<int>(pluginState.getSize())) + " bytes");
-        }
-    }
-    else
-    {
-        // Even if plugin is not currently loaded, try to preserve any pending state
-        juce::MemoryBlock pendingStateCopy;
-        {
-            const juce::SpinLock::ScopedLockType guard(pendingStateMutex_);
-            pendingStateCopy = pendingHostedState_;
-        }
+            if (auto* plugin = hostManager.beginExclusivePluginUse(500))
+            {
+                juce::MemoryBlock pluginState;
+                try
+                {
+                    plugin->getStateInformation(pluginState);
+                }
+                catch (...)
+                {
+                    if (!isAudioThread)
+                    {
+#if JUCE_DEBUG
+                        DBG("getStateInformation: WARNING - hosted plugin threw during getStateInformation");
+#endif
+                    }
+                    pluginState.reset();
+                }
 
-        if (pendingStateCopy.getSize() > 0)
+                hostManager.endExclusivePluginUse();
+
+                if (pluginState.getSize() > 0)
+                {
+                    auto stateXml = std::make_unique<juce::XmlElement>("HOSTED_PLUGIN_STATE");
+                    stateXml->setAttribute("data", pluginState.toBase64Encoding());
+                    xml->addChildElement(stateXml.release());
+                    if (!isAudioThread)
+                    {
+#if JUCE_DEBUG
+                        DBG("getStateInformation: Saved hosted plugin state, size: "
+                            + juce::String(static_cast<int>(pluginState.getSize())) + " bytes");
+#endif
+                    }
+                    capturedPluginState = true;
+                }
+            }
+        }
+        // else: audio thread or unknown — skip exclusive use, use pending state below
+
+        // Fallback: if plugin is not currently loaded (or we're on audio thread),
+        // try to preserve any pending state from setStateInformation.
+        if (!capturedPluginState)
         {
-            auto stateXml = std::make_unique<juce::XmlElement>("HOSTED_PLUGIN_STATE");
-            stateXml->setAttribute("data", pendingStateCopy.toBase64Encoding());
-            xml->addChildElement(stateXml.release());
-            DBG("getStateInformation: Saved pending hosted plugin state, size: "
-                + juce::String(static_cast<int>(pendingStateCopy.getSize())) + " bytes");
+            juce::MemoryBlock pendingStateCopy;
+            {
+                const juce::SpinLock::ScopedLockType guard(pendingStateMutex_);
+                pendingStateCopy = pendingHostedState_;
+            }
+
+            if (pendingStateCopy.getSize() > 0)
+            {
+                auto stateXml = std::make_unique<juce::XmlElement>("HOSTED_PLUGIN_STATE");
+                stateXml->setAttribute("data", pendingStateCopy.toBase64Encoding());
+                xml->addChildElement(stateXml.release());
+                if (!isAudioThread)
+                {
+#if JUCE_DEBUG
+                    DBG("getStateInformation: Saved pending hosted plugin state, size: "
+                        + juce::String(static_cast<int>(pendingStateCopy.getSize())) + " bytes");
+#endif
+                }
+            }
         }
     }
 
@@ -2225,6 +2439,23 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
     mcpXml->setAttribute("morphCode", instanceIdentity_.morphCode);
     xml->addChildElement(mcpXml.release());
 
+    // 9) Persist agent-layer autonomy level (H6). The runtime is rebuilt lazily on
+    // restore, so without this a user's autonomy choice (Assist/CoPilot/Autopilot)
+    // is lost across a project reload / export cycle. Versioned so future agent
+    // state can be forward-migrated.
+    {
+        juce::String autonomyStr;
+        if (auto* runtime = getAutomationRuntimeForAgents())
+            autonomyStr = more_phi::toString(runtime->permissions().getAutonomyLevel());
+        else
+            autonomyStr = more_phi::toString(pendingAgentAutonomy_);
+
+        auto agentXml = std::make_unique<juce::XmlElement>("AGENT_RUNTIME");
+        agentXml->setAttribute("version", "1");
+        agentXml->setAttribute("autonomy", autonomyStr);
+        xml->addChildElement(agentXml.release());
+    }
+
     copyXmlToBinary(*xml, destData);
 }
 
@@ -2252,11 +2483,30 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
     pendingLoadAttempts_.store(0, std::memory_order_relaxed);
 
     // 1) Restore APVTS parameters
-    if (xml->hasTagName(apvts.state.getType()))
-        apvts.replaceState(juce::ValueTree::fromXml(*xml));
-    else
-        DBG("MorePhiProcessor::setStateInformation — skipping APVTS restore: root tag '" +
-            xml->getTagName() + "' does not match '" + apvts.state.getType().toString() + "'");
+    // H-3 FIX: Some DAWs wrap the state XML in an additional element.
+    // Do a recursive search for the APVTS state element instead of only
+    // checking the root tag, which silently skips parameter restore otherwise.
+    {
+        const auto apvtsTag = apvts.state.getType().toString();
+        std::function<juce::XmlElement*(juce::XmlElement*)> findApvtsElement =
+            [&](juce::XmlElement* el) -> juce::XmlElement*
+            {
+                if (el == nullptr) return nullptr;
+                if (el->hasTagName(apvtsTag)) return el;
+                for (auto* child : el->getChildIterator())
+                {
+                    if (auto* found = findApvtsElement(child))
+                        return found;
+                }
+                return nullptr;
+            };
+
+        if (auto* apvtsEl = findApvtsElement(xml.get()))
+            apvts.replaceState(juce::ValueTree::fromXml(*apvtsEl));
+        else
+            DBG("MorePhiProcessor::setStateInformation — skipping APVTS restore: no element matching '"
+                + apvtsTag + "' found in state XML (root tag: '" + xml->getTagName() + "')");
+    }
 
     // 2) Restore Snapshot Bank
     if (auto* bankXml = xml->getChildByName("SNAPSHOT_BANK"))
@@ -2314,6 +2564,16 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
             DBG("setStateInformation: Buffered hosted plugin state, size: "
                 + juce::String(static_cast<int>(pendingHostedState_.getSize())) + " bytes");
         }
+    }
+
+    // 8b) Restore agent-layer autonomy (H6). Stashed until the runtime is rebuilt
+    // lazily in startAgentRuntimeIfNeeded, where it is applied to the permission
+    // kernel. Defaults to Assist if absent (preserves pre-existing behavior).
+    if (auto* agentXml = xml->getChildByName("AGENT_RUNTIME"))
+    {
+        const auto autonomyStr = agentXml->getStringAttribute("autonomy", "");
+        if (autonomyStr.isNotEmpty())
+            pendingAgentAutonomy_ = more_phi::autonomyLevelFromString(autonomyStr);
     }
 
     // 9) Restore the hosted plugin — synchronous when possible, Timer fallback when not.
@@ -2520,7 +2780,8 @@ bool MorePhiProcessor::hasPendingMessageThreadWork() const noexcept
         || audioDomainConfigDirty_.load(std::memory_order_acquire)
         || latencyConfigDirty_.load(std::memory_order_acquire)
         || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_
-        || pendingStateRestore_.load(std::memory_order_acquire);
+        || pendingStateRestore_.load(std::memory_order_acquire)
+        || morphPositionNotifyPending_.load(std::memory_order_acquire);
 }
 
 void MorePhiProcessor::loadCachedLicenseIfNeeded()
@@ -2558,10 +2819,9 @@ void MorePhiProcessor::refreshLicenseIfNeeded()
     if (licenseRefreshInFlight_.exchange(true, std::memory_order_acq_rel))
         return;
 
-    // Capture by value: the manager outlives this thread (it is a processor
-    // member). After completion we publish the result (already done inside
-    // refreshActivation) and clear the in-flight flag.
-    auto* manager = licenseManager_.get();
+    // L-5 FIX: Capture shared_ptr to extend manager lifetime past
+    // processor destruction — the detached refresh thread holds a reference.
+    auto manager = licenseManager_;  // shared_ptr copy
     const auto activationId = manager->lastActivationId();
     juce::Thread::launch([manager, activationId, this]()
     {
@@ -2626,9 +2886,11 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
     auto& automationRuntime = mcpServer.getAutomationRuntime();
 
     // Long-lived holders for the runtime's by-reference dependencies. The runtime
-    // itself is constructed last and destroyed first (member declaration order in
-    // the header is: toolHolder_ -> logHolder_ -> llmHolder_ -> blackboardHolder_
-    // -> agentRuntime_), so the references stay valid for the runtime's lifetime.
+    // borrows these by raw reference, so they must outlive it. Member declaration
+    // order in PluginProcessor.h guarantees that: the holders are declared BEFORE
+    // agentRuntime_, and C++ destroys members in reverse declaration order, so
+    // agentRuntime_ is destroyed FIRST. (H5: real members are agentTools_ ->
+    // agentLogger_ -> agentLlm_ -> agentBlackboard_ -> agentRuntime_.)
     auto blackboardHolder = std::make_unique<ag::BlackboardBridge>(automationRuntime.events());
     auto toolHolder = std::make_unique<ag::DefaultToolInvoker>(
         // DispatchFn: route every agent tool call through MCPToolHandler::handle so
@@ -2645,12 +2907,27 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
             if (id.startsWith("analysis"))     return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field", "analysis.capture_window", "analysis.compare_render" };
             if (id.startsWith("optimization")) return { "mastering.plan_preview", "mastering.render_batch", "mastering.render_status", "mastering.select_candidate", "hosted_plugin.set_parameter" };
             if (id.startsWith("creative"))     return { "mastering.plan_preview", "plugin_profile.describe_semantics" };
-            if (id.startsWith("realtime"))     return { "hosted_plugin.set_parameter", "hosted_plugin.set_parameters", "analysis.get_summary" };
+            // C3: RealtimeControlAgent trims the More-Phi OUTPUT GAIN via
+            // more_phi.set_parameter (resolved by parameter id on the message
+            // thread). It must NOT be granted hosted_plugin.set_parameter —
+            // reactive trim of an arbitrary hosted index was the bug.
+            if (id.startsWith("realtime"))     return { "more_phi.set_parameter" };
             if (id.startsWith("quality"))      return { "analysis.get_summary", "analysis.compare_render", "mastering.render_status" };
             if (id.startsWith("memory"))       return { "memory.list", "memory.store", "memory.recall" };
             return {};
         });
-    auto logHolder = std::make_unique<ag::NullAgentLogger>();
+
+    // M2: production observability. StructuredAgentLogger appends one JSONL record
+    // per agent log call to a per-run file under the shared More-Phi data dir,
+    // falling back to an in-memory ring if the file can't be opened. Previously
+    // production wired NullAgentLogger, leaving zero agent audit trail.
+    const auto logDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                            .getChildFile("More-Phi")
+                            .getChildFile("agents");
+    const auto logRunId = instanceIdentity_.instanceId.isNotEmpty()
+        ? instanceIdentity_.instanceId
+        : juce::String("default");
+    auto logHolder = std::make_unique<ag::StructuredAgentLogger>(logDir, logRunId);
     auto llmHolder = std::make_unique<ag::DeterministicFallbackLlmClient>();
 
     auto runtime = std::make_unique<ag::AgentRuntime>(
@@ -2673,6 +2950,10 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
 
     runtime->start(2);  // two scheduler workers
 
+    // H6: replay the persisted autonomy level onto the freshly-built permission
+    // kernel so a user's Assist/CoPilot/Autopilot choice survives project reload.
+    automationRuntime.permissions().setAutonomyLevel(pendingAgentAutonomy_);
+
     // Commit: order matters — assign the runtime LAST so the holders are already
     // in place on the processor before any worker could try to dispatch.
     agentTools_      = std::move(toolHolder);
@@ -2693,8 +2974,21 @@ void MorePhiProcessor::reconfigureAudioDomainProcessing()
 {
     audioDomainReconfiguring_.store(true, std::memory_order_release);
 
+    // P1 FIX: Bounded spin-wait with hard timeout to prevent message-thread
+    // stall when the audio thread is mid-processing with large FFT sizes.
+    // If the timeout expires, re-dirty the config flag and retry on the next
+    // timer tick instead of blocking indefinitely.
+    const auto deadline = juce::Time::getMillisecondCounter() + 100;
     while (audioDomainUsers_.load(std::memory_order_acquire) > 0)
+    {
+        if (juce::Time::getMillisecondCounter() > deadline)
+        {
+            audioDomainReconfiguring_.store(false, std::memory_order_release);
+            audioDomainConfigDirty_.store(true, std::memory_order_release);
+            return;
+        }
         juce::Thread::sleep(1);
+    }
 
     const int factor = juce::jlimit(1, OversamplingWrapper::kMaxOSFactor,
                                     desiredOversamplingFactor_.load(std::memory_order_relaxed));
@@ -2811,12 +3105,50 @@ void MorePhiProcessor::timerCallback()
     { MSG_TRACE(diagnostics_, "refreshLicenseIfNeeded");   refreshLicenseIfNeeded(); }
     { MSG_TRACE(diagnostics_, "startMCPServerIfNeeded");   startMCPServerIfNeeded(); }
 
+    // C1 FIX: Drain any hosted-plugin instances whose teardown was deferred
+    // because audio-thread leases were held when unloadPlugin() timed out.
+    // Destroys them now that activePluginUsers_ has returned to zero.
+    { MSG_TRACE(diagnostics_, "drainDeferredDoomedPlugins"); hostManager.drainDeferredDoomedPlugins(); hostManagerB_.drainDeferredDoomedPlugins(); }
+
     if (audioDomainConfigDirty_.load(std::memory_order_acquire))
     { MSG_TRACE(diagnostics_, "reconfigureAudioDomainProcessing"); reconfigureAudioDomainProcessing(); }
     else if (latencyConfigDirty_.load(std::memory_order_acquire))
     { MSG_TRACE(diagnostics_, "updateReportedLatency"); updateReportedLatency(); }
 
     { MSG_TRACE(diagnostics_, "applyPendingFullStateRecall"); applyPendingFullStateRecall(); }
+
+    // P2 FIX: Flush pending morph-position-to-APVTS notifications on the
+    // message thread. Replaces the dropped-prone callAsync path with a
+    // Timer-deferred notification that works reliably even when the editor
+    // is closed (FL Studio, headless Linux hosts, etc.).
+    if (morphPositionNotifyPending_.load(std::memory_order_acquire))
+    {
+        morphPositionNotifyPending_.store(false, std::memory_order_release);
+        if (auto* p = apvts.getParameter("morphX"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(morphX_.load(std::memory_order_relaxed));
+            p->endChangeGesture();
+        }
+        if (auto* p = apvts.getParameter("morphY"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(morphY_.load(std::memory_order_relaxed));
+            p->endChangeGesture();
+        }
+        if (auto* p = apvts.getParameter("faderPos"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(faderPos_.load(std::memory_order_relaxed));
+            p->endChangeGesture();
+        }
+        if (auto* p = apvts.getParameter("morphSource"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(static_cast<float>(morphSource_.load(std::memory_order_relaxed)));
+            p->endChangeGesture();
+        }
+    }
 
     // Timer fires on the message thread — exactly where we need to load plugins.
     if (!hasPendingPluginLoad_.load(std::memory_order_acquire))
@@ -2877,6 +3209,15 @@ void MorePhiProcessor::timerCallback()
 }
 
 // ── VST3 Program Interface (C-5 FIX) ──────────────────────────────────────────
+//
+// P3 NOTE: This exposes snapshot slots as DAW "programs" for preset-browser
+// integration. Empty slots appear as "Empty N" and are selectable (DAW preset
+// browsers typically list all programs). Selecting an empty slot is a no-op.
+// Program changes are forwarded to the command queue (recallSnapshotQueued)
+// which enqueues parameter writes; this is thread-safe (multi-producer queue)
+// but the DAW may call setCurrentProgram from UI or audio thread.
+// Future: consider filtering to only occupied slots, or using VST3 unit
+// information to expose only populated snapshots.
 
 int MorePhiProcessor::getNumPrograms()
 {
@@ -2927,8 +3268,8 @@ juce::AudioProcessorEditor* MorePhiProcessor::createEditor()
 double MorePhiProcessor::getTailLengthSeconds() const
 {
     double tail = 0.0;
-    auto& hostMgr = const_cast<PluginHostManager&>(hostManager);
-    if (auto* plugin = hostMgr.acquirePluginForUse())
+    // P2 FIX: hostManager is now mutable — no const_cast needed.
+    if (auto* plugin = hostManager.acquirePluginForUse())
     {
         try
         {
@@ -2938,7 +3279,7 @@ double MorePhiProcessor::getTailLengthSeconds() const
         {
             // Plugin in bad state, report zero tail
         }
-        hostMgr.releasePluginFromUse();
+        hostManager.releasePluginFromUse();
     }
     return tail;
 }

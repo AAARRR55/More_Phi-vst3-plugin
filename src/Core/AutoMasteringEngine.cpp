@@ -18,6 +18,11 @@ const MultibandDynamicsProcessor::BandParams kHeuristicDefaults[] = {
     { .thresholdDB = -22.f, .ratio = 3.0f, .attackMs =   8.f, .releaseMs = 120.f, .makeupDB = 0.f, .kneeDB = 2.f }, // Band 2: Mid
     { .thresholdDB = -18.f, .ratio = 2.0f, .attackMs =   3.f, .releaseMs =  80.f, .makeupDB = 0.f, .kneeDB = 2.f }, // Band 3: High
 };
+
+// AUDIT-FIX-2: hard upper bound on the limiter ceiling enforced after every
+// neural/heuristic apply. -1.0 dBTP is the streaming-platform standard
+// (Spotify, YouTube, Apple Music). Lower ceilings are always allowed.
+constexpr float kStreamingSafeCeilingDBTP = -1.0f;
 } // namespace
 
 AutoMasteringEngine::AutoMasteringEngine() = default;
@@ -342,17 +347,34 @@ void AutoMasteringEngine::timerCallback()
 
 void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
 {
+    // AUDIT-FIX-9: reconcile dual writers. The 30s heuristic timer used to call
+    // setTargetLUFS / setWidth unconditionally, clobbering whatever the neural
+    // path (applyValidatedPlan) had just set. Now the heuristic defers loudness
+    // and stereo width to a recent neural plan when one exists — those are the
+    // two knobs both paths fight over. EQ/ceiling/exciter still come from the
+    // heuristic because the neural path only decides EQ bands 0-7 and (optionally)
+    // the ceiling; band 8-31 EQ and exciter enable are heuristic-authoritative.
+    const bool deferToNeural = hasLastSafeNeuralPlan_
+        && lastSafeNeuralPlan_.appliedMask.loudness;
+
     // Apply EQ prescription
     if (plan.eqPrescriptionJSON.isNotEmpty())
         eqTranslator_.applyFromJSON(plan.eqPrescriptionJSON);
 
-    // Apply stereo widths
-    for (int b = 0; b < 4; ++b)
-        stereo_.setWidth(b, plan.widthCurve[b]);
+    // Apply stereo widths — only when the neural path is NOT controlling stereo.
+    if (!deferToNeural || !lastSafeNeuralPlan_.appliedMask.stereo)
+        for (int b = 0; b < 4; ++b)
+            stereo_.setWidth(b, plan.widthCurve[b]);
 
-    // Apply loudness target
-    normalizer_.setTargetLUFS(plan.targetLUFS);
-    limiter_.setCeiling(plan.ceilingDBTP);
+    // Apply loudness target — only when the neural path is NOT controlling it.
+    if (!deferToNeural)
+        normalizer_.setTargetLUFS(plan.targetLUFS);
+
+    // AUDIT-FIX-2 / AUDIT-FIX-9: cap the heuristic ceiling at streaming-safe.
+    // The plan's ceilingDBTP may be looser than -1.0 dBTP; clamp it down so the
+    // 30s heuristic timer cannot relax the ceiling that the neural path (or a
+    // prior call) tightened. Tighter ceilings always win.
+    limiter_.setCeiling(std::min(plan.ceilingDBTP, kStreamingSafeCeilingDBTP));
 
     // Enable/disable exciter
     exciter_.setEnabled(plan.exciterEnabled);
@@ -395,7 +417,7 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
             {
                 const auto& cp = plan.compParams[static_cast<std::size_t>(band)];
                 params.thresholdDB = std::clamp(cp.thresholdDb, -40.0f, -6.0f);
-                params.ratio       = std::clamp(cp.ratio,        1.0f,  6.0f);
+                params.ratio       = std::clamp(cp.ratio,        kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
                 params.attackMs    = std::clamp(cp.attackMs,     0.1f, 100.0f);
                 params.releaseMs   = std::clamp(cp.releaseMs,   10.0f, 500.0f);
                 params.makeupDB    = std::clamp(cp.makeupDb,     0.0f,  12.0f);
@@ -407,7 +429,7 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
                 const auto thrValue = plan.projectedTargets.dynamics[base + 0];
                 const auto ratValue = plan.projectedTargets.dynamics[base + 1];
                 params.thresholdDB = std::clamp(-20.0f + thrValue * 8.0f, -40.0f, -6.0f);
-                params.ratio = std::clamp(2.5f + ratValue * 1.5f, 1.0f, 6.0f);
+                params.ratio = std::clamp(2.5f + ratValue * 1.5f, kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
             }
             dynamics_.setBandParams(band, params);
         }
@@ -438,6 +460,19 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
                                         -3.0f,
                                         -0.1f);
         limiter_.setCeiling(ceiling);
+    }
+
+    // AUDIT-FIX-2: guarantee a streaming-safe terminal ceiling on EVERY neural
+    // apply, not just when the limiter mask is on. The SonicMaster decoder leaves
+    // appliedMask.limiter OFF (limiter is high-risk), so without this guard a
+    // -8 LUFS target combined with 3 bands x +12 dB makeup could run hot into a
+    // limiter holding a lax prior ceiling. -1.0 dBTP is the streaming standard
+    // (Spotify/YouTube/Apple). The explicit mask path above can still drive a
+    // tighter ceiling if the caller opts in; this clamp only caps the upper bound.
+    {
+        const float currentCeiling = limiter_.getCeiling();
+        if (currentCeiling > kStreamingSafeCeilingDBTP)
+            limiter_.setCeiling(kStreamingSafeCeilingDBTP);
     }
 
     if (plan.appliedMask.loudness)

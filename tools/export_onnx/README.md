@@ -3,30 +3,32 @@
 Produces the ONNX model + contract files consumed by `SonicMasterDecisionRunner`
 in the plugin's realtime neural mastering path.
 
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `export_patched.py` | **Primary.** Patches the model for ONNX compatibility (manual MHA replacing `nn.TransformerEncoder`, STFT-based spectral injection replacing `torch.fft.rfft`), exports via TorchScript exporter (opset 17), runs parity check. |
+| `masteringbrain_to_onnx.py` | Reference / historical. Attempts a direct export without patches — fails on `aten.fft_rfftfreq` and `aten::_transformer_encoder_layer_fwd`. Kept for comparison. |
+| `probe_decisions.py` | Runs the PyTorch checkpoint on synthetic audio for manual inspection. |
+
 ## Prerequisites
 
-Python 3.12 with `torch>=2.11`, `numpy`, `onnxruntime`, `onnx`. The
-`sonicmaster-v3-decision-engine` package must be unpacked locally (it carries
-the `masteringbrainv2` checkpoint and the `master_audio` loader).
-
-Install the training-side deps (from inside the package) if you don't already
-have them:
+Python 3.11+ with `torch>=2.10`, `numpy`, `onnxruntime`, `onnx`. The
+`sonicmaster-v3-decision-engine` package must be unpacked locally.
 
 ```bash
-cd <path-to>/sonicmaster-v3-decision-engine-20260530T121536Z
-python3 -m venv .venv-export
-. .venv-export/bin/activate    # Windows: .venv-export\Scripts\activate
 pip install torch numpy onnx onnxruntime
 ```
 
-## Run
+## Run (patched export)
 
 From the More-Phi repo root:
 
 ```bash
-python tools/export_onnx/masteringbrain_to_onnx.py \
+python tools/export_onnx/export_patched.py \
     --package "C:/Users/HP/Downloads/sonicmaster-v3-decision-engine-20260530T121536Z" \
-    --output-dir build/sonicmaster
+    --output-dir build/sonicmaster \
+    --opset 17
 ```
 
 ## Output

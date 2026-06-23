@@ -43,6 +43,8 @@ void StereoFieldAnalyzer::reset() noexcept
     sumR2_.fill(0.0f);
     sumM2_.fill(0.0f);
     sumS2_.fill(0.0f);
+    sumL_.fill(0.0f);
+    sumR_.fill(0.0f);
     samplesInWindow_ = 0;
     frameIndex_ = 0;
 
@@ -85,6 +87,9 @@ void StereoFieldAnalyzer::processBlock(const juce::AudioBuffer<float>& buffer) n
             sumR2_[static_cast<size_t>(band)] += r * r;
             sumM2_[static_cast<size_t>(band)] += m * m;
             sumS2_[static_cast<size_t>(band)] += s * s;
+            // AUDIT-FIX: Accumulate L/R for DC-removed correlation.
+            sumL_[static_cast<size_t>(band)]  += l;
+            sumR_[static_cast<size_t>(band)]  += r;
         }
 
         if (++samplesInWindow_ >= windowSamples_)
@@ -171,11 +176,22 @@ void StereoFieldAnalyzer::publishCurrentWindow() noexcept
     for (int band = 0; band < kNumBands; ++band)
     {
         const auto idx = static_cast<size_t>(band);
+        const float N = static_cast<float>(samplesInWindow_);
         const float l2 = sumL2_[idx];
         const float r2 = sumR2_[idx];
-        const float denom = std::sqrt(std::max(l2 * r2, 0.0f));
 
-        snapshot.correlation[idx] = denom > kEps ? std::clamp(sumLR_[idx] / denom, -1.0f, 1.0f) : 1.0f;
+        // AUDIT-FIX: Unbiased Pearson correlation with DC removal.
+        // Previously denom = sqrt(l2 * r2) and num = sumLR_; without mean
+        // subtraction the correlation is biased toward 1.0 when the signal
+        // has DC offset (common in sub band after crossover HP filter).
+        const float meanL = sumL_[idx] / N;
+        const float meanR = sumR_[idx] / N;
+        const float cov   = sumLR_[idx] / N - meanL * meanR;
+        const float varL  = l2 / N - meanL * meanL;
+        const float varR  = r2 / N - meanR * meanR;
+        const float denom = std::sqrt(std::max(varL * varR, 0.0f));
+
+        snapshot.correlation[idx] = denom > kEps ? std::clamp(cov / denom, -1.0f, 1.0f) : 1.0f;
         snapshot.msEnergyRatio[idx] = safeRatio(sumS2_[idx], sumM2_[idx]);
 
         totalM2 += sumM2_[idx];
@@ -190,15 +206,27 @@ void StereoFieldAnalyzer::publishCurrentWindow() noexcept
     sumR2_.fill(0.0f);
     sumM2_.fill(0.0f);
     sumS2_.fill(0.0f);
+    sumL_.fill(0.0f);
+    sumR_.fill(0.0f);
     samplesInWindow_ = 0;
 }
 
 void StereoFieldAnalyzer::publishSnapshot(const StereoFieldSnapshot& snapshot) noexcept
 {
+    // C2 FIX: Proper seqlock publish. The odd-marker store must be visible
+    // BEFORE the data write, and the data write must be visible BEFORE the
+    // even-marker store. On weakly-ordered CPUs (ARM/Apple Silicon) a plain
+    // release store of the version does NOT prevent the compiler/CPU from
+    // hoisting the snapshot copy above the odd marker — which would let a
+    // reader observe a half-written snapshot through an even version.
+    // atomic_thread_fence(release) after each marker store pairs with the
+    // reader's acquire fence (getSnapshot) to guarantee ordering.
     const auto before = version_.load(std::memory_order_relaxed);
-    version_.store(before + 1u, std::memory_order_release);
+    version_.store(before + 1u, std::memory_order_release);   // odd = writing
+    std::atomic_thread_fence(std::memory_order_release);       // pair w/ reader acquire
     publishedSnapshot_ = snapshot;
-    version_.store(before + 2u, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
+    version_.store(before + 2u, std::memory_order_release);   // even = done
 }
 
 } // namespace more_phi

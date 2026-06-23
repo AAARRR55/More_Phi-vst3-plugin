@@ -175,10 +175,13 @@ void InterpolationEngine::interpolateBatch_SIMD(
 
 // ── Clock Positions ────────────────────────────────────────────────────────────
 
-// H-4 FIX: Cache the unit-radius clock positions as function-local static.
-// The radius parameter is always 1.0 in practice — the caller can scale.
-// Avoids 12 trig ops per call (std::cos/std::sin not guaranteed RT-safe on all platforms).
-const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions(float radius)
+// W6 FIX: Return by value. Unit-radius positions are still computed once via
+// a function-local static and copied out (12 Points = 96 B); scaled-radius
+// positions are now computed into a local rather than a thread_local static,
+// eliminating the "holding a ref across another call invalidates it" footgun.
+// (std::cos/std::sin only run on the very first call for the unit-radius
+// cache; subsequent calls are a copy.)
+std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float radius)
 {
     static const auto kUnitPositions = []()
     {
@@ -192,16 +195,12 @@ const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions
         return pos;
     }();
 
-    // If caller requests unit radius, return the cached array directly
     if (std::abs(radius - 1.0f) < 1e-6f)
         return kUnitPositions;
 
-    // Fallback for non-unit radius — compute dynamically (rare path)
-    static thread_local std::array<juce::Point<float>, 12> scaled;
+    std::array<juce::Point<float>, 12> scaled;
     for (int i = 0; i < 12; ++i)
-    {
         scaled[i] = { kUnitPositions[i].x * radius, kUnitPositions[i].y * radius };
-    }
     return scaled;
 }
 

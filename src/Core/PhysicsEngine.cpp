@@ -131,8 +131,12 @@ float PhysicsEngine::perlin(float x, float y) noexcept
     const float fy = std::floor(wy);
     const int xi = static_cast<int>(fx) & 255;
     const int yi = static_cast<int>(fy) & 255;
-    const float xf = x - fx;
-    const float yf = y - fy;
+    // AUDIT-FIX: Use the wrapped coordinate (wx, wy) to compute the fractional
+    // part, not the original (x, y). When x is negative, std::fmod produces a
+    // negative result; using x - fx with the unwrapped x yields wildly wrong
+    // fractional parts (e.g. -1000 - (-232) = -768 instead of 0).
+    const float xf = wx - fx;
+    const float yf = wy - fy;
     const float u = fade(xf);
     const float v = fade(yf);
 

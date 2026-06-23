@@ -46,6 +46,12 @@ public:
     /** True Peak ceiling in dBTP. Default: -1.0 dBTP. */
     void setCeiling(float dBTP) noexcept;
 
+    /** AUDIT-FIX-2: read the current ceiling in dBTP (atomic, any thread). */
+    [[nodiscard]] float getCeiling() const noexcept
+    {
+        return 20.0f * std::log10(ceilingLinear_.load(std::memory_order_relaxed));
+    }
+
     /** Release time in milliseconds [1–500]. Default: 80 ms. */
     void setRelease(float ms) noexcept;
 
@@ -107,7 +113,8 @@ private:
 
     // ── Gain smoother ─────────────────────────────────────────────────────────
     float gainSmoothed_    = 1.0f;  // linear gain currently applied
-    float releaseCoeff_    = 0.0f;  // exp(-1/(release_ms * 0.001 * sr))
+    // AUDIT-FIX: releaseCoeff_ removed — computed per-block from atomic
+    // releaseMs_ in processBlock() to eliminate cross-thread race.
     double sampleRate_     = 48000.0;
 
     // ── Atomic parameters ─────────────────────────────────────────────────────
@@ -119,8 +126,6 @@ private:
     std::atomic<float> gainReductionDB_{ 0.0f };
 
     juce::AudioBuffer<float> lookaheadBuf_;   // pre-allocated scan buffer
-
-    void recomputeReleaseCoeff() noexcept;
 };
 
 } // namespace more_phi

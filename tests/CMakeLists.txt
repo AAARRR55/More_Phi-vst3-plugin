@@ -79,6 +79,7 @@ add_executable(MorePhiTests
     Unit/TestOnnxRunnerInference.cpp
     # SonicMaster realtime neural mastering (preview)
     Unit/TestSonicMasterDecisionDecoder.cpp
+    Unit/TestAuditFixes.cpp
     Unit/TestAudioCaptureRing.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
     Unit/TestSonicMasterHttpInferenceSource.cpp
@@ -157,28 +158,6 @@ if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhiTests PRIVATE MORE_PHI_HAS_ONNX=1)
     target_link_libraries(MorePhiTests PRIVATE more_phi::onnxruntime)
 
-    # Stage the accepted restraint-trained artifact next to the test exe so the
-    # inference test can find it at runtime, including the external ONNX data
-    # shard emitted by the Python training pipeline.
-    set(MOREPHI_MODEL_BASENAME "model_blackwell_restraint_v5.onnx")
-    set(MOREPHI_MODEL_SRC "${CMAKE_SOURCE_DIR}/scripts/neural-mastering/control/${MOREPHI_MODEL_BASENAME}")
-    set(MOREPHI_MODEL_DST "$<TARGET_FILE_DIR:MorePhiTests>/${MOREPHI_MODEL_BASENAME}")
-    if(EXISTS "${MOREPHI_MODEL_SRC}")
-        add_custom_command(TARGET MorePhiTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${MOREPHI_MODEL_SRC}" "${MOREPHI_MODEL_DST}"
-            COMMENT "Staging ${MOREPHI_MODEL_BASENAME} next to test exe"
-            VERBATIM)
-        set(MOREPHI_MODEL_DATA_SRC "${MOREPHI_MODEL_SRC}.data")
-        set(MOREPHI_MODEL_DATA_DST "$<TARGET_FILE_DIR:MorePhiTests>/${MOREPHI_MODEL_BASENAME}.data")
-        if(EXISTS "${MOREPHI_MODEL_DATA_SRC}")
-            add_custom_command(TARGET MorePhiTests POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${MOREPHI_MODEL_DATA_SRC}" "${MOREPHI_MODEL_DATA_DST}"
-                COMMENT "Staging ${MOREPHI_MODEL_BASENAME}.data next to test exe"
-                VERBATIM)
-        endif()
-    endif()
     if(WIN32 AND MORE_PHI_ONNX_RUNTIME_LIB)
         add_custom_command(TARGET MorePhiTests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different

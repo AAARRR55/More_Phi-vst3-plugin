@@ -23,8 +23,13 @@ class InterpolationEngine
 {
 public:
     // Clock-layout positions for 12 snapshots
-    // H-4 FIX: Returns const ref to cached positions for unit radius
-    static const std::array<juce::Point<float>, 12>& getClockPositions(float radius = 1.0f);
+    // W6 FIX: Returns BY VALUE. The previous const-ref return referenced a
+    // function-local static (unit radius) or a thread_local static (scaled
+    // radius); holding that reference across a second call silently
+    // invalidated it. Returning 12 Points (96 B) by value is cheap and removes
+    // the footgun. The unit-radius positions are still computed once (cached
+    // in an internal static) and copied out.
+    static std::array<juce::Point<float>, 12> getClockPositions(float radius = 1.0f);
 
     // 1D: faderPos ∈ [0,1] → linearly segments across occupied snapshots
     // noexcept: Only arithmetic on pre-allocated output vector

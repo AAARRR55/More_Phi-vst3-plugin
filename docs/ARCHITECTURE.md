@@ -57,14 +57,14 @@ More-Phi follows a **layered plugin architecture** where:
 
 ## Threading Model
 
-Three thread domains with strict boundaries:
+Three thread domains with strict boundaries, plus two agent-owned worker threads:
 
 ### Audio Thread
 - **Entry:** `MorePhiProcessor::processBlock()`
 - **Classes:** `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` (read side), `MIDIRouter`, `ModulationEngine`, `SpectralMorphEngine`, `GranularMorphEngine`
 - **Contract:** All methods `noexcept`, zero allocations after `prepare()`, no locks, no I/O
 - **ThreadPool:** `ThreadPool::workerThread()` uses `ActiveTaskGuard` RAII to guarantee `activeTasks_` is decremented even if the task throws. The `enqueue()` lambda no longer decrements the counter.
-- **Data flow:** Drains `LockFreeQueue` → processes MIDI → computes morph → applies to hosted plugin via `ParameterBridge`
+- **Data flow:** Drains `LockFreeQueue` (gated by `commandConsumerLock_` try-lock) → processes MIDI → computes morph → applies to hosted plugin via `ParameterBridge` (always proceeds, independent of drain gate — C-3 fix)
 
 ### Message Thread
 - **Entry:** JUCE message loop
@@ -77,6 +77,17 @@ Three thread domains with strict boundaries:
 - **Contract:** JSON-RPC I/O. Enqueues parameter changes to audio thread via `LockFreeQueue`. Reads snapshot data via seqlock.
 - **Security:** Instance-scoped `AutomationRuntime` (no global static). Cache keys prefixed with `instanceId + ":"`. Constant-time token comparison using `volatile uint8_t diff`. 30-second idle timeout on connections. TTL-based zombie eviction in `InstanceRegistry`.
 
+### Agent Scheduler Workers (2 threads)
+- **Entry:** `PriorityScheduler::workerLoop()`
+- **Classes:** `ConductorAgent`, `AnalysisAgent`, `OptimizationAgent`, `CreativeAgent`, `RealtimeControlAgent`, `QualitySafetyAgent`, `MemoryAgent`
+- **Contract:** Agents execute synchronously on scheduler workers — NEVER on the audio thread. `RealtimeCritical` priority jumps the *agent* queue only. `RealtimeControlAgent` writes corrections through `LockFreeQueue` / `DefaultToolInvoker` → `MCPToolHandler::handle`, exactly like the UI/MCP paths.
+- **Scheduler:** 4 per-priority-level `std::queue<Entry>` with O(1) operations. Starvation guard promotes Background→Normal after 1000ms (H-1/M-4 fix).
+
+### Blackboard Pump Thread
+- **Entry:** `AgentRuntime` lambda (50ms polling interval)
+- **Classes:** `BlackboardBridge`
+- **Contract:** Polls `IntegrationEventBus::listRecent()` every 50ms, fans out new events to matching agent subscribers. Subscriber callbacks run on this thread.
+
 ### Orchestrator Thread
 - **Entry:** `AgentOrchestrator::initialize()` (single-initialization facade)
 - **Classes:** `AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`
@@ -87,7 +98,10 @@ Three thread domains with strict boundaries:
 | Primitive | Location | Purpose |
 |-----------|----------|----------|
 | Seqlock | `SnapshotBank` | Lock-free audio reads with retry; UI/MCP writes via SpinLock. `paramNames_` and `stateChunks_` are read under their respective SpinLocks (`writeLock_` and `chunksLock_`) **before** the seqlock read of the primary payload |
-| SPSC LockFreeQueue | `MorePhiProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio |
+| SPSC LockFreeQueue | `MorePhiProcessor` | ParamCommand ring buffer (8192), UI/MCP → audio. Multi-producer push serialized via `juce::SpinLock`; single-consumer pop is lock-free |
+| SpinLock try-lock gate | `MorePhiProcessor::commandConsumerLock_` | Serializes audio-thread command drain vs assistant flush. Try-lock on audio path (non-blocking); only gates drain — morph application always proceeds (C-3 fix) |
+| SpinLock try-lock | `MorePhiProcessor::touchStateLock_` | Protects `lastApplied_`, `touchCooldown_`, `liveEditHold_` during morph application and drain. Try-lock on audio path |
+| Multi-queue scheduler | `PriorityScheduler` | 4 per-priority `std::queue<Entry>` with O(1) push/pop/starvation-promotion. Starvation guard 1000ms (H-1/M-4 fix) |
 | Double-buffer | `ModulationMatrix` | Atomic route publish with mirror-copy |
 | `std::atomic<bool>` | `GranularMorphEngine::active_` | Thread-safe enable/disable |
 | `std::atomic<int>` | `ModulationMatrix::readIndex_` | Buffer swap index |

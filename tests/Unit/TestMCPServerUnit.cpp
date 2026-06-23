@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -9,6 +11,8 @@
 #include "AI/InstanceIdentity.h"
 #include "AI/MCPServer.h"
 #include "AI/MasteringCandidateScoring.h"
+#include "AI/SonicMasterAnalysisEngine.h"
+#include "AI/SonicMasterDecisionDecoder.h"
 #include "AI/TrackAssistantStore.h"
 #include "Plugin/PluginProcessor.h"
 
@@ -76,6 +80,65 @@ const nlohmann::json* findSemanticControl(const nlohmann::json& values, const st
             return &value;
     }
     return nullptr;
+}
+
+class StubSonicMasterSource final : public more_phi::ISonicMasterInferenceSource
+{
+public:
+    [[nodiscard]] bool isAvailable() const noexcept override { return true; }
+
+    bool infer(const float*, float* outDecision, std::size_t outCapacity) noexcept override
+    {
+        if (outDecision == nullptr || outCapacity < more_phi::kSonicMasterDecisionWidth)
+            return false;
+
+        decision_.fill(0.0f);
+        decision_[more_phi::kSonicMasterEqGainOffset] = more_phi::kAdaptiveEqMaxGainDb;
+        decision_[more_phi::kSonicMasterTargetLufsIdx] = -8.0f;
+        decision_[more_phi::kSonicMasterTruePeakIdx] = -0.5f;
+
+        for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
+        {
+            const auto o = more_phi::kSonicMasterCompOffset + b * more_phi::kSonicMasterCompBandWidth;
+            decision_[o + 0] = -20.0f;
+            decision_[o + 1] = 2.5f;
+            decision_[o + 2] = 15.0f;
+            decision_[o + 3] = 150.0f;
+            decision_[o + 4] = 0.0f;
+            decision_[o + 5] = 2.0f;
+        }
+
+        decision_[more_phi::kSonicMasterCompOffset + 0] = -6.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 1] = 4.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 2] = 1.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 3] = 2.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 4] = 3.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 5] = 4.0f;
+        decision_[more_phi::kSonicMasterStereoOffset + 0] = 0.5f;
+        decision_[more_phi::kSonicMasterStereoOffset + 1] = -0.25f;
+
+        std::copy_n(decision_.data(), more_phi::kSonicMasterDecisionWidth, outDecision);
+        return true;
+    }
+
+private:
+    std::array<float, more_phi::kSonicMasterDecisionWidth> decision_ {};
+};
+
+void feedSonicMasterWindow(more_phi::SonicMasterAnalysisEngine& engine, double sampleRate)
+{
+    const auto frames = static_cast<std::size_t>(
+        std::llround(more_phi::kSonicMasterSegmentFrames * sampleRate / 44100.0)) + 1024;
+    std::vector<float> left(frames, 0.0001f);
+    std::vector<float> right(frames, 0.0001f);
+    constexpr std::size_t kBlock = 512;
+
+    engine.setActive(true);
+    for (std::size_t offset = 0; offset < frames; offset += kBlock)
+    {
+        const auto count = std::min(kBlock, frames - offset);
+        engine.capture(left.data() + offset, right.data() + offset, count);
+    }
 }
 
 juce::var toVar(const nlohmann::json& value)
@@ -880,6 +943,69 @@ TEST_CASE("MCP analysis summary reports deterministic methodology and model stat
     REQUIRE(jsonArrayContainsString(
         summary["warnings"],
         "lufs_values_are_rolling_available_history_estimates_not_external_lab_certification"));
+}
+
+TEST_CASE("sonicmaster_decision separates raw model telemetry from projected engine mapping",
+          "[mcp][sonicmaster]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    feedSonicMasterWindow(sonicMaster, 48000.0);
+
+    more_phi::InstanceIdentity identity;
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle(
+            "sonicmaster_decision",
+            toVar(nlohmann::json{{"target_lufs", -14.0}}),
+            processor,
+            identity).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    REQUIRE(response["success"].get<bool>());
+    REQUIRE(response["applied"].get<bool>() == false);
+    REQUIRE(response["response_schema_version"].get<int>() == 2);
+    REQUIRE(response["raw_model_decision"]["field_semantics"].get<std::string>()
+            == "raw_model_telemetry_not_applied_parameters");
+    REQUIRE(response["projected_plan"]["applied_mask"]["limiter"].get<bool>() == false);
+    REQUIRE(response["actual_engine_mapping"]["limiter"]["applied_if_confirmed"].get<bool>() == false);
+
+    const auto rawEqDb = response["raw_model_decision"]["eq_bands"][0]["gainDb"].get<double>();
+    const auto projectedEq = response["projected_plan"]["eq_normalized"][0].get<double>();
+    const auto mappedEqDb = response["actual_engine_mapping"]["eq_bands"][0]["gainDb"].get<double>();
+    CHECK(std::abs(rawEqDb - 12.0) < 1.0e-6);
+    CHECK(std::abs(projectedEq - 0.15) < 1.0e-6);
+    CHECK(std::abs(mappedEqDb - 1.8) < 1.0e-5);
+
+    CHECK(std::abs(response["raw_model_decision"]["compressor_bands"][0]["attackMs"].get<double>() - 1.0) < 1.0e-6);
+    // AUDIT-FIX: engineMapping now reads the model's decoded compParams
+    // sidecar directly, so attackMs is a plain number (not a nested object
+    // with a "source" key). The stub returns attackMs=1.0 for band 0.
+    CHECK(std::abs(response["actual_engine_mapping"]["dynamics_bands"][0]["attackMs"].get<double>() - 1.0) < 1.0e-6);
+    REQUIRE(jsonArrayContainsString(
+        response["actual_engine_mapping"]["dynamics_bands"][0]["direct_model_controls"],
+        "thresholdDb"));
+    // AUDIT-FIX: all 6 compressor params are now direct_model_controls;
+    // raw_telemetry_only_controls was removed.
+    REQUIRE(jsonArrayContainsString(
+        response["actual_engine_mapping"]["dynamics_bands"][0]["direct_model_controls"],
+        "attackMs"));
+    REQUIRE(jsonArrayContainsString(
+        response["warnings"],
+        "decision_contains_raw_model_telemetry_not_applied_parameters"));
+    // AUDIT-FIX: the warning "compressor_attack_release_makeup_knee_are_raw_telemetry"
+    // was removed because the engineMapping now reports actual model values from
+    // the compParams sidecar, not stale DSP state.
+
+    // Legacy aliases remain available for older clients.
+    REQUIRE(response["decision"]["eq_bands"].is_array());
+    REQUIRE(response["plan_eq_normalized"].is_array());
 }
 
 TEST_CASE("MCP capture window reports no samples before analysis tap has data", "[mcp][analysis][MeterWindow]")
