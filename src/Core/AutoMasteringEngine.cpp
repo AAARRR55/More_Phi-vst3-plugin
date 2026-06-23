@@ -380,16 +380,35 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     if (plan.appliedMask.dynamics)
     {
         // AUDIT-2/3: apply only the 3 model bands; band 3 (High) stays on the
-        // heuristic warm-start. Read threshold and ratio independently from the
-        // paired slots — no more threshold-derives-ratio coupling.
-        for (int band = 0; band < static_cast<int>(kSonicMasterCompBandCount); ++band)
+        // heuristic warm-start. AUDIT-2.1: when the plan carries the full
+        // real-unit compParams sidecar (SonicMaster decisions do), apply all six
+        // params per band directly. Otherwise fall back to the threshold/ratio
+        // pair decoded into the normalized dynamics array and leave attack/
+        // release/makeup/knee on whatever the band already had.
+        const int bandCount = static_cast<int>(plan.hasCompParams
+            ? kNeuralMasteringCompBandCount
+            : kSonicMasterCompBandCount);
+        for (int band = 0; band < bandCount; ++band)
         {
             auto params = dynamics_.getBandParams(band);
-            const std::size_t base = static_cast<std::size_t>(band) * kSonicMasterDynamicsSlotsPerBand;
-            const auto thrValue = plan.projectedTargets.dynamics[base + 0];
-            const auto ratValue = plan.projectedTargets.dynamics[base + 1];
-            params.thresholdDB = std::clamp(-20.0f + thrValue * 8.0f, -40.0f, -6.0f);
-            params.ratio = std::clamp(2.5f + ratValue * 1.5f, 1.0f, 6.0f);
+            if (plan.hasCompParams)
+            {
+                const auto& cp = plan.compParams[static_cast<std::size_t>(band)];
+                params.thresholdDB = std::clamp(cp.thresholdDb, -40.0f, -6.0f);
+                params.ratio       = std::clamp(cp.ratio,        1.0f,  6.0f);
+                params.attackMs    = std::clamp(cp.attackMs,     0.1f, 100.0f);
+                params.releaseMs   = std::clamp(cp.releaseMs,   10.0f, 500.0f);
+                params.makeupDB    = std::clamp(cp.makeupDb,     0.0f,  12.0f);
+                params.kneeDB      = std::clamp(cp.kneeDb,       0.0f,  12.0f);
+            }
+            else
+            {
+                const std::size_t base = static_cast<std::size_t>(band) * kSonicMasterDynamicsSlotsPerBand;
+                const auto thrValue = plan.projectedTargets.dynamics[base + 0];
+                const auto ratValue = plan.projectedTargets.dynamics[base + 1];
+                params.thresholdDB = std::clamp(-20.0f + thrValue * 8.0f, -40.0f, -6.0f);
+                params.ratio = std::clamp(2.5f + ratValue * 1.5f, 1.0f, 6.0f);
+            }
             dynamics_.setBandParams(band, params);
         }
     }

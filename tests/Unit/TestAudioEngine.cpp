@@ -470,6 +470,88 @@ TEST_CASE("AutoMasteringEngine applies only validated neural mastering plans", "
     CHECK(engine.getLastSafeNeuralMasteringPlan().sourcePlanId == 500);
 }
 
+TEST_CASE("AUDIT-2.1: applyValidatedPlan lands all six comp params when compParams set",
+          "[audio_engine][mastering][audit-2.1]")
+{
+    // AUDIT-2.1 regression: when a plan carries the full real-unit compParams
+    // sidecar, ALL six params per band must reach the DSP — not just threshold
+    // and ratio. Before this fix, attack/release/makeup/knee were decoded by the
+    // model but discarded; the DSP kept its heuristic defaults for those four.
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    ValidatedNeuralMasteringPlan plan;
+    plan.valid = true;
+    plan.sourcePlanId = 600;
+    plan.appliedMask.dynamics = true;
+    plan.hasCompParams = true;
+    // Band 0: distinct, assertable values for every param.
+    plan.compParams[0] = { -17.5f, 3.5f, 7.0f, 90.0f, 1.5f, 5.0f };
+    // Band 1: different values to confirm per-band independence.
+    plan.compParams[1] = { -22.0f, 2.0f, 25.0f, 200.0f, 4.0f, 8.0f };
+    // Band 2: a third distinct set.
+    plan.compParams[2] = { -19.0f, 4.0f, 12.0f, 150.0f, 0.0f, 2.0f };
+
+    REQUIRE(engine.applyValidatedPlan(plan));
+
+    auto& dyn = engine.getDynamics();
+    const auto p0 = dyn.getBandParams(0);
+    CHECK(p0.thresholdDB == Approx(-17.5f).margin(1e-3f));
+    CHECK(p0.ratio       == Approx(  3.5f).margin(1e-3f));
+    CHECK(p0.attackMs    == Approx(  7.0f).margin(1e-3f));
+    CHECK(p0.releaseMs   == Approx( 90.0f).margin(1e-3f));
+    CHECK(p0.makeupDB    == Approx(  1.5f).margin(1e-3f));
+    CHECK(p0.kneeDB      == Approx(  5.0f).margin(1e-3f));
+
+    const auto p1 = dyn.getBandParams(1);
+    CHECK(p1.thresholdDB == Approx(-22.0f).margin(1e-3f));
+    CHECK(p1.ratio       == Approx(  2.0f).margin(1e-3f));
+    CHECK(p1.attackMs    == Approx( 25.0f).margin(1e-3f));
+    CHECK(p1.releaseMs   == Approx(200.0f).margin(1e-3f));
+    CHECK(p1.makeupDB    == Approx(  4.0f).margin(1e-3f));
+    CHECK(p1.kneeDB      == Approx(  8.0f).margin(1e-3f));
+
+    const auto p2 = dyn.getBandParams(2);
+    CHECK(p2.thresholdDB == Approx(-19.0f).margin(1e-3f));
+    CHECK(p2.ratio       == Approx(  4.0f).margin(1e-3f));
+    CHECK(p2.attackMs    == Approx( 12.0f).margin(1e-3f));
+    CHECK(p2.releaseMs   == Approx(150.0f).margin(1e-3f));
+    CHECK(p2.makeupDB    == Approx(  0.0f).margin(1e-3f));
+    CHECK(p2.kneeDB      == Approx(  2.0f).margin(1e-3f));
+
+    // Band 3 (High) is OUTSIDE the 3-band model contract and must keep the
+    // heuristic warm-start, not be touched by the neural plan.
+    const auto p3 = dyn.getBandParams(3);
+    CHECK(p3.thresholdDB == Approx(-18.0f).margin(1e-3f));  // kHeuristicDefaults[3]
+    CHECK(p3.ratio       == Approx(  2.0f).margin(1e-3f));
+}
+
+TEST_CASE("AUDIT-2.1: applyValidatedPlan falls back to normalized pair without compParams",
+          "[audio_engine][mastering][audit-2.1]")
+{
+    // AUDIT-2.1 backward-compat: plans from producers other than the SonicMaster
+    // decoder (e.g. NeuralMasteringModelRunner) set only the normalized dynamics
+    // pair and leave hasCompParams=false. The engine must still apply threshold
+    // + ratio from the normalized array and not regress.
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    ValidatedNeuralMasteringPlan plan;
+    plan.valid = true;
+    plan.sourcePlanId = 601;
+    plan.appliedMask.dynamics = true;
+    plan.hasCompParams = false;
+    // threshold value 0.5 -> -20 + 0.5*8 = -16; ratio value 1.0 -> 2.5 + 1.0*1.5 = 4.0
+    plan.projectedTargets.dynamics[0] = 0.5f;
+    plan.projectedTargets.dynamics[1] = 1.0f;
+
+    REQUIRE(engine.applyValidatedPlan(plan));
+
+    const auto p0 = engine.getDynamics().getBandParams(0);
+    CHECK(p0.thresholdDB == Approx(-16.0f).margin(1e-3f));
+    CHECK(p0.ratio       == Approx(  4.0f).margin(1e-3f));
+}
+
 TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[processor][analysis][mcp]")
 {
     MorePhiProcessor processor;

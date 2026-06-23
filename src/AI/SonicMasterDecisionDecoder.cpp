@@ -76,22 +76,37 @@ bool decodeSonicMasterDecision(const float* decision,
     }
 
     // ── Dynamics: 3 x (threshold,ratio,attack,release,makeup,knee).
-    //    AUDIT-3: the model emits threshold AND ratio per band. Previously both
-    //    were collapsed onto one scalar (threshold), then the engine derived a
-    //    coupled ratio from that scalar — so "high threshold + low ratio" was
-    //    unexpressible and the model's ratio decision was discarded. Now store
-    //    the two independently as a pair: dynamics[2*band] = threshold value,
-    //    dynamics[2*band+1] = ratio value. 3 bands x 2 = 6 <= dynamics.size() (8).
-    //    Attack/release/makeup/knee remain projected from the threshold scalar
-    //    (the engine exposes no per-band knob for them); they are not decoded.
+    //    AUDIT-2.1: the model emits all six params per band. Decode them into the
+    //    compParams sidecar in real units (the full set), AND mirror threshold +
+    //    ratio into the normalized projectedTargets.dynamics array so the safety
+    //    policy's [-1,1] delta validation still runs. Attack/release/makeup/knee
+    //    travel ONLY in the sidecar — applyValidatedPlan reads them when
+    //    hasCompParams is set, otherwise falls back to the threshold/ratio pair
+    //    and the DSP's existing attack/release/makeup/knee values.
     for (std::size_t band = 0; band < kSonicMasterCompBandCount; ++band)
     {
         const std::size_t o = kSonicMasterCompOffset + band * kSonicMasterCompBandWidth;
         const float thresholdDb = clamp(decision[o + 0], -40.0f, -6.0f);
         const float ratioRaw    = clamp(decision[o + 1], 1.0f, 20.0f);
+        const float attackMs    = clamp(decision[o + 2],   0.1f, 100.0f);
+        const float releaseMs   = clamp(decision[o + 3],  10.0f, 500.0f);
+        const float makeupDb    = clamp(decision[o + 4],   0.0f,  12.0f);
+        const float kneeDb      = clamp(decision[o + 5],   0.0f,  12.0f);
+
+        // Normalized pair for the safety policy's delta math.
         out.projectedTargets.dynamics[2 * band + 0] = clamp((thresholdDb + 20.0f) / 8.0f, -1.0f, 1.0f);
         out.projectedTargets.dynamics[2 * band + 1] = clamp((ratioRaw - 2.5f) / 1.5f, -1.0f, 5.0f);
+
+        // Full real-unit sidecar for the DSP.
+        auto& cp = out.compParams[band];
+        cp.thresholdDb = thresholdDb;
+        cp.ratio       = ratioRaw;
+        cp.attackMs    = attackMs;
+        cp.releaseMs   = releaseMs;
+        cp.makeupDb    = makeupDb;
+        cp.kneeDb      = kneeDb;
     }
+    out.hasCompParams     = true;
     out.appliedMask.dynamics = true;
 
     // ── Stereo: 2 x (width, sideGain). AUDIT-2: the model emits two width

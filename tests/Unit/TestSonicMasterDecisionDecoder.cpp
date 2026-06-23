@@ -131,6 +131,75 @@ TEST_CASE("decodeSonicMasterDecision fills the 3-band compressor block",
     // threshold=-20 -> 0.0, ratio=2.5 -> 0.0.
     CHECK_THAT(plan.projectedTargets.dynamics[0], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
     CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
+
+    // AUDIT-2.1: full real-unit sidecar carries all six params per band.
+    REQUIRE(plan.hasCompParams);
+    const auto& cp0 = plan.compParams[0];
+    CHECK_THAT(cp0.thresholdDb, Catch::Matchers::WithinAbs(-20.0f, 1e-4f));
+    CHECK_THAT(cp0.ratio,       Catch::Matchers::WithinAbs(  2.5f, 1e-4f));
+    CHECK_THAT(cp0.attackMs,    Catch::Matchers::WithinAbs( 10.0f, 1e-4f));
+    CHECK_THAT(cp0.releaseMs,   Catch::Matchers::WithinAbs(100.0f, 1e-4f));
+    CHECK_THAT(cp0.makeupDb,    Catch::Matchers::WithinAbs(  0.0f, 1e-4f));
+    CHECK_THAT(cp0.kneeDb,      Catch::Matchers::WithinAbs(  3.0f, 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision fills compParams for all 3 bands and clamps",
+          "[SonicMaster][Decoder][audit-2.1]")
+{
+    // AUDIT-2.1: every band's sidecar is populated; out-of-range inputs clamp to
+    // the decoder's advertised ranges. All bands get EXPLICIT in-range-or-edge
+    // values — we never rely on zero-init clamping, since clamp(0,-40,-6)==-6
+    // and that reads as "intentional -6 dB" rather than "unset".
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    // Band 0: in-range sane values.
+    decision[more_phi::kSonicMasterCompOffset + 0] = -18.0f;  // thr
+    decision[more_phi::kSonicMasterCompOffset + 1] = 3.0f;    // ratio
+    decision[more_phi::kSonicMasterCompOffset + 2] = 5.0f;    // attack
+    decision[more_phi::kSonicMasterCompOffset + 3] = 80.0f;   // release
+    decision[more_phi::kSonicMasterCompOffset + 4] = 2.0f;    // makeup
+    decision[more_phi::kSonicMasterCompOffset + 5] = 4.0f;    // knee
+    // Band 1: extreme out-of-range (attack too fast, makeup too high, knee negative).
+    const std::size_t b1 = more_phi::kSonicMasterCompOffset + more_phi::kSonicMasterCompBandWidth;
+    decision[b1 + 0] = -16.0f;
+    decision[b1 + 1] = 4.0f;
+    decision[b1 + 2] = 0.001f;   // below 0.1 floor -> clamps to 0.1
+    decision[b1 + 3] = 50.0f;
+    decision[b1 + 4] = 99.0f;    // above 12 ceiling -> clamps to 12
+    decision[b1 + 5] = -5.0f;    // below 0 floor -> clamps to 0
+    // Band 2: explicit in-range values (NOT zero-init).
+    const std::size_t b2 = more_phi::kSonicMasterCompOffset + 2 * more_phi::kSonicMasterCompBandWidth;
+    decision[b2 + 0] = -24.0f;
+    decision[b2 + 1] = 2.0f;
+    decision[b2 + 2] = 20.0f;
+    decision[b2 + 3] = 180.0f;
+    decision[b2 + 4] = 3.0f;
+    decision[b2 + 5] = 6.0f;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    REQUIRE(plan.hasCompParams);
+
+    const auto& cp0 = plan.compParams[0];
+    CHECK_THAT(cp0.thresholdDb, Catch::Matchers::WithinAbs(-18.0f, 1e-4f));
+    CHECK_THAT(cp0.ratio,       Catch::Matchers::WithinAbs(  3.0f, 1e-4f));
+    CHECK_THAT(cp0.attackMs,    Catch::Matchers::WithinAbs(  5.0f, 1e-4f));
+    CHECK_THAT(cp0.releaseMs,   Catch::Matchers::WithinAbs( 80.0f, 1e-4f));
+    CHECK_THAT(cp0.makeupDb,    Catch::Matchers::WithinAbs(  2.0f, 1e-4f));
+    CHECK_THAT(cp0.kneeDb,      Catch::Matchers::WithinAbs(  4.0f, 1e-4f));
+
+    const auto& cp1 = plan.compParams[1];
+    CHECK_THAT(cp1.thresholdDb, Catch::Matchers::WithinAbs(-16.0f, 1e-4f));
+    CHECK_THAT(cp1.attackMs,    Catch::Matchers::WithinAbs(  0.1f, 1e-4f));  // clamped up
+    CHECK_THAT(cp1.makeupDb,    Catch::Matchers::WithinAbs( 12.0f, 1e-4f));  // clamped down
+    CHECK_THAT(cp1.kneeDb,      Catch::Matchers::WithinAbs(  0.0f, 1e-4f));  // clamped up
+
+    const auto& cp2 = plan.compParams[2];
+    CHECK_THAT(cp2.thresholdDb, Catch::Matchers::WithinAbs(-24.0f, 1e-4f));
+    CHECK_THAT(cp2.ratio,       Catch::Matchers::WithinAbs(  2.0f, 1e-4f));
+    CHECK_THAT(cp2.attackMs,    Catch::Matchers::WithinAbs( 20.0f, 1e-4f));
+    CHECK_THAT(cp2.releaseMs,   Catch::Matchers::WithinAbs(180.0f, 1e-4f));
+    CHECK_THAT(cp2.makeupDb,    Catch::Matchers::WithinAbs(  3.0f, 1e-4f));
+    CHECK_THAT(cp2.kneeDb,      Catch::Matchers::WithinAbs(  6.0f, 1e-4f));
 }
 
 TEST_CASE("decodeSonicMasterDecision decodes threshold and ratio independently",

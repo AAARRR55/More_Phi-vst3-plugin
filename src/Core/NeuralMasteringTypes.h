@@ -20,6 +20,26 @@ inline constexpr std::size_t kNeuralMasteringStereoBandCount = 8;
 inline constexpr std::size_t kNeuralMasteringGateCount = 10;
 inline constexpr std::size_t kNeuralMasteringIssueCapacity = 16;
 
+// AUDIT-2.1: number of compressor bands the neural mastering decision emits
+// (masteringbrainv2 contract). Declared in Core (not the AI decoder header) so
+// the ValidatedNeuralMasteringPlan sidecar below can carry the full per-band
+// param set without Core depending on AI.
+inline constexpr std::size_t kNeuralMasteringCompBandCount = 3;
+
+// AUDIT-2.1: full per-band compressor params, in real units. The 44-float
+// SonicMaster decision carries all six (threshold,ratio,attack,release,makeup,
+// knee) per band, but the normalized MasteringTargetVector.dynamics array holds
+// only 2/band in [-1,1] delta space. The other four travel in this sidecar.
+struct NeuralMasteringCompBand
+{
+    float thresholdDb = -20.0f;
+    float ratio       =   2.5f;
+    float attackMs    =  15.0f;
+    float releaseMs   = 150.0f;
+    float makeupDb    =   0.0f;
+    float kneeDb      =   2.0f;
+};
+
 enum class NeuralMasteringRuntimeMode : std::uint8_t
 {
     Offline,
@@ -199,6 +219,12 @@ struct ValidatedNeuralMasteringPlan
     NeuralMasteringEvidenceLevel evidenceLevel = NeuralMasteringEvidenceLevel::Planning;
     bool valid = false;
     bool projected = false;
+
+    // AUDIT-2.1: full per-band compressor params. Set by the SonicMaster decoder
+    // (it has all six from the decision vector); other plan producers leave this
+    // false and applyValidatedPlan falls back to the normalized dynamics pair.
+    std::array<NeuralMasteringCompBand, kNeuralMasteringCompBandCount> compParams {};
+    bool hasCompParams = false;
 };
 
 } // namespace more_phi
