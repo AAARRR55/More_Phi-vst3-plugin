@@ -94,10 +94,23 @@ bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::strin
             outTensor.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
         { unloadModel(); return false; }
 
-        const auto totalIn = std::accumulate(inTensor.GetShape().begin(), inTensor.GetShape().end(),
+        // Query dimensions via GetDimensionsCount/GetDimensions rather than the
+        // convenience GetShape() wrapper. Against ORT 1.22.1's cxx headers the
+        // returned-by-value GetShape() path segfaults on this exported graph
+        // (a symbolic 'batch' dim); the lower-level GetDimensions call on the
+        // same handle is stable. Same data, no fault. GetElementType() above is
+        // unaffected because it does not touch the dimension storage.
+        const auto inDimCount = inTensor.GetDimensionsCount();
+        const auto outDimCount = outTensor.GetDimensionsCount();
+        std::vector<int64_t> inDims(inDimCount, -1);
+        inTensor.GetDimensions(inDims.data(), inDimCount);
+        std::vector<int64_t> outDims(outDimCount, -1);
+        outTensor.GetDimensions(outDims.data(), outDimCount);
+
+        const auto totalIn = std::accumulate(inDims.begin(), inDims.end(),
                                              int64_t { 1 },
                                              [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
-        const auto totalOut = std::accumulate(outTensor.GetShape().begin(), outTensor.GetShape().end(),
+        const auto totalOut = std::accumulate(outDims.begin(), outDims.end(),
                                               int64_t { 1 },
                                               [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
         if (totalIn != static_cast<int64_t>(2 * kSonicMasterSegmentFrames) ||
