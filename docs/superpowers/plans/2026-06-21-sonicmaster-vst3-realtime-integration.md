@@ -1957,7 +1957,7 @@ TEST_CASE("SonicMasterDecisionRunner loads and infers the real ONNX model",
 
 - [ ] **Step 2: Register the test gated on ONNX**
 
-In `tests/CMakeLists.txt`, immediately after the existing `if(MORE_PHI_HAS_ONNX)` block (which already stages `model_blackwell_restraint_v5.onnx`), add a parallel staging block for the SonicMaster model and add the test source guarded by the same flag:
+In `tests/CMakeLists.txt`, immediately after the existing `if(MORE_PHI_HAS_ONNX)` block, add a parallel staging block for the SonicMaster model and add the test source guarded by the same flag:
 
 ```cmake
     # ── SonicMaster realtime neural mastering (preview) ──────────────────────

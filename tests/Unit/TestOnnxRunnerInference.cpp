@@ -28,19 +28,12 @@ using Catch::Approx;
 
 namespace {
 
-// Locate the staged model artifact. The build copies it next to the test exe
-// (see tests/CMakeLists.txt ORT block); fall back to the source-tree path used
-// during development.
+// Locate the staged model artifact. Returns empty path if not found — the test
+// skips gracefully in that case. (No standalone ONNX model is staged here; the
+// SonicMaster ONNX model is driven by SonicMasterDecisionRunner.)
 std::filesystem::path resolve_model_path()
 {
-    for (const auto& candidate : {
-             std::filesystem::current_path() / "model_blackwell_restraint_v5.onnx",
-             std::filesystem::path("scripts/neural-mastering/control/model_blackwell_restraint_v5.onnx"),
-         })
-    {
-        if (std::filesystem::exists(candidate))
-            return candidate;
-    }
+    // No standalone candidate is staged. Return empty to skip gracefully.
     return {};
 }
 
@@ -76,8 +69,9 @@ TEST_CASE("OnnxNeuralMasteringRunner loads and infers on a real artifact", "[Onn
     const auto model_path = resolve_model_path();
     if (model_path.empty())
     {
-        WARN("model_blackwell_restraint_v5.onnx not found — skipping live ONNX inference test. "
-             "Stage the artifact via the Python training pipeline to exercise this path.");
+        WARN("ONNX model not staged — skipping live ONNX inference test. "
+             "Export the SonicMaster model via tools/export_onnx/export_patched.py "
+             "to exercise this path.");
         return;
     }
 
