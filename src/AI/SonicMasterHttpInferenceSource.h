@@ -4,13 +4,18 @@
  * ISonicMasterInferenceSource implementation that drives the local Python
  * inference server (tools/inference_server/server.py) over HTTP on localhost.
  *
- * Why this exists: the masteringbrainv2 checkpoint cannot yet be exported to
- * ONNX faithfully (fused transformer/MHA kernels + FFT-based spectral
- * injection have no ONNX opset-17 symbolic). Running the checkpoint directly
- * via PyTorch — the path it was validated with — is the correct, faithful
- * inference. This source lets the plugin use that inference without linking
- * PyTorch into the VST3: a small localhost server hosts the model, and this
- * source POSTs a 6s stereo window and parses the 44-float decision back.
+ * Role: the FALLBACK inference path. The plugin's primary path is the in-process
+ * ONNX runner (SonicMasterDecisionRunner), which loads the exported
+ * masteringbrain_v2_decision.onnx graph produced by
+ * tools/export_onnx/export_patched.py (manual Multi-Head Attention + STFT-based
+ * spectral injection; parity verified). This HTTP source is used when the ONNX
+ * runner is unavailable at runtime (no model staged, ORT not linked into this
+ * build, or a load-time validation failure): it lets the plugin fall back to
+ * running the checkpoint directly via PyTorch — the path it was originally
+ * validated with — without linking PyTorch into the VST3. A small localhost
+ * server hosts the model, and this source POSTs a 6s stereo window and parses
+ * the 44-float decision back. The PluginProcessor selects ONNX-first,
+ * HTTP-fallback at construction.
  *
  * Protocol (see tools/inference_server/server.py):
  *   GET  /health                          -> {"status":"ok"}

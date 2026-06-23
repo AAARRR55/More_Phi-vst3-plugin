@@ -471,8 +471,22 @@ bool OnnxNeuralMasteringRunner::loadModel(std::string_view absolutePath,
             return false;
         }
 
-        const auto inDims = inputTensor.GetShape();
-        const auto outDims = outputTensor.GetShape();
+        // Query dimensions via GetDimensionsCount/GetDimensions rather than the
+        // convenience GetShape() wrapper. Against ORT 1.22.1's cxx headers the
+        // returned-by-value GetShape() path segfaults on exported graphs with a
+        // symbolic 'batch' dim (verified on the waveform->decision runner — see
+        // SonicMasterDecisionRunner::loadModel, commit a28b621); the lower-level
+        // GetDimensions call on the same handle is stable. Same data, no fault.
+        // GetElementType() above is unaffected because it does not touch the
+        // dimension storage. This runner is currently seam-only (ORT not linked
+        // into its path) but the fix is applied preemptively so a future
+        // feature-frame model wiring cannot reintroduce the segfault.
+        const auto inDimCount = inputTensor.GetDimensionsCount();
+        const auto outDimCount = outputTensor.GetDimensionsCount();
+        std::vector<int64_t> inDims(inDimCount, -1);
+        inputTensor.GetDimensions(inDims.data(), inDimCount);
+        std::vector<int64_t> outDims(outDimCount, -1);
+        outputTensor.GetDimensions(outDims.data(), outDimCount);
         // Accept [1, N] or [N]; require the trailing product to match the schema.
         const auto totalIn = std::accumulate(inDims.begin(), inDims.end(), int64_t { 1 },
                                              [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
