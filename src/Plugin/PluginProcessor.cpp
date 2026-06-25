@@ -3416,11 +3416,19 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
     auto logHolder = std::make_unique<ag::StructuredAgentLogger>(logDir, logRunId);
 
     // AUDIT-FIX (close the "AI theater" gap): prefer a REAL LLM (OpenAI /
-    // Anthropic / OpenAI-compatible) when the user has configured + validated
-    // an API key, so ConductorAgent::decomposeGoal is driven by a genuine model
-    // instead of the 3-keyword deterministic heuristic. Falls back to the
-    // deterministic client when no provider is configured — preserving the
-    // always-works, offline-safe default (Risk R1 mitigation).
+    // Anthropic / OpenAI-compatible) when the user has CONFIGURED an API key, so
+    // ConductorAgent::decomposeGoal is driven by a genuine model instead of the
+    // 3-keyword deterministic heuristic. Falls back to the deterministic client
+    // when no provider is configured — preserving the always-works, offline-safe
+    // default (Risk R1 mitigation).
+    //
+    // AUDIT (A1, 2026-06-25): the gate is isConfigured() (non-empty key + selected
+    // model), NOT a live validation. LLMConnectionValidator::testConnectionAsync is
+    // async/UI-panel-only; calling it synchronously here would stall MCP server init
+    // on a network round-trip (up to its 15s timeout). A configured-but-invalid key
+    // therefore wires RestLlmClient and fails lazily to http_401 on the first
+    // complete() (retried then surfaced by RestLlmClient — see
+    // TestRestLlmClientHardening.cpp). This is intentional; AGENTS.md documents it.
     std::unique_ptr<ag::ILlmClient> llmHolder = [this]() -> std::unique_ptr<ag::ILlmClient>
     {
         LLMSettings settings = LLMSettings::createDefault();

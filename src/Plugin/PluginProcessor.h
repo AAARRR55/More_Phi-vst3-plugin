@@ -411,6 +411,14 @@ public:
     const AutoMasteringEngine& getAutoMasteringEngine() const noexcept { return autoMasteringEngine_; }
     SonicMasterAnalysisEngine& getSonicMasterEngine() noexcept { return sonicMasterEngine_; }
     const SonicMasterAnalysisEngine& getSonicMasterEngine() const noexcept { return sonicMasterEngine_; }
+
+    // AUDIT (C2, 2026-06-25): SonicMaster ONNX inference latency, measured
+    // around session->Run(). last = most recent run; max = running high-water
+    // mark. 0.0 before the first run / when ONNX is unavailable. The analysis
+    // cycle budget is 3 s, so a sustained last value approaching that indicates
+    // the model can no longer keep up at the configured cadence.
+    float getSonicMasterLastInferenceMs() const noexcept { return sonicMasterRunner_.getLastInferenceMs(); }
+    float getSonicMasterMaxInferenceMs() const noexcept  { return sonicMasterRunner_.getMaxInferenceMs(); }
     NeuralMasteringController& getNeuralMasteringController() noexcept { return neuralMasteringController_; }
     const NeuralMasteringController& getNeuralMasteringController() const noexcept { return neuralMasteringController_; }
     bool hasLastSafeNeuralMasteringPlan() const noexcept { return autoMasteringEngine_.hasLastSafeNeuralMasteringPlan(); }

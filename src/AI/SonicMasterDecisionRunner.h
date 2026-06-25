@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <atomic>
 
 namespace more_phi {
 
@@ -114,9 +115,34 @@ public:
                      float* outDecision,
                      std::size_t outCapacity) noexcept;
 
+    // AUDIT (C2, 2026-06-25): wall-clock duration of the last session->Run() in
+    // milliseconds, measured around the ONNX inference call. 0.0 before the first
+    // successful run. Read from any thread (relaxed atomic) for diagnostics /
+    // profiling — the analysis cycle budget is 3 s (kSonicMasterAnalysisInterval),
+    // so a sustained value approaching that budget would indicate the model can no
+    // longer keep up at the configured cadence. Previously there was NO latency
+    // instrumentation in the C++ ONNX path (the Python fallback server returned an
+    // inference_ms field that the C++ client discarded).
+    [[nodiscard]] float getLastInferenceMs() const noexcept
+    {
+        return lastInferenceMs_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] float getMaxInferenceMs() const noexcept
+    {
+        return maxInferenceMs_.load(std::memory_order_relaxed);
+    }
+    void resetInferenceTiming() noexcept
+    {
+        lastInferenceMs_.store(0.0f, std::memory_order_relaxed);
+        maxInferenceMs_.store(0.0f, std::memory_order_relaxed);
+    }
+
 private:
     std::unique_ptr<SonicMasterSessionHandle> session_;
     bool available_ = false;
+
+    std::atomic<float> lastInferenceMs_{ 0.0f };
+    std::atomic<float> maxInferenceMs_{ 0.0f };
 };
 
 } // namespace more_phi

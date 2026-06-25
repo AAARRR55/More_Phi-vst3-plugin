@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <cmath>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 #ifndef MORE_PHI_HAS_ONNX
@@ -202,8 +203,24 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
         const char* inputNames[] = { session_->inputName.c_str() };
         const char* outputNames[] = { session_->outputName.c_str() };
 
+        // AUDIT (C2, 2026-06-25): time the inference call so the 3 s analysis-
+        // cycle budget can be monitored. steady_clock (monotonic) is the right
+        // clock — wall-clock could jump on NTP sync. Relaxed atomic stores are
+        // fine: these are diagnostics, no dependent data.
+        const auto t0 = std::chrono::steady_clock::now();
         auto outputs = session_->session->Run(
             Ort::RunOptions { nullptr }, inputNames, &inputTensor, 1, outputNames, 1);
+        const auto t1 = std::chrono::steady_clock::now();
+        const float elapsedMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+        lastInferenceMs_.store(elapsedMs, std::memory_order_relaxed);
+        // Saturating max so a single slow first-run warmup doesn't get lost.
+        float prevMax = maxInferenceMs_.load(std::memory_order_relaxed);
+        while (elapsedMs > prevMax
+               && !maxInferenceMs_.compare_exchange_weak(prevMax, elapsedMs,
+                                                          std::memory_order_relaxed))
+        {
+            // prevMax refreshed by CAS failure; loop until stored or overtaken.
+        }
 
         const float* outData = outputs[0].GetTensorData<float>();
         std::copy_n(outData, kSonicMasterDecisionWidth, outDecision);

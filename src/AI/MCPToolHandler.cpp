@@ -6190,6 +6190,13 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     result["applied"] = false;  // decision only — assistant/user applies next
     result["response_schema_version"] = 2;
     result["model_source"] = "sonicmaster-v2 (masteringbrainv2)";
+    // AUDIT (C2, 2026-06-25): surface the ONNX inference latency so the 3 s
+    // analysis-cycle budget can be monitored. 0.0 when ONNX is unavailable or
+    // before the first run. A sustained last_inference_ms approaching the cycle
+    // budget means the model can no longer keep up at the configured cadence.
+    result["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+    result["max_inference_ms"]  = p.getSonicMasterMaxInferenceMs();
+    result["analysis_cycle_budget_ms"] = 3000;  // kSonicMasterAnalysisInterval * 1000
     result["target_lufs_requested"] = targetLufs;
     // F2/AUDIT: make explicit that the neural mastering decision — even if
     // applied — lands on More-Phi's INTERNAL mastering chain, which is dormant
