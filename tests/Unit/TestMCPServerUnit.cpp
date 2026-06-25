@@ -1101,8 +1101,14 @@ TEST_CASE("MCP dry-run mastering candidates can be selected and applied", "[mcp]
     REQUIRE(batch["planner_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["planner_metadata"]["recommendation_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["planner_metadata"]["confidence"].is_null());
-    REQUIRE_FALSE(batch["score_available"].get<bool>());
-    REQUIRE(batch["score_basis"].get<std::string>() == "not_scored_without_audio_render");
+    // P3.9 (AUDIT): render_batch now reports score_available=true even in dry-run
+    // because it computes a real lufs_error = |targetLUFS - measuredLUFS| proxy per
+    // candidate (previously every candidate read infinity → no scoring → a no-op).
+    // The score_basis is honest about it being a target-distance proxy, not a
+    // rendered-audio score. The prior assertion (score_available==false /
+    // "not_scored_without_audio_render") encoded the pre-P3.9 no-op behavior.
+    REQUIRE(batch["score_available"].get<bool>() == true);
+    REQUIRE(batch["score_basis"].get<std::string>() == "lufs_target_distance_proxy");
     REQUIRE(batch["candidates"][0]["recommendation_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["candidates"][0]["planner_metadata"]["confidence"].is_null());
     REQUIRE(batch["candidates"][0]["measured_inputs"].is_object());
