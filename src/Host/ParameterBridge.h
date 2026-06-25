@@ -22,6 +22,21 @@ namespace more_phi {
 
 class PluginHostManager;
 
+// AUDIT (E2, 2026-06-25): forward-declared so ParameterBridge can stamp the
+// source of each hosted-parameter write without depending on PluginProcessor.h
+// (which would create a circular include — PluginProcessor owns ParameterBridge).
+// The drain loop (PluginProcessor.cpp) calls noteWriteSource() with the
+// ParameterEditSource carried by each ParamCommand.
+enum class HostedWriteSource : uint8_t
+{
+    Unknown = 0,
+    UI,
+    Assistant,
+    MCP,        // manual hosted edit (set_parameter / hosted_plugin.set_parameter)
+    Snapshot,
+    Neural      // automated SonicMaster plan write (OzonePlanApplicator)
+};
+
 class ParameterBridge : public IParameterBridge
 {
 public:
@@ -144,6 +159,32 @@ public:
         applyExceptionCount_.store(0, std::memory_order_relaxed);
     }
 
+    // AUDIT (E2, 2026-06-25): per-parameter write-source stamp + write-precedence
+    // conflict counter. noteWriteSource() is called from the audio-thread drain
+    // for every hosted write, carrying the ParamCommand's source. If a write
+    // from a DIFFERENT source arrives within kWritePrecedenceSettleMs of the
+    // previous write to the same index, writePrecedenceConflictCount_ is
+    // incremented (audio-safe saturating counter). Read getWritePrecedenceConflicts()
+    // from the message thread for diagnostics / ActionLedger recording.
+    //
+    // Rationale: the audit's original E2 premise ("two uncoordinated hosted
+    // writers") is incorrect — both hosted writers (Neural + MCP) share one FIFO
+    // command queue, so they are already serialized. This stamp does NOT
+    // arbitrate; it makes a same-parameter, different-source edit burst OBSERVABLE
+    // for debugging (e.g. a user manually tweaking a control the neural engine is
+    // also driving). Audio-safe: fixed std::array + relaxed atomics, no locks.
+    static constexpr int kWritePrecedenceSettleMs = 250;
+    void noteWriteSource(int index, HostedWriteSource source) noexcept;
+    uint64_t getWritePrecedenceConflicts() const noexcept
+    {
+        return writePrecedenceConflictCount_.load(std::memory_order_relaxed);
+    }
+    void resetWritePrecedenceConflicts() noexcept
+    {
+        writePrecedenceConflictCount_.store(0, std::memory_order_relaxed);
+    }
+    HostedWriteSource getLastWriteSource(int index) const noexcept;
+
 private:
     struct ThrottleState
     {
@@ -157,6 +198,15 @@ private:
     mutable juce::SpinLock throttleMutex_;
     mutable std::vector<ThrottleState> throttleStates_;
     std::vector<ParameterDescriptor> testDescriptors_;
+
+    // AUDIT (E2): per-parameter last-writer stamp. Fixed array (no allocation on
+    // the audio path), one atomic per slot — mirrors the recallRamp* pattern.
+    // lastWriteSource_ holds the source of the most recent write; lastWriteMs_
+    // holds its millisecond timestamp. Relaxed ordering is sufficient: the only
+    // cross-thread invariant is "observe who wrote last", no dependent data.
+    std::array<std::atomic<HostedWriteSource>, MAX_PARAMETERS> lastWriteSource_{};
+    std::array<std::atomic<juce::uint32>, MAX_PARAMETERS>      lastWriteMs_{};
+    std::atomic<uint64_t> writePrecedenceConflictCount_{0};
 
     // B4 FIX: saturating counter for hosted-plugin setValue() exceptions on the
     // apply path (audio thread can't log). Stops at uint64 max to avoid wrap.

@@ -5,6 +5,10 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Version.h"   // VERSION_STRING — single source of truth for the state-version literal
+#if MORE_PHI_HAS_ONNX
+#  include "SonicMasterModelHash.h"   // generated: more_phi::sonicmaster::kExpectedModelHash (W8 integrity check)
+#  include <juce_cryptography/juce_cryptography.h>  // juce::SHA256 for the model integrity check
+#endif
 #include "Core/InterpolationEngine.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/ABCompareEngine.h"
@@ -42,6 +46,25 @@ namespace more_phi {
 namespace {
 
 std::atomic<juce::uint64> gNextProcessorGenerationToken{1};
+
+// AUDIT (E2, 2026-06-25): map the drain-side ParameterEditSource (defined here in
+// PluginProcessor.h) to the HostedWriteSource enum ParameterBridge stamps. The two
+// enums are intentionally separate so ParameterBridge.h need not depend on
+// PluginProcessor.h (which owns a ParameterBridge — a circular include otherwise).
+// The values line up 1:1 by intent.
+HostedWriteSource toHostedWriteSource(MorePhiProcessor::ParameterEditSource s) noexcept
+{
+    switch (s)
+    {
+        case MorePhiProcessor::ParameterEditSource::UI:        return HostedWriteSource::UI;
+        case MorePhiProcessor::ParameterEditSource::Assistant: return HostedWriteSource::Assistant;
+        case MorePhiProcessor::ParameterEditSource::MCP:       return HostedWriteSource::MCP;
+        case MorePhiProcessor::ParameterEditSource::Snapshot:  return HostedWriteSource::Snapshot;
+        case MorePhiProcessor::ParameterEditSource::Neural:    return HostedWriteSource::Neural;
+        case MorePhiProcessor::ParameterEditSource::Unknown:   break;
+    }
+    return HostedWriteSource::Unknown;
+}
 
 float readRawFloat(const std::atomic<float>* p, float fallback) noexcept
 {
@@ -858,6 +881,13 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
         }
         else
         {
+            // AUDIT (E2, 2026-06-25): stamp the source of this hosted write so a
+            // same-parameter, different-source edit burst (e.g. a manual MCP tweak
+            // of a control the neural engine is also driving) is observable. Audio-
+            // safe: fixed array + relaxed atomics inside noteWriteSource. This does
+            // NOT arbitrate — both hosted writers already share this FIFO queue.
+            paramBridge.noteWriteSource(cmd.paramIndex, toHostedWriteSource(cmd.source));
+
             // PERF-BATCH: the MCP-flush path (exclusivePlugin != nullptr) writes
             // through immediately because it holds the exclusive lease and is
             // already O(1) in acquire cost. The audio-thread path (nullptr)
@@ -3907,7 +3937,13 @@ juce::AudioProcessorEditor* MorePhiProcessor::createEditor()
     }
 }
 
-// C-1 FIX: Report actual latency from all pipeline stages
+// C-1 FIX: Report actual latency from all pipeline stages.
+// AUDIT-FIX (TAIL-1): previously this returned ONLY the hosted plugin's tail,
+// ignoring the plugin's own audio-domain tails (spectral overlap-add residual,
+// granular in-flight grains, mastering-chain lookahead). That made offline-bounce
+// tails wrong whenever audio-domain morph or mastering was engaged. Now we take
+// the max across the hosted plugin and every active internal engine, matching the
+// latency aggregation in updateReportedLatency().
 double MorePhiProcessor::getTailLengthSeconds() const
 {
     double tail = 0.0;
@@ -3924,6 +3960,25 @@ double MorePhiProcessor::getTailLengthSeconds() const
         }
         hostManager.releasePluginFromUse();
     }
+
+    // AUDIT-FIX (TAIL-1): add the plugin's own engine tails when the audio
+    // domain is active. isActive() gates each engine so dormant engines add 0.
+    if (audioDomainEnabled_.load(std::memory_order_relaxed))
+    {
+        tail = juce::jmax(tail, spectralEngine_.getTailLengthSeconds());
+        tail = juce::jmax(tail, granularEngine_.getTailLengthSeconds());
+    }
+
+    // AUDIT-FIX (TAIL-1): mastering-chain lookahead tail. getMasteringChainLatency()
+    // returns 0 while the chain is dormant (shipped plugin only meters), so this
+    // is a no-op until mastering is engaged — the live reported tail is unchanged.
+    if (currentSampleRate > 0.0)
+    {
+        const double masteringTailSec =
+            static_cast<double>(autoMasteringEngine_.getMasteringChainLatency()) / currentSampleRate;
+        tail = juce::jmax(tail, masteringTailSec);
+    }
+
     return tail;
 }
 

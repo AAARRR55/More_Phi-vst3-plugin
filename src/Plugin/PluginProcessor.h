@@ -202,7 +202,15 @@ public:
         UI,
         Assistant,
         MCP,
-        Snapshot
+        Snapshot,
+        // AUDIT (E2, 2026-06-25): the SonicMaster neural path previously passed
+        // ::MCP like manual hosted edits, making the two hosted-parameter writers
+        // indistinguishable. A distinct Neural value lets ParameterBridge's
+        // per-parameter source stamp distinguish an automated neural plan write
+        // from a manual MCP edit to the same hosted control, and lets a write
+        // precedence conflict (two different sources editing the same param
+        // within a settle window) be observed/counted.
+        Neural
     };
 
     struct ParamCommand {

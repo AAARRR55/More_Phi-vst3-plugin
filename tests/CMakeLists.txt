@@ -96,6 +96,8 @@ add_executable(MorePhiTests
     # Ozone parameter-map discovery regression guard (W1: silent no-op when the
     # hosted plugin's names don't match the discovery heuristic).
     Unit/TestOzoneParameterMapDiscovery.cpp
+    # Per-parameter write-source stamp + write-precedence conflict counter (E2).
+    Unit/TestParameterBridgeWriteSource.cpp
     Unit/TestAuditFixes.cpp
     Unit/TestAudioCaptureRing.cpp
     Unit/TestNeuralPlanVerification.cpp

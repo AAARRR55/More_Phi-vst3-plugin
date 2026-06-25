@@ -300,7 +300,12 @@ int OzonePlanApplicator::enqueueIfMapped(int idx, float normalizedValue,
     const float snapped = processor_.getParameterBridge().snapNormalizedToStep(idx, normalizedValue);
     const bool ok = processor_.enqueueParameterSet(
         idx, snapped,
-        MorePhiProcessor::ParameterEditSource::MCP,
+        // AUDIT (E2, 2026-06-25): tag neural-plan writes with a distinct source
+        // so ParameterBridge's per-parameter stamp can distinguish an automated
+        // neural plan write from a manual MCP edit (and observe write-precedence
+        // conflicts on the same hosted control). Previously both AI entry paths
+        // passed ::MCP, making them indistinguishable.
+        MorePhiProcessor::ParameterEditSource::Neural,
         // P2.4 (AUDIT): hold the AI edit against morph. The neural/Ozone path
         // previously passed false, so a running morph block could overwrite the
         // recommended value before/while it drained — the edit vanished audibly.

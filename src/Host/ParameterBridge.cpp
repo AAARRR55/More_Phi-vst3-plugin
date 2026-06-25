@@ -526,6 +526,45 @@ void ParameterBridge::updateThrottleState(int index, float value, juce::uint32 n
     }
 }
 
+// AUDIT (E2, 2026-06-25): per-parameter write-source stamp. Called from the
+// audio-thread drain for every hosted write. Audio-safe: fixed array, relaxed
+// atomics, no locks, no logging. If a DIFFERENT source writes the same index
+// within kWritePrecedenceSettleMs of the previous write, count it as a
+// write-precedence observation (saturating counter). This does NOT arbitrate —
+// both hosted writers already share one FIFO command queue — it only makes a
+// same-parameter, different-source edit burst observable for debugging.
+void ParameterBridge::noteWriteSource(int index, HostedWriteSource source) noexcept
+{
+    if (index < 0 || index >= MAX_PARAMETERS)
+        return;
+
+    const auto prevSource = lastWriteSource_[static_cast<size_t>(index)]
+                                .exchange(source, std::memory_order_relaxed);
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+    const auto prevMs = lastWriteMs_[static_cast<size_t>(index)]
+                            .exchange(now, std::memory_order_relaxed);
+
+    // Only count a conflict if: a different source wrote previously, that write
+    // was recent (within the settle window), and the clock actually advanced
+    // (guards against the very first write, where prevMs == 0).
+    if (prevSource != HostedWriteSource::Unknown
+        && prevSource != source
+        && prevMs != 0
+        && (now - prevMs) < static_cast<juce::uint32>(kWritePrecedenceSettleMs))
+    {
+        uint64_t cur = writePrecedenceConflictCount_.load(std::memory_order_relaxed);
+        if (cur != std::numeric_limits<uint64_t>::max())
+            writePrecedenceConflictCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+HostedWriteSource ParameterBridge::getLastWriteSource(int index) const noexcept
+{
+    if (index < 0 || index >= MAX_PARAMETERS)
+        return HostedWriteSource::Unknown;
+    return lastWriteSource_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+}
+
 juce::String ParameterBridge::getParameterLabel(int index) const
 {
     return withPlugin(host_, cachedConcreteHost_, "getParameterLabel", juce::String{},
