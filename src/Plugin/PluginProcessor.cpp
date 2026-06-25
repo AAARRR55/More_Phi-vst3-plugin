@@ -19,6 +19,9 @@
 #include "AI/Agents/Tooling/DefaultToolInvoker.h"
 #include "AI/Agents/Logging/StructuredAgentLogger.h"
 #include "AI/Agents/Llm/DeterministicFallbackLlmClient.h"
+#include "AI/Agents/Llm/RestLlmClient.h"          // AUDIT-FIX: real-LLM seam for the agent layer
+#include "AI/LLMSettingsStore.h"                   // AUDIT-FIX: load provider config for RestLlmClient
+#include "AI/LLMConnectionValidator.h"             // AUDIT-FIX: JuceLLMHttpClient
 #include "AI/AutomationControlPlane.h"   // H6: AutonomyLevel / toString / autonomyLevelFromString
 #include "AI/Agents/Conductor/ConductorAgent.h"
 #include "AI/Agents/Agents/AnalysisAgent.h"
@@ -686,6 +689,7 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
     {
         if (cmd.isSnapshotMarker)
         {
+            MORE_PHI_PROFILE(profiler_, "command_drain_snapshot");
             const int slot = cmd.snapshotSlot;
             auto positions = InterpolationEngine::getClockPositions();
             if (slot >= 0 && slot < static_cast<int>(positions.size()))
@@ -761,6 +765,7 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
             // stashes into drainScratch_ and defers the plugin setValue to a
             // single batched ParameterBridge::applyParameterState call below —
             // collapsing N×(acquire+throttle+syscall) to one lock per block.
+            MORE_PHI_PROFILE(profiler_, "command_drain_param");
             if (exclusivePlugin == nullptr)
             {
                 if (cmd.paramIndex >= 0 &&
@@ -1029,6 +1034,14 @@ juce::String MorePhiProcessor::getProfilingReport() const
         report << "  Calls:      " << stat.callCount << "\n";
         report << "  Avg:        " << juce::String(avgUs, 2) << " µs\n";
         report << "  Max:        " << juce::String(maxUs, 2) << " µs\n";
+        // AUDIT-2026-06-25 (M4): trailing-window percentiles over the most
+        // recent kRingSamples (2048) samples. p50 is the median; p99 surfaces
+        // tail spikes that the running average hides. 0.0 until the first
+        // sample lands. Process-block-level percentiles come from the audit
+        // harness's own HighResTimer (true population); these are per-section.
+        report << "  p50:        " << juce::String(stat.p50Ms * 1000.0, 2) << " µs\n";
+        report << "  p95:        " << juce::String(stat.p95Ms * 1000.0, 2) << " µs\n";
+        report << "  p99:        " << juce::String(stat.p99Ms * 1000.0, 2) << " µs\n";
         report << "  Total:      " << juce::String(stat.totalTimeMs * 1000.0, 2) << " µs\n";
         report << "  Percentage: " << juce::String(pct, 1) << "%\n";
     }
@@ -1339,6 +1352,17 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     profiler_.registerSection("command_queue_drain");
     profiler_.registerSection("morph_computation");
     profiler_.registerSection("parameter_application");
+    // AUDIT-2026-06-25: sub-section timers that split the dominant
+    // parameter_application cost (the 2048-param loop) so the audit can
+    // attribute cycles to read vs touch vs write. These are LEAF sections
+    // (never nested in parameter_application) to avoid the double-count caveat.
+    profiler_.registerSection("param_getvalue_read");
+    profiler_.registerSection("param_touch_detect");
+    profiler_.registerSection("param_setvalue_write");
+    // AUDIT-2026-06-25: split the command drain into its two structurally
+    // distinct branches (snapshot-restore marker vs normal param commands).
+    profiler_.registerSection("command_drain_snapshot");
+    profiler_.registerSection("command_drain_param");
     profiler_.registerSection("audio_domain_total");
     profiler_.registerSection("spectral_engine");
     profiler_.registerSection("granular_engine");
@@ -2041,11 +2065,18 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                         const int touchOffset = touchSamplingPhase_;
                         touchSamplingPhase_ = (touchSamplingPhase_ + 1) % kTouchSamplingStride;
 
-                        // Only batch-read params in the current stride window
-                        for (int i = touchOffset; i < pluginParamCount; i += kTouchSamplingStride)
+                        // AUDIT-2026-06-25: isolate the getValue() batch read — the
+                        // documented dominant per-block cost — as its own leaf section
+                        // so the audit can quantify it independently of the interleaved
+                        // touch/setValue loop below. ~512 calls (stride 4 of 2048).
                         {
-                            try { currentParamSnapshot_[static_cast<size_t>(i)] = pluginParams[i]->getValue(); }
-                            catch (...) { currentParamSnapshot_[static_cast<size_t>(i)] = 0.0f; }
+                            MORE_PHI_PROFILE(profiler_, "param_getvalue_read");
+                            // Only batch-read params in the current stride window
+                            for (int i = touchOffset; i < pluginParamCount; i += kTouchSamplingStride)
+                            {
+                                try { currentParamSnapshot_[static_cast<size_t>(i)] = pluginParams[i]->getValue(); }
+                                catch (...) { currentParamSnapshot_[static_cast<size_t>(i)] = 0.0f; }
+                            }
                         }
 
                         const bool hasTouchLock = touchStateLock_.tryEnter();
@@ -2410,16 +2441,19 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
     }
 
     // C-6 FIX (audit): Wet/dry crossfade + mix-ramp advance.
-    // When fully wet (mix≈1) or fully dry (mix≈0) AND not transitioning, the
-    // buffer already holds the right signal (wet from the chain above, or dry
-    // because the chain was skipped) — no crossfade work needed. Only during a
-    // transition (or at the exact fully-dry block where buffer is dry but we
-    // captured dry separately) do we blend.
+    // The ramp is LINEAR with a CONSTANT step of 1/kBypassRampBlocks toward the
+    // target (not a proportional/exponential step) so it completes in exactly
+    // kBypassRampBlocks blocks and lands precisely on the target. The mix
+    // advances exactly once per block (the crossfade uses the pre-advance value
+    // for THIS block's blend, then advances for next block).
     if (transitioning && ns > 0 && numCh > 0
         && dryBuffer_.getNumChannels() >= numCh && dryBuffer_.getNumSamples() >= ns)
     {
-        // Per-sample linear crossfade from current mix toward next mix.
-        const float step = (bypassTarget - bypassMix) / static_cast<float>(kBypassRampBlocks);
+        // One block's worth of constant-velocity movement toward the target.
+        const float step = (bypassTarget >= bypassMix ? 1.0f : -1.0f)
+                         / static_cast<float>(kBypassRampBlocks);
+        // The per-sample blend ramps from the current mix across this block to
+        // the post-step mix for a continuous, click-free fade.
         const float nextMix = std::clamp(bypassMix + step, 0.0f, 1.0f);
         const float invNs = 1.0f / static_cast<float>(ns);
         for (int c = 0; c < numCh; ++c)
@@ -2428,20 +2462,24 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
             const float* dry = dryBuffer_.getReadPointer(c);
             for (int i = 0; i < ns; ++i)
             {
-                // Linear interp of mix across the block for a click-free fade.
                 const float m = bypassMix + (nextMix - bypassMix) * (static_cast<float>(i) * invNs);
                 wet[i] = wet[i] * m + dry[i] * (1.0f - m);
             }
         }
         bypassMix = nextMix;
     }
-    // Advance the mix toward target by one block-counted step even when the
-    // per-sample crossfade above didn't run (keeps the ramp progressing for
-    // larger block sizes where one block > one ramp step).
+    else if (transitioning)
     {
-        const float step = (bypassTarget - bypassMix) / static_cast<float>(kBypassRampBlocks);
+        // Transitioning but no buffer to crossfade (e.g. zero samples) — still
+        // advance the mix by one constant step so the ramp completes on time.
+        const float step = (bypassTarget >= bypassMix ? 1.0f : -1.0f)
+                         / static_cast<float>(kBypassRampBlocks);
         bypassMix = std::clamp(bypassMix + step, 0.0f, 1.0f);
     }
+    // Snap to target if within one step (avoids straddling the threshold that
+    // gates `transitioning` and leaving a tiny residual forever).
+    if (std::abs(bypassMix - bypassTarget) <= 1.0f / static_cast<float>(kBypassRampBlocks))
+        bypassMix = bypassTarget;
     bypassMix_.store(bypassMix, std::memory_order_relaxed);
 
     // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools.
@@ -3239,7 +3277,33 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
         ? instanceIdentity_.instanceId
         : juce::String("default");
     auto logHolder = std::make_unique<ag::StructuredAgentLogger>(logDir, logRunId);
-    auto llmHolder = std::make_unique<ag::DeterministicFallbackLlmClient>();
+
+    // AUDIT-FIX (close the "AI theater" gap): prefer a REAL LLM (OpenAI /
+    // Anthropic / OpenAI-compatible) when the user has configured + validated
+    // an API key, so ConductorAgent::decomposeGoal is driven by a genuine model
+    // instead of the 3-keyword deterministic heuristic. Falls back to the
+    // deterministic client when no provider is configured — preserving the
+    // always-works, offline-safe default (Risk R1 mitigation).
+    std::unique_ptr<ag::ILlmClient> llmHolder = [this]() -> std::unique_ptr<ag::ILlmClient>
+    {
+        LLMSettings settings = LLMSettings::createDefault();
+        juce::String loadErr;
+        LLMSettingsStore store;
+        if (store.load(settings, loadErr) && settings.activeProvider.has_value())
+        {
+            const auto id = *settings.activeProvider;
+            const auto& ps = settings.getProvider(id);
+            if (ag::RestLlmClient::isConfigured(ps))
+            {
+                DBG("Agent LLM: using REST client for provider '"
+                    + toDisplayString(id) + "' / model '" + ps.selectedModel + "'");
+                return std::make_unique<ag::RestLlmClient>(
+                    id, ps, std::make_shared<JuceLLMHttpClient>());
+            }
+        }
+        DBG("Agent LLM: no configured provider — using deterministic fallback");
+        return std::make_unique<ag::DeterministicFallbackLlmClient>();
+    }();
 
     auto runtime = std::make_unique<ag::AgentRuntime>(
         this,

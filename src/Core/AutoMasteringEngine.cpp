@@ -160,18 +160,22 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     MSMatrix::encodeBuffer(buf);
 
     // ── Stage 2: 4-band split ──────────────────────────────────────────────
-    // AUDIT-FIX (M1): The previous loop body contained a dead expression
-    // statement `bandBuffers_[ch < ... ? ch : 0];` that indexed the array and
-    // discarded the result — a leftover from a refactor that produced no code.
-    // Removed: setSize + copyFrom already establish per-band channel counts and
-    // contents, and the splitter overwrites the band data immediately after.
-    for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
+    // AUDIT-FIX (RT-safe): bandBuffers_ are pre-allocated in prepare() as
+    // (MultibandSplitter::kMaxChannels, maxBlockSize). NEVER call setSize() on
+    // the audio thread — it heap-allocates if a host changes channel count or
+    // block size mid-stream, violating real-time safety. Clamp to the existing
+    // capacity instead; the plugin is stereo so nch <= kMaxChannels always holds
+    // for a valid layout, and the host guarantees ns <= maxBlockSize.
     {
-        bandBuffers_[b].setSize(nch, ns, false, false, true);
-        jassert(bandBuffers_[b].getNumChannels() >= nch); // setSize must give us nch channels
-        // Copy M/S buf into each band buffer for splitting
-        for (int ch = 0; ch < nch; ++ch)
-            bandBuffers_[b].copyFrom(ch, 0, buf, ch, 0, ns);
+        const int bandCh  = MultibandSplitter::kMaxChannels;
+        const int copyCh  = juce::jmin(nch, bandCh);
+        for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
+        {
+            jassert(bandBuffers_[b].getNumChannels() >= bandCh);
+            jassert(bandBuffers_[b].getNumSamples()  >= ns);
+            for (int ch = 0; ch < copyCh; ++ch)
+                bandBuffers_[b].copyFrom(ch, 0, buf, ch, 0, ns);
+        }
     }
     splitter_.processBlock(buf, bandBuffers_);
 

@@ -309,6 +309,12 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         auto snapshot = std::make_unique<juce::PluginDescription>(desc);
         auto* raw = snapshot.get();
         descriptionHistory_.push_back(std::move(snapshot));
+        // AUDIT-FIX: Cap history growth. Repeated plugin swaps (e.g. automated
+        // testing, long sessions) otherwise accumulated PluginDescription objects
+        // indefinitely — a slow leak. Keep only the most recent entries.
+        constexpr size_t kMaxDescriptionHistory = 16;
+        while (descriptionHistory_.size() > kMaxDescriptionHistory)
+            descriptionHistory_.erase(descriptionHistory_.begin());
         descriptionSnapshot_.store(raw, std::memory_order_release);
     }
 
@@ -502,6 +508,10 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
             const uint32_t c = exceptionCount_.load(std::memory_order_relaxed);
             if (c < static_cast<uint32_t>(MAX_PLUGIN_EXCEPTIONS) + 1)
                 exceptionCount_.fetch_add(1, std::memory_order_relaxed);
+            // AUDIT-FIX: recovery attempt failed — count this failure and return.
+            // Previously fell through to the unconditional increment below,
+            // double-counting every failed recovery probe (every 100th block).
+            return;
             }
         }
         // C12 FIX: Saturated unsigned increment in suspended path.

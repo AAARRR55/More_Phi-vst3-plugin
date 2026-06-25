@@ -153,6 +153,9 @@ void fillSineBlock(juce::AudioBuffer<float>& buf, int block, double sampleRate)
 //     Calls:      <n>
 //     Avg:        <us> µs
 //     Max:        <us> µs
+//     p50:        <us> µs       ← AUDIT-2026-06-25 (M4)
+//     p95:        <us> µs       ← AUDIT-2026-06-25 (M4)
+//     p99:        <us> µs       ← AUDIT-2026-06-25 (M4)
 //     Total:      <us> µs
 //     Percentage: <p>%
 std::vector<ScenarioResult::SectionStat> parseSections(const juce::String& report)
@@ -188,8 +191,11 @@ std::vector<ScenarioResult::SectionStat> parseSections(const juce::String& repor
             while (j < lines.size())
             {
                 const juce::String t = lines[j].trim();
+                // AUDIT-2026-06-25: added p50/p95/p99 to the known-field prefix
+                // list so the block gather doesn't stop early on the new lines.
                 if (t.endsWith(":") && !t.startsWith("Calls") && !t.startsWith("Avg") &&
-                    !t.startsWith("Max") && !t.startsWith("Total") && !t.startsWith("Percentage") &&
+                    !t.startsWith("Max") && !t.startsWith("p50") && !t.startsWith("p95") &&
+                    !t.startsWith("p99") && !t.startsWith("Total") && !t.startsWith("Percentage") &&
                     !t.startsWith("===") && !t.startsWith("---"))
                     break;
                 blockText << lines[j] << "\n";
@@ -198,6 +204,10 @@ std::vector<ScenarioResult::SectionStat> parseSections(const juce::String& repor
             ScenarioResult::SectionStat s;
             s.name  = name;
             s.avgUs = extract(blockText, "Avg:");
+            s.maxUs = extract(blockText, "Max:");
+            s.p50Us = extract(blockText, "p50:");
+            s.p95Us = extract(blockText, "p95:");
+            s.p99Us = extract(blockText, "p99:");
             s.pct   = extract(blockText, "Percentage:");
             s.calls = static_cast<std::uint64_t>(std::llround(extract(blockText, "Calls:")));
             out.push_back(s);
@@ -289,6 +299,9 @@ void emitJson(const std::string& path, const Config& cfg,
         {
             const auto& s = r.sections[k];
             f << "        { \"name\": \"" << s.name << "\", \"avgUs\": " << s.avgUs
+              << ", \"maxUs\": " << s.maxUs
+              << ", \"p50Us\": " << s.p50Us << ", \"p95Us\": " << s.p95Us
+              << ", \"p99Us\": " << s.p99Us
               << ", \"pct\": " << s.pct << ", \"calls\": " << s.calls << " }"
               << (k + 1 < r.sections.size() ? "," : "") << "\n";
         }

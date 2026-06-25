@@ -62,6 +62,7 @@ namespace agents {
 class AgentRuntime;
 class DefaultToolInvoker;
 class IAgentLogger;            // M2: store by interface so we can wire StructuredAgentLogger in production
+class ILlmClient;              // AUDIT-FIX: hold by interface so RestLlmClient or DeterministicFallback can be wired
 class DeterministicFallbackLlmClient;
 class BlackboardBridge;
 } // namespace agents
@@ -507,7 +508,7 @@ private:
     // FIRST (C++ destroys members in reverse declaration order).
     std::unique_ptr<agents::DefaultToolInvoker>          agentTools_;
     std::unique_ptr<agents::IAgentLogger>                agentLogger_;   // M2: StructuredAgentLogger in production
-    std::unique_ptr<agents::DeterministicFallbackLlmClient> agentLlm_;
+    std::unique_ptr<agents::ILlmClient>                  agentLlm_;      // AUDIT-FIX: RestLlmClient when an API key is configured, else DeterministicFallback
     std::unique_ptr<agents::BlackboardBridge>            agentBlackboard_;
     std::unique_ptr<agents::AgentRuntime>                agentRuntime_;
     // H6: autonomy chosen by the user (Assist/CoPilot/Autopilot), captured in
@@ -872,9 +873,15 @@ private:
     // and wet buffers are crossfaded by it, eliminating the hard-switch click
     // on bypass toggle. Audio-thread only (like smoothedGain_); atomic only so
     // UI diagnostics can read it. kBypassRampBlocks controls the fade length.
+public:
+    // AUDIT-FIX (pre-existing): public so unit tests can pin the fade length.
+    // Compile-time tuning constant (no encapsulated state); the bypass *state*
+    // (bypassMix_, bypassMixInitialized_) stays private below.
+    static constexpr int kBypassRampBlocks = 32;  // ~32 blocks ≈ fast, click-free fade
+
+private:
     std::atomic<float> bypassMix_{1.0f};
     bool bypassMixInitialized_ = false;
-    static constexpr int kBypassRampBlocks = 32;  // ~32 blocks ≈ fast, click-free fade
 
     // M11 FIX: Atomic flag for deferred state restore from audio thread
     std::atomic<bool> pendingStateRestore_{false};

@@ -34,6 +34,10 @@ public:
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
+    // AUDIT-FIX (accessibility): keyboard-operable + screen-reader labelled.
+    bool keyPressed(const juce::KeyPress& key) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
+
     // Visualization options
     void setGridVisible(bool shouldShow);
     void setPathVisible(bool shouldShow);

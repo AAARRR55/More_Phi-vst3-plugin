@@ -29,6 +29,9 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     setSize(920, 760);
     setResizable(true, true);
     setResizeLimits(720, 600, 1600, 1120);
+    // AUDIT-FIX (accessibility): make the editor a focus container so keyboard
+    // (Tab/arrow) traversal reaches the hosted controls (MorphPad, SnapFader, …).
+    setFocusContainerType(juce::Component::FocusContainerType::focusContainer);
 
     paramToggleBtn_.setButtonText("All Parameters \u25B8");
     paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");

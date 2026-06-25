@@ -78,6 +78,8 @@ public:
     {
         return recallRampActive_.load(std::memory_order_acquire);
     }
+    // Public read-only access to the ramp length (blocks) for diagnostics/tests.
+    static constexpr int recallRampBlocks() noexcept { return kRecallRampBlocks; }
 
     std::vector<float> captureParameterState() const noexcept override;
     void captureAllNormalized(float* outValues, int count) const noexcept override;
@@ -145,13 +147,19 @@ private:
     // apply path (audio thread can't log). Stops at uint64 max to avoid wrap.
     mutable std::atomic<uint64_t> applyExceptionCount_{0};
 
+public:
+    // C-5 FIX (audit): public so unit tests can pin the ramp length. This is a
+    // compile-time tuning constant (no encapsulated state); the ramp *state*
+    // (recallRampActive_/Count_/Step_) stays private below.
+    static constexpr int kRecallRampBlocks = 8; // ~8 blocks ≈ 8..170 ms by block size
+
+private:
     // C-5 FIX (audit): Recall ramp state. Fixed arrays (no allocation on the
     // audio thread). recallRampActive_ uses acq_rel so the message-thread
     // startRecallRamp() and the audio-thread processRecallRamp() agree on the
     // populated buffers. Only ONE ramp may be active at a time; starting a new
     // ramp while one is active replaces it (the target updates, current values
     // are re-captured as the new start).
-    static constexpr int kRecallRampBlocks = 8; // ~8 blocks ≈ 8..170 ms by block size
     std::atomic<bool> recallRampActive_ { false };
     std::atomic<int>  recallRampCount_  { 0 };     // populated params in the ramp
     std::atomic<int>  recallRampStep_   { 0 };     // current block index [0..kRecallRampBlocks]

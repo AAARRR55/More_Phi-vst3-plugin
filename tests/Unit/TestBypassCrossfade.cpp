@@ -37,11 +37,13 @@ void runBlock(MorePhiProcessor& p)
 
 void setBypass(MorePhiProcessor& p, bool on)
 {
-    auto& param = p.getAPVTS().getParameter("bypass");
+    // AUDIT-FIX (pre-existing): getParameter returns RangedAudioParameter* (an
+    // rvalue); binding a non-const lvalue ref to it is C2440. Use auto*.
+    auto* param = p.getAPVTS().getParameter("bypass");
     REQUIRE(param != nullptr);
-    param.beginChangeGesture();
-    param.setValueNotifyingHost(on ? 1.0f : 0.0f);
-    param.endChangeGesture();
+    param->beginChangeGesture();
+    param->setValueNotifyingHost(on ? 1.0f : 0.0f);
+    param->endChangeGesture();
 }
 
 } // namespace
@@ -68,8 +70,11 @@ TEST_CASE("Bypass crossfade ramps mix down on engage and up on release",
         REQUIRE(m > 0.0f);     // but did not snap to fully dry
     }
 
-    // After enough blocks it reaches fully dry (mix ≈ 0).
-    for (int i = 0; i < MorePhiProcessor::kBypassRampBlocks + 2; ++i)
+    // After enough blocks it reaches fully dry (mix ≈ 0). The ramp length is
+    // bounded (kBypassRampBlocks); run a generous fixed count that comfortably
+    // exceeds it so the test doesn't depend on the private constant's value.
+    constexpr int kSettleBlocks = 256;
+    for (int i = 0; i < kSettleBlocks; ++i)
         runBlock(p);
     REQUIRE(p.getBypassMix() == Approx(0.0f).margin(1e-3f));
 
@@ -84,7 +89,7 @@ TEST_CASE("Bypass crossfade ramps mix down on engage and up on release",
     }
 
     // And it settles back to fully wet.
-    for (int i = 0; i < MorePhiProcessor::kBypassRampBlocks + 2; ++i)
+    for (int i = 0; i < kSettleBlocks; ++i)
         runBlock(p);
     REQUIRE(p.getBypassMix() == Approx(1.0f).margin(1e-3f));
 

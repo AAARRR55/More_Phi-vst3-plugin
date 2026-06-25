@@ -42,6 +42,7 @@ public:
 
     explicit LLMChatClient(MorePhiProcessor& processor);
     LLMChatClient(MorePhiProcessor& processor, std::shared_ptr<ILLMHttpClient> httpClient);
+    ~LLMChatClient();
 
     /**
      * Send userMessage, run the tool agent loop, and call back with the final
@@ -132,6 +133,7 @@ private:
     MorePhiProcessor&               processor_;
     std::shared_ptr<ILLMHttpClient> httpClient_;
     mutable AutomationRuntime       automationRuntime_;
+    std::shared_ptr<bool>           alive_ { std::make_shared<bool>(true) };
 
     static constexpr int kMaxToolIterations  = 8;
     static constexpr int kMaxTokens          = 4096;

@@ -963,7 +963,16 @@ static bool restoreMorePhiControlsFromState(const json& state, MorePhiProcessor&
         auto* parameter = p.getAPVTS().getParameter(id);
         if (parameter == nullptr)
             continue;
-        parameter->setValueNotifyingHost(static_cast<float>(item.value("value", parameter->getValue())));
+        // AUDIT-FIX (VST3 gestures): a bulk state restore is a discrete
+        // programmatic edit per parameter, so bracket each write with
+        // begin/end gesture. This lets the host record the restore as proper
+        // automation touches rather than gesture-less notify calls. (Continuous
+        // morph streams elsewhere intentionally omit per-sample gestures per
+        // the VST3 spec.)
+        const float restored = static_cast<float>(item.value("value", parameter->getValue()));
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(restored);
+        parameter->endChangeGesture();
     }
     return true;
 }

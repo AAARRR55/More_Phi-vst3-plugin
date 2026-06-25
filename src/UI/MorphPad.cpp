@@ -22,6 +22,12 @@ MorphPad::MorphPad(MorePhiProcessor& processor)
         "around the clock face. Click a numbered dot to recall a snapshot. "
         "Right-click or double-click to capture the current sound to a slot. "
         "The trail shows recent cursor movement.");
+    // AUDIT-FIX (accessibility): make the pad keyboard-focusable + announce it.
+    // Arrow keys nudge the morph cursor (see keyPressed); screen readers read
+    // the name/title.
+    setWantsKeyboardFocus(true);
+    setComponentID("MorphPad");
+    setName("XY Morph Pad");
     startTimerHz(30);   // 30 FPS for smooth animation
 }
 
@@ -176,7 +182,8 @@ int MorphPad::findNextEmptySlot() const
         if (!bank.isOccupied(i))
             return i;
     }
-    return 0;
+    // AUDIT-FIX: return -1 when full rather than silently overwriting slot 0.
+    return -1;
 }
 
 int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
@@ -685,6 +692,52 @@ void MorphPad::updatePosition(juce::Point<float> pos)
     proc_.setMorphSource(0);  // XY mode
     needsRepaint_ = true;
     repaint();
+}
+
+bool MorphPad::keyPressed(const juce::KeyPress& key)
+{
+    // AUDIT-FIX (accessibility): arrow-key control of the morph cursor, mirroring
+    // a mouse drag through the same APVTS gesture path so DAW automation records
+    // it identically. Each press nudges the cursor 2% — fine enough for keyboard
+    // / screen-reader users and accelerates when held (host key-repeat).
+    constexpr float kStep = 0.02f;
+    float dx = 0.0f, dy = 0.0f;
+
+    if      (key.isKeyCode(juce::KeyPress::leftKey))  dx = -kStep;
+    else if (key.isKeyCode(juce::KeyPress::rightKey)) dx =  kStep;
+    else if (key.isKeyCode(juce::KeyPress::upKey))    dy = -kStep;   // up → smaller morphY
+    else if (key.isKeyCode(juce::KeyPress::downKey))  dy =  kStep;   // down → larger morphY
+    else return false;
+
+    auto& apvts = proc_.getAPVTS();
+    auto* px = apvts.getParameter("morphX");
+    auto* py = apvts.getParameter("morphY");
+    if (px == nullptr || py == nullptr) return false;
+
+    const float newX = juce::jlimit(0.0f, 1.0f, px->getValue() + dx);
+    const float newY = juce::jlimit(0.0f, 1.0f, py->getValue() + dy);
+
+    // One discrete gesture per key press (begin / notify / end) so the host
+    // records a distinct automation point, matching a single mouse click-drag.
+    px->beginChangeGesture();
+    px->setValueNotifyingHost(newX);
+    px->endChangeGesture();
+    py->beginChangeGesture();
+    py->setValueNotifyingHost(newY);
+    py->endChangeGesture();
+
+    proc_.setMorphSource(0);  // XY mode
+    needsRepaint_ = true;
+    repaint();
+    return true;
+}
+
+std::unique_ptr<juce::AccessibilityHandler> MorphPad::createAccessibilityHandler()
+{
+    // Announce the pad as a labelled group so screen readers read its name.
+    // (Keyboard operability is provided by keyPressed above; a full value
+    // interface is not feasible for a 2D pad.)
+    return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
 }
 
 } // namespace more_phi

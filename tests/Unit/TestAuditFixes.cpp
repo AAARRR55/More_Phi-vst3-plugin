@@ -22,22 +22,25 @@ using namespace more_phi;
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
 
-// ── AUDIT-FIX-3: decoder ratio clamp must match the engine's [1,6] ────────────
+// ── AUDIT-FIX-3: decoder ratio clamp must match the engine's [1,4] ────────────
 // Before the fix the decoder accepted ratio up to 20 but applyValidatedPlan
 // re-clamped to 6 — telemetry lied by up to 3.3x. Both bounds must agree now.
+// AUDIT-FIX (A6): the band tightened [1,6] → [1,4] so every decoded ratio maps
+// into the safety policy's normalized [-1,+1] dynamics bound (the old 6.0 max
+// produced normalized +2.33 and was silently rejected by the safety gate).
 
-TEST_CASE("AUDIT-FIX-3: decoder clamps ratio to the shared [1,6] band",
+TEST_CASE("AUDIT-FIX-3: decoder clamps ratio to the shared [1,4] band",
           "[audit][sonicmaster][decoder]")
 {
     float decision[kSonicMasterDecisionWidth] {};
-    // Band 0 ratio = 20.0 (the model's documented max). Must clamp to 6.0,
+    // Band 0 ratio = 20.0 (the model's documented max). Must clamp to 4.0,
     // matching AutoMasteringEngine::applyValidatedPlan's kSonicMasterCompRatioMax.
     decision[kSonicMasterCompOffset + 1] = 20.0f;
 
     ValidatedNeuralMasteringPlan plan {};
     REQUIRE(decodeSonicMasterDecision(decision, kSonicMasterDecisionWidth, 48000.0, plan));
     REQUIRE(plan.hasCompParams);
-    REQUIRE_THAT(plan.compParams[0].ratio, WithinAbs(6.0f, 1e-4f));
+    REQUIRE_THAT(plan.compParams[0].ratio, WithinAbs(4.0f, 1e-4f));
 
     // And the floor.
     decision[kSonicMasterCompOffset + 1] = 0.0f;
@@ -52,7 +55,7 @@ TEST_CASE("AUDIT-FIX-3: ratio constant is the same value the engine uses",
     // kSonicMasterCompRatioMax is referenced by both SonicMasterDecisionDecoder.cpp
     // and AutoMasteringEngine.cpp::applyValidatedPlan.
     CHECK(kSonicMasterCompRatioMin == 1.0f);
-    CHECK(kSonicMasterCompRatioMax == 6.0f);
+    CHECK(kSonicMasterCompRatioMax == 4.0f);  // AUDIT-FIX (A6): was 6.0f, tightened to keep decoded ratios inside the safety gate
 }
 
 // ── AUDIT-FIX-3 (round-trip): a ratio the decoder emits survives apply ───────
@@ -67,11 +70,11 @@ TEST_CASE("AUDIT-FIX-3: decoded ratio survives applyValidatedPlan without re-cla
     plan.appliedMask.dynamics = true;
     plan.hasCompParams = true;
     // Ratio at the top of the agreed band — must reach the DSP unchanged.
-    plan.compParams[0] = { -18.0f, 6.0f, 10.0f, 100.0f, 0.0f, 3.0f };
+    plan.compParams[0] = { -18.0f, 4.0f, 10.0f, 100.0f, 0.0f, 3.0f };
 
     REQUIRE(engine.applyValidatedPlan(plan));
     const auto applied = engine.getDynamics().getBandParams(0);
-    CHECK(applied.ratio == Approx(6.0f).margin(1e-3f));
+    CHECK(applied.ratio == Approx(4.0f).margin(1e-3f));
 }
 
 // ── AUDIT-FIX-5: all-stubs map is detectable ──────────────────────────────────

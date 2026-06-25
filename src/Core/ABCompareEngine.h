@@ -6,7 +6,7 @@
  * Workflow:
  *   1. captureCheckpoint()  — save current mastering params to SnapshotBank slot 11
  *   2. Apply candidate parameters from GeneticOptimizer or ChainPlanExecutor
- *   3. After 2 s analysis window, compareAndDecide() compares LUFS/LRA/spectral score
+ *   3. After 2 s analysis window, compareAndDecide() compares LUFS/LRA
  *   4. If candidate is worse on ≥ 2 metrics → rollback() restores slot 11
  *   5. UI exposes commitCandidate() / rollbackCandidate() for manual override
  *

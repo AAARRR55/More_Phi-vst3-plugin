@@ -290,7 +290,7 @@ const char* const LLMChatClient::kSystemPrompt =
     "\n"
     "Everything else is fair game - perform direct edits and keep the user informed.";
 
-// ── Construction ───────────────────────────────────────────────────────────
+// ── Construction / Destruction ─────────────────────────────────────────────
 
 LLMChatClient::LLMChatClient(MorePhiProcessor& processor)
     : processor_(processor)
@@ -303,6 +303,11 @@ LLMChatClient::LLMChatClient(MorePhiProcessor& processor,
     : processor_(processor)
     , httpClient_(std::move(httpClient))
 {
+}
+
+LLMChatClient::~LLMChatClient()
+{
+    *alive_ = false;
 }
 
 // ── Tool list conversion ───────────────────────────────────────────────────
@@ -889,6 +894,7 @@ static juce::String dispatchToolInProcess(MorePhiProcessor& processor,
 juce::String LLMChatClient::executeTool(const juce::String& name,
                                          const juce::String& argumentsJson)
 {
+    if (!*alive_) return "{\"success\":false,\"error\":\"client destroyed\"}";
     // Single in-process dispatch path (also used as the MCP-session fallback).
     return dispatchToolInProcess(processor_,
                                  processor_.getInstanceIdentity(),
@@ -1134,8 +1140,11 @@ void LLMChatClient::chat(const LLMSettings& settings,
     try { toolsArray = filterToolsForChat(json::parse(toolsStr.toRawUTF8()), isAnthropic); }
     catch (...) { toolsArray = json::array(); }
 
-    // Capture everything the background thread needs
-    std::thread([this,
+    // Capture everything the background thread needs.
+    // alive_ and httpClient_ are captured by copy so they survive the
+    // LLMChatClient destruction; *alive is checked before every this-> use.
+    std::thread([alive = alive_,
+                 httpClient = httpClient_,
                  providerId,
                  providerSettings,
                  model,
@@ -1144,8 +1153,10 @@ void LLMChatClient::chat(const LLMSettings& settings,
                  toolsArray,
                  isAnthropic,
                  callback,
-                 progress]() mutable
+                 progress, this]() mutable
     {
+        if (!*alive) return;
+
         // ── Parse / initialise message history ──────────────────────────
         json messages = json::array();
         if (historyJson.isNotEmpty())
@@ -1215,7 +1226,8 @@ void LLMChatClient::chat(const LLMSettings& settings,
 
                 // Execute HTTP request
                 const auto request  = buildHttpRequest(providerId, providerSettings, body);
-                const auto response = httpClient_->execute(request);
+                const auto response = httpClient->execute(request);
+                if (!*alive) return;
                 if (response.statusCode <= 0)
                 {
                     // Transport-layer failure (timeout, DNS, TLS, connection refused, etc.).
@@ -1373,6 +1385,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
                         });
                         continue;
                     }
+                    if (!*alive) return;
                     const auto result = executeTool(tc.name, tc.argumentsJson);
                     messages.push_back({
                         {"role",         "tool"},
@@ -1390,6 +1403,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
             }
         }
 
+        if (!*alive) return;
         const juce::String updatedHistory = juce::String::fromUTF8(messages.dump().c_str());
 
         // ── Post result to message thread ───────────────────────────────

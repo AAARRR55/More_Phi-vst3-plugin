@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <mutex>
@@ -11,18 +13,29 @@ namespace more_phi {
 /**
  * Statistics for profiling a specific operation.
  *
- * AUDIT-FIX (M4, documented slice): these are RUNNING totals accumulated since
- * the section was first registered. Consequences a consumer must know:
- *   - averageTimeMs is dominated by early history late in a long session. For a
- *     "what just happened" view, snapshot reset() between reporting windows.
- *   - Only mean/min/max are tracked here — no per-section p50/p95/p99. A ring
- *     buffer of the last N samples would add them but doubles the per-section
- *     allocation and adds a write to the audio-thread hot path (the C-2/C-16
- *     no-alloc/no-block fixes must be preserved). Upgrade path: add a
- *     std::array<double, kRingSamples> per section, push in updateStats() under
- *     the existing try-lock, compute percentiles in getAllStats().
+ * These are RUNNING totals accumulated since the section was first registered,
+ * PLUS per-section percentiles (p50/p95/p99) computed over a trailing ring of
+ * the most recent samples.
+ *
+ * AUDIT-FIX (M4, implemented): a per-section fixed-size ring (kRingSamples,
+ * power-of-two) is pushed in updateStats() under the EXISTING try-lock — no new
+ * allocation, no new lock, so the C-2/C-16 audio-thread no-alloc/no-block
+ * contract is preserved. Percentiles are computed in getStats()/getAllStats()
+ * (message-thread only) by sorting a copy of the populated ring window.
+ *
+ * Consequences a consumer must know:
+ *   - averageTimeMs is still dominated by early history late in a long session.
+ *     For a "what just happened" view, snapshot reset() between reporting
+ *     windows. p50/p95/p99 are trailing-window and reflect the most recent
+ *     kRingSamples samples, so they are NOT subject to the same early-history
+ *     drift.
+ *   - p50/p95/p99 default to 0.0 until at least one sample lands in the ring.
  *   - The nested-section double-count caveat (container vs leaf sections) is
  *     noted in MorePhiProcessor::getProfilingReport.
+ *   - processBlock-level percentiles are the responsibility of the CALLER's
+ *     timing harness (e.g. the audit harness's HighResTimer), which times the
+ *     whole block and computes population percentiles across all passes. The
+ *     profiler's ring is per-section, not per-block.
  */
 struct ProfileStats {
     size_t callCount = 0;
@@ -30,6 +43,9 @@ struct ProfileStats {
     double averageTimeMs = 0.0;
     double minTimeMs = 0.0;
     double maxTimeMs = 0.0;
+    double p50Ms = 0.0; // median over the trailing ring window
+    double p95Ms = 0.0;
+    double p99Ms = 0.0;
 };
 
 /**
@@ -112,14 +128,43 @@ public:
 
 private:
     /**
+     * Per-section trailing ring buffer. The ring is allocated once in
+     * registerSection() (message thread, before audio starts); the audio thread
+     * only does a fixed-index write + modulo advance under the existing
+     * try-lock, so no allocation and no blocking (C-2/C-16 invariants preserved).
+     *
+     * kRingSamples is a power of two so `head & (kRingSamples - 1)` replaces a
+     * modulo with a mask (one cycle vs ~20 for integer div). Total ring memory
+     * is ~kRingSamples * sizeof(double) * numSections ≈ 2048 * 8 * ~18 ≈ 288 KB.
+     *
+     * Defined before computeStats() so the latter can use it by value without a
+     * forward declaration.
+     */
+    static constexpr std::size_t kRingSamples = 2048;
+
+    struct SectionRecord
+    {
+        ProfileStats stats;
+        std::array<double, kRingSamples> ring{};
+        std::size_t ringHead = 0;  // next write index
+        std::size_t ringCount = 0; // populated count (caps at kRingSamples)
+    };
+
+    /**
      * Update statistics for the given operation with a new time measurement.
      */
     void updateStats(const std::string& name, double timeMs);
 
+    /**
+     * Compute the public ProfileStats (including percentiles) from a record.
+     * Message-thread only — allocates a sort scratch.
+     */
+    ProfileStats computeStats(const SectionRecord& record) const;
+
     // SpinLock for recordTime() — never blocks audio thread (uses tryEnter).
     // std::mutex retained for reader methods (message thread only, blocking OK).
     mutable juce::SpinLock statsSpinLock_;
-    std::unordered_map<std::string, ProfileStats> stats_;
+    std::unordered_map<std::string, SectionRecord> records_;
 };
 
 /**

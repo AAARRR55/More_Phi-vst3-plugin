@@ -55,6 +55,11 @@ private:
     MorePhiProcessor& processor;
     MorePhiLookAndFeel lnf;
 
+    // AUDIT-FIX (accessibility): Without a TooltipWindow parent, the many
+    // setTooltip() calls on controls never display in most host window
+    // contexts. Parented to this editor with a 700 ms hover delay.
+    juce::TooltipWindow tooltipWindow_ { this, 700 };
+
     // ── V1 UI components (Classic tab) ─────────────────────────────────────────
     MorphPad          morphPad;
     SnapFader         snapFader;

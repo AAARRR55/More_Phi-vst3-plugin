@@ -173,7 +173,19 @@ struct ScenarioResult
     std::size_t peakWorkingSetBytes  = 0;
 
     // Per-section profiling (parsed from getProfilingReport); empty if N/A.
-    struct SectionStat { std::string name; double avgUs; double pct; std::uint64_t calls; };
+    // AUDIT-2026-06-25: added p50/p95/p99 + maxUs — the in-tree profiler now
+    // emits trailing-window percentiles per section (M4 ring-buffer upgrade).
+    struct SectionStat
+    {
+        std::string name;
+        double avgUs = 0.0;
+        double maxUs = 0.0;
+        double p50Us = 0.0;
+        double p95Us = 0.0;
+        double p99Us = 0.0;
+        double pct   = 0.0;
+        std::uint64_t calls = 0;
+    };
     std::vector<SectionStat> sections;
 
     bool skipped = false;

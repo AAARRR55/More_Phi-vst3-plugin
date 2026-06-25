@@ -141,7 +141,7 @@ TEST_CASE("ParameterBridge recall ramp does not snap and converges to target",
 
     // Invariant 2: run the remaining (kRecallRampBlocks - 1) blocks. The ramp
     // must complete and land exactly on target.
-    const int kBlocks = ParameterBridge::kRecallRampBlocks;
+    const int kBlocks = ParameterBridge::recallRampBlocks();
     for (int b = 1; b < kBlocks; ++b)
         bridge.processRecallRamp();
 
@@ -175,7 +175,7 @@ TEST_CASE("ParameterBridge recall ramp captures current values as the start",
     REQUIRE(bridge.startRecallRamp(target, 4));
 
     bridge.processRecallRamp();   // 1 block: frac = 1/kRecallRampBlocks
-    const int kBlocks = ParameterBridge::kRecallRampBlocks;
+    const int kBlocks = ParameterBridge::recallRampBlocks();
     const float expectedAfter1 = 0.3f + (0.7f - 0.3f) * (1.0f / static_cast<float>(kBlocks));
     for (int i = 0; i < 4; ++i)
     {

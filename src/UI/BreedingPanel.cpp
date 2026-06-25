@@ -143,6 +143,12 @@ void BreedingPanel::breedSnapshots()
     }
 
     const int targetSlot = findNextEmptySlot();
+    if (targetSlot < 0)
+    {
+        statusLabel_.setText("All 12 slots are full — clear one before breeding.",
+                             juce::dontSendNotification);
+        return;
+    }
     bank.captureValues(targetSlot, blended);
 
     statusLabel_.setText("Bred slot " + juce::String(targetSlot + 1)
@@ -197,6 +203,12 @@ void BreedingPanel::mutateSnapshot()
     }
 
     const int targetSlot = findNextEmptySlot();
+    if (targetSlot < 0)
+    {
+        statusLabel_.setText("All 12 slots are full — clear one before mutating.",
+                             juce::dontSendNotification);
+        return;
+    }
     bank.captureValues(targetSlot, mutated);
 
     statusLabel_.setText("Mutated slot " + juce::String(sourceSlot + 1)
@@ -233,8 +245,10 @@ int BreedingPanel::findNextEmptySlot() const
             return i;
     }
 
-    // If all slots are full, recycle slot 0.
-    return 0;
+    // AUDIT-FIX: All slots occupied. Previously returned 0 and silently
+    // overwrote slot 0 — destructive data loss with no confirmation. Return
+    // -1 so callers can surface the condition instead of clobbering a snapshot.
+    return -1;
 }
 
 } // namespace more_phi

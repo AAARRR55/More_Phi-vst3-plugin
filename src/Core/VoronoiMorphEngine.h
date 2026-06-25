@@ -73,7 +73,7 @@ public:
     struct Edge { int a, b; };
     const std::vector<Edge>& getEdges() const noexcept
     {
-        jassert(juce::MessageManager::isThisTheMessageThread());
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
         return edges_;
     }
 
@@ -86,7 +86,7 @@ public:
     };
     const std::vector<CellPoly>& getVoronoiCells() const noexcept
     {
-        jassert(juce::MessageManager::isThisTheMessageThread());
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
         return voronoiCells_;
     }
 

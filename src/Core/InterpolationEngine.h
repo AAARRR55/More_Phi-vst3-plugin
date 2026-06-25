@@ -53,7 +53,7 @@ public:
                                   const VoronoiMorphEngine& engine,
                                   std::vector<float>& output) noexcept;
 
-    // SIMD batch interpolation - processes 8 floats at once (AVX) or 4 (SSE)
+    // SIMD batch interpolation - processes 8 floats at once (AVX), 4 (SSE), or 4 (NEON)
     // noexcept: Pure pointer arithmetic, no allocations
     static void interpolateBatch_SIMD(
         const float* srcA, const float* srcB,

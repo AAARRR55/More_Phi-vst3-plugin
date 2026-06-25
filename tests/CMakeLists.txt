@@ -293,6 +293,43 @@ if(MORE_PHI_BUILD_BENCHMARKS)
     endif()
 endif()
 
+# ── Integrated processor benchmark (audit, opt-in) ───────────────────────────
+# AUDIT-2026-06-25: IntegratedProcessorBenchmark.cpp drives the REAL
+# MorePhiProcessor.processBlock headlessly through the 8 audit scenarios
+# (idle / active / sweep / rapid / neural-isolation / neural-in-context /
+# combined / combined+ozone). It has its OWN main() — distinct from
+# BenchmarkSuite.cpp's — so it cannot share the MorePhiBenchmarks target.
+# Built only when BOTH benchmarks + profiling are requested (profiling is
+# required for the per-section breakdown to be meaningful).
+if(MORE_PHI_BUILD_BENCHMARKS AND MORE_PHI_ENABLE_PROFILING)
+    add_executable(MorePhiAuditBenchmark
+        Performance/IntegratedProcessorBenchmark.cpp
+    )
+
+    target_link_libraries(MorePhiAuditBenchmark PRIVATE
+        MorePhi
+        juce::juce_core
+        juce::juce_events
+        juce::juce_audio_processors
+    )
+
+    if(WIN32)
+        target_link_libraries(MorePhiAuditBenchmark PRIVATE Psapi)
+    endif()
+
+    target_include_directories(MorePhiAuditBenchmark PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_compile_definitions(MorePhiAuditBenchmark PRIVATE
+        MORE_PHI_TEST_MODE=1
+        JUCE_STANDALONE_APPLICATION=0
+    )
+    if(COMMAND more_phi_apply_build_tuning)
+        more_phi_apply_build_tuning(MorePhiAuditBenchmark)
+    endif()
+endif()
+
 # VST3 validation (optional, needs external validator tooling)
 if(TARGET MorePhi_VST3)
     set(MORE_PHI_VST3_VALIDATION_PLUGIN

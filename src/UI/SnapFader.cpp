@@ -9,6 +9,11 @@ namespace more_phi {
 
 SnapFader::SnapFader(MorePhiProcessor& p) : proc_(p)
 {
+    setTooltip("Morph Fader: drag to morph linearly through occupied snapshot slots. "
+               "Arrow Up/Down (or Page Up/Down) nudge the position.");
+    setWantsKeyboardFocus(true);   // AUDIT-FIX (accessibility)
+    setComponentID("SnapFader");
+    setName("Morph Fader");
     startTimerHz(15);
 }
 
@@ -94,6 +99,39 @@ void SnapFader::mouseUp(const juce::MouseEvent&)
         if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
             p->endChangeGesture();
     dragging_ = false;
+}
+
+bool SnapFader::keyPressed(const juce::KeyPress& key)
+{
+    // AUDIT-FIX (accessibility): keyboard control of the fader mirroring a drag
+    // (up increases value, down decreases), routed through the same APVTS path.
+    float delta = 0.0f;
+    if      (key.isKeyCode(juce::KeyPress::upKey))        delta =  0.02f;
+    else if (key.isKeyCode(juce::KeyPress::downKey))      delta = -0.02f;
+    else if (key.isKeyCode(juce::KeyPress::pageUpKey))    delta =  0.1f;
+    else if (key.isKeyCode(juce::KeyPress::pageDownKey))  delta = -0.1f;
+    else if (key.isKeyCode(juce::KeyPress::homeKey))      delta =  1.0f;   // jump to top
+    else if (key.isKeyCode(juce::KeyPress::endKey))       delta = -1.0f;   // jump to bottom
+    else return false;
+
+    auto* p = proc_.getAPVTS().getParameter("faderPos");
+    if (p == nullptr) return false;
+
+    const float clamped = juce::jlimit(0.0f, 1.0f, p->getValue() + delta);
+    p->beginChangeGesture();
+    p->setValueNotifyingHost(clamped);
+    p->endChangeGesture();
+
+    ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
+    proc_.setMorphSource(1);  // fader mode
+    return true;
+}
+
+std::unique_ptr<juce::AccessibilityHandler> SnapFader::createAccessibilityHandler()
+{
+    // AUDIT-FIX (accessibility): expose as a slider so screen readers announce
+    // the role + name; keyboard operability is provided by keyPressed.
+    return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::slider);
 }
 
 void SnapFader::updateValue(float yPos)

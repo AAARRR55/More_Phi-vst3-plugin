@@ -113,10 +113,10 @@ struct SonicMasterAnalysisEngineConfig
     int    consecutiveFailureLimit = 3;
     // 8 s @ 192 kHz, rounded up to a power of two by AudioCaptureRing.
     // At the default 1,536,000 frames, the power-of-2 round-up produces
-    // 2,097,152 frames × 2 channels × 4 bytes = ~16.8 MB. This is within
-    // budget on 64-bit hosts (~12-17 MB of the plugin's ~30 MB baseline)
-    // but may be tight on 32-bit hosts. Reduce this for 32-bit targets or
-    // when memory profiling shows contention.
+    // 2,097,152 frames × 2 channels × 4 bytes = 16,777,216 bytes = 16.0 MiB
+    // (~16.8 MB decimal). This is within budget on 64-bit hosts (~50% of the
+    // plugin's ~30 MB baseline) but may be tight on 32-bit hosts. Reduce this
+    // for 32-bit targets or when memory profiling shows contention.
     std::size_t captureRingFrames = 8u * 192000u;
 };
 
@@ -159,7 +159,7 @@ public:
 
     // Any thread (atomic). When true, capture + cycling run; when false, capture
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
-    // PERF-MEM: First activation lazily allocates the ~12.3 MB capture ring.
+    // PERF-MEM: First activation lazily allocates the 16.0 MiB capture ring.
     void setActive(bool active) noexcept
     {
         active_.store(active, std::memory_order_relaxed);
@@ -245,7 +245,7 @@ private:
     bool runCycle() noexcept; // returns true if a plan was applied
     void applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept;
 
-    // PERF-MEM: Lazily allocates the capture ring (~12.3 MB) on first use.
+    // PERF-MEM: Lazily allocates the capture ring (16.0 MiB) on first use.
     // Called from setActive(true), requestDecisionNow, and runOneCycleForTest.
     // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
     void ensureRing() noexcept;

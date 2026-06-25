@@ -216,7 +216,13 @@ private:
                               float* magOut,
                               int numBins, float alpha) noexcept;
 
+    // AUDIT-FIX (phase locking): magnitude inputs drive identity phase locking —
+    // each bin's phase advances by the instantaneous frequency of whichever source
+    // dominates it (magnitude × (1−α) vs α), instead of a physically-meaningless
+    // blended IF. Reduces the classic phase-vocoder "phasiness" on polyphonic
+    // material (Laroche & Dolson 1999).
     void interpolatePhase(const float* phaseA, const float* phaseB,
+                          const float* magA,    const float* magB,
                           float* prevPhaseA,   float* prevPhaseB,
                           float* synthPhase,
                           int numBins, float alpha) noexcept;

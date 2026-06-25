@@ -30,7 +30,20 @@ struct LicenseApiConfig
 
     bool isUsable() const noexcept
     {
-        return baseUrl.trim().isNotEmpty() && publicClientToken.trim().isNotEmpty();
+        const auto base = baseUrl.trim();
+        if (base.isEmpty() || publicClientToken.trim().isEmpty())
+            return false;
+        // AUDIT-FIX (security): production builds must only activate over HTTPS.
+        // A plaintext http:// URL would transmit the license key, machine hash
+        // and client token in cleartext over the wire. Release builds therefore
+        // require an https:// base URL; an unconfigured or http:// default falls
+        // through to StubActivationClient (offline) rather than leaking data.
+        // Debug builds still allow http://localhost for end-to-end dev testing.
+#ifndef NDEBUG
+        return true;
+#else
+        return base.startsWithIgnoreCase("https://");
+#endif
     }
 };
 

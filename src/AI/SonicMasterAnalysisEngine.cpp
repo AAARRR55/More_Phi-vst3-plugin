@@ -179,7 +179,10 @@ void SonicMasterAnalysisEngine::ensureRing() noexcept
 
     // AUDIT-FIX-R11: sanity-check the ring size. At the default 8*192000=1,536,000
     // frames, the power-of-2 round-up yields 2,097,152 frames × 2 ch × 4 bytes =
-    // ~16.8 MB. This is within budget but debug builds assert a reasonable ceiling.
+    // 16,777,216 bytes = 16.0 MiB (~16.8 MB decimal). This is within budget but
+    // debug builds assert a reasonable ceiling. (AUDIT-2026-06-25: earlier comments
+    // here and at SonicMasterAnalysisEngine.h:162/:248 said "~12.3 MB" — that was
+    // a stale underestimate from a prior smaller ring config; corrected.)
     jassert(config_.captureRingFrames >= 2u * 44100u);           // at least 2s @ 44.1k
     jassert(config_.captureRingFrames <= 32u * 192000u);         // at most 32s @ 192k
 
@@ -195,9 +198,9 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
 
     // PERF-MEM: Defer AudioCaptureRing allocation until the feature is actually
-    // activated (setActive(true) or requestDecisionNow). The ring is ~12.3 MB
-    // (8s @ 192kHz stereo); lazy allocation cuts More-Phi's baseline memory
-    // footprint by ~60% when SonicMaster is not in use.
+    // activated (setActive(true) or requestDecisionNow). The ring is 16.0 MiB
+    // (~16.8 MB decimal; 8s @ 192kHz stereo, pow2-rounded); lazy allocation cuts
+    // More-Phi's baseline memory footprint substantially when SonicMaster is off.
     // C-3 FIX (audit): publish nullptr BEFORE freeing storage so an audio
     // thread in capture() that loads ring_ with acquire bails before the
     // object is destroyed. Safe w.r.t. processBlock because JUCE guarantees

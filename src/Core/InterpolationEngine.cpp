@@ -26,6 +26,15 @@
     #endif
 #endif
 
+// AUDIT-FIX (Apple Silicon / ARM): NEON is mandatory on AArch64 (Apple Silicon,
+// all ARMv8-A), so compile-time selection is correct here — no runtime dispatch
+// needed for the ARM slice. Previously ARM builds fell through to the scalar
+// path because only x86 SIMD was detected.
+#if defined(__ARM_NEON__) || defined(__ARM_NEON) || (defined(_M_ARM64) && !defined(_M_ARM64EC))
+    #include <arm_neon.h>
+    #define MORE_PHI_USE_NEON 1
+#endif
+
 namespace more_phi {
 
 // ── CPU Feature Detection ─────────────────────────────────────────────────────
@@ -98,6 +107,8 @@ const char* InterpolationEngine::getCompiledSIMDPath() noexcept
     return "AVX2";
 #elif defined(MORE_PHI_USE_SSE)
     return "SSE2";
+#elif defined(MORE_PHI_USE_NEON)
+    return "NEON";
 #else
     return "Scalar";
 #endif
@@ -159,6 +170,27 @@ void InterpolationEngine::interpolateBatch_SIMD(
             _mm_mul_ps(a, oneMinusT),
             _mm_mul_ps(b, tVec));
         _mm_storeu_ps(dest + i, result);
+    }
+
+    // Handle remaining elements
+    for (size_t i = simdCount; i < count; ++i)
+    {
+        dest[i] = srcA[i] * (1.0f - t) + srcB[i] * t;
+    }
+
+#elif defined(MORE_PHI_USE_NEON)
+    // NEON implementation - 4 floats at once (ARM / Apple Silicon)
+    float32x4_t tVec = vdupq_n_f32(t);
+
+    size_t simdCount = count - (count % 4);
+
+    for (size_t i = 0; i < simdCount; i += 4)
+    {
+        float32x4_t a = vld1q_f32(srcA + i);
+        float32x4_t b = vld1q_f32(srcB + i);
+        // result = a + t*(b - a) = a*(1-t) + b*t  (fused-multiply-add, one insn)
+        float32x4_t result = vmlaq_f32(a, tVec, vsubq_f32(b, a));
+        vst1q_f32(dest + i, result);
     }
 
     // Handle remaining elements

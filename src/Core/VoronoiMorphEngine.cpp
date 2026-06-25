@@ -154,7 +154,7 @@ void VoronoiMorphEngine::rebuild(
 {
     // M7: document invariant — rebuild must run on message thread, same as
     // getEdges()/getVoronoiCells().
-    jassert(juce::MessageManager::isThisTheMessageThread());
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
 
     triangles_.clear();
     edges_.clear();

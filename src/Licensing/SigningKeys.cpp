@@ -30,6 +30,35 @@ constexpr Ed25519PublicKey kProdEd25519_2026_01 = {
     0xfc, 0x37, 0x9e, 0x35, 0x8a, 0x52, 0xac, 0x9f,
 };
 
+// ── AUDIT-FIX: ship-blocker guard ────────────────────────────────────────────
+// The key above is the DEV keypair's public half. As long as it stays here, any
+// certificate signed by the dev backend verifies as a production license. This
+// constexpr predicate detects the placeholder so a static_assert can refuse to
+// compile a real shipping build until the key is rotated.
+constexpr bool isDevPlaceholderKey(const Ed25519PublicKey& k) noexcept
+{
+    constexpr Ed25519PublicKey kKnownDev = {
+        0x8e, 0x1a, 0xa2, 0x8c, 0x35, 0xa9, 0x4b, 0xf3,
+        0xc6, 0xe5, 0x55, 0xfa, 0xdb, 0x5b, 0xa3, 0x4c,
+        0x5b, 0x48, 0x80, 0x71, 0x56, 0x65, 0xc8, 0x4d,
+        0xfc, 0x37, 0x9e, 0x35, 0x8a, 0x52, 0xac, 0x9f,
+    };
+    for (std::size_t i = 0; i < kKnownDev.size(); ++i)
+        if (k[i] != kKnownDev[i]) return false;
+    return true;
+}
+
+// A genuine shipping plugin build (Release, NDEBUG defined, not a test build)
+// MUST NOT carry the dev key. Tests (MORE_PHI_TEST_MODE) and Debug builds are
+// exempt so end-to-end dev flows still work. Flip this to fail by replacing
+// kProdEd25519_2026_01 with the real production public key.
+#if defined(NDEBUG) && !defined(MORE_PHI_TEST_MODE)
+static_assert(! isDevPlaceholderKey(kProdEd25519_2026_01),
+    "RELEASE BUILD BLOCKED: SigningKeys.cpp still contains the DEV Ed25519 "
+    "public key. Replace kProdEd25519_2026_01 with the real production key "
+    "(keyId prod-ed25519-2026-01) before building a shipping Release.");
+#endif
+
 const std::map<std::string, const Ed25519PublicKey*>& knownKeys()
 {
     // Constructed once on first use; pointers to the constexpr arrays above.

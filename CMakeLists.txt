@@ -407,6 +407,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/Agents/Blackboard/BlackboardBridge.cpp
     src/AI/Agents/Llm/DeterministicFallbackLlmClient.h
     src/AI/Agents/Llm/DeterministicFallbackLlmClient.cpp
+    src/AI/Agents/Llm/RestLlmClient.h
+    src/AI/Agents/Llm/RestLlmClient.cpp
     src/AI/Agents/Tooling/DefaultToolInvoker.h
     src/AI/Agents/Tooling/DefaultToolInvoker.cpp
     src/AI/Agents/AgentRegistry.h
@@ -763,6 +765,14 @@ target_compile_definitions(MorePhi
         MORE_PHI_ENABLE_DATASET_V3=1
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
+
+# When the test suite is enabled, mark the shared-code lib with MORE_PHI_TEST_MODE
+# so the SigningKeys dev-key release-gate (an intentional ship blocker) is
+# exempted for test/lib builds — real shipping Release builds (tests OFF) still
+# enforce it. Without this, the test exe can't link the Release MorePhi lib.
+if(MORE_PHI_BUILD_TESTS)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_TEST_MODE=1)
+endif()
 
 if(MORE_PHI_ENABLE_PROFILING)
     target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_PROFILING=1)

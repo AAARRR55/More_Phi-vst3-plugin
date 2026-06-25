@@ -367,8 +367,9 @@ void SpectralMorphEngine::processFrame(ChannelState& ch, float alpha) noexcept
     interpolateMagnitude(ch.magA.data(), ch.magB.data(),
                          ch.magOut.data(), numBins_, alpha);
 
-    // ── 5. Interpolate phase (IF vocoder) ─────────────────────────────────────
+    // ── 5. Interpolate phase (identity phase-locked IF vocoder) ──────────────
     interpolatePhase(phaseA, phaseB,
+                     ch.magA.data(), ch.magB.data(),
                      ch.prevPhaseA.data(), ch.prevPhaseB.data(),
                      ch.synthPhase.data(),
                      numBins_, alpha);
@@ -522,46 +523,58 @@ void SpectralMorphEngine::interpolateMagnitude(const float* magA, const float* m
 // ─── interpolatePhase() ───────────────────────────────────────────────────────
 
 void SpectralMorphEngine::interpolatePhase(const float* phaseA, const float* phaseB,
+                                            const float* magA,    const float* magB,
                                             float* prevPhaseA, float* prevPhaseB,
                                             float* synthPhase,
                                             int numBins, float alpha) noexcept
 {
-    // Instantaneous frequency vocoder:
+    // AUDIT-FIX (phase locking — Laroche & Dolson 1999):
     //
-    //   deltaA[k] = wrap(phaseA[k] - prevPhaseA[k])
-    //   deltaB[k] = wrap(phaseB[k] - prevPhaseB[k])
-    //   IF_morph  = (1-α)*deltaA + α*deltaB
-    //   synthPhase[k] += IF_morph[k]
+    // The previous implementation blended the two sources' instantaneous
+    // frequencies linearly:  IF_morph = (1-α)·δA + α·δB.  A blended IF has no
+    // physical meaning (there is no single oscillator advancing at that rate),
+    // and on polyphonic material this produces the well-known "phasiness" /
+    // smearing of the classic phase vocoder.
     //
-    // wrap() maps the phase difference into [-π, π].
+    // Identity phase locking instead advances each bin by the IF of whichever
+    // source dominates that bin, weighted by morph alpha:
+    //     weightA = (1-α)·|Xa[k]|      weightB = α·|Xb[k]|
+    //     synthPhase[k] += (weightA >= weightB) ? δA[k] : δB[k]
+    // The synthesized phase is therefore always driven by a REAL source IF,
+    // which markedly reduces phasiness while preserving the magnitude blend.
+    //
+    // wrap() maps the phase difference into [-π, π] via std::remainder.
 
     const float oneMinusAlpha = 1.0f - alpha;
 
     for (int k = 0; k < numBins; ++k)
     {
-        float deltaA = phaseA[k] - prevPhaseA[k];
-        float deltaB = phaseB[k] - prevPhaseB[k];
+        const float weightA = oneMinusAlpha * magA[k];
+        const float weightB = alpha * magB[k];
+
+        float delta;
+        if (weightA >= weightB)
+        {
+            delta = phaseA[k] - prevPhaseA[k];
+            prevPhaseA[k] = phaseA[k];
+        }
+        else
+        {
+            delta = phaseB[k] - prevPhaseB[k];
+            prevPhaseB[k] = phaseB[k];
+        }
 
         // Phase unwrap into [-π, π].
-        // std::remainder(x, 2π) is equivalent to the while-loop unwrap but
-        // handles large differences in a single step with no loop overhead.
-        deltaA = std::remainder(deltaA, kSMTwoPi);
-        deltaB = std::remainder(deltaB, kSMTwoPi);
+        delta = std::remainder(delta, kSMTwoPi);
 
-        const float ifMorph = oneMinusAlpha * deltaA + alpha * deltaB;
-        synthPhase[k] += ifMorph;
+        synthPhase[k] += delta;
         // DEEP-DIVE FIX: wrap synthPhase after ~1000 full cycles (~62831 rad)
-        // instead of every ±π. The previous π threshold fired on ~50% of frames
-        // for steadily advancing phase, causing an unnecessary std::remainder
-        // call per-bin per-frame. Float mantissa precision is adequate up to
-        // ~3 million rad (~10 h at 86 hops/s), so 62831 rad (~33 min at
-        // 600 Hz bin) is a safe guard that cuts the remainder rate to ~0.1%.
+        // instead of every ±π. Float mantissa precision is adequate up to
+        // ~3 million rad, so 62831 rad is a safe guard that cuts the remainder
+        // rate to ~0.1%.
         constexpr float kPhaseWrapThreshold = 1000.0f * kSMTwoPi;
         if (synthPhase[k] > kPhaseWrapThreshold || synthPhase[k] < -kPhaseWrapThreshold)
             synthPhase[k] = std::remainder(synthPhase[k], kSMTwoPi);
-
-        prevPhaseA[k] = phaseA[k];
-        prevPhaseB[k] = phaseB[k];
     }
 }
 
