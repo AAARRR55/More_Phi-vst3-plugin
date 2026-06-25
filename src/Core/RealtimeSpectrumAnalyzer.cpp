@@ -65,6 +65,8 @@ void RealtimeSpectrumAnalyzer::reset() noexcept
     writePos_ = 0;
     hopCounter_ = 0;
     frameIndex_ = 0;
+    // AUDIT (crest/RMS): re-zero so the program-crest EMA re-gates after reset.
+    samplesCaptured_ = 0;
     crestProgramEma_ = 0.0f;   // AUDIT-FIX (A7): reset program-crest EMA
 
     SpectrumSnapshot empty;
@@ -97,6 +99,10 @@ void RealtimeSpectrumAnalyzer::processBlock(const juce::AudioBuffer<float>& buff
 
         inputBuffer_[static_cast<size_t>(writePos_)] = mono;
         writePos_ = (writePos_ + 1) % fftSize_;
+        // AUDIT (crest/RMS): count captured samples so processFrame can skip the
+        // program-crest EMA until the ring holds a full frame of real audio.
+        if (samplesCaptured_ < static_cast<uint64_t>(fftSize_))
+            ++samplesCaptured_;
 
         if (++hopCounter_ >= hopSize_)
         {
@@ -153,16 +159,29 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     float energySum = 0.0f;
     float weightedFreqSum = 0.0f;
     float fluxSum = 0.0f;
-    // AUDIT-FIX (M2): peak / RMS computed over the UN-WINDOWED raw frame. The
-    // previous code used linearFrame_ (= raw * Hann), which biases the reported
-    // peak down by up to -6 dB whenever the true peak does not sit at the
-    // window centre, and skews RMS by the window's mean gain.
+    // AUDIT-FIX (DC-1, R5a 2026-07-16): remove the frame's DC offset before the
+    // crest/RMS/peak metrics. A constant-DC signal otherwise inflates low-bin
+    // energy and, via the start-of-frame step transient from the ring buffer's
+    // initial zero state, makes the per-frame crest read ~1.6 instead of ~1.0.
+    // Subtracting the mean makes a pure-DC frame report ~0 peak/RMS (→ crest 0,
+    // flagged invalid downstream) and leaves AC content (sine, music) unaffected
+    // to first order. (LUFS already RLB-filters DC; this brings the spectral
+    // path in line.)
+    double frameSum = 0.0;
+    for (int i = 0; i < fftSize_; ++i)
+        frameSum += static_cast<double>(rawFrame_[static_cast<size_t>(i)]);
+    const float frameMean = static_cast<float>(frameSum / static_cast<double>(std::max(1, fftSize_)));
+
+    // AUDIT-FIX (M2): peak / RMS computed over the UN-WINDOWED, DC-removed raw
+    // frame. The previous code used linearFrame_ (= raw * Hann), which biases
+    // the reported peak down by up to -6 dB whenever the true peak does not sit
+    // at the window centre, and skews RMS by the window's mean gain.
     float peak = 0.0f;
     double rmsSum = 0.0;
 
     for (int i = 0; i < fftSize_; ++i)
     {
-        const float s = rawFrame_[static_cast<size_t>(i)];
+        const float s = rawFrame_[static_cast<size_t>(i)] - frameMean;
         const float a = std::abs(s);
         if (a > peak) peak = a;
         rmsSum += static_cast<double>(s) * static_cast<double>(s);
@@ -227,7 +246,15 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     // AUDIT-FIX (A7): program-level crest factor = EMA of the per-frame crest
     // over ~1 s. Uses the classic one-pole form y += alpha*(x-y). Seeded to the
     // first valid per-frame crest so it doesn't climb from 0 for a full tau.
-    if (snapshot.crestFactor > 0.0f)
+    //
+    // AUDIT (crest/RMS, 2026-06-25): do NOT seed the EMA until the ring holds a
+    // full frame of real audio. The ring starts zero-filled; the first frame
+    // therefore straddles a 0→signal step whose RMS is transiently low (~0.35
+    // for a full-scale sine vs the steady 0.707), seeding the EMA to ~2.8 crest
+    // instead of ~1.4. The EMA then needs a full tau to unlearn it. Gating on
+    // samplesCaptured_ >= fftSize_ makes the first reported crest correct.
+    if (snapshot.crestFactor > 0.0f
+        && samplesCaptured_ >= static_cast<uint64_t>(fftSize_))
     {
         if (crestProgramEma_ <= 0.0f)
             crestProgramEma_ = snapshot.crestFactor;

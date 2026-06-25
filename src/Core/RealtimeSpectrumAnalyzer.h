@@ -69,6 +69,14 @@ private:
     int writePos_ = 0;
     int hopCounter_ = 0;
     uint64_t frameIndex_ = 0;
+    // AUDIT (crest/RMS, 2026-06-25): total mono samples pushed into the ring
+    // since prepare()/reset(). The program-crest EMA must NOT seed from a frame
+    // that still includes the ring's initial zero-fill — that transient
+    // contaminates the first frame's RMS and seeds the EMA to a wrong value
+    // (~2.8 crest for a pure sine instead of ~1.4), which then takes a full EMA
+    // tau to unlearn. Gate seeding on samplesCaptured_ >= fftSize_ so the first
+    // reported crest is from a genuinely full ring.
+    uint64_t samplesCaptured_ = 0;
 
     std::unique_ptr<juce::dsp::FFT> fft_;
     std::vector<float> window_;

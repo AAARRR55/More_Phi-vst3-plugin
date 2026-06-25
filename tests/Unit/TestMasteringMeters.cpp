@@ -6,14 +6,19 @@
  * DSP). The strong LUFS conformance lives in TestLUFSMeter.cpp and the spectrum
  * feature basics in TestSpectrumAnalyzer.cpp; this file covers the AUDIT gaps:
  *
- *   - DC offset is NOT removed in the spectrum path (a known limitation). This
- *     test pins the current behavior so a future DC-removal fix flips it green.
+ *   - DC offset IS now removed in the spectrum path (AUDIT-FIX DC-1, R5a). The
+ *     "DC offset is removed (fixed)" test below pins the corrected behavior; a
+ *     pure-DC frame reports a ~0/invalid crest, not the ~1.6 of the DC-laden path.
+ *     NOTE: a deeper crest/RMS scaling inconsistency remains (the pure-sine crest
+ *     sanity guard reads ~2.3 instead of ~1.414) — tracked separately, predates
+ *     this audit's changes. See the sine + DC test bodies.
  *   - Crest factor is bounded for a pure sine (≈1.414) — a sanity guard.
  *   - Spectral centroid tracks frequency monotonically (low tone < high tone).
  *
  * Missing-metric inventory (noise floor, SNR, muddiness, harshness, transient):
- * these are intentionally absent today; the audit flags them. If any is added,
- * add a test here. These tests document the gap rather than assert absence.
+ * these are intentionally absent today; the audit flags them. AUDIT C6 removed
+ * the SUCCEED() stubs that previously signaled false coverage — the
+ * implementation hints are preserved as a comment block at the end of this file.
  */
 #include "Core/RealtimeSpectrumAnalyzer.h"
 #include <catch2/catch_approx.hpp>
@@ -97,13 +102,12 @@ TEST_CASE("Spectral centroid is higher for a high tone than a low tone",
     CHECK(highSnap.spectralCentroid > 2000.0f);
 }
 
-// AUDIT gap: the spectrum path does NOT remove DC offset. A pure-DC signal
-// (constant 0.5) should ideally be ignored or attributed only to bin 0; today it
-// inflates low-frequency energy and the crest/centroid become meaningless. This
-// test pins the CURRENT behavior so a future DC-removal fix is detectable. It
-// does not assert correctness — it documents the limitation.
-TEST_CASE("DC offset is NOT removed in the spectrum path (known limitation)",
-          "[meters][dc][audit-gap]")
+// AUDIT-FIX (DC-1, R5a 2026-07-16): the spectrum path now REMOVES DC offset
+// (frame mean subtracted before peak/RMS/crest). A pure-DC signal therefore
+// reports a near-zero/invalid crest (peak≈0 → crest=0 sentinel) rather than the
+// meaningless ~1.6 the DC-laden path produced. This asserts the fixed behavior.
+TEST_CASE("DC offset is removed in the spectrum path (fixed)",
+          "[meters][dc]")
 {
     RealtimeSpectrumAnalyzer analyzer;
     analyzer.prepare(kSampleRate, kBlockSize);
@@ -111,62 +115,49 @@ TEST_CASE("DC offset is NOT removed in the spectrum path (known limitation)",
     // Feed a constant DC offset of 0.5 for 0.5s (no AC content at all).
     juce::AudioBuffer<float> buffer(2, kBlockSize);
     int generated = 0;
-    const int total = static_cast<int>(kSampleRate * 0.5);
+    // AUDIT (crest/RMS, 2026-06-25): feed ONLY full blocks of DC. The prior
+    // loop fed a partial final block (total=24000 = 46*512 + 448) and called
+    // buffer.clear() first, so the last 64 samples of the final block were 0 —
+    // a DC→0 step transient whose frame seeded the program-crest EMA to ~5.6
+    // even though every full-DC frame correctly reads crest 0. Rounding total
+    // up to a whole block multiple and filling the whole block (no clear) keeps
+    // every processed frame pure-DC, so the EMA never seeds and reports ~0.
+    const int total = ((static_cast<int>(kSampleRate * 0.5) + kBlockSize - 1) / kBlockSize) * kBlockSize;
     while (generated < total)
     {
-        const int n = std::min(kBlockSize, total - generated);
-        buffer.clear();
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < kBlockSize; ++i)
         {
             buffer.setSample(0, i, 0.5f);
             buffer.setSample(1, i, 0.5f);
         }
         analyzer.processBlock(buffer);
-        generated += n;
+        generated += kBlockSize;
     }
 
     RealtimeSpectrumAnalyzer::SpectrumSnapshot snap;
     REQUIRE(analyzer.getSnapshot(snap));
     REQUIRE(snap.frameIndex > 0);
 
-    // A DC-only signal has peak == RMS, so crest ≈ 1.0. Today this passes because
-    // there is no DC removal — the DC shows up as energy. When DC removal is added,
-    // this assertion should be revisited (the snapshot may report a near-zero /
-    // invalid crest instead). INFO documents the expectation.
-    INFO("DC-only crest factor: " << snap.crestFactorProgram
-         << " (expected ≈1.0 today; revisit after DC-removal fix)");
-    CHECK(snap.crestFactorProgram == Approx(1.0f).margin(0.15f));
+    // After DC removal, a pure-DC frame has ~0 AC energy, so the crest factor is
+    // the 0 sentinel (invalid) or vanishingly small — NOT the ~1.6 the prior
+    // DC-laden path reported. (crestFactor is peak/rms; both → 0 ⇒ 0 sentinel.)
+    INFO("DC-only crest factor after DC removal: " << snap.crestFactorProgram
+         << " (expected ~0 / invalid; was ~1.6 before the fix)");
+    CHECK(snap.crestFactorProgram <= 0.01f);
 }
 
-// Missing-metric inventory. These metrics are flagged as absent in the audit.
-// Each SECTION documents the expected behavior so a future implementation has a
-// ready test target. They are deliberately non-asserting today.
-TEST_CASE("Missing mastering metrics (audit inventory — not yet implemented)",
-          "[meters][audit-gap][inventory]")
-{
-    SECTION("noise floor")
-    {
-        // Not computed. When added: feed a near-silent signal (-90 dBFS) and
-        // assert the noise-floor estimate is within a few dB of -90.
-        SUCCEED("noise floor metric not implemented (audit gap)");
-    }
-    SECTION("muddiness (low-energy ratio)")
-    {
-        // Not computed. When added: feed a signal boosted in the 200-500 Hz
-        // region and assert the muddiness score rises vs a flat signal.
-        SUCCEED("muddiness metric not implemented (audit gap)");
-    }
-    SECTION("harshness (2-5 kHz energy)")
-    {
-        // Not computed. When added: feed a signal with excess 2-5 kHz content
-        // and assert the harshness score rises.
-        SUCCEED("harshness metric not implemented (audit gap)");
-    }
-    SECTION("transient / attack")
-    {
-        // Not computed (TransientDetector exists but only drives morph alpha,
-        // not the mastering decision). When added: feed a percussive signal and
-        // assert the transient metric is non-zero.
-        SUCCEED("transient/attack metric not implemented (audit gap)");
-    }
-}
+// Missing-metric inventory (AUDIT C6, 2026-06-25). These metrics are flagged as
+// absent in the audit. The implementation hints are kept as documentation so a
+// future implementation has a ready test target, but the prior SUCCEED() stubs
+// were removed — they emitted "passed" assertions that signaled coverage which
+// does not exist. When each metric is implemented, add a real assertion here:
+//
+//   noise floor       — feed a near-silent signal (-90 dBFS); assert the estimate
+//                       is within a few dB of -90.
+//   muddiness         — feed a signal boosted in 200-500 Hz; assert the score
+//                       rises vs a flat signal.
+//   harshness         — feed a signal with excess 2-5 kHz content; assert the
+//                       score rises.
+//   transient/attack  — TransientDetector exists but only drives morph alpha,
+//                       not the mastering decision. Feed a percussive signal;
+//                       assert the metric is non-zero.
