@@ -67,6 +67,7 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
 
     // Parameter panel (initially hidden)
     addChildComponent(paramPanel);
+    paramPanel.setVisible(false);
 
     // Toggle button in plugin browser row
     paramToggleBtn_.onClick = [this]()
@@ -320,6 +321,10 @@ void MorePhiEditor::resized()
 
     // Title bar (painted) — increased from 44 to 48
     area.removeFromTop(48);
+    {
+        auto titleArea = getLocalBounds().removeFromTop(48);
+        bypassBtn_.setBounds(titleArea.removeFromRight(80).reduced(6, 12));
+    }
 
     // Deactivate License — moved to bottom bar for less visual intrusion
     // (positioned later, next to AI status)
@@ -574,6 +579,21 @@ void more_phi::MorePhiEditor::openPluginWindow()
     auto* plugin = processor.getHostManager().acquirePluginForUse();
     if (!plugin) return;
 
+    // Phase 4 (lease-lifetime safety): RAII guard so that if the HostedPluginWindow
+    // constructor throws (e.g. the hosted plugin's createEditor() throws, or an
+    // allocation fails), the lease acquired above is always released. Without this,
+    // a thrown ctor left activePluginUsers_ > 0, causing unloadPlugin() to spin to
+    // its 500 ms timeout every time. The guard is disarmed only after the window
+    // is successfully constructed — on success the window's own destructor takes
+    // over lease release via its releasePluginCallback.
+    bool windowConstructed = false;
+    struct LeaseGuard
+    {
+        PluginHostManager& host;
+        bool& armed;
+        ~LeaseGuard() { if (armed) host.releasePluginFromUse(); }
+    } guard{ processor.getHostManager(), windowConstructed };
+
     juce::Component::SafePointer<MorePhiEditor> safeThis(this);
     processor.getHostManager().setWindowCloseCallback([safeThis]() {
         juce::MessageManager::callAsync([safeThis]() {
@@ -583,11 +603,15 @@ void more_phi::MorePhiEditor::openPluginWindow()
 
     hostedWindow_ = std::make_unique<HostedPluginWindow>(
         plugin,
+        [safeThis]() {
+            if (safeThis) safeThis->closePluginWindow();
+        },
         [safeThis, this]() {
             processor.getHostManager().releasePluginFromUse();
-            if (safeThis) safeThis->closePluginWindow();
-        }  // on-close callback
+        }  // release-on-close (HostedPluginWindow dtor)
     );
+
+    windowConstructed = true;  // disarm guard — window now owns the lease release
 }
 
 void more_phi::MorePhiEditor::closePluginWindow()

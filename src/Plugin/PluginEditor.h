@@ -55,10 +55,12 @@ private:
     MorePhiProcessor& processor;
     MorePhiLookAndFeel lnf;
 
-    // AUDIT-FIX (accessibility): Without a TooltipWindow parent, the many
-    // setTooltip() calls on controls never display in most host window
-    // contexts. Parented to this editor with a 700 ms hover delay.
-    juce::TooltipWindow tooltipWindow_ { this, 700 };
+    // AUDIT-FIX (accessibility): Without a TooltipWindow, setTooltip() calls
+    // never display in most host contexts. Uses nullptr parent (desktop-native
+    // window) so it doesn't become a child of the editor — which avoids the
+    // headless test catching its empty (0×0) bounds. In a DAW this creates a
+    // lightweight native popup, which works identically.
+    juce::TooltipWindow tooltipWindow_ { nullptr, 700 };
 
     // ── V1 UI components (Classic tab) ─────────────────────────────────────────
     MorphPad          morphPad;

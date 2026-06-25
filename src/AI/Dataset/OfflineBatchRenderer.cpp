@@ -4,6 +4,7 @@
  */
 
 #include "AI/Dataset/OfflineBatchRenderer.h"
+#include "Core/ParameterState.h"   // MAX_PARAMETERS (parameter ceiling for the DATASET-4 clamp)
 #include "Core/SIMDAudio.h"
 
 #include <nlohmann/json.hpp>
@@ -1083,9 +1084,9 @@ std::vector<std::vector<float>> OfflineBatchRenderer::generateParameterVariation
                         if (idx > maxIdx) maxIdx = idx;
                     }
                     // DATASET-4: clamp against the project's parameter ceiling
-                    // (MAX_PARAMETERS=2048) so a crafted config can't force a
+                    // (MAX_PARAMETERS=4096) so a crafted config can't force a
                     // multi-GB resize from a hostile index value.
-                    constexpr int kMaxDatasetParamIndex = 2047;
+                    constexpr int kMaxDatasetParamIndex = MAX_PARAMETERS - 1;
                     if (maxIdx >= 0 && maxIdx <= kMaxDatasetParamIndex) {
                         params.resize(static_cast<size_t>(maxIdx) + 1, 0.0f);
                         for (const auto& p : j["parameters"]) {

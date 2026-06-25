@@ -3,6 +3,7 @@
  */
 #include "ChainPlanExecutor.h"
 #include "OzonePlanApplicator.h"
+#include "Core/AutoMasteringEngine.h"   // P1.2: ApplyVerification complete type
 #include <cmath>
 #include <algorithm>
 
@@ -31,6 +32,31 @@ int ChainPlanExecutor::applyPlan(const MultiEffectPlan& plan)
 
     const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
     return ozoneApplicator_ != nullptr ? ozoneApplicator_->apply(plan) : 0;
+}
+
+OzoneApplyBreakdown ChainPlanExecutor::getLastOzoneApplyBreakdown() const noexcept
+{
+    // AUDIT-FIX (Fix 6): forward to the applicator under the same lock that guards
+    // applyPlan(), so the breakdown read pairs with the apply that produced it.
+    const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+    if (ozoneApplicator_ != nullptr)
+        return ozoneApplicator_->getLastApplyBreakdown();
+    return {};
+}
+
+ApplyVerification ChainPlanExecutor::getLastOzoneVerification() const noexcept
+{
+    // P1.2 (AUDIT): forward the applicator's readback verification under the same
+    // lock that guards applyPlan(). AutoMasteringEngine::applyValidatedPlan calls
+    // this AFTER flushing the command queue so the hosted plugin's normalized
+    // values reflect the writes, then stores the result into
+    // lastApplyVerification_ / lastApplyWasPartial_. Without this forwarder the
+    // engine had no way to reach the applicator's verification, so the entire
+    // read-back path (Fix 2) was built but never consulted.
+    const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+    if (ozoneApplicator_ != nullptr)
+        return ozoneApplicator_->getLastVerification();
+    return {};
 }
 
 MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,

@@ -15,6 +15,14 @@ namespace {
 std::mutex gStoreOverrideMutex;
 std::optional<juce::File> gStoreDirectoryOverride;
 
+// P2.5 (AUDIT): in-memory ledger ring cap. Was a hardcoded 256, which evicted
+// older AI/neural edits from the queryable window during a busy session even
+// though they were the most important to audit. Raised to 4096 — the ledger
+// still persists the full history to action_ledger.json on every record; this
+// only widens the fast in-memory query window. Keep load() capped to the same
+// value so a huge persisted file doesn't blow up memory on startup.
+constexpr size_t kLedgerMaxTransactions = 4096;
+
 juce::File resolveStoreDirectory()
 {
     {
@@ -661,7 +669,7 @@ AutomationTransaction ActionLedger::record(AutomationTransaction transaction)
 
     std::lock_guard<std::mutex> lock(mutex_);
     transactions_.push_back(transaction);
-    while (transactions_.size() > 256)
+    while (transactions_.size() > kLedgerMaxTransactions)
         transactions_.erase(transactions_.begin());
     persist();
     return transaction;
@@ -737,7 +745,7 @@ void ActionLedger::load()
         for (const auto& item : parsed)
             transactions_.push_back(automationTransactionFromJson(item));
 
-        while (transactions_.size() > 256)
+        while (transactions_.size() > kLedgerMaxTransactions)
             transactions_.erase(transactions_.begin());
     }
     catch (...)

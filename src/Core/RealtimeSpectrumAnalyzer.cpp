@@ -42,6 +42,14 @@ void RealtimeSpectrumAnalyzer::prepare(double sampleRate, int /*maxBlockSize*/)
     rawMagnitude_.assign(static_cast<size_t>(numBins_), 0.0f);
     previousMagnitudeDb_.assign(static_cast<size_t>(numBins_), kMinDB);
     computeHannWindow();
+    // AUDIT-FIX (A7): EMA coeff for program crest: alpha = 1 - exp(-hop/tau).
+    // framesPerTau = sampleRate / hopSize gives the analysis frame rate; tau is
+    // kCrestProgramTauSeconds (1 s). Computed once here, used every processFrame().
+    {
+        const double frameRate = sampleRate_ / static_cast<double>(hopSize_ > 0 ? hopSize_ : kDefaultHopSize);
+        const double framesPerTau = std::max(1.0, frameRate * kCrestProgramTauSeconds);
+        crestProgramAlpha_ = static_cast<float>(1.0 - std::exp(-1.0 / framesPerTau));
+    }
     reset();
 }
 
@@ -57,6 +65,7 @@ void RealtimeSpectrumAnalyzer::reset() noexcept
     writePos_ = 0;
     hopCounter_ = 0;
     frameIndex_ = 0;
+    crestProgramEma_ = 0.0f;   // AUDIT-FIX (A7): reset program-crest EMA
 
     SpectrumSnapshot empty;
     empty.binCount = kMaxBins;
@@ -162,29 +171,20 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     int fluxCount = 0;
     for (int bin = 0; bin < numBins_; ++bin)
     {
-        // JUCE's real-only FFT output format:
-        //   output[0] = DC real    (imag always 0)
-        //   output[1] = real[1], output[2] = imag[1]
-        //   output[3] = real[2], output[4] = imag[2]
-        //   ...
-        //   output[2k-1] = real[k], output[2k] = imag[k]  for 1 <= k < N/2
-        //   output[N-1] = Nyquist real  (imag always 0)
-        float real, imag;
-        if (bin == 0)
-        {
-            real = fftScratch_[0];
-            imag = 0.0f;
-        }
-        else if (bin == numBins_ - 1)
-        {
-            real = fftScratch_[static_cast<size_t>(fftSize_ - 1)];
-            imag = 0.0f;
-        }
-        else
-        {
-            real = fftScratch_[static_cast<size_t>(2 * bin - 1)];
-            imag = fftScratch_[static_cast<size_t>(2 * bin)];
-        }
+        // Standard complex-interleaved format (all JUCE FFT engines):
+        //   real[bin] at fftScratch_[2*bin]
+        //   imag[bin] at fftScratch_[2*bin+1]
+        //   (DC imag = 0, Nyquist imag = 0 for real input)
+        //
+        // AUDIT-FIX (2026-07): previous code read with IPP packed-CCS offsets
+        //   (2*bin-1 / 2*bin) which shifted all bins by one index. The FFTFallback
+        //   engine used on MSVC always produces standard interleaved regardless
+        //   of the ignoreHalf flag, so the old read swapped real/imag and shifted
+        //   the entire spectrum — only THD/crest-factor tests caught it because
+        //   the centroid test's 80 Hz margin masked the ~12 Hz drift.
+        const auto idx = static_cast<size_t>(2 * bin);
+        float real = fftScratch_[idx];
+        float imag = fftScratch_[idx + 1];
 
         // AUDIT-FIX (A3): divide by (N * coherentGain) so a full-scale single
         // tone reports its true amplitude in magnitudeDB. Previously the /N-only
@@ -223,6 +223,55 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
 
     const double rms = std::sqrt(rmsSum / static_cast<double>(std::max(1, fftSize_)));
     snapshot.crestFactor = rms > kEps ? peak / static_cast<float>(rms) : 0.0f;
+
+    // AUDIT-FIX (A7): program-level crest factor = EMA of the per-frame crest
+    // over ~1 s. Uses the classic one-pole form y += alpha*(x-y). Seeded to the
+    // first valid per-frame crest so it doesn't climb from 0 for a full tau.
+    if (snapshot.crestFactor > 0.0f)
+    {
+        if (crestProgramEma_ <= 0.0f)
+            crestProgramEma_ = snapshot.crestFactor;
+        else
+            crestProgramEma_ += crestProgramAlpha_ * (snapshot.crestFactor - crestProgramEma_);
+    }
+    snapshot.crestFactorProgram = crestProgramEma_;
+
+    // AUDIT-FIX (A7): Total Harmonic Distortion, H2..H5 / fundamental.
+    // Fundamental = bin of max magnitude in (0, Nyquist). rawMagnitude_ is already
+    // window-corrected (divided by N*coherentGain above), so the ratio is unbiased
+    // by the Hann coherent gain. Capped at 100% to avoid blowups on near-silent
+    // frames where the fundamental ≈ eps.
+    int fundamentalBin = 1;
+    float fundamentalMag = 0.0f;
+    const int nyquistBin = numBins_ - 1;
+    for (int bin = 1; bin < nyquistBin; ++bin)
+    {
+        const float m = rawMagnitude_[static_cast<size_t>(bin)];
+        if (m > fundamentalMag)
+        {
+            fundamentalMag = m;
+            fundamentalBin = bin;
+        }
+    }
+    if (fundamentalBin > 0 && fundamentalMag > 1e-6f)
+    {
+        float harmonicEnergy = 0.0f;
+        for (int h = 2; h <= 5; ++h)
+        {
+            const int harmonicBin = fundamentalBin * h;
+            if (harmonicBin < nyquistBin)
+            {
+                const float hm = rawMagnitude_[static_cast<size_t>(harmonicBin)];
+                harmonicEnergy += hm * hm;
+            }
+        }
+        const float ratio = std::sqrt(harmonicEnergy) / fundamentalMag;
+        snapshot.thdPercent = std::min(ratio, 1.0f) * 100.0f;
+    }
+    else
+    {
+        snapshot.thdPercent = 0.0f;
+    }
 
     const float rolloffTarget = energySum * 0.85f;
     float cumulative = 0.0f;

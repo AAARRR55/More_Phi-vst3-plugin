@@ -4,7 +4,6 @@
  */
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "Core/AllocationTracker.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/ABCompareEngine.h"
@@ -355,13 +354,25 @@ bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
     if (paramIndex < 0 || paramIndex >= MAX_PARAMETERS)
         return false;
 
-    return commandQueue.push(ParamCommand{
+    const bool pushed = commandQueue.push(ParamCommand{
         paramIndex,
         juce::jlimit(0.0f, 1.0f, normalizedValue),
         false, -1,
         source,
         holdAgainstMorph
     });
+
+    // P2.8 (AUDIT): arm the SonicMaster transition guard so the analysis cycle
+    // discards any capture window that straddles this hosted-parameter change
+    // (a hybrid window would be analyzed as a state that never existed). Called
+    // for AI/MCP edits that route through this enqueue (not the audio-thread
+    // morph drain, which is continuous interpolation, not a discrete change).
+    // Cheap: one relaxed store + one relaxed timestamp. Coalesced by design —
+    // a 40-param batch re-stamps the same flag harmlessly.
+    if (pushed)
+        sonicMasterEngine_.notifyHostedParameterChanged();
+
+    return pushed;
 }
 
 bool MorePhiProcessor::enqueueParameterBatch(const std::vector<ParamCommand>& commands)
@@ -3432,21 +3443,99 @@ void MorePhiProcessor::updateReportedLatency()
     latencyConfigDirty_.store(false, std::memory_order_release);
 }
 
-// H3 FIX: Stub implementation for future state migration.
-// When the version is older than the current version, transform the XML
-// to match the current schema before restoration proceeds.
-bool MorePhiProcessor::applyStateMigration(juce::XmlElement& /*stateXml*/, const juce::String& version)
+// Phase 2.3 (production readiness): real forward-migration. The previous stub
+// only LOGGED the saved version and returned true, relying entirely on defaulted
+// XML getters — which is safe for ADDITIVE schema changes but silently DROPS
+// changed/renamed semantics. This implementation runs a versioned transform
+// chain so each prior release is carried forward to the current schema.
+//
+// Migration policy:
+//  - Parse "major.minor.patch" from `version` (missing/unparseable → 0.0.0).
+//  - Apply transforms in order for every version newer than the saved one, up
+//    to CURRENT_VERSION. Each transform mutates the XML in place.
+//  - Versions older than 3.0.0 (the pre-versioned, structurally-different
+//    format) are rejected (return false) — they cannot be safely migrated.
+//  - Same/newer versions pass through unchanged.
+//  - Each transform is defensive: it checks attribute/child existence before
+//    touching it, so a partially-saved state still migrates cleanly.
+bool MorePhiProcessor::applyStateMigration(juce::XmlElement& stateXml, const juce::String& version)
 {
-    // Current version is v3.3.0. If version is missing or older than 3.0.0,
-    // the state format has changed significantly enough that automatic
-    // migration is not attempted. Future versions can add incremental
-    // transforms here based on the detected version.
-    if (version.isEmpty() || version == "0.0.0")
+    // ── Parse the saved version into a comparable integer key ──────────────
+    int savedMajor = 0, savedMinor = 0, savedPatch = 0;
+    auto parseVersion = [](const juce::String& v, int& maj, int& min, int& pat)
     {
-        // Reset to default: old state that predates versioning.
+        const auto parts = juce::StringArray::fromTokens(v, ".", "");
+        maj = parts.size() > 0 ? parts[0].getIntValue() : 0;
+        min = parts.size() > 1 ? parts[1].getIntValue() : 0;
+        pat = parts.size() > 2 ? parts[2].getIntValue() : 0;
+    };
+    parseVersion(version, savedMajor, savedMinor, savedPatch);
+
+    const int savedKey = savedMajor * 1000000 + savedMinor * 1000 + savedPatch;
+
+    // Current version (keep in sync with Version.h). Migrations below bring the
+    // state up to this version.
+    constexpr int kCurrentMajor = 3, kCurrentMinor = 4, kCurrentPatch = 0;
+    const int currentKey = kCurrentMajor * 1000000 + kCurrentMinor * 1000 + kCurrentPatch;
+
+    // Newer-than-current state (e.g. a project saved with a future build) is
+    // loaded best-effort via defaulted getters; we do not reverse-migrate.
+    if (savedKey > currentKey)
+    {
+        DBG("MorePhiProcessor::applyStateMigration — state version " + version
+            + " is newer than current " + juce::String(kCurrentMajor) + "."
+            + juce::String(kCurrentMinor) + "." + juce::String(kCurrentPatch)
+            + "; loading best-effort without reverse migration.");
+        return true;
+    }
+
+    // Already current — nothing to do.
+    if (savedKey == currentKey)
+        return true;
+
+    // Pre-3.0.0 state predates versioning and the structural rewrite; reject.
+    if (savedMajor < 3)
+    {
+        DBG("MorePhiProcessor::applyStateMigration — rejecting pre-3.0.0 state (" + version + ")");
         return false;
     }
-    // No migration needed for same or newer versions
+
+    // ── Versioned transform chain ──────────────────────────────────────────
+    // Each step runs if the saved state is older than that target version.
+    // Add new steps here as the schema evolves. Keep them idempotent + defensive.
+
+    // 3.3.0 → 3.4.0: rename the legacy "more-phi" program name attribute to the
+    // canonical "MorePhi" (Phase 2.4 name-consistency fix). Old saved sessions
+    // that captured getName() as "More-Phi" are normalized so they don't surface
+    // the stale hyphenated spelling in preset/automation identity.
+    {
+        const int target340 = 3 * 1000000 + 4 * 1000 + 0;
+        if (savedKey < target340)
+        {
+            // The program-name is not stored as a dedicated attribute today, but
+            // any snapshot whose NAME captured the old spelling is normalized.
+            // We walk every SNAPSHOT_BANK entry and rewrite names that equal the
+            // legacy literal. This is a no-op when no snapshot used the old name.
+            juce::XmlElement* bank = stateXml.getChildByName("SNAPSHOT_BANK");
+            if (bank != nullptr)
+            {
+                for (auto* snap : bank->getChildIterator())
+                {
+                    if (snap == nullptr) continue;
+                    const auto name = snap->getStringAttribute("name", "");
+                    if (name == "More-Phi")
+                        snap->setAttribute("name", "MorePhi");
+                }
+            }
+            DBG("MorePhiProcessor::applyStateMigration — applied 3.3.0 -> 3.4.0 transforms");
+        }
+    }
+
+    // Mark the state as migrated to the current version so downstream code sees
+    // a consistent schema and so a re-save does not re-enter the chain.
+    stateXml.setAttribute("stateVersion",
+        juce::String(kCurrentMajor) + "." + juce::String(kCurrentMinor) + "." + juce::String(kCurrentPatch));
+
     return true;
 }
 

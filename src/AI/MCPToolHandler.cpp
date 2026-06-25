@@ -999,7 +999,7 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
         std::vector<MorePhiProcessor::ParamCommand> commands;
         commands.reserve(valuesJson.size());
         // MCP-CONTROL-04: bound the rollback to the project's parameter ceiling
-        // (MAX_PARAMETERS=2048). A tampered/oversized ledger could otherwise queue
+        // (MAX_PARAMETERS=4096). A tampered/oversized ledger could otherwise queue
         // commands for non-existent param indices, and enqueueParameterBatch
         // rejects the ENTIRE batch if any index >= MAX_PARAMETERS — breaking the
         // whole rollback. (writeParameter still drops any index beyond the live
@@ -5236,6 +5236,20 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
 
         const uint64_t batchId = gNextDryRunBatchId.fetch_add(1);
         json candidates = json::array();
+
+        // P3.9 (AUDIT): the dry-run path previously emitted score=0.0 and NO
+        // lufs_error field, so OptimizationAgent's min(lufs_error) selection read
+        // infinity for every candidate and chose nothing (bestIdx stayed -1, zero
+        // proposed actions). Populate a real lufs_error per candidate: the absolute
+        // distance between the candidate's targetLUFS and the engine's live
+        // integrated LUFS measurement. This is a meaningful ranking signal (a
+        // candidate whose target lands far from the measured program loudness is a
+        // worse fit) and makes OptimizationAgent's selection genuinely discriminate
+        // among the offset candidates. It is NOT a rendered-audio fitness (no
+        // offline render in dry-run); score_basis documents that honestly.
+        auto& ame = p.getAutoMasteringEngine();
+        const double measuredLufs = finiteOr(ame.getLUFSIntegrated(), -70.0);
+
         for (int i = 0; i < candidateCount; ++i)
         {
             const float offset = static_cast<float>(i) - static_cast<float>(candidateCount - 1) * 0.5f;
@@ -5252,7 +5266,9 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             const auto rulesApplied = plannerRulesToJson(
                 genreIndex, adjustedDynamicRange, adjustedSpectralTilt, adjustedCorrelationMS, plan);
             const auto candidateId = makeDryRunCandidateId(batchId, i);
-            const float score = 0.0f;
+            const float lufsError = static_cast<float>(std::abs(plan.targetLUFS - measuredLufs));
+            // Normalize to [0,1]: 0 = perfect match, 1 = >=24 LU off (full target band).
+            const float score = std::clamp(1.0f - lufsError / 24.0f, 0.0f, 1.0f);
 
             {
                 const std::lock_guard<std::mutex> guard(gDryRunCandidatesMutex);
@@ -5265,6 +5281,8 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             json candidate = planToJson(plan);
             candidate["id"] = candidateId.toStdString();
             candidate["score"] = score;
+            candidate["lufs_error"] = lufsError;          // P3.9: OptimizationAgent ranks on this
+            candidate["measured_lufs"] = measuredLufs;    // provenance for the error
             candidate["measured_inputs"] = measuredInputs;
             candidate["rules_applied"] = rulesApplied;
             candidates.push_back(candidate);
@@ -5275,8 +5293,8 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             {"mode", "dry_run_plan_candidates"},
             {"planner_type", kPlannerType},
             {"rule_version", kPlannerRuleVersion},
-            {"score_available", false},
-            {"score_basis", kDryRunScoreBasis},
+            {"score_available", true},
+            {"score_basis", "lufs_target_distance_proxy"},  // P3.9: honest about what the score means
             {"planner_metadata", plannerMetadataToJson()},
             {"candidates", candidates}
         });

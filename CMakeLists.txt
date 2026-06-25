@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MorePhi VERSION 3.3.0 LANGUAGES C CXX)
+project(MorePhi VERSION 3.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,16 @@ option(MORE_PHI_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder aft
 option(MORE_PHI_BUILD_TESTS "Configure and build tests in tests/." ON)
 option(MORE_PHI_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
 option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
+# Production Ed25519 public key injection (Phase 1 licensing ship-blocker).
+# The plugin ships with the DEV keypair's public half in src/Licensing/SigningKeys.cpp
+# so local end-to-end activation tests work against a dev backend. A genuine shipping
+# build MUST inject the production public key via:
+#   cmake -DMORE_PHI_PROD_ED25519_KEY_HEX=8e1aa28c... (64 hex chars, no separators)
+# When set, CMake generates a configured header that overrides the dev key, and the
+# compile-time static_assert in SigningKeys.cpp passes for Release. When unset, the
+# dev key remains and Release builds are correctly blocked (tests/Debug exempt).
+# NEVER commit the production key — inject it at build time from CI secrets.
+set(MORE_PHI_PROD_ED25519_KEY_HEX "" CACHE STRING "Production Ed25519 public key (64 hex chars) injected at build time; empty = use dev key (Release builds blocked)")
 # /MP process count: defaults to the host's logical-core count so MSVC compiles
 # that many .cpp files in parallel. Was hard-capped at 2, leaving most cores idle.
 # Override per-machine with -DMORE_PHI_MSVC_MP=N (0 disables /MP = serial).
@@ -198,6 +208,7 @@ juce_add_plugin(MorePhi
     PLUGIN_CODE              Mrps
     FORMATS                  ${MORE_PHI_PLUGIN_FORMATS}
     PRODUCT_NAME             "MorePhi"
+    VERSION                  ${PROJECT_VERSION}
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
@@ -243,7 +254,6 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/PerformanceProfiler.cpp
     src/Core/MorePhiDiagnostics.h
     src/Core/MorePhiDiagnostics.cpp
-    src/Core/AllocationTracker.h
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
     src/Core/DiscreteParameterHandler.h
@@ -752,6 +762,29 @@ target_link_libraries(MorePhi
 
 if(WIN32)
     target_link_libraries(MorePhi PRIVATE winhttp)
+endif()
+
+# ── Production Ed25519 key injection (Phase 1) ───────────────────────────────
+# When MORE_PHI_PROD_ED25519_KEY_HEX is set (64 hex chars), generate a configured
+# header that supplies the production public key, overriding the dev placeholder.
+# The hex is validated for length=64 and [0-9a-fA-F] only; malformed input is a
+# hard configure error (fail closed — never silently ship a partial/garbage key).
+if(MORE_PHI_PROD_ED25519_KEY_HEX)
+    set(_keyhex "${MORE_PHI_PROD_ED25519_KEY_HEX}")
+    string(LENGTH "${_keyhex}" _keylen)
+    string(REGEX MATCH "^[0-9a-fA-F]+$" _keyvalid "${_keyhex}")
+    if(NOT (_keylen EQUAL 64 AND _keyvalid))
+        message(FATAL_ERROR
+            "MORE_PHI_PROD_ED25519_KEY_HEX must be exactly 64 hex chars [0-9a-fA-F]. "
+            "Got length=${_keylen}. Refusing to configure with a malformed production key.")
+    endif()
+    string(TOLOWER "${_keyhex}" _keyhex_lower)
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/src/Licensing/ProdSigningKey.h.in"
+        "${CMAKE_BINARY_DIR}/generated/licensing/ProdSigningKey.h"
+        @ONLY)
+    target_include_directories(MorePhi PUBLIC "${CMAKE_BINARY_DIR}/generated")
+    message(STATUS "More-Phi: production Ed25519 key injected (${_keyhex_lower}) — Release builds unblocked.")
 endif()
 
 # ── Compile Definitions ──────────────────────────────────────────────────────

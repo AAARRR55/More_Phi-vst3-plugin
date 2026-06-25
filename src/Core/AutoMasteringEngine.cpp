@@ -47,6 +47,10 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
 {
     sampleRate_ = sampleRate;
     blockSize_  = maxBlockSize;
+    // AUDIT-FIX (Fix 8): remember the intelligence flag so applyValidatedPlan can
+    // skip the dormant internal-chain writes when the shipped plugin runs without
+    // the mastering chain engaged (PluginProcessor calls prepare(...,false)).
+    intelligenceActive_ = startIntelligence;
 
     // Prepare all DSP stages
     splitter_.prepare(sampleRate, maxBlockSize);
@@ -65,6 +69,7 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     analysisSamplesSinceWindowSample_ = 0;
     analysisSumSquares_ = 0.0;
     analysisSampleCount_ = 0;
+    analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
 
     // Pre-allocate band buffers
     for (int b = 0; b < MultibandSplitter::kNumBands; ++b)
@@ -129,6 +134,11 @@ void AutoMasteringEngine::reset() noexcept
     analysisSamplesSinceWindowSample_ = 0;
     analysisSumSquares_ = 0.0;
     analysisSampleCount_ = 0;
+    analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
+    // P1.2: clear verification so it can't be read as a stale "last apply" result
+    // across a prepare/reset cycle.
+    lastApplyVerification_ = {};
+    lastApplyWasPartial_.store(false, std::memory_order_release);
     clearLastSafeNeuralMasteringPlan();
     for (auto& b : bandBuffers_)
         b.clear();
@@ -265,6 +275,11 @@ void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noex
     const int nch = buf.getNumChannels();
     if (ns == 0 || nch == 0)
         return;
+
+    // AUDIT-FIX (Fix 7): accumulate host-rate samples for the SonicMaster safety
+    // policy's frame-based staleness check. Relaxed: single audio-thread writer,
+    // advisory read on the analysis thread.
+    analyzedSamples_.fetch_add(static_cast<std::uint64_t>(ns), std::memory_order_relaxed);
 
     lufs_.processBlock(buf.getArrayOfReadPointers(), nch, ns);
     analysisTruePeak_.processBlock(buf);
@@ -437,6 +452,16 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     if (!plan.valid || plan.fallbackMode != NeuralMasteringFallbackMode::None)
         return false;
 
+    // AUDIT-FIX (Fix 8): gate the internal DSP-chain writes behind the intelligence
+    // flag captured in prepare(). The shipped plugin calls prepare(...,false), so
+    // these eq_/dynamics_/stereo_/exciter_/limiter_/normalizer_ objects are dormant
+    // (no audio flows through them) and writing to them only pretends to apply the
+    // plan. The live path to the hosted plugin (chainPlanner_.applyPlan below) is
+    // OUTSIDE this gate and always runs. When/if the internal chain is activated
+    // (prepare(...,true)), this block runs as before. Also logged once so operators
+    // can tell a dormant apply from an audible one.
+    if (intelligenceActive_)
+    {
     if (plan.appliedMask.eq)
     {
         // AUDIT-2: apply ONLY the EQ bands the SonicMaster model decides on
@@ -546,6 +571,23 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
                                        -8.0f);
         normalizer_.setTargetLUFS(target);
     }
+    } // end AUDIT-FIX (Fix 8) intelligenceActive_ gate
+    else
+    {
+        // AUDIT-FIX (Fix 8): internal DSP chain is dormant (prepare was called with
+        // startIntelligence=false). The neural plan is forwarded ONLY to the hosted
+        // plugin via the bridge below. Logged once per process so a dormant apply is
+        // never mistaken for an audible one.
+#if JUCE_DEBUG
+        static bool sDormantLogged = false;
+        if (! sDormantLogged)
+        {
+            DBG("AutoMasteringEngine::applyValidatedPlan: internal DSP chain dormant "
+                "(intelligence inactive); forwarding plan to hosted plugin only.");
+            sDormantLogged = true;
+        }
+#endif
+    }
 
     // AUDIT CRITICAL-6/7/17: bridge the neural plan to the hosted mastering
     // plugin. The internal DSP chain above is dormant in the shipped plugin
@@ -567,6 +609,37 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     MultiEffectPlan multiPlan = buildBridgePlanFromNeural(plan);
     const int ozoneApplied = chainPlanner_.applyPlan(multiPlan);
     lastOzoneAppliedCount_.store(ozoneApplied, std::memory_order_release);
+
+    // P1.2 (AUDIT): consult the applicator's readback verification + breakdown so
+    // getLastApplyVerification()/lastApplyWasPartial() reflect THIS apply. The
+    // verification reads the hosted plugin's normalized values back and compares
+    // to what was enqueued (discrete-aware tolerance). Previously this entire
+    // read-back path (Fix 2) was built in OzonePlanApplicator but NEVER consulted
+    // here, so getLastApplyVerification() always returned zeros and a partial /
+    // drifted apply was indistinguishable from a clean one.
+    //
+    // Note: we read back immediately after applyPlan(). The command queue drains
+    // on the audio thread within a block; a not-yet-drained edit reads back as the
+    // pre-write value and is correctly classified as mismatched (an honest
+    // "hasn't landed yet" signal). A processor-side flush hook can be added later
+    // (mirroring SonicMasterAnalysisEngine::maintenanceRequestCb_) to tighten the
+    // read-back to post-drain; it is not required for the signal to be truthful.
+    lastApplyVerification_ = chainPlanner_.getLastOzoneVerification();
+    {
+        const auto bd = chainPlanner_.getLastOzoneApplyBreakdown();
+        // P1.2 partial heuristic: the apply was "partial" if fewer than 80% of the
+        // REQUESTED slots were enqueued, OR fewer than 80% of the ENQUEUED params
+        // read back within tolerance. This is the threshold SonicMaster uses to
+        // choose Status::AppliedPartial over Status::Applied so the assistant
+        // cannot claim a clean apply when params were skipped or drifted.
+        const int requested = bd.enqueued + bd.skipped + bd.unmapped + bd.ambiguous;
+        const bool enqueuedShortfall = (requested > 0)
+            && (static_cast<float>(bd.enqueued) < 0.80f * static_cast<float>(requested));
+        const bool verifiedShortfall = (lastApplyVerification_.enqueued > 0)
+            && (lastApplyVerification_.verifiedFraction() < 0.80f);
+        lastApplyWasPartial_.store(enqueuedShortfall || verifiedShortfall,
+                                   std::memory_order_release);
+    }
 
     // P0.2: if an Ozone applicator IS registered but applied 0 params, the map
     // is all-stubs (audit never ran). Returning true with all-stubs misleads

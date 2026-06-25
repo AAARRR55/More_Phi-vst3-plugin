@@ -127,7 +127,8 @@ MasteringTargetVector makeDeltasTowardTargets(const MasteringTargetVector& targe
 NeuralMasteringPlanCandidate makeSafetyCandidate(const ValidatedNeuralMasteringPlan& plan,
                                                  NeuralMasteringRuntimeMode mode,
                                                  float confidence,
-                                                 const NeuralMasteringSafetyPolicy& policy) noexcept
+                                                 const NeuralMasteringSafetyPolicy& policy,
+                                                 std::uint64_t currentFrame) noexcept
 {
     NeuralMasteringPlanCandidate candidate {};
     candidate.schemaVersion   = kNeuralMasteringPlanSchemaVersion;
@@ -144,6 +145,15 @@ NeuralMasteringPlanCandidate makeSafetyCandidate(const ValidatedNeuralMasteringP
     candidate.compParams      = plan.compParams;
     candidate.hasCompParams   = plan.hasCompParams;
     candidate.capturedAtSteadyClockNs = plan.capturedAtSteadyClockNs;
+    // AUDIT-FIX (Fix 7): populate frame-based staleness so the safety policy's
+    // StalePlan/InvalidTimestamp checks (NeuralMasteringSafetyPolicy.cpp:357-361)
+    // actually fire for the SonicMaster path. Previously both fields stayed 0,
+    // disabling the check (0 < 0 is false, 0 > currentFrame is false on a live
+    // stream → neither branch tripped, but a genuinely stale plan also slipped
+    // through because producedAtFrame(0) was never > currentFrame). Matches the
+    // OnnxNeuralMasteringRunner precedent (expiresAfterFrame = produced + 96000).
+    candidate.producedAtFrame   = currentFrame;
+    candidate.expiresAfterFrame = currentFrame + policy.getConfig().maxPlanAgeFrames;
     return candidate;
 }
 
@@ -177,12 +187,11 @@ void SonicMasterAnalysisEngine::ensureRing() noexcept
     if (ring_.load(std::memory_order_acquire) != nullptr) return;
     if (!prepared_.load(std::memory_order_relaxed)) return;
 
-    // AUDIT-FIX-R11: sanity-check the ring size. At the default 8*192000=1,536,000
-    // frames, the power-of-2 round-up yields 2,097,152 frames × 2 ch × 4 bytes =
-    // 16,777,216 bytes = 16.0 MiB (~16.8 MB decimal). This is within budget but
-    // debug builds assert a reasonable ceiling. (AUDIT-2026-06-25: earlier comments
-    // here and at SonicMasterAnalysisEngine.h:162/:248 said "~12.3 MB" — that was
-    // a stale underestimate from a prior smaller ring config; corrected.)
+    // AUDIT-FIX-R11: sanity-check the ring size. captureRingFrames is sized in
+    // prepare() to 8 s at the actual host sample rate (PERF-MEM-RATE), then
+    // pow2-rounded by AudioCaptureRing. At 48 kHz that's ~4.0 MiB; at 192 kHz
+    // ~16.0 MiB. (AUDIT-2026-06-25: earlier comments cited a fixed "16.0 MiB"
+    // or "12.3 MB" — both stale; the ring is now rate-proportional.)
     jassert(config_.captureRingFrames >= 2u * 44100u);           // at least 2s @ 44.1k
     jassert(config_.captureRingFrames <= 32u * 192000u);         // at most 32s @ 192k
 
@@ -197,9 +206,23 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
 
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
 
+    // PERF-MEM-RATE: Right-size the capture ring to 8 s at the ACTUAL host sample
+    // rate (was a fixed 8*192000 = 1,536,000 frames → 16.0 MiB regardless of rate).
+    // Most sessions run at 44.1/48 kHz, where 8 s is ~353k/384k frames → pow2-rounds
+    // to 512k frames × 2 ch × 4 B = 4.0 MiB (vs 16.0 MiB at 192 kHz). AudioCaptureRing
+    // pow2-rounds again in its ctor, so this is a soft target. Clamped to the same
+    // [2s@44.1k, 32s@192k] bounds ensureRing asserts.
+    {
+        const double framesF = 8.0 * sampleRate_;
+        auto frames = static_cast<std::size_t>(framesF);
+        if (frames < 2u * 44100u)   frames = 2u * 44100u;
+        if (frames > 32u * 192000u) frames = 32u * 192000u;
+        config_.captureRingFrames = frames;
+    }
+
     // PERF-MEM: Defer AudioCaptureRing allocation until the feature is actually
-    // activated (setActive(true) or requestDecisionNow). The ring is 16.0 MiB
-    // (~16.8 MB decimal; 8s @ 192kHz stereo, pow2-rounded); lazy allocation cuts
+    // activated (setActive(true) or requestDecisionNow). The ring is rate-proportional
+    // (~4 MiB at 48 kHz, ~16 MiB at 192 kHz, pow2-rounded); lazy allocation cuts
     // More-Phi's baseline memory footprint substantially when SonicMaster is off.
     // C-3 FIX (audit): publish nullptr BEFORE freeing storage so an audio
     // thread in capture() that loads ring_ with acquire bails before the
@@ -366,6 +389,43 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     captureTimeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
+    // P2.8 (AUDIT): transition guard. If a hosted-plugin parameter changed during
+    // or shortly before this capture window, the window is a hybrid of two
+    // parameter states — the model would produce a decision for a state that never
+    // existed. Discard the window, flush the ring so the next cycle starts fresh,
+    // and report CollectingAudio until a clean post-settle window accumulates.
+    // settleNs gives the hosted plugin's internal state (filters, lookahead, tails)
+    // time to flush after the change.
+    if (paramChangePending_.load(std::memory_order_relaxed))
+    {
+        const std::uint64_t changeNs = paramChangeNs_;  // relaxed read, advisory
+        const double windowSeconds = static_cast<double>(hostFrames) / sampleRate_;
+        const std::uint64_t windowNs = static_cast<std::uint64_t>(windowSeconds * 1e9);
+        const std::uint64_t settleNs = static_cast<std::uint64_t>(paramSettleSeconds_ * 1e9);
+        // Contaminated if the change occurred within [captureTimeNs - window, captureTimeNs + settle].
+        const std::uint64_t windowStartNs =
+            captureTimeNs_ > windowNs ? captureTimeNs_ - windowNs : 0;
+        const bool inWindow = (changeNs >= windowStartNs && changeNs <= captureTimeNs_);
+        // Also require the full settle period to have elapsed since the change so
+        // we don't analyze a window whose tail still reflects the prior setting.
+        const bool stillSettling =
+            captureTimeNs_ < changeNs || (captureTimeNs_ - changeNs) < settleNs;
+        if (inWindow || stillSettling)
+        {
+            // Flush and clear the pending flag; the next cycle re-evaluates. If
+            // another change arrives in the meantime, notifyHostedParameterChanged
+            // re-arms it — we only clear when we've actually observed the change.
+            paramChangePending_.store(false, std::memory_order_relaxed);
+            if (auto* ring2 = ring_.load(std::memory_order_acquire))
+                ring2->reset();
+            status_.store(Status::CollectingAudio, std::memory_order_release);
+            return false;
+        }
+        // The change predates this window by more than the settle period: clear
+        // the flag and analyze normally (the window is clean).
+        paramChangePending_.store(false, std::memory_order_relaxed);
+    }
+
     // Resample host-rate -> 44.1k if needed.
     if (std::abs(sampleRate_ - 44100.0) < 0.5)
     {
@@ -439,11 +499,18 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     runtime.sampleRate = sampleRate_;
     runtime.channelCount = 2;
     runtime.layout = NeuralMasteringLayout::Stereo;
+    // AUDIT-FIX (Fix 7): feed the real audio frame count so the safety policy's
+    // frame-based staleness check fires (previously currentFrame stayed 0 and the
+    // check was inert for the SonicMaster path). Pulled from AutoMasteringEngine's
+    // analyzeBlock accumulator; falls back to 0 when no app engine is attached.
+    if (applicationEngine_ != nullptr)
+        runtime.currentFrame = applicationEngine_->getAnalyzedSampleCount();
 
     const auto candidate = makeSafetyCandidate(plan,
                                                NeuralMasteringRuntimeMode::Background,
                                                config_.confidenceFloor,
-                                               safetyPolicy_);
+                                               safetyPolicy_,
+                                               runtime.currentFrame);
     const auto verdict = safetyPolicy_.validate(candidate, runtime);
     if (!verdict.accepted)
     {
@@ -543,12 +610,16 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     runtime.sampleRate = sampleRate_;
     runtime.channelCount = 2;
     runtime.layout = NeuralMasteringLayout::Stereo;
+    // AUDIT-FIX (Fix 7): same frame-based staleness population as runCycle above.
+    if (applicationEngine_ != nullptr)
+        runtime.currentFrame = applicationEngine_->getAnalyzedSampleCount();
 
     auto decisionPolicy = safetyPolicy_;
     const auto candidate = makeSafetyCandidate(plan,
                                                NeuralMasteringRuntimeMode::MessageThread,
                                                config_.confidenceFloor,
-                                               decisionPolicy);
+                                               decisionPolicy,
+                                               runtime.currentFrame);
     const auto verdict = decisionPolicy.validate(candidate, runtime);
     if (!verdict.accepted)
         return false;

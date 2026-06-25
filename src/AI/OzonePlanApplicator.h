@@ -14,12 +14,18 @@
 #pragma once
 
 #include "OzoneParameterMap.h"
-#include "ChainPlanExecutor.h"
+#include "ChainPlanExecutor.h"   // brings in OzoneApplyBreakdown + MultiEffectPlan (Fix 6)
 #include <juce_core/juce_core.h>
 
 namespace more_phi {
 
 class MorePhiProcessor;
+
+// AUDIT-FIX (Fix 2): verification result returned by
+// OzonePlanApplicator::getLastVerification(). Defined in Core/AutoMasteringEngine.h;
+// forward-declared here to avoid a header dependency cycle (AutoMasteringEngine.h
+// includes ChainPlanExecutor.h, which this header also includes).
+struct ApplyVerification;
 
 /**
  * Abstract interface for Ozone plan applicators.
@@ -31,6 +37,15 @@ public:
     virtual ~OzonePlanApplicatorBase() = default;
     virtual int apply(const MultiEffectPlan& plan) = 0;
     virtual int getLastAppliedCount() const noexcept = 0;
+    // AUDIT-FIX (Fix 6): default returns an empty breakdown so existing test stubs
+    // don't need to implement it; the production applicator overrides to return the
+    // real per-slot detail.
+    virtual OzoneApplyBreakdown getLastApplyBreakdown() const noexcept { return {}; }
+    // AUDIT-FIX (Fix 2): default returns an empty verification so stubs compile.
+    // The production applicator overrides to read back each enqueued param via the
+    // hosted-plugin bridge and compare to the requested normalized value with a
+    // discrete-aware tolerance.
+    virtual ApplyVerification getLastVerification() const noexcept;
 };
 
 class OzonePlanApplicator : public OzonePlanApplicatorBase
@@ -58,6 +73,18 @@ public:
     /** Read back the number of parameters applied in the last apply() call. */
     int getLastAppliedCount() const noexcept override { return lastAppliedCount_; }
 
+    // AUDIT-FIX (Fix 6): per-slot breakdown of the last apply() — enqueued/skipped/
+    // unmapped/ambiguous counts plus the list of {index, requestedValue} pairs
+    // actually enqueued, for readback verification by the caller.
+    OzoneApplyBreakdown getLastApplyBreakdown() const noexcept override { return lastBreakdown_; }
+
+    // AUDIT-FIX (Fix 2): readback verification of the last apply(). For each
+    // enqueued {index, requestedValue}, reads the hosted plugin's current normalized
+    // value back and compares with a discrete-aware tolerance. Counts verified,
+    // driftedDiscrete (discrete params that snapped to a different step), and
+    // mismatched (outside tolerance). Empty before the first apply.
+    ApplyVerification getLastVerification() const noexcept override;
+
 private:
     /** Apply EQ prescription (parses plan.eqPrescriptionJSON). */
     int applyEQ(const MultiEffectPlan& plan);
@@ -74,9 +101,26 @@ private:
     /** Enqueue a single parameter if idx != -1. Returns 1 on success, 0 if skipped. */
     int enqueueIfMapped(int idx, float normalizedValue);
 
+    // P2.6 (AUDIT): overload that re-validates the hosted plugin's current
+    // parameter name at `idx` against `expectedName` before writing. Used to
+    // detect index drift when the hosted plugin is swapped after the map was
+    // built — a stale positional index would otherwise write to whatever
+    // parameter now occupies that slot in the new plugin. On mismatch the write
+    // is skipped (counted as skipped in the breakdown) rather than corrupting an
+    // unrelated control. Pass an empty expectedName to skip the check (legacy
+    // callers that don't yet supply a name).
+    int enqueueIfMapped(int idx, float normalizedValue, const juce::String& expectedName);
+
+    // P2.6 (AUDIT): case-insensitive comparator used by the index-drift check.
+    bool nameMatches(const juce::String& expectedName,
+                     const juce::String& actualName) const noexcept;
+
     MorePhiProcessor&        processor_;
     const OzoneParameterMap& map_;
     int                      lastAppliedCount_ = 0;
+    // AUDIT-FIX (Fix 6): populated by apply() via enqueueIfMapped. Cleared at the
+    // start of each apply() so it always reflects the most recent call.
+    OzoneApplyBreakdown      lastBreakdown_ {};
 
     // Dynamics mapping constants
     // compressionNeed [0..1] → threshold dBFS in this range

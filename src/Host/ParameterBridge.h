@@ -54,6 +54,21 @@ public:
     float getParameterNormalized(juce::AudioPluginInstance& plugin, int index) const noexcept;
     void setParameterNormalized(int index, float value) noexcept override;
     void setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value) noexcept;
+
+    // AUDIT-FIX (Fix 5): setParameterNormalized variant that SNAPS the value to the
+    // nearest valid step for discrete/boolean parameters before writing. The raw
+    // setValue path writes a continuous float regardless of isDiscrete/isBoolean,
+    // relying on the hosted plugin to self-snap — which is unreliable and undetectable
+    // on readback (the autonomous SonicMaster path has no round-trip check). This
+    // helper computes round(value*(numSteps-1))/(numSteps-1) for discrete params and
+    // 0/1 for booleans, then delegates to setParameterNormalized for the existing
+    // clamp + throttle + setValue + exception-accounting. Continuous params pass
+    // through unchanged. No-op if index is out of range.
+    void setParameterNormalizedSnapped(int index, float value) noexcept;
+    // Pure helper (no write): returns the value that setParameterNormalizedSnapped
+    // would write for the given index. Exposed for the OzonePlanApplicator to
+    // enqueue the already-snapped normalized value, and for readback verification.
+    float snapNormalizedToStep(int index, float value) const noexcept;
     juce::String getParameterName(int index) const override;
 
     void applyParameterState(const float* values, int count) noexcept override;

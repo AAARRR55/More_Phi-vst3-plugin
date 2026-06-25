@@ -44,6 +44,8 @@ add_executable(MorePhiTests
     Integration/TestVST3ParameterAutomation.cpp
     Integration/TestVST3MidiAndSidechain.cpp
     Integration/TestVST3AudioSignalAccuracy.cpp
+    # Phase 1: end-to-end activation (skips without secrets; never fails without them)
+    Integration/TestActivationE2E.cpp
     # Integration/TestVST3ComprehensiveE2E.cpp  # Out of sync with v3.3 core/API; needs rewrite
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
@@ -109,6 +111,8 @@ add_executable(MorePhiTests
     Unit/TestAgentRuntimeCore.cpp
     Unit/TestAgentIsolation.cpp
     Unit/TestConductorAgent.cpp
+    # Phase 3: real REST LLM hardening (retry/validation/tokens), no network
+    Unit/TestRestLlmClientHardening.cpp
     Unit/TestAnalysisAgent.cpp
     Unit/TestOptimizationAgent.cpp
     Unit/TestCreativeAgent.cpp

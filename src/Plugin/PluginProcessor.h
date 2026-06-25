@@ -100,7 +100,11 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "More-Phi"; }
+    // Canonical plugin name matches CMake PRODUCT_NAME ("MorePhi") so preset,
+    // automation, and host identity are consistent across the binary, the
+    // VST3 component, and the AudioProcessor. The hyphenated "More-Phi" is
+    // a marketing-only spelling.
+    const juce::String getName() const override { return "MorePhi"; }
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }

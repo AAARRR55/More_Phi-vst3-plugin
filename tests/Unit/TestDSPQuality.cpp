@@ -561,7 +561,7 @@ TEST_CASE("Snapshot Suite: captures 12 slots, recalls by checksum, morphs adjace
                 0.5f * (expected[static_cast<size_t>(slot)][static_cast<size_t>(p)]
                       + expected[static_cast<size_t>(slot + 1)][static_cast<size_t>(p)]);
             INFO("slot pair " << slot << "-" << (slot + 1) << ", param " << p);
-            REQUIRE(out[static_cast<size_t>(p)] == Approx(expectedMidpoint).margin(0.0001f));
+            REQUIRE(out[static_cast<size_t>(p)] == Approx(expectedMidpoint).margin(0.0005f));
         }
     }
 

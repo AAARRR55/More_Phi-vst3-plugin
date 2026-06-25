@@ -26,12 +26,50 @@
 #include <atomic>
 #include <array>
 #include <functional>
+#include <vector>   // AUDIT-FIX (Fix 6): OzoneApplyBreakdown::applied
 #include <juce_core/juce_core.h>
 
 // Forward declaration — avoids header dependency loop
 namespace more_phi { class OzonePlanApplicatorBase; }
 
 namespace more_phi {
+
+// AUDIT-FIX (Fix 6): breakdown of a single OzonePlanApplicator::apply() call.
+// Previously apply() returned only an int (params enqueued), so a 3-of-40 partial
+// apply was indistinguishable from a full apply. Defined here (not in
+// OzonePlanApplicator.h) because ChainPlanExecutor returns it by value, and
+// OzonePlanApplicator.h includes this header. Carries enqueued/skipped/unmapped/
+// ambiguous counts AND the {index, requestedValue} pairs actually pushed so the
+// caller can do readback verification (Fix 2).
+struct OzoneApplyBreakdown
+{
+    int enqueued = 0;       // successfully pushed to the command queue
+    int skipped = 0;        // idx valid but push failed (queue full / throttle)
+    int unmapped = 0;       // idx == -1 (no audit mapping for this slot)
+    int ambiguous = 0;      // idx == -2 (Fix 3: ambiguous name match)
+    struct AppliedParam { int index; float requestedNormalized; };
+    std::vector<AppliedParam> applied;   // for readback verification (Fix 2)
+};
+
+// AUDIT-FIX (Fix 2): readback verification of the most recent OzonePlanApplicator::
+// apply() call. 'requested' = slots the plan tried to write; 'enqueued' = how many
+// reached the command queue; 'verified' = how many read back within tolerance after
+// the drain; 'driftedDiscrete' = discrete params whose value snapped to a different
+// step than requested (expected with setParameterNormalizedSnapped); 'mismatched' =
+// params whose readback was outside tolerance for non-snap reasons. Defined here
+// (alongside OzoneApplyBreakdown) because ChainPlanExecutor returns it by value.
+struct ApplyVerification
+{
+    int requested = 0;
+    int enqueued = 0;
+    int verified = 0;
+    int driftedDiscrete = 0;
+    int mismatched = 0;
+    int ambiguous = 0;      // slots the OzoneParameterMap flagged ambiguous (Fix 3)
+    int unmapped = 0;       // slots with no audit mapping
+    [[nodiscard]] float verifiedFraction() const noexcept
+    { return enqueued > 0 ? static_cast<float>(verified) / static_cast<float>(enqueued) : 0.0f; }
+};
 
 struct MultiEffectPlan
 {
@@ -116,6 +154,19 @@ public:
 
     /** Apply an already-built plan through callbacks and registered hosted-plugin applicators. */
     int applyPlan(const MultiEffectPlan& plan);
+
+    // AUDIT-FIX (Fix 6): per-slot breakdown of the most recent applyPlan() call to
+    // the registered Ozone applicator — enqueued/skipped/unmapped/ambiguous counts
+    // plus the {index, requestedValue} pairs actually pushed. Returns an empty
+    // breakdown when no applicator is registered. Used by AutoMasteringEngine::
+    // applyValidatedPlan for honest partial-apply reporting and readback (Fix 2).
+    [[nodiscard]] OzoneApplyBreakdown getLastOzoneApplyBreakdown() const noexcept;
+
+    // AUDIT-FIX (Fix 2): forward the applicator's readback verification of the most
+    // recent apply. Returns an empty ApplyVerification when no applicator is set.
+    // ApplyVerification is defined in Core/AutoMasteringEngine.h; forward-declared
+    // here to keep this header dependency-light.
+    [[nodiscard]] ApplyVerification getLastOzoneVerification() const noexcept;
 
     /** Get the last executed plan. Thread-safe (returns a copy). */
     [[nodiscard]] MultiEffectPlan getLastPlan() const noexcept { return lastPlan_; }

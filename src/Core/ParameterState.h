@@ -12,9 +12,13 @@
 
 namespace more_phi {
 
-// Maximum supported parameters per hosted plugin
-// Most plugins have < 500 parameters; this provides headroom
-constexpr int MAX_PARAMETERS = 2048;
+// Maximum supported parameters per hosted plugin.
+// 4096 covers large commercial instruments (e.g. Serum ~2623 params) with
+// headroom, removing the need to pre-shrink via the TokenOptimizer for most
+// plugins. Arrays sized by this constant are heap-allocated where large
+// (SnapshotBank), so the resident cost (~+200 KB vs the old 2048 ceiling) is
+// bounded and safe.
+constexpr int MAX_PARAMETERS = 4096;
 
 // Reference block duration: 512 samples @ 44.1 kHz.
 // Used as the canonical dt for smoothing time-constant derivation (MorphProcessor)
@@ -24,7 +28,7 @@ constexpr float kRefDt = 512.0f / 44100.0f;
 
 struct ParameterState
 {
-    std::array<float, MAX_PARAMETERS> values{};  // 2048 floats, fixed-size, no heap
+    std::array<float, MAX_PARAMETERS> values{};  // MAX_PARAMETERS floats, fixed-size, no heap
     char   name[64]{};                            // Fixed char buffer, RT-safe
     bool   occupied = false;
     int    parameterCount = 0;

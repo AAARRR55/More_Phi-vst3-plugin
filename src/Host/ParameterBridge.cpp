@@ -189,6 +189,40 @@ void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, 
     updateThrottleState(index, clamped, now);
 }
 
+float ParameterBridge::snapNormalizedToStep(int index, float value) const noexcept
+{
+    // AUDIT-FIX (Fix 5): NaN -> 0, clamp to [0,1] first so the snap math is well
+    // defined. Booleans quantize to {0,1}; discrete params with numSteps>1 quantize
+    // to the nearest step (k/(numSteps-1)); everything else (continuous, or discrete
+    // with unknown steps) passes through unchanged so setParameterNormalized does
+    // the normal clamp+write.
+    const float safeValue = std::isfinite(value) ? value : 0.0f;
+    float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
+
+    if (index < 0)
+        return clamped;
+
+    if (isBoolean(index))
+        return clamped >= 0.5f ? 1.0f : 0.0f;
+
+    if (isDiscrete(index))
+    {
+        const int numSteps = getParameterNumSteps(index);
+        if (numSteps > 1)
+        {
+            const float stepCount = static_cast<float>(numSteps - 1);
+            const float stepped = std::round(clamped * stepCount) / stepCount;
+            return juce::jlimit(0.0f, 1.0f, stepped);
+        }
+    }
+    return clamped;
+}
+
+void ParameterBridge::setParameterNormalizedSnapped(int index, float value) noexcept
+{
+    setParameterNormalized(index, snapNormalizedToStep(index, value));
+}
+
 juce::String ParameterBridge::getParameterName(int index) const
 {
     if (!testDescriptors_.empty())

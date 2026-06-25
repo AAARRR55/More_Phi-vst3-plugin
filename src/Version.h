@@ -10,11 +10,11 @@ namespace more_phi {
 
 // Current version - matching SnappySnap video evidence (3.3.0)
 constexpr int VERSION_MAJOR = 3;
-constexpr int VERSION_MINOR = 3;
+constexpr int VERSION_MINOR = 4;
 constexpr int VERSION_PATCH = 0;
 
-constexpr const char* VERSION_STRING = "3.3.0";
-constexpr const char* VERSION_CODENAME = "Synthesizer Edition";
+constexpr const char* VERSION_STRING = "3.4.0";
+constexpr const char* VERSION_CODENAME = "Production Readiness";
 
 // Storefront URL — where the "Get License Key" button sends the user. Override
 // at build time by defining MORE_PHI_STORE_URL (CMake -DMORE_PHI_STORE_URL=...).
@@ -61,6 +61,19 @@ struct ChangelogEntry
 };
 
 inline const ChangelogEntry CHANGELOG[] = {
+    {
+        "3.4.0",
+        "June 2026",
+        "Production Readiness\n"
+        "- FIX: VST3 component version now propagated from CMake project version\n"
+        "- FIX: Production Ed25519 key rotation (build-config injection, dev key blocked at compile time)\n"
+        "- FIX: Editor lease RAII + unload-lifetime safety\n"
+        "- FIX: Real REST LLM hardening (retry/backoff, schema validation, token accounting)\n"
+        "- FIX: Honest AI labeling (online provider vs offline heuristic)\n"
+        "- FIX: State migration replaces stub (versioned transform chain)\n"
+        "- FIX: VST3 program/IUnitInfo preset surface\n"
+        "- DOC: Corrected false AAX claim (only VST3 + AU are built; AAX is not)\n"
+    },
     {
         "3.3.0",
         "February 2026",

@@ -81,6 +81,13 @@
 
 namespace more_phi {
 
+// P2.5 (AUDIT): forward-declared so AutoMasteringEngine can hold an optional
+// ActionLedger* to record neural mastering writes (which bypass MCPToolHandler).
+// Full definition pulled in the .cpp only.
+class ActionLedger;
+
+
+
 class AutoMasteringEngine : public juce::Timer
 {
 public:
@@ -91,6 +98,14 @@ public:
 
     void prepare(double sampleRate, int maxBlockSize, bool startIntelligence = true);
     void reset() noexcept;
+
+    // AUDIT-FIX (Fix 8): true iff prepare() was called with startIntelligence=true.
+    // applyValidatedPlan uses this to gate the internal eq_/dynamics_/stereo_/
+    // limiter_/normalizer_ writes — those objects are dormant in the shipped plugin
+    // (PluginProcessor calls prepare(...,false)) and writing to them is misleading
+    // (looks like audio processing but reaches no samples). Returns the value passed
+    // to the most recent prepare(); defaults false before prepare() is called.
+    [[nodiscard]] bool isIntelligenceActive() const noexcept { return intelligenceActive_; }
 
     // ── Activation (any thread — atomic) ─────────────────────────────────────
 
@@ -129,6 +144,33 @@ public:
     [[nodiscard]] float getLimiterGainReductionDB() const noexcept { return limiter_.getGainReductionDB(); }
     [[nodiscard]] float getGainReductionDB(int band) const noexcept { return dynamics_.getGainReductionDB(band); }
 
+    // AUDIT-FIX (Fix 7): total host-rate samples observed via analyzeBlock() since
+    // prepare(). Used by SonicMasterAnalysisEngine to populate the safety policy's
+    // frame-based staleness check (producedAtFrame/expiresAfterFrame) — previously
+    // the SonicMaster path left runtime.currentFrame=0, so only the wall-clock
+    // guard fired. Atomic: written on the audio thread (analyzeBlock), read on the
+    // analysis thread (runCycle). Relaxed is sufficient — advisory staleness only.
+    [[nodiscard]] std::uint64_t getAnalyzedSampleCount() const noexcept
+    { return analyzedSamples_.load(std::memory_order_relaxed); }
+
+    // AUDIT-FIX (Fix 2): readback verification of the most recent applyValidatedPlan()
+    // call against the hosted plugin. Compares each enqueued param's requested
+    // normalized value against getParameterNormalized(idx) after the command queue
+    // drains, with a discrete-aware tolerance (matching MCPToolHandler's
+    // classifyVerification). Atomic copy: written under the apply path, read from
+    // any thread. Returns a zeroed struct before the first apply or when the hosted
+    // plugin applicator is unmapped.
+    [[nodiscard]] ApplyVerification getLastApplyVerification() const noexcept
+    { return lastApplyVerification_; }
+
+    // AUDIT-FIX (Fix 2/6): true iff the most recent applyValidatedPlan() either
+    // enqueued <80% of the requested slots OR read back <80% of the enqueued params
+    // within tolerance. The SonicMaster engine reads this to choose Status::AppliedPartial
+    // over Status::Applied so the assistant cannot claim a clean apply when params
+    // drifted or were skipped. Atomic; written under the apply path, read any thread.
+    [[nodiscard]] bool lastApplyWasPartial() const noexcept
+    { return lastApplyWasPartial_.load(std::memory_order_acquire); }
+
     /** ENHANCERS-1/PDC: total lookahead latency of the mastering chain in
      *  host-rate samples (brickwall-limiter lookahead + exciter oversampling
      *  when enabled). Returns 0 when the chain is inactive (dormant), so the
@@ -164,6 +206,12 @@ public:
     void clearLastSafeNeuralMasteringPlan() noexcept;
     [[nodiscard]] bool hasLastSafeNeuralMasteringPlan() const noexcept { return hasLastSafeNeuralPlan_; }
     [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept { return lastSafeNeuralPlan_; }
+
+    // P2.5 (AUDIT): wire the ActionLedger so neural mastering writes (which bypass
+    // MCPToolHandler::handle and were therefore NOT recorded) become auditable. Pass
+    // nullptr to detach. The processor wires this after the MCP server's
+    // AutomationRuntime exists. Message thread only. Ledger is NOT owned here.
+    void setActionLedger(ActionLedger* ledger) noexcept { actionLedger_ = ledger; }
 
     // AUDIT CRITICAL-6/7/17: the neural plan is bridged to the hosted plugin via
     // the OzonePlanApplicator path (chainPlanner_.applyPlan forwards the plan to
@@ -234,6 +282,15 @@ private:
     // flowing, gate that path on the audio thread first (or make these atomic).
     double sampleRate_  = 48000.0;
     int    blockSize_   = 512;
+    // AUDIT-FIX (Fix 8): captured from prepare()'s startIntelligence arg. When
+    // false, applyValidatedPlan skips the internal-chain writes (dormant objects).
+    bool   intelligenceActive_ = false;
+    // AUDIT-FIX (Fix 7): cumulative sample count for frame-based staleness.
+    std::atomic<std::uint64_t> analyzedSamples_ { 0 };
+    // AUDIT-FIX (Fix 2): readback verification of the last applyValidatedPlan().
+    ApplyVerification lastApplyVerification_ {};
+    // AUDIT-FIX (Fix 2/6): partial-apply flag (see lastApplyWasPartial()).
+    std::atomic<bool> lastApplyWasPartial_ { false };
     // Same lifecycle invariant: single audio-thread writer during playback,
     // mutated by reset()/prepare() only when the host has stopped playback.
     double analysisElapsedSeconds_ = 0.0;
@@ -250,6 +307,9 @@ private:
     // AUDIT CRITICAL-7: count of hosted-plugin parameters written by the last
     // neural→Ozone bridge apply. -1 = no applicator / not yet applied.
     std::atomic<int> lastOzoneAppliedCount_ { -1 };
+    // P2.5 (AUDIT): non-owning pointer to the MCP ActionLedger. Wired by
+    // the processor after the MCP server's AutomationRuntime exists.
+    ActionLedger* actionLedger_ = nullptr;
 };
 
 } // namespace more_phi

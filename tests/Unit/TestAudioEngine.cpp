@@ -565,10 +565,12 @@ TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[process
     // 100 ms blocks (historyCount_ >= 4) before it publishes an integrated
     // value. 48 blocks gave only 6 throttled analyzeBlock calls → 0 LUFS commits
     // → getLUFSIntegrated() stayed -inf. Feed enough to cross all gates with
-    // margin: 320 blocks → 40 analyzeBlock calls → 20480 samples → ≥4 LUFS
+    // margin: 1280 blocks → 40 analyzeBlock calls → 20480 samples → ≥4 LUFS
     // commits (each 4800 samples) so integrated, momentary (≥4) and snapshots
     // (≥1) all populate.
-    constexpr int kBlocks = 320;
+    // AUDIT-THROTTLE (2026-07): ANALYSIS_THROTTLE_BLOCKS was raised from 8→32;
+    //                          320 blocks gave only 10 analyzeBlock calls → 1 commit → -inf.
+    constexpr int kBlocks = 1280;
     for (int block = 0; block < kBlocks; ++block)
     {
         for (int i = 0; i < buffer.getNumSamples(); ++i)

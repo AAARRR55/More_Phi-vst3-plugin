@@ -32,6 +32,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -111,13 +112,11 @@ struct SonicMasterAnalysisEngineConfig
     double analysisIntervalSeconds = 3.0;
     float  confidenceFloor         = kSonicMasterDefaultConfidence;
     int    consecutiveFailureLimit = 3;
-    // 8 s @ 192 kHz, rounded up to a power of two by AudioCaptureRing.
-    // At the default 1,536,000 frames, the power-of-2 round-up produces
-    // 2,097,152 frames × 2 channels × 4 bytes = 16,777,216 bytes = 16.0 MiB
-    // (~16.8 MB decimal). This is within budget on 64-bit hosts (~50% of the
-    // plugin's ~30 MB baseline) but may be tight on 32-bit hosts. Reduce this
-    // for 32-bit targets or when memory profiling shows contention.
-    std::size_t captureRingFrames = 8u * 192000u;
+    // 8 s of capture, rate-proportional. prepare() sets this to round(8.0 * sampleRate)
+    // (clamped to [2s@44.1k, 32s@192k]); AudioCaptureRing then pow2-rounds it. At
+    // 48 kHz → ~4.0 MiB; at 192 kHz → ~16.0 MiB. The default here is only used if
+    // prepare() is never called (tests); production always re-sizes it.
+    std::size_t captureRingFrames = 8u * 48000u;
 };
 
 class SonicMasterAnalysisEngine
@@ -157,9 +156,34 @@ public:
     // active — the analysis thread will see an empty ring on its next cycle.
     void flushCaptureRing() noexcept;
 
+    // P2.8 (AUDIT): transition guard. Call from the hosted-plugin parameter write
+    // path (AI/MCP/morph edits) when a hosted plugin parameter changes. Records the
+    // instant of the change so runCycle() can detect that the current capture window
+    // straddles a parameter transition — a window spanning a param change is a hybrid
+    // of two states and must NOT be analyzed (the model would produce a decision for a
+    // state that never existed). The cycle discards such a window, flushes the ring,
+    // and reports CollectingAudio until a clean window accumulates.
+    //
+    // Thread-safe and cheap: one relaxed atomic flag + one relaxed timestamp store.
+    // Safe to call from the message/MCP thread (enqueueParameterSet). NOT intended
+    // for the audio-thread drain hot path — wire it at the enqueue point instead.
+    void notifyHostedParameterChanged() noexcept
+    {
+        paramChangePending_.store(true, std::memory_order_relaxed);
+        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    // P2.8: configurable settling period (seconds). After a parameter change the
+    // engine waits this long before trusting a capture window, so the hosted
+    // plugin's internal state (filters, lookahead, tails) has flushed. Defaults to
+    // 0.5 s; raise for plugins with long tails/reverb. Message thread.
+    void setParamTransitionSettleSeconds(double seconds) noexcept
+    { paramSettleSeconds_ = seconds > 0.0 ? seconds : 0.0; }
+
     // Any thread (atomic). When true, capture + cycling run; when false, capture
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
-    // PERF-MEM: First activation lazily allocates the 16.0 MiB capture ring.
+    // PERF-MEM: First activation lazily allocates the rate-proportional capture
+    // ring (~4 MiB at 48 kHz, ~16 MiB at 192 kHz — see SonicMasterAnalysisEngineConfig).
     void setActive(bool active) noexcept
     {
         active_.store(active, std::memory_order_relaxed);
@@ -176,11 +200,18 @@ public:
         CollectingAudio,
         Applied,
         // F2/AUDIT: a plan was decoded, safety-validated, and written into the
-        // AutoMasteringEngine's DSP setters — BUT that chain is not active in
-        // the audio path (active_==false), so no audio sample flows through it
+        // AutoMasteringEngine's DSP setters — BUT that chain is not active in the
+        // audio path (active_==false), so no audio sample flows through it
         // and the hosted plugin is untouched. Distinct from Applied so the UI
         // and the MCP client cannot mistake a dormant apply for an audible one.
         AppliedNoAudioPath,
+        // AUDIT-FIX (Fix 2/6): a plan was applied but readback verification found
+        // either <80% of the enqueued params actually landed on the hosted plugin,
+        // or the applicator only managed to enqueue <80% of the requested slots
+        // (partial map / queue contention / ambiguous names). Distinct from Applied
+        // so the assistant cannot claim a clean apply when params drifted or were
+        // skipped. The full breakdown is available via getLastApplyVerification().
+        AppliedPartial,
         HeldLowConfidence,
         ErrorAutoDisabled
     };
@@ -245,7 +276,7 @@ private:
     bool runCycle() noexcept; // returns true if a plan was applied
     void applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept;
 
-    // PERF-MEM: Lazily allocates the capture ring (16.0 MiB) on first use.
+    // PERF-MEM: Lazily allocates the rate-proportional capture ring on first use.
     // Called from setActive(true), requestDecisionNow, and runOneCycleForTest.
     // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
     void ensureRing() noexcept;
@@ -299,6 +330,15 @@ private:
     std::atomic<bool> pendingApplication_ { false };
     ValidatedNeuralMasteringPlan pendingPlan_ {};
     std::function<void()> maintenanceRequestCb_;  // set by processor; called after flag is set
+
+    // P2.8 (AUDIT): hosted-parameter transition guard. paramChangePending_ is set by
+    // notifyHostedParameterChanged() (message/MCP thread) and consumed+cleared by
+    // runCycle() (analysis thread). paramChangeNs_ is the steady-clock instant of
+    // the most recent change. Relaxed atomics: advisory — a missed/delayed observation
+    // only risks analyzing one stale window, never corrupts data.
+    std::atomic<bool> paramChangePending_ { false };
+    std::uint64_t paramChangeNs_ = 0;
+    double paramSettleSeconds_ = 0.5;   // default settling period after a param change
 };
 
 } // namespace more_phi

@@ -24,12 +24,11 @@ public:
         float spectralRolloff = 0.0f;
         float spectralFlux = 0.0f;
         float crestFactor = 0.0f;
-        // AUDIT-FIX (A7): these two fields are RESERVED — processFrame() never
-        // assigns them, so they are always 0.0f. The plumbing (MeterWindowAccumulator,
-        // MCP telemetry, SonicMasterAnalysisEngine) and TestMeterWindowAccumulator
-        // depend on the fields existing, so they stay; implement the computation
-        // (THD = sqrt(Σ_{h=2..5} |bin(fund*h)|²)/|bin(fund)|; program crest = a
-        // slow window of per-frame crestFactor) only when a consumer needs real values.
+        // AUDIT-FIX (A7): THD and program-crest are now COMPUTED in processFrame()
+        // (previously RESERVED stubs — always 0.0f — yet reported by getLiveMeasure-
+        // ments() as if valid, implying zero distortion / zero crest).
+        //   thdPercent        = 100 * sqrt(Σ_{h=2..5} |X(fund·h)|²) / |X(fund)|
+        //   crestFactorProgram = EMA-smoothed per-frame crestFactor (~1 s window)
         float thdPercent = 0.0f;
         float crestFactorProgram = 0.0f;
         float spectralTilt = 0.0f;
@@ -54,6 +53,10 @@ private:
     static constexpr int kDefaultFFTSize = 2048;
     static constexpr int kDefaultHopSize = 512;
     static constexpr int kMaxReadRetries = 8;
+    // AUDIT-FIX (A7): program-level crest factor EMA time constant (~1 s).
+    // alpha is recomputed in prepare() from sampleRate_/hopSize_ so the smoothing
+    // window tracks the actual analysis frame rate.
+    static constexpr double kCrestProgramTauSeconds = 1.0;
 
     void processFrame() noexcept;
     void publishSnapshot(const SpectrumSnapshot& snapshot) noexcept;
@@ -84,6 +87,9 @@ private:
     std::vector<float> fftScratch_;
     std::vector<float> rawMagnitude_;
     std::vector<float> previousMagnitudeDb_;
+    // AUDIT-FIX (A7): program-level crest EMA state + per-frame smoothing coeff.
+    float crestProgramEma_ = 0.0f;
+    float crestProgramAlpha_ = 0.0f;
 
     mutable std::atomic<uint32_t> version_ { 0 };
     SpectrumSnapshot publishedSnapshot_;
