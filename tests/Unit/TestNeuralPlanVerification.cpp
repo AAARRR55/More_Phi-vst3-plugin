@@ -18,6 +18,7 @@
 #include "AI/OzonePlanApplicator.h"
 #include "AI/OzoneParameterMap.h"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 namespace {
@@ -213,6 +214,6 @@ TEST_CASE("EQ gain round-trip is identity over the decode range (±kMaxGainDB)",
 
     // Regression: the OLD default (±18) would encode +12 dB as 0.8333, not 1.0.
     const float oldBuggy = OzoneParameterMap::normalizeGain(AdaptiveEQ::kMaxGainDB);  // default ±18
-    CHECK(oldBuggy == Catch::Approx(12.0f / 36.0f).margin(1e-5f));   // 0.8333
+    CHECK(oldBuggy == Catch::Approx(30.0f / 36.0f).margin(1e-5f));   // 0.8333 (AUDIT: was a typo 12/36)
     CHECK_FALSE(oldBuggy == Catch::Approx(1.0f).margin(1e-2f));
 }
