@@ -35,6 +35,11 @@ void MorphProcessor::prepare(int maxParamCount)
 
     // C-3 FIX: Reset all physics state so stale values from a previous
     // sample rate / block size don't cause large initial displacement.
+    // NOTE: processedX_/Y_ are kept at 0.5 (their default member initializer)
+    // for state/back-compat. W-2 (mode-switch stale state) is handled separately
+    // in updatePhysics, which re-seeds elasticState_ from the CURRENT cursor on
+    // any transition into Elastic — so the init value here does not cause a
+    // first-block jump (the seed runs on the first Elastic block regardless).
     elasticState_ = ElasticState{};
     processedX_.store(0.5f, std::memory_order_relaxed);
     processedY_.store(0.5f, std::memory_order_relaxed);
@@ -120,6 +125,18 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
             break;
 
         case MorphMode::Elastic:
+            // W-2 FIX (audit): when entering Elastic from a different mode (or
+            // on the first block), seed the spring state from the current
+            // cursor so there is no one-block jump toward target from stale
+            // {0,0} state. processedX_/Y_ are in [-1,1] (same space as
+            // elasticState_.x/y). Zero the velocity for a clean start.
+            if (lastPhysicsMode_ != MorphMode::Elastic)
+            {
+                elasticState_.x  = processedX_.load(std::memory_order_relaxed);
+                elasticState_.y  = processedY_.load(std::memory_order_relaxed);
+                elasticState_.vx = 0.0f;
+                elasticState_.vy = 0.0f;
+            }
             PhysicsEngine::updateElastic(elasticState_, targetX, targetY,
                                           static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)), dt);
             // AUDIT-FIX (C6): reflect the published-cursor clamp back into the
@@ -139,8 +156,15 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
 
         case MorphMode::Drift:
         {
+            // AUDIT-FIX (C5): let driftTime_ grow and wrap on the perlin-space
+            // coordinate instead (see PhysicsEngine::updateDrift). The previous
+            // `if (driftTime_ > 256.0f) driftTime_ -= 256.0f` wrap was continuous
+            // in perlin() only when `speed` was an integer; for non-integer speed
+            // it produced a step discontinuity in perlin(time*speed) every
+            // 256/speed seconds. Coarse reset at 1e9 avoids double-precision drift
+            // over multi-hour sessions while preserving perlin's own periodicity.
             driftTime_ += dt;
-            if (driftTime_ > 256.0f) driftTime_ -= 256.0f;
+            if (driftTime_ > 1e9f) driftTime_ -= 1e6f;
             float px = processedX_.load(std::memory_order_relaxed);
             float py = processedY_.load(std::memory_order_relaxed);
             PhysicsEngine::updateDrift(px, py,
@@ -155,6 +179,10 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
             break;
         }
     }
+
+    // W-2 FIX (audit): record the mode so the next call can detect a transition
+    // into Elastic and re-seed the spring state (see the Elastic case above).
+    lastPhysicsMode_ = mode;
 }
 
 float MorphProcessor::computeSmoothingRateFor(MorphMode mode, float dt) noexcept
@@ -177,8 +205,20 @@ float MorphProcessor::computeSmoothingRateFor(MorphMode mode, float dt) noexcept
     else
     {
         tau = smoothTau_.load(std::memory_order_relaxed);
+        // W-3 FIX (audit): Drift mode writes a fresh Perlin cursor sample every
+        // block. If the user disabled smoothing (tau <= 0), the cursor — and
+        // therefore every interpolated hosted parameter — would jump block-to-
+        // block, producing zipper noise / clicks. Clamp to a safety floor so a
+        // continuous trajectory is always guaranteed. Elastic doesn't need this:
+        // its spring-damper already produces a continuous trajectory even with
+        // smoothing off, so we honor the user's explicit "no smoothing" there.
         if (tau <= 0.0f)
-            return 0.0f;                   // user disabled smoothing → instant track
+        {
+            if (mode == MorphMode::Drift)
+                tau = kDriftMinSmoothingTau;
+            else
+                return 0.0f;               // Elastic + user disabled → instant track
+        }
     }
 
     float rate = std::exp(-safeDt / tau);

@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace more_phi {
@@ -36,6 +37,51 @@ struct SonicMasterSessionHandle; // pimpl — defined in the .cpp
 // "integrated loudness" label downstream as mislabeled short-term.
 inline constexpr std::size_t kSonicMasterSegmentFrames = 262138;
 
+// AUDIT-FIX (A2): the preprocessing the C++ path applies to every inference.
+// Pinned in the model's sibling .contract.json and validated at loadModel time
+// so a model retrained with different preprocessing is rejected at startup
+// rather than producing silently-wrong decisions out-of-distribution.
+inline constexpr float kSonicMasterPeakTargetLinear = 0.89125094f;  // 10^(-1/20) ≈ -1 dBFS
+inline constexpr double kSonicMasterModelSampleRate = 44100.0;
+inline constexpr const char* kSonicMasterInputLayout = "deinterleaved_chw";
+inline constexpr const char* kSonicMasterNormalization = "peak_to_-1dBFS";
+inline constexpr const char* kSonicMasterDtype = "float32";
+inline constexpr int kSonicMasterContractSchema = 1;
+
+// Parsed view of the sibling .contract.json. All fields are validated against
+// the runtime constants above; mismatch fails the model load.
+struct SonicMasterModelContract
+{
+    int schema = 0;
+    std::string inputLayout;
+    std::string normalization;
+    std::string dtype;
+    double sampleRate = 0.0;
+    std::size_t segmentFrames = 0;
+    float peakTargetLinear = 0.0f;
+    // Optional: SHA-256 of the pre-inference tensor for a fixed 1 kHz reference
+    // sine, computed by the export pipeline. When non-empty, the runtime can
+    // recompute and compare for byte-exact preprocessing parity. MVP (A2)
+    // validates the scalar fields only; the hash is the upgrade path.
+    std::string preprocessFingerprint;
+
+    // Returns true iff every field matches the runtime contract constants.
+    bool validate() const noexcept
+    {
+        return schema == kSonicMasterContractSchema
+            && inputLayout == kSonicMasterInputLayout
+            && normalization == kSonicMasterNormalization
+            && dtype == kSonicMasterDtype
+            && std::abs(sampleRate - kSonicMasterModelSampleRate) < 0.5
+            && segmentFrames == kSonicMasterSegmentFrames
+            && std::abs(peakTargetLinear - kSonicMasterPeakTargetLinear) < 1e-4f;
+    }
+};
+
+// Parse a .contract.json file. Returns true on success; false (and leaves the
+// out struct default-initialized) on any parse/schema error. Message thread only.
+bool parseSonicMasterContract(const std::string& contractJsonPath, SonicMasterModelContract& out);
+
 // ONNX session wrapper for the waveform->decision contract.
 class SonicMasterDecisionRunner
 {
@@ -46,10 +92,14 @@ public:
     SonicMasterDecisionRunner(const SonicMasterDecisionRunner&) = delete;
     SonicMasterDecisionRunner& operator=(const SonicMasterDecisionRunner&) = delete;
 
-    // Message thread only. Loads + shape-validates an ONNX model. Returns false
-    // when ORT is not linked, the file is missing, or the I/O shapes do not
-    // match the expected segment_frames / decision_width constants.
-    bool loadModel(std::string_view modelPath);
+    // Message thread only. Loads + shape-validates an ONNX model, and (when
+    // contractPath is non-empty) validates the sibling .contract.json against
+    // the runtime preprocessing constants — a model retrained with different
+    // normalization/layout/dtype/sample-rate is rejected here at startup.
+    // Returns false when ORT is not linked, the file is missing, the I/O shapes
+    // do not match the expected segment_frames / decision_width constants, or
+    // the contract validation fails. AUDIT-FIX (A2).
+    bool loadModel(std::string_view modelPath, std::string_view contractPath = {});
 
     void unloadModel() noexcept;
 

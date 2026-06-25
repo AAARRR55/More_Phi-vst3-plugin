@@ -107,10 +107,12 @@ bool decodeSonicMasterDecision(const float* decision,
         const float makeupDb    = clamp(decision[o + 4],   0.0f,  12.0f);
         const float kneeDb      = clamp(decision[o + 5],   0.0f,  12.0f);
 
-        // Normalized pair for the safety policy's delta math. Map ratio over the
-        // agreed [1,6] band: ratio=2.5 -> 0.0, ratio=1 -> -1.0, ratio=6 -> +3.5.
+        // Normalized pair for the safety policy's delta math. Map ratio over
+        // the agreed [1,4] band: ratio=2.5 -> 0.0, ratio=1 -> -1.0, ratio=4 -> +1.0.
+        // AUDIT-FIX (A6): clamp upper bound was 5.0, allowing normalized values
+        // beyond the safety policy's +1.0 max (silent rejection). Now [-1, +1].
         out.projectedTargets.dynamics[2 * band + 0] = clamp((thresholdDb + 20.0f) / 8.0f, -1.0f, 1.0f);
-        out.projectedTargets.dynamics[2 * band + 1] = clamp((ratioRaw - 2.5f) / 1.5f, -1.0f, 5.0f);
+        out.projectedTargets.dynamics[2 * band + 1] = clamp((ratioRaw - 2.5f) / 1.5f, -1.0f, 1.0f);
 
         // Full real-unit sidecar for the DSP.
         auto& cp = out.compParams[band];

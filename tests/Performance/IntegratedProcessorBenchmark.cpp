@@ -40,6 +40,11 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32) && defined(_M_X64)
+    // AUDIT-FIX (M1): FTZ/DAZ intrinsics for measurement-hygiene setup.
+    #include <xmmintrin.h>
+#endif
+
 namespace more_phi::audit {
 
 namespace {
@@ -87,6 +92,28 @@ Config parseArgs(int argc, char** argv)
         }
     }
     return c;
+}
+
+// ─── AUDIT-FIX (M1): measurement hygiene ───────────────────────────────────
+// Flush denormals to zero (FTZ + DAZ) and pin the benchmark thread to a
+// non-core-0 logical CPU. Without this, any engine that produces a denormal
+// runs 10–100× slower on those blocks, contaminating every relative-timing
+// claim; core migration and turbo variance add noise on top.
+void prepareMeasurementHygiene()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // FTZ (flush-to-zero) + DAZ (denormals-are-zero) via the MXCSR intrinsics.
+    // These match what juce::ScopedNoDenormals sets per-block, but process-wide
+    // so the whole audit (including the timing loop's own scalar state) is clean.
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+
+    // Pin to logical CPU 2 (avoid core 0 — the OS schedules housekeeping there).
+    // Raise priority so OS preemption noise is minimized. Both are advisory: a
+    // noisy machine still produces noisy numbers, but the setup is now declared.
+    SetThreadAffinityMask(GetCurrentThread(), reinterpret_cast<DWORD_PTR>(1) << 2);
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+#endif
 }
 
 // ─── APVTS automation helper (mirrors TestVST3ParameterAutomation.cpp) ─────
@@ -350,6 +377,12 @@ ScenarioResultSet scenarioProcess(const Config& cfg, int blockSize, AutomationMo
     // Reset the in-tree profiler so each scenario's report is self-contained.
     processor.resetProfiler();
 
+    // AUDIT-FIX (M3): collect EVERY per-block timing across ALL passes into one
+    // population for p50/p95/p99/stddev. The previous code took percentiles of
+    // the 5 pass-averages — p99 of 5 numbers is just the max.
+    std::vector<double> allTimings;
+    allTimings.reserve(static_cast<size_t>(cfg.passes) * static_cast<size_t>(cfg.blocksPerPass));
+
     for (int pass = 0; pass < cfg.passes; ++pass)
     {
         std::vector<double> timings;
@@ -406,6 +439,8 @@ ScenarioResultSet scenarioProcess(const Config& cfg, int blockSize, AutomationMo
             if ((b & 63) == 0) pumpMessageThread(2);
         }
 
+        // AUDIT-FIX (M3): fold into the cross-pass population before the move.
+        allTimings.insert(allTimings.end(), timings.begin(), timings.end());
         TimingStats s = TimingStats::fromSamples(std::move(timings));
         r.perPassAvgUs.push_back(s.avgUs);
         r.folded.avgUs += s.avgUs;
@@ -416,17 +451,16 @@ ScenarioResultSet scenarioProcess(const Config& cfg, int blockSize, AutomationMo
     const int N = cfg.passes;
     r.folded.avgUs /= N;
 
-    // Build folded percentiles from a re-run of samples would double the cost;
-    // instead fold the per-pass avgs for a stable p50/p95/p99 of the pass means.
+    // AUDIT-FIX (M3): folded percentiles from the full per-block population
+    // (all passes × blocksPerPass samples), not from the 5 pass-averages.
     {
-        std::vector<double> passAvgs = r.perPassAvgUs;
-        TimingStats passStats = TimingStats::fromSamples(std::move(passAvgs));
-        r.folded.p50Us = passStats.p50Us;
-        r.folded.p95Us = passStats.p95Us;
-        r.folded.p99Us = passStats.p99Us;
-        r.folded.minUs = passStats.minUs;
-        r.folded.maxUs = passStats.maxUs;
-        r.folded.samples = passStats.samples;
+        TimingStats allStats = TimingStats::fromSamples(std::move(allTimings));
+        r.folded.p50Us = allStats.p50Us;
+        r.folded.p95Us = allStats.p95Us;
+        r.folded.p99Us = allStats.p99Us;
+        r.folded.minUs = allStats.minUs;
+        r.folded.maxUs = allStats.maxUs;
+        r.folded.samples = allStats.samples;
     }
 
     r.cpuPercent = (r.folded.avgUs / bufferUs) * 100.0;
@@ -679,6 +713,7 @@ ScenarioResultSet scenarioCombinedOzone(const Config& cfg, int blockSize)
 // ═══════════════════════════════════════════════════════════════════════════
 int runAudit(int argc, char** argv)
 {
+    prepareMeasurementHygiene();  // AUDIT-FIX (M1): FTZ/DAZ + thread affinity before any timing
     const Config cfg = parseArgs(argc, argv);
 
     std::cout << "\n╔══════════════════════════════════════════════════════════════════════╗\n";
@@ -690,6 +725,11 @@ int runAudit(int argc, char** argv)
     for (size_t i = 0; i < cfg.bufferSizes.size(); ++i) std::cout << cfg.bufferSizes[i] << (i + 1 < cfg.bufferSizes.size() ? "," : "");
     std::cout << "] @" << cfg.sampleRate << "Hz"
               << (cfg.realtimePacing ? " [REALTIME PACED]" : " [OFFLINE best-case]") << "\n";
+#if defined(_WIN32) && defined(_M_X64)
+    std::cout << "  Measurement hygiene: FTZ+DAZ ON, affinity pinned to CPU 2, HIGH_PRIORITY\n";
+#else
+    std::cout << "  Measurement hygiene: FTZ/DAZ/affinity NOT applied (non-Windows-x64) — expect noise\n";
+#endif
 
     const auto baseline = takeMemorySnapshot();
     if (baseline.supported)

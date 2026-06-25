@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <thread>
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
 
@@ -136,10 +137,26 @@ bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
     auto bodyHolder = std::make_shared<juce::MemoryBlock>(
         stereoInterleaved, 2 * kSonicMasterSegmentFrames * sizeof(float));
 
-    // Use an async read with a 5-second deadline so a hanging server (accepts
-    // POST but never responds) stalls the analysis loop for at most ~5s,
-    // not the old 10s (which was the connect timeout only, plus unbounded read).
-    auto future = std::async(std::launch::async, [baseUrlCopy, portCopy, targetLufsCopy, bodyHolder]() -> std::string {
+    // AUDIT-FIX (A8): the previous std::async + future::wait_for pattern had an
+    // ineffective 5s timeout. On timeout, infer() returned false — but the
+    // std::future destructor is REQUIRED by the standard to join the async task,
+    // so a hanging server (accepts POST, never responds) stalled the analysis
+    // thread for the full hang duration, not 5s. Replace with a detached thread
+    // + atomic done flag so the destructor does not join. Real socket-level
+    // cancellation would need WinHTTP/libcURL; this gives "give up waiting",
+    // and an inFlight_ guard prevents stacking concurrent requests.
+    if (inFlight_.exchange(true, std::memory_order_acq_rel))
+    {
+        // A previous request is still pending in its detached thread. Skip rather
+        // than stack another 2 MB POST onto a wedged server.
+        return false;
+    }
+
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    auto ok    = std::make_shared<std::atomic<bool>>(false);
+    auto respHolder = std::make_shared<std::string>();
+
+    std::thread worker([baseUrlCopy, portCopy, targetLufsCopy, bodyHolder, done, ok, respHolder]() {
         try
         {
             juce::URL url(baseUrlCopy + ":" + std::to_string(portCopy)
@@ -147,25 +164,40 @@ bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
             const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
                                   .withConnectionTimeoutMs(2000);
             auto stream = url.withPOSTData(*bodyHolder).createInputStream(opts);
-            if (stream == nullptr)
-                return {};
-            return stream->readEntireStreamAsString().toStdString();
+            if (stream != nullptr)
+            {
+                *respHolder = stream->readEntireStreamAsString().toStdString();
+                ok->store(!respHolder->empty(), std::memory_order_release);
+            }
         }
         catch (...)
         {
-            return {};
+            ok->store(false, std::memory_order_release);
         }
+        done->store(true, std::memory_order_release);
     });
+    worker.detach();  // ponytail: detach — ~thread does not join, so timeout is effective
 
-    if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
-        return false;   // A3: safe now — bodyHolder + locals are owned by the async thread, not this frame
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (done->load(std::memory_order_acquire))
+        {
+            const bool success = ok->load(std::memory_order_acquire);
+            inFlight_.store(false, std::memory_order_release);
+            if (!success || respHolder->empty())
+                return false;
+            return parseInferResponse(*respHolder, outDecision, outCapacity);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
-    std::string resp;
-    try { resp = future.get(); } catch (...) { return false; }
-    if (resp.empty())
-        return false;
-
-    return parseInferResponse(resp, outDecision, outCapacity);
+    // Timeout. The detached worker may still complete in the background; the
+    // inFlight_ flag stays set so the next cycle skips until that worker sets
+    // done. We do NOT clear inFlight_ here on purpose — a still-running wedged
+    // request would otherwise let us stack a second one next cycle. The flag is
+    // cleared on the next observed completion (above) or by refreshProbe().
+    return false;
 }
 
 } // namespace more_phi

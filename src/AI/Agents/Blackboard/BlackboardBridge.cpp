@@ -58,7 +58,10 @@ void BlackboardBridge::unsubscribeAll()
 
 bool BlackboardBridge::hasNewEvents() const
 {
-    return bus_.lastSequence() > lastSeenSequence_.load(std::memory_order_relaxed);
+    // W-8 FIX (audit): acquire-load — pairs with the release-store in poll().
+    // MCP connection threads call this; without acquire they could observe a
+    // stale cursor (re-delivery) or miss a just-published event (skip).
+    return bus_.lastSequence() > lastSeenSequence_.load(std::memory_order_acquire);
 }
 
 namespace {
@@ -129,7 +132,9 @@ void BlackboardBridge::poll()
     // last poll. A dropped count cursor (the old design) would re-deliver or skip
     // events under eviction; the sequence cursor cannot.
     const int window = 512;
-    auto recent = bus_.listRecentSince(lastSeenSequence_.load(std::memory_order_relaxed), window);
+    // W-8 FIX (audit): acquire-load so any event payload published before this
+    // sequence is visible to this (pump) thread.
+    auto recent = bus_.listRecentSince(lastSeenSequence_.load(std::memory_order_acquire), window);
     if (! recent.is_array() || recent.empty())
         return;
 
@@ -161,8 +166,12 @@ void BlackboardBridge::poll()
         // safe because it has no side effects we haven't already idempotently
         // guarded against via the rate/budget limiters in the reactive agents.
         const auto seq = ev.value("sequence", static_cast<uint64_t>(0));
+        // W-8 FIX (audit): release-store so MCP readers (hasNewEvents,
+        // recentAgentEvents) that acquire-load this cursor also see the event
+        // payloads that were published at or before `seq`. Same-thread read on
+        // the pump thread uses relaxed.
         if (seq > lastSeenSequence_.load(std::memory_order_relaxed))
-            lastSeenSequence_.store(seq, std::memory_order_relaxed);
+            lastSeenSequence_.store(seq, std::memory_order_release);
     }
 }
 

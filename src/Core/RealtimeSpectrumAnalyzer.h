@@ -69,6 +69,12 @@ private:
 
     std::unique_ptr<juce::dsp::FFT> fft_;
     std::vector<float> window_;
+    // AUDIT-FIX (A3): precomputed window gains for amplitude/energy-correct
+    // magnitudes. Hann coherent gain = Σw/N = 0.5; energy gain = Σw²/N = 0.375.
+    // Dividing raw |X(k)| by (N * windowCoherentGain_) yields the true tone
+    // amplitude (currently the /N-only division biases absolute dB by ~-6 dB).
+    float windowCoherentGain_ = 1.0f;
+    float windowEnergyGain_   = 1.0f;
     std::vector<float> inputBuffer_;
     std::vector<float> linearFrame_;
     // AUDIT-FIX (M2): un-windowed copy of the current frame. crestFactor /

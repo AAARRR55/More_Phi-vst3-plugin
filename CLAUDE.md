@@ -35,14 +35,34 @@ Always use explicit `.load(order)` / `.store(value, order)` on `std::atomic<T>` 
 
 ## Build Commands
 
+### Windows / MSVC — Ninja (recommended, fastest)
+
+Use the Ninja generator via the `build-ninja.bat` wrapper, which handles the
+MSVC environment (`vcvars64.bat`) and the VS-bundled `ninja.exe`. Faster than
+the Visual Studio generator and avoids its `.tlog` file-lock thrash. Artefacts
+land in `build-ninja/`. See `build-ninja.bat` and `AGENTS.md` for the full
+action list.
+
+```cmd
+build-ninja.bat configure                          :: one-time (re-fetches JUCE, ~2 min)
+build-ninja.bat build                              :: build the VST3 plugin (default target)
+build-ninja.bat tests                              :: build + run the full test suite
+build-ninja.bat testonly -R "TestName" --output-on-failure   :: run a single test by regex
+build-ninja.bat target MorePhiCLI MorePhiMcpServer :: build specific targets
+```
+
+DAW-loadable VST3: `build-ninja\MorePhi_artefacts\Release\VST3\MorePhi.vst3\Contents\x86_64-win\MorePhi.vst3`
+
+### Generic cmake (other platforms, or VS generator fallback)
+
 ```bash
 # Generic configure/build with tests
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel
 
 # Debug build
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel
 
 # Run all tests from a generic build directory
 ctest --test-dir build --build-config Release --output-on-failure --parallel 4
@@ -59,27 +79,28 @@ cmake --build build-bench --config Release --target MorePhiBenchmarks
 
 # Sanitizer build (Clang/GCC only)
 cmake -B build-asan -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-asan --config Debug --parallel 2
+cmake --build build-asan --config Debug --parallel
 ctest --test-dir build-asan --build-config Debug --output-on-failure
 ```
 
-Windows local build presets are configured for stability on mid-range machines:
+Windows local build presets are configured for stability on mid-range machines
+(prefer `build-ninja.bat` above for speed; these are the VS-generator presets):
 
 ```bash
 # Safe local plugin build; tests are disabled in this preset
 cmake --preset windows-msvc-safe
-cmake --build --preset windows-safe --parallel 2
+cmake --build --preset windows-safe --parallel
 
 # Single-job fallback if the machine is unstable
 cmake --build --preset windows-single --parallel 1
 
 # Debug build with presets
 cmake --preset windows-msvc-debug
-cmake --build --preset windows-debug --parallel 2
+cmake --build --preset windows-debug --parallel
 
 # Full Windows release/test configure preset
 cmake --preset windows-msvc-release
-cmake --build build/windows-msvc-release --config Release --parallel 2
+cmake --build build/windows-msvc-release --config Release --parallel
 ctest --preset windows-tests
 ```
 

@@ -30,7 +30,12 @@ inline constexpr std::size_t kSonicMasterCompBandWidth = 6;
 // and the applied DSP disagree by up to 3.3x. Raise BOTH together (and verify
 // MultibandDynamicsProcessor supports the wider range) before widening.
 inline constexpr float kSonicMasterCompRatioMin = 1.0f;
-inline constexpr float kSonicMasterCompRatioMax = 6.0f;
+// AUDIT-FIX (A6): tightened from 6.0 to 4.0 so every decoded ratio maps into
+// the safety policy's normalized [-1, +1] dynamics bound. With the previous 6.0
+// max, the normalized value (ratio-2.5)/1.5 could reach +2.33, and any decoded
+// ratio > 4.0 was silently rejected by the safety gate (TargetOutOfRange).
+// Gentler compression is also safer for a default-on mastering assistant.
+inline constexpr float kSonicMasterCompRatioMax = 4.0f;
 
 // AUDIT-2/3: the model emits these counts; AutoMasteringEngine applies ONLY
 // these many bands from a SonicMaster plan and leaves the rest to the genre

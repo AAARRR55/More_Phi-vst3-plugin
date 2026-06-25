@@ -11,9 +11,10 @@ namespace more_phi {
 
 // AUDIT-3: decoder and engine must clamp compressor ratio to the SAME range.
 // If one is widened without the other, telemetry lies by up to 3.3x.
+// AUDIT-FIX (A6): max tightened 6.0 -> 4.0 (see SonicMasterDecisionDecoder.h).
 static_assert(kSonicMasterCompRatioMin == 1.0f,
               "kSonicMasterCompRatioMin mismatch: decoder and engine disagree");
-static_assert(kSonicMasterCompRatioMax == 6.0f,
+static_assert(kSonicMasterCompRatioMax == 4.0f,
               "kSonicMasterCompRatioMax mismatch: decoder and engine disagree");
 
 namespace {

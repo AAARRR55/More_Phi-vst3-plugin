@@ -254,6 +254,103 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
     });
 }
 
+bool ParameterBridge::startRecallRamp(const float* targetValues, int count) noexcept
+{
+    // C-5 FIX (audit): Begin a ramped recall. Captures the hosted plugin's
+    // CURRENT per-parameter values as the ramp start, then stashes the target
+    // snapshot values. The audio-thread per-block loop calls processRecallRamp()
+    // to advance the ramp over kRecallRampBlocks blocks, eliminating the
+    // instant-snap click on continuous params (gain, cutoff, …).
+    //
+    // RT-safety: this runs on the audio thread (MIDI recall) or the message
+    // thread (MCP recall). It performs one ref-counted plugin lease and a
+    // single pass of getValue() (the same cost the touch-detection path pays
+    // every few blocks). All ramp buffers are fixed std::array — no allocation.
+    if (targetValues == nullptr || count <= 0) return false;
+
+    const int captured = withPlugin(host_, cachedConcreteHost_, "startRecallRamp", 0,
+        [this, targetValues, count](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, (int) params.size(), (int) MAX_PARAMETERS);
+        for (int i = 0; i < safeCount; ++i)
+        {
+            // Capture current value as the ramp start; clamp+store the target.
+            recallRampStart_[static_cast<size_t>(i)]  = juce::jlimit(0.0f, 1.0f, params[i]->getValue());
+            recallRampTarget_[static_cast<size_t>(i)] = juce::jlimit(0.0f, 1.0f, targetValues[i]);
+        }
+        return safeCount;
+    });
+
+    if (captured <= 0) return false;
+
+    // Publish the ramp: step=0, count=captured. Stores above happen-before the
+    // release-store of count_ / active_ so the audio thread's acquire-load
+    // observes fully-populated buffers.
+    recallRampStep_.store(0, std::memory_order_relaxed);
+    recallRampCount_.store(captured, std::memory_order_release);
+    recallRampActive_.store(true, std::memory_order_release);
+    return true;
+}
+
+void ParameterBridge::processRecallRamp() noexcept
+{
+    // C-5 FIX (audit): advance the active recall ramp by one block and write
+    // the interpolated values to the hosted plugin. Audio-thread only.
+    // No-op (fast acquire-load bail) when no ramp is active — the steady-state
+    // morph path pays only the atomic load.
+    if (!recallRampActive_.load(std::memory_order_acquire))
+        return;
+
+    const int count = recallRampCount_.load(std::memory_order_relaxed);
+    int step = recallRampStep_.load(std::memory_order_relaxed);
+    if (count <= 0)
+    {
+        recallRampActive_.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Linear ramp fraction in [0,1]. On the final block (step == blocks) we
+    // write exactly the target so floating-point drift can't leave residual.
+    const float frac = (step >= kRecallRampBlocks) ? 1.0f
+        : static_cast<float>(step + 1) / static_cast<float>(kRecallRampBlocks);
+
+    withPlugin(host_, cachedConcreteHost_, "processRecallRamp", 0,
+        [this, count, frac](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, (int) params.size(), (int) MAX_PARAMETERS);
+        for (int i = 0; i < safeCount; ++i)
+        {
+            const float start  = recallRampStart_[static_cast<size_t>(i)];
+            const float target = recallRampTarget_[static_cast<size_t>(i)];
+            const float v = start + (target - start) * frac;
+            try {
+                params[i]->setValue(juce::jlimit(0.0f, 1.0f, v));
+            } catch (...) {
+                bumpApplyException();
+                // Continue ramping the remaining params; one bad param must not
+                // abort the whole recall (matches applyParameterState's policy).
+            }
+        }
+        return safeCount;
+    });
+
+    ++step;
+    if (step >= kRecallRampBlocks)
+    {
+        // Ramp complete. Clear active FIRST (release), then count — order
+        // ensures any later startRecallRamp sees a clean slate.
+        recallRampActive_.store(false, std::memory_order_release);
+        recallRampStep_.store(0, std::memory_order_relaxed);
+        recallRampCount_.store(0, std::memory_order_relaxed);
+    }
+    else
+    {
+        recallRampStep_.store(step, std::memory_order_relaxed);
+    }
+}
+
 std::vector<float> ParameterBridge::captureParameterState() const noexcept
 {
     // H10 FIX: Message-thread only — touches hosted plugin parameters

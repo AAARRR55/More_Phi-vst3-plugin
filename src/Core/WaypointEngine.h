@@ -79,46 +79,46 @@ public:
         const double beatsPerSec = bpm / 60.0;
         const double phaseDelta = static_cast<double>(dt) * beatsPerSec;
 
+        // AUDIT-FIX (C3): the previous advance condition compared the fmod-wrapped
+        // localPhase against `total`, but fmod guarantees localPhase < total, so
+        // the wrap signal was destroyed and the sequencer never advanced. Track
+        // unwrapped phase and detect the crossing explicitly; handle 0 or >1
+        // skipped waypoints via integer divide.
         double phase = phaseTime_.load(std::memory_order_relaxed);
+        const double prevPhase = phase;
         phase += phaseDelta;
-        phaseTime_.store(phase, std::memory_order_relaxed);
 
         const int count = static_cast<int>(waypoints_.size());
         int idx = currentIndex_.load(std::memory_order_relaxed);
 
-        // Clamp to valid range
-        const auto& wp = waypoints_[static_cast<size_t>(idx)];
-        const float transition = wp.transitionBeats;
-        const float hold = wp.holdBeats;
-        const float total = transition + hold;
+        double total = static_cast<double>(waypoints_[static_cast<size_t>(idx)].transitionBeats)
+                     + static_cast<double>(waypoints_[static_cast<size_t>(idx)].holdBeats);
 
-        // Phase accumulates. Check if we need to advance.
-        // transition_ starts from 0, goes to transition, then hold phase
-        double localPhase = std::fmod(phase, static_cast<double>(total));
-        bool advanceToNext = false;
-
-        if (std::abs(localPhase - static_cast<double>(total)) < 1e-9 || localPhase >= static_cast<double>(total))
+        if (total > 0.0 && phase >= total)
         {
-            localPhase = 0.0;
-            advanceToNext = true;
-        }
-        else if (localPhase < 0.0)
-        {
-            localPhase = 0.0;
-        }
-
-        if (advanceToNext)
-        {
-            idx = (idx + 1) % count;
+            const int advances = 1 + static_cast<int>((phase - total) / total);
+            idx = (idx + advances) % count;
             currentIndex_.store(idx, std::memory_order_relaxed);
-            phaseTime_.store(0.0, std::memory_order_relaxed);
-            phase = 0.0;
-            localPhase = 0.0;
+            total = static_cast<double>(waypoints_[static_cast<size_t>(idx)].transitionBeats)
+                  + static_cast<double>(waypoints_[static_cast<size_t>(idx)].holdBeats);
+            // Carry the remainder into the new waypoint's window. prevPhase is the
+            // phase at the start of this block, so (phase - prevPhase) is the
+            // block's delta; fmod by the new total lands us in [0, newTotal).
+            phase = (total > 0.0) ? std::fmod(phase - prevPhase, total) : 0.0;
         }
 
-        const bool inTransition = localPhase < static_cast<double>(transition);
-        const float p = static_cast<float>(inTransition && transition > 0.0f
-            ? localPhase / static_cast<double>(transition)
+        // Drift guard: prevent unbounded growth over multi-hour sessions that
+        // would erode double precision. Coarse reset preserves phase continuity
+        // because all waypoint windows are integer-rational in beats.
+        if (phase > 1e9)
+            phase = std::fmod(phase, 1000.0);
+        phaseTime_.store(phase, std::memory_order_relaxed);
+
+        const double transition = static_cast<double>(waypoints_[static_cast<size_t>(idx)].transitionBeats);
+        const double localPhase = (total > 0.0) ? phase : 0.0;
+        const bool inTransition = (transition > 0.0) && (localPhase < transition);
+        const float p = static_cast<float>(inTransition
+            ? localPhase / transition
             : 1.0);
 
         const size_t prevIdx = static_cast<size_t>((idx - 1 + count) % count);

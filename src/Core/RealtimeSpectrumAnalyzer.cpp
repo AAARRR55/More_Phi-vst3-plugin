@@ -186,7 +186,13 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
             imag = fftScratch_[static_cast<size_t>(2 * bin)];
         }
 
-        const float mag = std::sqrt(real * real + imag * imag) / static_cast<float>(fftSize_);
+        // AUDIT-FIX (A3): divide by (N * coherentGain) so a full-scale single
+        // tone reports its true amplitude in magnitudeDB. Previously the /N-only
+        // division left an uncorrected Hann coherent gain of 0.5, biasing every
+        // absolute dB reading by ~-6 dB. Ratio-based features (centroid, rolloff,
+        // flux, tilt) are invariant to this scale, so they are unaffected.
+        const float mag = std::sqrt(real * real + imag * imag)
+                        / (static_cast<float>(fftSize_) * windowCoherentGain_);
         const float energy = mag * mag;
         const float freq = static_cast<float>(bin) * static_cast<float>(sampleRate_) / static_cast<float>(fftSize_);
         rawMagnitude_[static_cast<size_t>(bin)] = mag;
@@ -303,8 +309,21 @@ void RealtimeSpectrumAnalyzer::computeHannWindow() noexcept
         return;
 
     const float denom = static_cast<float>(std::max(1, fftSize_ - 1));
+    double sumW = 0.0;
+    double sumWSq = 0.0;
     for (int i = 0; i < fftSize_; ++i)
-        window_[static_cast<size_t>(i)] = 0.5f * (1.0f - std::cos(2.0f * kPi * static_cast<float>(i) / denom));
+    {
+        const float w = 0.5f * (1.0f - std::cos(2.0f * kPi * static_cast<float>(i) / denom));
+        window_[static_cast<size_t>(i)] = w;
+        sumW += w;
+        sumWSq += static_cast<double>(w) * w;
+    }
+    // AUDIT-FIX (A3): coherent gain = Σw/N, energy gain = Σw²/N. Accumulate in
+    // double for precision; the Hann theoretical values are 0.5 and 0.375.
+    const double n = static_cast<double>(fftSize_);
+    windowCoherentGain_ = (n > 0.0) ? static_cast<float>(sumW / n) : 1.0f;
+    windowEnergyGain_   = (n > 0.0) ? static_cast<float>(sumWSq / n) : 1.0f;
+    if (windowCoherentGain_ < 1e-6f) windowCoherentGain_ = 1.0f;  // guard against degenerate window
 }
 
 } // namespace more_phi

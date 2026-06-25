@@ -30,18 +30,24 @@ float VoronoiMorphEngine::circumcircleRadiusSq(
     // Compute circumcenter via perpendicular bisector intersection,
     // then radius². For the Delaunay condition we only need the
     // in-circle test, but the radius is useful for diagnostics.
-    float d = 2.0f * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
-    if (std::abs(d) < 1e-12f) return std::numeric_limits<float>::max(); // collinear
+    // AUDIT-FIX (C1): promote accumulation to long double. The default snapshot
+    // layout is 12 points on the unit circle — maximally cocircular — and a
+    // float-precision predicate flips sign on near-cocircular inputs, producing
+    // flipped diagonals / wrong triangulations. 80-bit extended (x86-64) gives
+    // enough headroom for the [-3,3] coordinate range used here.
+    const long double ax = a.x, ay = a.y, bx = b.x, by = b.y, cx = c.x, cy = c.y;
+    const long double d = 2.0L * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (std::fabs(d) < 1e-12L) return std::numeric_limits<float>::max(); // collinear
 
-    float ax = a.x * a.x + a.y * a.y;
-    float bx = b.x * b.x + b.y * b.y;
-    float cx = c.x * c.x + c.y * c.y;
+    const long double aL = ax * ax + ay * ay;
+    const long double bL = bx * bx + by * by;
+    const long double cL = cx * cx + cy * cy;
 
-    float ux = (ax * (b.y - c.y) + bx * (c.y - a.y) + cx * (a.y - b.y)) / d;
-    float uy = (ax * (c.x - b.x) + bx * (a.x - c.x) + cx * (b.x - a.x)) / d;
+    const long double ux = (aL * (by - cy) + bL * (cy - ay) + cL * (ay - by)) / d;
+    const long double uy = (aL * (cx - bx) + bL * (ax - cx) + cL * (bx - ax)) / d;
 
-    float dx = ux - a.x, dy = uy - a.y;
-    return dx * dx + dy * dy;
+    const long double dx = ux - ax, dy = uy - ay;
+    return static_cast<float>(dx * dx + dy * dy);
 }
 
 bool VoronoiMorphEngine::pointInCircumcircle(
@@ -50,22 +56,32 @@ bool VoronoiMorphEngine::pointInCircumcircle(
 {
     // In-circle test using the determinant method.
     // Returns true if p is inside the circumcircle of triangle (a, b, c).
+    // AUDIT-FIX (C1): long double accumulation (see circumcircleRadiusSq above).
+    const long double ax = a.x - p.x, ay = a.y - p.y;
+    const long double bx = b.x - p.x, by = b.y - p.y;
+    const long double cx = c.x - p.x, cy = c.y - p.y;
 
-    float ax = a.x - p.x, ay = a.y - p.y;
-    float bx = b.x - p.x, by = b.y - p.y;
-    float cx = c.x - p.x, cy = c.y - p.y;
+    const long double aL2 = ax * ax + ay * ay;
+    const long double bL2 = bx * bx + by * by;
+    const long double cL2 = cx * cx + cy * cy;
 
-    float det = (ax * ax + ay * ay) * (bx * cy - by * cx)
-              - (bx * bx + by * by) * (ax * cy - ay * cx)
-              + (cx * cx + cy * cy) * (ax * by - ay * bx);
+    const long double det = aL2 * (bx * cy - by * cx)
+                          - bL2 * (ax * cy - ay * cx)
+                          + cL2 * (ax * by - ay * bx);
 
-    // The sign of det relative to the triangle's orientation determines
-    // whether p is inside. Compute triangle orientation:
-    float signedArea = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    if (std::abs(signedArea) < 1e-12f) return false; // degenerate
+    // Triangle orientation in long double as well, for a consistent sign test.
+    const long double signedArea =
+        static_cast<long double>(b.x - a.x) * static_cast<long double>(c.y - a.y)
+      - static_cast<long double>(b.y - a.y) * static_cast<long double>(c.x - a.x);
+    if (std::fabs(signedArea) < 1e-12L) return false; // degenerate
 
-    // Inside when det and signedArea have the same sign
-    return (det > 1e-9f && signedArea > 0.0f) || (det < -1e-9f && signedArea < 0.0f);
+    // Inside when det and signedArea have the same sign. No tolerance band —
+    // long double resolves the cocircular cases the float predicate couldn't.
+    // ponytail: long double on x86-64 is 80-bit extended, sufficient for the
+    // clock-layout coordinate range. If a future point set has coords beyond
+    // [-3,3] or demands certified robustness, promote to Shewchuk adaptive
+    // predicates (predicates.c, public domain).
+    return (det > 0.0L) == (signedArea > 0.0L);
 }
 
 // ── Cotangent of angle at vertex 'a' in triangle (a,b,c) ─────────────────────
@@ -73,25 +89,17 @@ bool VoronoiMorphEngine::pointInCircumcircle(
 float VoronoiMorphEngine::cotangent(
     juce::Point<float> a, juce::Point<float> b, juce::Point<float> c) noexcept
 {
-    // cot(A) = (b² + c² - a²) / (4 * area)
-    // where A is angle at vertex 'a', side a is opposite 'a' (edge bc),
-    // side b is opposite 'b' (edge ac), side c is opposite 'c' (edge ab).
-    // Wait — re-derive with consistent notation:
-    // We want cot(angle at vertex 'a'). Let:
-    //   u = b - a   (vector from a to b)
-    //   v = c - a   (vector from a to c)
-    // cos(θ) = (u·v) / (|u||v|)
-    // sin(θ) = |u×v| / (|u||v|)
-    // cot(θ) = cos/sin = (u·v) / |u×v|
+    // cot(A) = cos(A)/sin(A) = (u·v) / |u×v| where u=b-a, v=c-a.
+    // AUDIT-FIX (C1): long double accumulation for consistency with the
+    // in-circle predicate (this helper is reserved for future NNI use).
+    const long double ux = b.x - a.x, uy = b.y - a.y;
+    const long double vx = c.x - a.x, vy = c.y - a.y;
 
-    float ux = b.x - a.x, uy = b.y - a.y;
-    float vx = c.x - a.x, vy = c.y - a.y;
+    const long double dot = ux * vx + uy * vy;
+    const long double cross = ux * vy - uy * vx;  // |u×v|
 
-    float dot = ux * vx + uy * vy;
-    float cross = ux * vy - uy * vx;  // |u×v|
-
-    if (std::abs(cross) < 1e-12f) return 0.0f;  // degenerate
-    return dot / cross;
+    if (std::fabs(cross) < 1e-12L) return 0.0f;  // degenerate
+    return static_cast<float>(dot / cross);
 }
 
 // ── Barycentric test: which triangle contains p? ─────────────────────────────
@@ -306,6 +314,27 @@ void VoronoiMorphEngine::rebuild(
         addEdge(t.c, t.a);
     }
 
+    // AUDIT-FIX (C2): extract hull (boundary) edges — those shared by exactly
+    // one triangle. Precomputed here so signedDistanceToHull is a cheap
+    // audio-thread scan with no per-call bookkeeping.
+    hullEdges_.clear();
+    for (const auto& e : edges_)
+    {
+        int sharedCount = 0;
+        for (const auto& t : triangles_)
+        {
+            const int ga = occupiedIdx_[static_cast<size_t>(t.a)];
+            const int gb = occupiedIdx_[static_cast<size_t>(t.b)];
+            const int gc = occupiedIdx_[static_cast<size_t>(t.c)];
+            const bool ab = (e.a == ga && e.b == gb) || (e.a == gb && e.b == ga);
+            const bool bc = (e.a == gb && e.b == gc) || (e.a == gc && e.b == gb);
+            const bool ca = (e.a == gc && e.b == ga) || (e.a == ga && e.b == gc);
+            if (ab || bc || ca) ++sharedCount;
+        }
+        if (sharedCount == 1)
+            hullEdges_.push_back(e);
+    }
+
     // Compute Voronoi cell polygons for UI
     computeVoronoiCells(positions);
 
@@ -474,6 +503,54 @@ void VoronoiMorphEngine::computeWeights(
     totalWeight = weights[static_cast<size_t>(slot0)]
                 + weights[static_cast<size_t>(slot1)]
                 + weights[static_cast<size_t>(slot2)];
+}
+
+// ── AUDIT-FIX (C2): signed distance to the convex hull ───────────────────────
+
+float VoronoiMorphEngine::signedDistanceToHull(
+    float cursorX, float cursorY,
+    const std::array<juce::Point<float>, SnapshotBank::NUM_SLOTS>& positions) const noexcept
+{
+    if (!triValid_ || hullEdges_.empty())
+        return std::numeric_limits<float>::infinity();
+
+    // Compute the hull centroid to establish inward orientation for each edge.
+    juce::Point<float> centroid{ 0.0f, 0.0f };
+    for (const auto& e : hullEdges_)
+    {
+        centroid.x += positions[static_cast<size_t>(e.a)].x;
+        centroid.y += positions[static_cast<size_t>(e.a)].y;
+    }
+    centroid.x /= static_cast<float>(hullEdges_.size());
+    centroid.y /= static_cast<float>(hullEdges_.size());
+
+    // Signed distance to the hull = min over hull edges of the signed perpendicular
+    // distance to the edge line, signed so the centroid side is positive.
+    // For a convex hull this is the true signed distance (positive inside).
+    float minSignedDist = std::numeric_limits<float>::max();
+    for (const auto& e : hullEdges_)
+    {
+        const juce::Point<float> p1 = positions[static_cast<size_t>(e.a)];
+        const juce::Point<float> p2 = positions[static_cast<size_t>(e.b)];
+        const float ex = p2.x - p1.x;
+        const float ey = p2.y - p1.y;
+        const float edgeLenSq = ex * ex + ey * ey;
+        if (edgeLenSq < 1e-12f) continue;
+        const float edgeLen = std::sqrt(edgeLenSq);
+
+        // Perpendicular distance from cursor to the infinite line through p1→p2.
+        // cross > 0 means cursor is on one side; we sign it by the centroid side.
+        const float crossCursor = ex * (cursorY - p1.y) - ey * (cursorX - p1.x);
+        const float crossCentroid = ex * (centroid.y - p1.y) - ey * (centroid.x - p1.x);
+        const float sign = (crossCentroid >= 0.0f) ? 1.0f : -1.0f;
+        const float signedDist = sign * crossCursor / edgeLen;
+
+        minSignedDist = std::min(minSignedDist, signedDist);
+    }
+
+    return (minSignedDist == std::numeric_limits<float>::max())
+        ? std::numeric_limits<float>::infinity()
+        : minSignedDist;
 }
 
 } // namespace more_phi

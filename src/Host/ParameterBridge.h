@@ -10,6 +10,7 @@
 #pragma once
 
 #include "IPluginHostManager.h"
+#include "Core/ParameterState.h"   // MAX_PARAMETERS for the recall-ramp buffers
 #include <atomic>
 #include <limits>
 #include <vector>
@@ -57,6 +58,26 @@ public:
 
     void applyParameterState(const float* values, int count) noexcept override;
     void applyParameterState(const std::vector<float>& values) noexcept override;
+
+    // C-5 FIX (audit): Ramped recall. Instead of snapping every hosted
+    // parameter to the snapshot value in one block (an audible click on
+    // continuous params like gain/cutoff), startRecallRamp() captures the
+    // plugin's CURRENT values as the ramp start and stashes the target. The
+    // audio-thread per-block loop then calls processRecallRamp(dt), which
+    // advances a linear ramp toward the target over ~kRecallRampSeconds.
+    // RT-safe: buffers are fixed std::array (no allocation), no locks beyond
+    // the existing throttle try-lock. Returns false if no hosted plugin is
+    // available (caller should fall back to applyParameterState).
+    bool startRecallRamp(const float* targetValues, int count) noexcept;
+    // Advances the active recall ramp by one block. No-op if none active.
+    // dtSeconds is the block duration; the ramp resolves in a fixed number of
+    // blocks regardless of block size by counting blocks, not seconds, so the
+    // feel is consistent (kRecallRampBlocks).
+    void processRecallRamp() noexcept;
+    [[nodiscard]] bool isRecallRampActive() const noexcept
+    {
+        return recallRampActive_.load(std::memory_order_acquire);
+    }
 
     std::vector<float> captureParameterState() const noexcept override;
     void captureAllNormalized(float* outValues, int count) const noexcept override;
@@ -123,6 +144,23 @@ private:
     // B4 FIX: saturating counter for hosted-plugin setValue() exceptions on the
     // apply path (audio thread can't log). Stops at uint64 max to avoid wrap.
     mutable std::atomic<uint64_t> applyExceptionCount_{0};
+
+    // C-5 FIX (audit): Recall ramp state. Fixed arrays (no allocation on the
+    // audio thread). recallRampActive_ uses acq_rel so the message-thread
+    // startRecallRamp() and the audio-thread processRecallRamp() agree on the
+    // populated buffers. Only ONE ramp may be active at a time; starting a new
+    // ramp while one is active replaces it (the target updates, current values
+    // are re-captured as the new start).
+    static constexpr int kRecallRampBlocks = 8; // ~8 blocks ≈ 8..170 ms by block size
+    std::atomic<bool> recallRampActive_ { false };
+    std::atomic<int>  recallRampCount_  { 0 };     // populated params in the ramp
+    std::atomic<int>  recallRampStep_   { 0 };     // current block index [0..kRecallRampBlocks]
+    // start/target are written by the message thread (startRecallRamp) under
+    // the active-flag handoff and read by the audio thread (processRecallRamp).
+    // They are not mutated mid-ramp except by a new startRecallRamp, which
+    // itself happens-before publishing active_=true via release.
+    std::array<float, MAX_PARAMETERS> recallRampStart_  {};
+    std::array<float, MAX_PARAMETERS> recallRampTarget_ {};
 
     bool shouldThrottle(int index, float newValue, juce::uint32 now) const;
     void updateThrottleState(int index, float value, juce::uint32 now);

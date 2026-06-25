@@ -24,6 +24,8 @@ add_executable(MorePhiTests
     Unit/TestPhysicsAndGenetic.cpp
     Unit/TestSidechainTrigger.cpp
     Unit/TestAudioEngine.cpp
+    Unit/TestRecallRamp.cpp
+    Unit/TestBypassCrossfade.cpp
     Unit/TestDSPQuality.cpp
     Unit/TestAIRegressions.cpp
     Unit/TestLLMSettings.cpp

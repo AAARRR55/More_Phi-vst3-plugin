@@ -179,14 +179,37 @@ More-Phi's analysis tools expose deterministic DSP measurements. They are useful
 ```bash
 git clone https://github.com/your-repo/morephi.git
 cd morephi
+```
 
-# Configure and build Release
+#### Windows / MSVC — Ninja (recommended)
+
+The Ninja generator is faster and avoids the Visual Studio generator's `.tlog`
+file-lock thrash. A wrapper script (`build-ninja.bat`) handles the MSVC
+environment (`vcvars64.bat`) and uses the VS-bundled `ninja.exe` — no separate
+install. Build artefacts land in `build-ninja/`.
+
+```cmd
+build-ninja.bat configure                           :: one-time (re-fetches JUCE, ~2 min)
+build-ninja.bat build                               :: build the VST3 plugin (default target)
+build-ninja.bat tests                               :: build + run the full test suite
+build-ninja.bat testonly -R "Agent|Realtime" --output-on-failure   :: run a test subset
+build-ninja.bat target MorePhi_Standalone           :: build any specific target
+build-ninja.bat clean                               :: wipe build-ninja/
+```
+
+The DAW-loadable VST3 binary lands at:
+`build-ninja\MorePhi_artefacts\Release\VST3\MorePhi.vst3\Contents\x86_64-win\MorePhi.vst3`
+
+#### Other platforms / VS generator (fallback)
+
+```bash
+# Configure and build Release (Linux/macOS, or Windows VS generator)
 cmake -B build -S .
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel
 
 # Build with tests
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel
 ctest --test-dir build --output-on-failure
 
 # Debug build
@@ -204,7 +227,7 @@ cmake -B build -S . -DMORE_PHI_ENABLE_PROFILING=ON
 
 # Safe local build (Windows, conservative settings)
 cmake --preset windows-msvc-safe
-cmake --build --preset windows-safe --parallel 2
+cmake --build --preset windows-safe --parallel
 ```
 
 ---

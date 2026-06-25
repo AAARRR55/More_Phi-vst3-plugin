@@ -390,7 +390,8 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // for many operators (softmax, layer norm).
     if (!std::isfinite(peak) || peak < 1e-15f)
         return false;
-    const float gain = 0.891f / peak;
+    // AUDIT-FIX (A2): use the named contract constant (was a bare 0.891f literal).
+    const float gain = kSonicMasterPeakTargetLinear / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
     {
         interleaved_[2 * i + 0] = modelL_[i] * gain;
@@ -511,7 +512,8 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
                                 peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
     if (!std::isfinite(peak) || peak < 1e-15f)
         return false;
-    const float gain = 0.891f / peak;
+    // AUDIT-FIX (A2): use the named contract constant (was a bare 0.891f literal).
+    const float gain = kSonicMasterPeakTargetLinear / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
     {
         interleaved_[2 * i + 0] = modelL_[i] * gain;

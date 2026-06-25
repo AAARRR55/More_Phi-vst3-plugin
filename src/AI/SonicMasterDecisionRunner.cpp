@@ -9,6 +9,11 @@
 
 #include <algorithm>
 #include <numeric>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <cmath>
+#include <nlohmann/json.hpp>
 
 #ifndef MORE_PHI_HAS_ONNX
 #define MORE_PHI_HAS_ONNX 0
@@ -40,11 +45,22 @@ struct SonicMasterSessionHandle {};
 SonicMasterDecisionRunner::SonicMasterDecisionRunner() noexcept = default;
 SonicMasterDecisionRunner::~SonicMasterDecisionRunner() = default;
 
-bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath)
+bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::string_view contractPath)
 {
     unloadModel();
 
     if (modelPath.empty()) return false;
+
+    // AUDIT-FIX (A2): validate the sibling .contract.json before touching ORT.
+    // This converts "model was retrained with different preprocessing" from a
+    // silent out-of-distribution degradation into a startup error. The false
+    // return is surfaced via the caller's existing "model not found" log path.
+    if (!contractPath.empty())
+    {
+        SonicMasterModelContract contract;
+        if (!parseSonicMasterContract(std::string(contractPath), contract) || !contract.validate())
+            return false;
+    }
 
 #if !MORE_PHI_HAS_ONNX
     return false;
@@ -98,13 +114,22 @@ bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath)
         std::vector<int64_t> outDims(outDimCount, -1);
         outTensor.GetDimensions(outDims.data(), outDimCount);
 
+        // AUDIT-FIX (A1): validate rank + channel dim explicitly, not just the
+        // element product. A model exported as [2, N] would pass a product-only
+        // check and feed wrongly-shaped data at inference time.
+        const bool inputShapeOK = (inDimCount == 3)
+            && (inDims[0] == 1 || inDims[0] == -1)        // batch (symbolic ok)
+            && (inDims[1] == 2 || inDims[1] == -1)        // stereo channels
+            && (inDims[2] == static_cast<int64_t>(kSonicMasterSegmentFrames) || inDims[2] == -1);
+
         const auto totalIn = std::accumulate(inDims.begin(), inDims.end(),
                                              int64_t { 1 },
                                              [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
         const auto totalOut = std::accumulate(outDims.begin(), outDims.end(),
                                               int64_t { 1 },
                                               [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
-        if (totalIn != static_cast<int64_t>(2 * kSonicMasterSegmentFrames) ||
+        if (!inputShapeOK ||
+            totalIn != static_cast<int64_t>(2 * kSonicMasterSegmentFrames) ||
             totalOut != static_cast<int64_t>(kSonicMasterDecisionWidth))
         { unloadModel(); return false; }
 
@@ -152,7 +177,20 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
 
     try
     {
-        std::copy_n(stereoInterleaved, 2 * kSonicMasterSegmentFrames, session_->inputBuffer.data());
+        // AUDIT-FIX (A1): de-interleave stereo into the [1, 2, N] row-major layout
+        // the tensor declares (inputShape = {1, 2, kSonicMasterSegmentFrames}).
+        // The previous verbatim std::copy_n of L0,R0,L1,R1,... into a [1,2,N]
+        // tensor fed the model all samples as channel 0 (L0,R0,L1,R1 in time)
+        // with channel 1 reading L(N),R(N),... — i.e. wrongly-shaped data.
+        // ponytail: two-pass copy, ~2x memcpy cost but negligible at 0.3 Hz
+        // inference. SIMD de-interleave only if profiling ever shows it (it won't).
+        float* dst = session_->inputBuffer.data();
+        const std::size_t N = kSonicMasterSegmentFrames;
+        for (std::size_t t = 0; t < N; ++t)
+        {
+            dst[t]     = stereoInterleaved[2 * t + 0];  // channel 0 = all L
+            dst[N + t] = stereoInterleaved[2 * t + 1];  // channel 1 = all R
+        }
 
         Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
             session_->memoryInfo,
@@ -176,6 +214,52 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
         return false;
     }
 #endif
+}
+
+// ── AUDIT-FIX (A2): contract parsing ─────────────────────────────────────────
+
+bool parseSonicMasterContract(const std::string& contractJsonPath, SonicMasterModelContract& out)
+{
+    out = SonicMasterModelContract{};
+
+    std::ifstream ifs(contractJsonPath, std::ios::binary);
+    if (!ifs.is_open())
+        return false;
+
+    std::stringstream ss;
+    ss << ifs.rdbuf();
+    const std::string text = ss.str();
+    if (text.empty())
+        return false;
+
+    try
+    {
+        const auto j = nlohmann::json::parse(text);
+
+        // Required scalar fields. Missing or wrong-type → fail-closed.
+        if (!j.contains("schema") || !j["schema"].is_number_integer()) return false;
+        if (!j.contains("input_layout") || !j["input_layout"].is_string()) return false;
+        if (!j.contains("normalization") || !j["normalization"].is_string()) return false;
+        if (!j.contains("dtype") || !j["dtype"].is_string()) return false;
+        if (!j.contains("sample_rate") || !j["sample_rate"].is_number()) return false;
+        if (!j.contains("segment_frames") || !j["segment_frames"].is_number_integer()) return false;
+        if (!j.contains("peak_target_linear") || !j["peak_target_linear"].is_number()) return false;
+
+        out.schema = j["schema"].get<int>();
+        out.inputLayout = j["input_layout"].get<std::string>();
+        out.normalization = j["normalization"].get<std::string>();
+        out.dtype = j["dtype"].get<std::string>();
+        out.sampleRate = j["sample_rate"].get<double>();
+        out.segmentFrames = static_cast<std::size_t>(j["segment_frames"].get<long long>());
+        out.peakTargetLinear = j["peak_target_linear"].get<float>();
+        out.preprocessFingerprint = j.value("preprocess_fingerprint", "");
+
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 } // namespace more_phi

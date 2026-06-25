@@ -7,7 +7,17 @@ option(MORE_PHI_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder aft
 option(MORE_PHI_BUILD_TESTS "Configure and build tests in tests/." ON)
 option(MORE_PHI_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
 option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
-set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
+# /MP process count: defaults to the host's logical-core count so MSVC compiles
+# that many .cpp files in parallel. Was hard-capped at 2, leaving most cores idle.
+# Override per-machine with -DMORE_PHI_MSVC_MP=N (0 disables /MP = serial).
+# ponytail: no new option, no default machinery — std::thread::hardware_concurrency
+# is the right default and already available in the CMake context.
+include(ProcessorCount)
+ProcessorCount(N)
+if(N LESS 1)
+    set(N 4)   # sane fallback if detection fails
+endif()
+set(MORE_PHI_MSVC_MP "${N}" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)

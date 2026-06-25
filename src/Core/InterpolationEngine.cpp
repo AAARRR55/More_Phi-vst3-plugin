@@ -430,14 +430,36 @@ void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
             float totalWeight = 0.0f;
             engine.computeWeights(cursorX, cursorY, positions, masses, weights, totalWeight);
 
-            if (totalWeight < 1e-6f)
+            // AUDIT-FIX (C2): crossfade barycentric (inside hull) and IDW (outside)
+            // over a narrow signed-distance band. Without this the transition is a
+            // hard step — a C0 discontinuity in which/how many snapshots contribute
+            // whenever the cursor crosses the convex hull of occupied snapshots.
+            // alpha = 1 → pure barycentric; alpha = 0 → pure IDW.
+            constexpr float kHullBlendEps = 0.02f;  // ±2% of pad half-width
+            const float signedDist = engine.signedDistanceToHull(cursorX, cursorY, positions);
+            float alpha = 1.0f;
+            if (std::isfinite(signedDist))
             {
-                // Cursor outside convex hull — fall back to IDW
-                // (Replicate IDW inline to avoid a second seqlock call)
-                float idwTotal = 0.0f;
-                std::array<float, SnapshotBank::NUM_SLOTS> idwWeights{};
-                // AUDIT-FIX (C7): local kEpsilonSq redefinition removed — uses the unified class constant.
+                // smoothstep over [-eps, +eps]
+                const float t = std::clamp((signedDist + kHullBlendEps) / (2.0f * kHullBlendEps), 0.0f, 1.0f);
+                alpha = t * t * (3.0f - 2.0f * t);
+            }
+            else if (totalWeight < 1e-6f)
+            {
+                // No hull (degenerate geometry) and no barycentric result → pure IDW.
+                alpha = 0.0f;
+            }
 
+            const bool needBarycentric = (alpha > 1e-4f) && (totalWeight >= 1e-6f);
+            const bool needIDW = (alpha < 1.0f - 1e-4f);
+
+            // Compute IDW weights when needed (inside-band or outside).
+            std::array<float, SnapshotBank::NUM_SLOTS> idwWeights{};
+            float idwTotal = 0.0f;
+            bool onSnapshotIDW = false;
+            int onSnapshotIdx = -1;
+            if (needIDW)
+            {
                 for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
                 {
                     if (!slots[i].occupied) continue;
@@ -447,38 +469,38 @@ void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
 
                     if (distSq < kEpsilonSq)
                     {
-                        // Cursor directly on a snapshot
-                        const size_t c = juce::jmin(static_cast<size_t>(slots[i].size()), output.size());
-                        for (size_t p = 0; p < c; ++p)
-                            output[p] = slots[i].data()[p];
-                        return;
+                        // Cursor directly on a snapshot — exclusive, no blend needed.
+                        onSnapshotIDW = true;
+                        onSnapshotIdx = i;
+                        break;
                     }
 
                     idwWeights[i] = slots[i].mass / std::max(distSq, kEpsilonSq);
                     idwTotal += idwWeights[i];
                 }
+            }
 
-                if (idwTotal < 1e-12f) return;  // AUDIT-FIX (C7): preserved literal — idwTotal is a weight sum, not a distance²; changing to kEpsilon would alter the threshold by 1e6.
-
-                std::fill(output.begin(), output.end(), 0.0f);
-                for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
-                {
-                    if (!slots[i].occupied) continue;
-                    const float w = idwWeights[i] / idwTotal;
-                    const size_t c = juce::jmin(static_cast<size_t>(slots[i].size()), output.size());
-                    for (size_t p = 0; p < c; ++p)
-                        output[p] += slots[i].data()[p] * w;
-                }
+            if (onSnapshotIDW)
+            {
+                const size_t c = juce::jmin(static_cast<size_t>(slots[onSnapshotIdx].size()), output.size());
+                for (size_t p = 0; p < c; ++p)
+                    output[p] = slots[onSnapshotIdx].data()[p];
                 return;
             }
 
-            // Blend using NNI weights
+            if (!needBarycentric && idwTotal < 1e-12f) return;  // nothing to contribute
+            if (needBarycentric && !needIDW && totalWeight < 1e-6f) return;
+
+            // Emit blended output: alpha * barycentric + (1 - alpha) * IDW.
             std::fill(output.begin(), output.end(), 0.0f);
             for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
             {
                 if (!slots[i].occupied) continue;
-
-                const float w = weights[static_cast<size_t>(i)] / totalWeight;
+                float w = 0.0f;
+                if (needBarycentric)
+                    w += alpha * (weights[static_cast<size_t>(i)] / totalWeight);
+                if (needIDW && idwTotal > 1e-12f)
+                    w += (1.0f - alpha) * (idwWeights[i] / idwTotal);
                 if (w < 1e-8f) continue;
 
                 const auto& slot = slots[i];

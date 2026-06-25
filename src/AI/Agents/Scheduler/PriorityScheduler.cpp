@@ -34,7 +34,9 @@ PriorityScheduler::~PriorityScheduler()
 
 void PriorityScheduler::start(unsigned numWorkers)
 {
-    if (running_.exchange(true))
+    // BP-1 FIX (audit): explicit acq_rel — read-modify-write that publishes
+    // running_=true to workers (release) while observing any prior value (acquire).
+    if (running_.exchange(true, std::memory_order_acq_rel))
         return;
     workers_.reserve(numWorkers);
     for (unsigned i = 0; i < numWorkers; ++i)
@@ -43,7 +45,9 @@ void PriorityScheduler::start(unsigned numWorkers)
 
 void PriorityScheduler::stop()
 {
-    if (! running_.exchange(false))
+    // BP-1 FIX (audit): explicit acq_rel — publishes running_=false and orders
+    // the prior queue mutations before the workers observe the stop.
+    if (! running_.exchange(false, std::memory_order_acq_rel))
         return;
     cv_.notify_all();
     // H3 FIX: Bounded join. std::thread::join has no timeout, so poll
@@ -88,12 +92,14 @@ void PriorityScheduler::workerLoop()
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this] {
-                if (! running_.load()) return true;
+                // BP-1 FIX (audit): explicit relaxed — the mutex already
+                // synchronizes this read with stop()'s exchange.
+                if (! running_.load(std::memory_order_relaxed)) return true;
                 for (int i = 0; i < kNumPriorityLevels; ++i)
                     if (! queues_[i].empty()) return true;
                 return false;
             });
-            if (! running_.load())
+            if (! running_.load(std::memory_order_relaxed))
             {
                 bool anyLeft = false;
                 for (int i = 0; i < kNumPriorityLevels; ++i)

@@ -30,7 +30,32 @@ cmake --build build --config Debug
 cd build && ctest --build-config Debug --output-on-failure
 ```
 
-CMake options: `MORE_PHI_BUILD_TESTS` (ON/OFF), `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (OFF by default), `MORE_PHI_ENABLE_SANITIZERS` (ASAN+UBSAN, Clang/GCC only).
+CMake options: `MORE_PHI_BUILD_TESTS` (ON/OFF), `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (OFF by default), `MORE_PHI_ENABLE_SANITIZERS` (ASAN+UBSAN, Clang/GCC only), `MORE_PHI_MSVC_MP` (MSVC `/MP` process count under the VS generator; defaults to host logical-core count, `0` disables — ignored under Ninja which controls its own parallelism).
+
+### Faster builds with Ninja (recommended for Windows/MSVC)
+
+The default Visual Studio generator parallelizes poorly and its `.tlog` tracking
+hangs when two builds contend for the same files. Ninja (bundled with VS, no
+separate install) schedules compile+link as one stream and is materially faster.
+
+A wrapper script handles the MSVC environment setup (`vcvars64.bat`) and the
+VS-bundled `ninja.exe`:
+
+```cmd
+build-ninja.bat configure   :: first time — generates build-ninja/ (re-fetches JUCE, ~2 min)
+build-ninja.bat build       :: build the DAW-loadable VST3 plugin (default target)
+build-ninja.bat tests       :: build + run the full test suite
+build-ninja.bat testonly -R "Agent|Realtime" --output-on-failure   :: run a test subset
+build-ninja.bat target MorePhi   :: build just the SharedCode lib (faster compile check)
+build-ninja.bat target MorePhiCLI MorePhiMcpServer   :: build any specific target(s)
+build-ninja.bat clean       :: wipe build-ninja/
+```
+
+Build artifacts land in `build-ninja/` (separate from the VS-generator `build/`).
+The DAW-loadable VST3 binary is at
+`build-ninja\MorePhi_artefacts\Release\VST3\MorePhi.vst3\Contents\x86_64-win\MorePhi.vst3`.
+The two build dirs coexist; do not mix generators on the same dir. Verified:
+clean full build ~5 min on 8 cores; targeted agent/host-manager tests pass.
 
 Dependencies (all fetched automatically via FetchContent): JUCE 8.0.4, nlohmann/json 3.11.3, Catch2 v3.4.0.
 

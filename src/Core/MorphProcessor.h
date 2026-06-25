@@ -147,6 +147,14 @@ private:
     // discontinuous cursor moves on unsmoothed hosted params (gain, output).
     static constexpr float kDirectMinSmoothingTau = 0.002f;
 
+    // W-3 FIX (audit): minimum safety de-zipper for Drift mode when the user
+    // has disabled smoothing (smoothTau_ <= 0). Without it, updateDrift writes
+    // a fresh Perlin sample into the cursor every block, so with smoothing off
+    // the cursor (and thus every interpolated param) jumps block-to-block →
+    // zipper noise / clicks. This slower-than-Direct floor (~20 ms) preserves
+    // Drift's organic feel while guaranteeing a continuous cursor trajectory.
+    static constexpr float kDriftMinSmoothingTau = 0.020f;
+
     // Reference block config — kRefDt is defined in ParameterState.h as a
     // namespace-level constant shared by all consumers.
 
@@ -154,6 +162,10 @@ private:
 
     // Physics state (ATS-M7+M8: enum/float params now atomic for thread safety)
     ElasticState elasticState_;
+    // W-2 FIX (audit): tracks the mode used on the previous updatePhysics call
+    // so a transition INTO Elastic re-seeds elasticState_ from the current
+    // cursor (no one-block jump from stale spring state). Audio-thread only.
+    MorphMode lastPhysicsMode_{ MorphMode::Direct };
     std::atomic<int> elasticPreset_{static_cast<int>(ElasticPreset::Medium)};
     std::atomic<int> driftMode_{static_cast<int>(DriftMode::Free)};
     std::atomic<float> driftSpeed_{0.3f};

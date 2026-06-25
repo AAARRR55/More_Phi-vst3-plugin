@@ -1,19 +1,27 @@
 /*
  * More-Phi — Core/VoronoiMorphEngine.h
- * Delaunay triangulation + Natural Neighbor Interpolation (Sibson weights).
+ * Delaunay triangulation + barycentric interpolation on the containing triangle.
  *
- * Phase 2 of the weakpoint-fix plan: replaces IDW with NNI to eliminate
- * distant-snapshot bleed. Only snapshots whose Voronoi cells are adjacent
- * to the cursor contribute to the blend.
+ * AUDIT-FIX (C1): this header previously advertised Sibson/cotangent Natural
+ * Neighbor Interpolation. The implementation in computeWeights() is actually
+ * linear barycentric interpolation on the single Delaunay triangle that
+ * contains the cursor (3 contributors max), NOT NNI. The cotangent() helper
+ * exists but is not on the weight-computation path. This doc now matches the
+ * code. True NNI (C1 continuous, local support) is a future enhancement if
+ * barycentric's C0 edge kinks prove audible after the C2 hull-boundary blend
+ * lands.
  *
- * Algorithm (cotangent formula):
+ * Algorithm (barycentric):
  *   1. Precompute Delaunay triangulation of occupied snapshot positions
- *      (Bowyer-Watson incremental, max 12 points).
- *   2. Per block: insert cursor into triangulation → find natural neighbors.
- *   3. For each neighbor v_i:
- *        w_i = mass_i * (cot(α_i) + cot(β_i)) / ||cursor - v_i||²
- *      where α_i, β_i are angles opposite edge (cursor, v_i) in the two
- *      adjacent triangles.
+ *      (Bowyer-Watson incremental, max 12 points). In-circle predicate uses
+ *      long double accumulation for robustness on the maximally cocircular
+ *      clock layout.
+ *   2. Per block: find the containing triangle via barycentric area tests.
+ *      Cursor on a vertex → exclusive weight on that vertex.
+ *      Cursor outside the convex hull → caller falls back to IDW (see C2 fix
+ *      in InterpolationEngine for the boundary blend that smooths this step).
+ *   3. For each of the 3 vertices v_i of the containing triangle:
+ *        w_i = mass_i * (area_opposite_v_i / total_area)
  *   4. Normalize: w_i /= Σ w_j
  *
  * noexcept guarantee: All functions are noexcept. Allocation only in rebuild().
@@ -82,12 +90,22 @@ public:
         return voronoiCells_;
     }
 
+    /** AUDIT-FIX (C2): signed perpendicular distance from the cursor to the
+     *  convex hull boundary. Positive inside the hull, negative outside.
+     *  Used by InterpolationEngine to crossfade barycentric (inside) and IDW
+     *  (outside) weights over a narrow band, eliminating the C0 step at the hull.
+     *  Audio-thread safe: no allocations, scans the precomputed hull edges.
+     *  Returns +infinity when no hull exists (<3 occupied slots or invalid). */
+    float signedDistanceToHull(float cursorX, float cursorY,
+                               const std::array<juce::Point<float>, SnapshotBank::NUM_SLOTS>& positions) const noexcept;
+
 private:
     struct Triangle { int a, b, c; };  // indices into positions array
 
     // Delaunay triangulation
     std::vector<Triangle> triangles_;
     std::vector<Edge>      edges_;
+    std::vector<Edge>      hullEdges_;  // AUDIT-FIX (C2): boundary edges (shared by 1 triangle), precomputed at rebuild for signedDistanceToHull
     std::vector<CellPoly>  voronoiCells_;
     bool triValid_ = false;
 

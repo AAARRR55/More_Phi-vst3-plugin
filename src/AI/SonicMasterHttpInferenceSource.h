@@ -94,6 +94,10 @@ private:
     mutable std::atomic<int64_t> lastProbeMs_   { 0 };     // cache window (ms)
     mutable std::atomic<bool>    cachedAvailable_{ false };
     mutable std::atomic<bool>    probeFresh_     { false };
+    // AUDIT-FIX (A8): guards against stacking concurrent infer() POSTs when a
+    // detached worker is still wedged on a hanging server. Set on entry, cleared
+    // on observed completion (or by refreshProbe during a health re-check).
+    std::atomic<bool> inFlight_ { false };
 
     // For test access to the pure helpers without exposing internals publicly.
     friend struct SonicMasterHttpTestAccess;

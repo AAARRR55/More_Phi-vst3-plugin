@@ -196,8 +196,15 @@ void PhysicsEngine::updateDrift(float& outX, float& outY,
     const float safeSpeed = std::max(speed, 0.0f);
     const float safeDistance = std::max(distance, 0.0f);
     const int octaves = std::clamp(static_cast<int>(chaos * 4.0f) + 1, 1, 4);
-    const float nx = perlinOctaves(time * safeSpeed, 0.5f, octaves) * safeDistance;
-    const float ny = perlinOctaves(0.5f, time * safeSpeed, octaves) * safeDistance;
+    // AUDIT-FIX (C5): wrap on the perlin-space coordinate, not on raw time.
+    // perlin() is C1-continuous across its 256-wide lattice boundary IN ITS
+    // ARGUMENT, so fmod'ing the argument by 256 guarantees continuity for any
+    // (possibly non-integer) speed. The +128 offset on the y-argument decorrelates
+    // the two noise channels the way the previous two-arg call intended.
+    const double wrappedX = std::fmod(static_cast<double>(time) * safeSpeed, 256.0);
+    const double wrappedY = std::fmod(static_cast<double>(time) * safeSpeed + 128.0, 256.0);
+    const float nx = perlinOctaves(static_cast<float>(wrappedX), 0.5f, octaves) * safeDistance;
+    const float ny = perlinOctaves(0.5f, static_cast<float>(wrappedY), octaves) * safeDistance;
 
     switch (mode)
     {

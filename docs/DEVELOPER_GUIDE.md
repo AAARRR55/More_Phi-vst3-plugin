@@ -46,7 +46,29 @@ Guide for developers who want to build, modify, or contribute to More-Phi.
 
 ## Building
 
-### Quick Build
+### Quick Build — Windows / MSVC (Ninja, recommended)
+
+The Ninja generator is faster and avoids the Visual Studio generator's `.tlog`
+file-lock thrash. A `build-ninja.bat` wrapper sets up the MSVC environment
+(`vcvars64.bat`) and uses the VS-bundled `ninja.exe` — no separate install.
+Artefacts land in `build-ninja/`.
+
+```cmd
+git clone https://github.com/your-repo/morephi.git
+cd morephi
+
+build-ninja.bat configure   :: one-time (re-fetches JUCE, ~2 min)
+build-ninja.bat build       :: build the VST3 plugin (default target)
+build-ninja.bat tests       :: build + run the full test suite
+```
+
+DAW-loadable VST3: `build-ninja\MorePhi_artefacts\Release\VST3\MorePhi.vst3\Contents\x86_64-win\MorePhi.vst3`
+
+Other actions: `build-ninja.bat testonly -R "TestName" --output-on-failure`,
+`build-ninja.bat target <TargetName>`, `build-ninja.bat clean`. See `AGENTS.md`
+for the full list.
+
+### Quick Build — other platforms / VS generator (fallback)
 
 ```bash
 # Clone repository
@@ -60,8 +82,11 @@ cmake --build build --config Release
 
 ### Build Configurations
 
+Single-config build types apply directly to Ninja / single-config generators.
+For the VS multi-config generator, pass `--config <Type>` to the build step.
+
 ```bash
-# Debug (with symbols, no optimization)
+# Debug (with symbols, no optimization) — Ninja: reconfigure with -DCMAKE_BUILD_TYPE=Debug
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 
@@ -410,10 +435,15 @@ void processBlock(...)
 
 ### Running Tests
 
+Windows / MSVC (Ninja, recommended): `build-ninja.bat tests` builds and runs the
+full suite in `build-ninja/`. For a subset: `build-ninja.bat testonly -R "TestName" --output-on-failure`.
+
+Generic cmake (other platforms / VS generator fallback):
+
 ```bash
 # Build tests
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
-cmake --build build --parallel 2
+cmake --build build --parallel
 
 # Run all wired tests
 ctest --test-dir build --output-on-failure

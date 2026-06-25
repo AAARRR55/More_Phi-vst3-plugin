@@ -539,6 +539,11 @@ private:
 public:
     /** Diagnostic accessor (profiling builds only; otherwise the object is inert). */
     MorePhiDiagnostics& getDiagnostics() noexcept { return diagnostics_; }
+
+    // C-6 FIX (audit): current bypass wet/dry mix (1.0 = fully wet/hosted,
+    // 0.0 = fully dry/bypassed). Read-only diagnostic for UI meters + tests;
+    // the value ramps across blocks on bypass toggle (kBypassRampBlocks).
+    float getBypassMix() const noexcept { return bypassMix_.load(std::memory_order_relaxed); }
 private:
 
     // Audio-domain morph state
@@ -557,6 +562,12 @@ private:
     juce::AudioBuffer<float> paramOut_;
     juce::AudioBuffer<float> spectralOut_;
     juce::AudioBuffer<float> granularOut_;
+    // C-6 FIX (audit): Dry-signal snapshot captured before the hosted plugin
+    // runs, so applyOutputGainAndMetering can crossfade wet↔dry across the
+    // bypass transition instead of hard-switching (which clicks). Pre-allocated
+    // in prepareToPlay alongside the other scratch buffers — no audio-thread
+    // allocation.
+    juce::AudioBuffer<float> dryBuffer_;
     std::array<float*, OversamplingWrapper::kMaxChannels> osParamPtrs_{};
     std::array<float*, OversamplingWrapper::kMaxChannels> osBPtrs_{};
     // C-P3 FIX: Re-used MIDI buffer — retains capacity across clear() calls
@@ -839,6 +850,16 @@ private:
     // Not atomic by design; the surrounding atomics (smoothedGain_) are for
     // cross-thread visibility from UI diagnostic reads, not synchronization.
     bool gainSmoothingInitialized_ = false;
+
+    // C-6 FIX (audit): Bypass wet/dry crossfade state. bypassMix_ is the
+    // current wet amount (1.0 = fully wet/hosted, 0.0 = fully dry/bypassed).
+    // Each block it ramps toward the target (isBypassed ? 0 : 1) and the dry
+    // and wet buffers are crossfaded by it, eliminating the hard-switch click
+    // on bypass toggle. Audio-thread only (like smoothedGain_); atomic only so
+    // UI diagnostics can read it. kBypassRampBlocks controls the fade length.
+    std::atomic<float> bypassMix_{1.0f};
+    bool bypassMixInitialized_ = false;
+    static constexpr int kBypassRampBlocks = 32;  // ~32 blocks ≈ fast, click-free fade
 
     // M11 FIX: Atomic flag for deferred state restore from audio thread
     std::atomic<bool> pendingStateRestore_{false};

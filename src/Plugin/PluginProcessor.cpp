@@ -30,6 +30,7 @@
 #include "AI/MCPToolHandler.h"
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <functional>
 
@@ -151,7 +152,19 @@ MorePhiProcessor::MorePhiProcessor()
 
             // MIDI callbacks already run on the audio thread, so parameter
             // recall is applied here. Opaque state recall is deferred above.
-            self->snapshotBank.recallFast(slot, self->paramBridge);
+            // C-5 FIX (audit): recallFast snapped every hosted parameter in one
+            // block → audible click on continuous params (gain/cutoff). Route
+            // through paramBridge.startRecallRamp() instead, which captures the
+            // current values as a ramp start and linearly ramps to the snapshot
+            // target over kRecallRampBlocks blocks (advanced each block by
+            // processRecallRamp in processBlock). Falls back to the instant
+            // recallFast only if the ramp couldn't start (no hosted plugin).
+            if (!self->snapshotBank.getSlotValuesCopy(slot, self->recallScratch_)
+                || !self->paramBridge.startRecallRamp(self->recallScratch_.data(),
+                                                      static_cast<int>(self->recallScratch_.size())))
+            {
+                self->snapshotBank.recallFast(slot, self->paramBridge);
+            }
             // C4 FIX: drop the apply cache so this block's morph pass treats the
             // recalled values as the new baseline instead of overwriting them.
             self->invalidateAppliedCacheAudioThread();
@@ -195,6 +208,7 @@ void MorePhiProcessor::initializeSonicMaster()
         juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
 
     const char* modelName = "masteringbrain_v2_decision.onnx";
+    const char* contractName = "masteringbrain_v2_decision.contract.json";  // AUDIT-FIX (A2): sibling contract
 
     // Also search a "sonicmaster" subdirectory and build/sonicmaster (dev path).
     const juce::File searchDirs[] = {
@@ -204,14 +218,20 @@ void MorePhiProcessor::initializeSonicMaster()
     };
 
     std::string modelPath;
+    std::string contractPath;  // AUDIT-FIX (A2): optional; missing contract still loads (legacy), present contract must validate
     for (auto& dir : searchDirs)
     {
         auto f = dir.getChildFile(modelName);
         if (f.existsAsFile()) { modelPath = f.getFullPathName().toStdString(); break; }
     }
+    for (auto& dir : searchDirs)
+    {
+        auto c = dir.getChildFile(contractName);
+        if (c.existsAsFile()) { contractPath = c.getFullPathName().toStdString(); break; }
+    }
 
     // Try ONNX in-process inference first.
-    if (!modelPath.empty() && sonicMasterRunner_.loadModel(modelPath))
+    if (!modelPath.empty() && sonicMasterRunner_.loadModel(modelPath, contractPath))
     {
         sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
         // AUDIT LOW-4: wire the HTTP source as automatic fallback when ONNX
@@ -1361,6 +1381,9 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     paramOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
     spectralOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
     granularOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
+    // C-6 FIX (audit): dry buffer for the bypass wet/dry crossfade (host rate,
+    // same size as the incoming buffer — never oversampled).
+    dryBuffer_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
 
     prepared.store(true, std::memory_order_release);
     startTimer(50);  // persistent timer — always-on after prepare so audio thread never allocates to kick it
@@ -1683,6 +1706,12 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     drainParameterCommandQueue(cachedParamCount, canDrainCommands);
     processMIDIAndSidechain(midi, buffer);
     applyMorphAndParameters(buffer, cachedParamCount, /*canApplyParameters=*/true);
+    // C-5 FIX (audit): advance any active recall ramp AFTER the morph apply so
+    // the ramp's linear-interpolated values win when both run in the same block
+    // (the MIDI recall path starts the ramp and invalidates the apply cache so
+    // the morph treats the ramped values as the new baseline). Fast no-op
+    // (single acquire-load) when no ramp is active.
+    paramBridge.processRecallRamp();
     applyOutputGainAndMetering(buffer, isBypassed);
 
     // SonicMaster analysis capture: lock-free ring write only (no locks, no
@@ -2125,15 +2154,58 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
 void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer,
                                                    bool isBypassed) noexcept
 {
-    // 6) Forward audio + filtered MIDI to hosted plugin
-    if (!isBypassed)
+    // C-6 FIX (audit): Bypass wet/dry crossfade.
+    // The old code hard-switched: when isBypassed, the hosted plugin was
+    // skipped entirely → buffer went from wet to dry in one sample → click.
+    // We now ramp a wet/dry mix (bypassMix_: 1.0 = wet, 0.0 = dry) over
+    // kBypassRampBlocks and crossfade. To keep the CPU-saver property of
+    // bypass (skip the hosted plugin when fully dry), the wet path only runs
+    // while bypassMix_ is meaningfully above 0 (i.e. active, or mid-fade-out).
+    // Once settled fully dry, the original skip behavior is restored.
+    const int ns = buffer.getNumSamples();
+    const int numCh = buffer.getNumChannels();
+    const float bypassTarget = isBypassed ? 0.0f : 1.0f;
+
+    float bypassMix = bypassMix_.load(std::memory_order_relaxed);
+    if (!bypassMixInitialized_)
+    {
+        // First block: jump straight to the target (no misleading fade from 1.0).
+        bypassMix = bypassTarget;
+        bypassMix_.store(bypassMix, std::memory_order_relaxed);
+        bypassMixInitialized_ = true;
+    }
+
+    // Per-block linear step toward the target. kBypassRampBlocks gives the
+    // fade length regardless of host block size (block-counted, not timed).
+    const bool transitioning = std::abs(bypassMix - bypassTarget) > 1.0f / 256.0f;
+    // C-6 FIX: the wet path must run whenever the TARGET is wet (so there is a
+    // wet signal to fade IN on bypass-release) OR the current mix still has
+    // wet content (to fade OUT cleanly). Only fully-bypassed steady state
+    // (target dry AND mix≈0) skips the hosted plugin.
+    const bool wetNeeded = (bypassTarget > 0.0f) || (bypassMix > 1.0f / 256.0f);
+
+    // Capture dry BEFORE the hosted plugin processes buffer in place, but ONLY
+    // when we will need it (mid-transition, or fully dry this block). When fully
+    // wet and staying wet, the dry copy is wasted work — skip it.
+    const bool needDryCapture = transitioning || isBypassed;
+    if (needDryCapture && ns > 0 && numCh > 0
+        && dryBuffer_.getNumChannels() >= numCh && dryBuffer_.getNumSamples() >= ns)
+    {
+        for (int c = 0; c < numCh; ++c)
+            dryBuffer_.copyFrom(c, 0, buffer, c, 0, ns);
+    }
+
+    // 6) Forward audio + filtered MIDI to hosted plugin — only when wet is
+    //    needed (active, or fading out). Fully-bypassed steady state skips it.
+    if (wetNeeded)
     {
         MORE_PHI_PROFILE(profiler_, "hosted_plugin_process");
         hostManager.processBlock(buffer, filteredMidiBuffer_);
     }
 
-    // V2: Audio-domain morph path
-    if (!isBypassed
+    // V2: Audio-domain morph path (C-6 FIX: gated on wetNeeded, same as the
+    // hosted-plugin path, so it's skipped once fully bypassed).
+    if (wetNeeded
         && audioDomainEnabled_.load(std::memory_order_relaxed)
         && hostManagerB_.hasPlugin()
         && !audioDomainReconfiguring_.load(std::memory_order_acquire))
@@ -2274,9 +2346,11 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
         audioDomainUsers_.fetch_sub(1, std::memory_order_acq_rel);
     }
 
-    // Apply post-processing output gain when not bypassed.
+    // Apply post-processing output gain to the wet signal when wet is needed.
     // M9 FIX: Ramp gain smoothly across the block to avoid zipper noise.
-    if (!isBypassed && rawParams_.outputGain != nullptr)
+    // C-6 FIX: gate on wetNeeded (not !isBypassed) so the gain still tracks
+    // during the fade-out, then the crossfade below blends wet↔dry.
+    if (wetNeeded && rawParams_.outputGain != nullptr)
     {
         const float gainDb = rawParams_.outputGain->load(std::memory_order_relaxed);
         const float targetGainLinear = juce::Decibels::decibelsToGain(gainDb);
@@ -2303,6 +2377,41 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
             }
         }
     }
+
+    // C-6 FIX (audit): Wet/dry crossfade + mix-ramp advance.
+    // When fully wet (mix≈1) or fully dry (mix≈0) AND not transitioning, the
+    // buffer already holds the right signal (wet from the chain above, or dry
+    // because the chain was skipped) — no crossfade work needed. Only during a
+    // transition (or at the exact fully-dry block where buffer is dry but we
+    // captured dry separately) do we blend.
+    if (transitioning && ns > 0 && numCh > 0
+        && dryBuffer_.getNumChannels() >= numCh && dryBuffer_.getNumSamples() >= ns)
+    {
+        // Per-sample linear crossfade from current mix toward next mix.
+        const float step = (bypassTarget - bypassMix) / static_cast<float>(kBypassRampBlocks);
+        const float nextMix = std::clamp(bypassMix + step, 0.0f, 1.0f);
+        const float invNs = 1.0f / static_cast<float>(ns);
+        for (int c = 0; c < numCh; ++c)
+        {
+            float* wet = buffer.getWritePointer(c);
+            const float* dry = dryBuffer_.getReadPointer(c);
+            for (int i = 0; i < ns; ++i)
+            {
+                // Linear interp of mix across the block for a click-free fade.
+                const float m = bypassMix + (nextMix - bypassMix) * (static_cast<float>(i) * invNs);
+                wet[i] = wet[i] * m + dry[i] * (1.0f - m);
+            }
+        }
+        bypassMix = nextMix;
+    }
+    // Advance the mix toward target by one block-counted step even when the
+    // per-sample crossfade above didn't run (keeps the ramp progressing for
+    // larger block sizes where one block > one ramp step).
+    {
+        const float step = (bypassTarget - bypassMix) / static_cast<float>(kBypassRampBlocks);
+        bypassMix = std::clamp(bypassMix + step, 0.0f, 1.0f);
+    }
+    bypassMix_.store(bypassMix, std::memory_order_relaxed);
 
     // 7b) Non-mutating live analysis tap for MCP/Track Assistant tools.
     // ponytail: throttle — the analysis runs LUFS+FFT+true-peak+stereo, and the
@@ -3182,6 +3291,8 @@ void MorePhiProcessor::reconfigureAudioDomainProcessing()
     paramOut_.setSize(channels, osBlockSize);
     spectralOut_.setSize(channels, osBlockSize);
     granularOut_.setSize(channels, osBlockSize);
+    // C-6 FIX (audit): keep the dry buffer at host rate (currentBlockSize).
+    dryBuffer_.setSize(channels, currentBlockSize);
 
     activeOversamplingFactor_.store(factor, std::memory_order_release);
     activeSpectralFFTSize_.store(fftSize, std::memory_order_release);
