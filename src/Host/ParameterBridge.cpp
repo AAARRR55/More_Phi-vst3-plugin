@@ -142,7 +142,11 @@ void ParameterBridge::setParameterNormalized(int index, float value) noexcept
         auto& params = plugin.getParameters();
         if (index < 0 || index >= (int)params.size()) return 0;
 
-        const float clamped = juce::jlimit(0.0f, 1.0f, value);
+        // W-7 FIX (audit): juce::jlimit returns NaN for a NaN input (NaN
+        // comparisons are false), which would propagate NaN into setValue().
+        // Reject non-finite values with a neutral 0.0 before clamping.
+        const float safeValue = std::isfinite(value) ? value : 0.0f;
+        const float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
         const auto now = juce::Time::getMillisecondCounter();
 
         if (shouldThrottle(index, clamped, now))
@@ -166,7 +170,9 @@ void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, 
     auto& params = plugin.getParameters();
     if (index < 0 || index >= (int)params.size()) return;
 
-    const float clamped = juce::jlimit(0.0f, 1.0f, value);
+    // W-7 FIX (audit): guard non-finite values (see setParameterNormalized above).
+    const float safeValue = std::isfinite(value) ? value : 0.0f;
+    const float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
     const auto now = juce::Time::getMillisecondCounter();
 
     if (shouldThrottle(index, clamped, now))
@@ -222,7 +228,10 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
 
         for (int i = 0; i < safeCount; ++i)
         {
-            const float clamped = juce::jlimit(0.0f, 1.0f, values[i]);
+            // W-7 FIX (audit): guard non-finite snapshot/morph values before
+            // jlimit (NaN would otherwise propagate into setValue as NaN).
+            const float raw = values[i];
+            const float clamped = juce::jlimit(0.0f, 1.0f, std::isfinite(raw) ? raw : 0.0f);
 
             bool throttled = false;
             if (hasThrottleLock)

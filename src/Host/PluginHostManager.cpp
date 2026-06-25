@@ -73,7 +73,7 @@ void PluginHostManager::drainDeferredDoomedPlugins()
     }
 }
 
-juce::AudioPluginInstance* PluginHostManager::acquirePluginForUse() noexcept
+juce::AudioPluginInstance* PluginHostManager::acquirePluginForUse() const noexcept
 {
     if (exclusivePluginUseRequested_.load(std::memory_order_acquire))
         return nullptr;
@@ -95,7 +95,7 @@ juce::AudioPluginInstance* PluginHostManager::acquirePluginForUse() noexcept
     return plugin;
 }
 
-void PluginHostManager::releasePluginFromUse() noexcept
+void PluginHostManager::releasePluginFromUse() const noexcept
 {
     // A1a FIX: underflow guard. A double-release (or a release without a
     // matching acquire) used to drive activePluginUsers_ negative, after which
@@ -356,9 +356,20 @@ void PluginHostManager::unloadPlugin()
 
         hostedPluginPtr_.store(nullptr, std::memory_order_release);
 
-        // Notify any open editor window to close before destroying the plugin
+        // Notify any open editor window to close before destroying the plugin.
+        // BP-4 FIX (audit): callAsync() can silently drop in headless hosts or
+        // when no editor is open, orphaning a hosted plugin's window. Invoke
+        // directly when we're already on the message thread (the common case —
+        // unloadPlugin runs here), and only fall back to callAsync for the rare
+        // non-message-thread caller.
         if (windowCloseCallback_)
-            juce::MessageManager::callAsync([cb = windowCloseCallback_]() { cb(); });
+        {
+            auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+            if (mm != nullptr && mm->isThisTheMessageThread())
+                windowCloseCallback_();
+            else
+                juce::MessageManager::callAsync([cb = windowCloseCallback_]() { cb(); });
+        }
 
         // FIX C2/C1: Bounded wait for active audio-thread leases. An unbounded
         // spin here can hang the DAW forever if a lease holder is stalled. After
@@ -674,8 +685,21 @@ const juce::PluginDescription* PluginHostManager::getLastDescription() const
 
 int PluginHostManager::getNumSteps(int index) const noexcept
 {
-    auto* plugin = hostedPluginPtr_.load(std::memory_order_acquire);
-    if (!plugin) return 0;
+    // W-10 FIX (audit): take a ref-counted lease instead of raw-loading
+    // hostedPluginPtr_. The old code dereferenced the raw pointer with no
+    // refcount, racing unloadPlugin() — a small but real use-after-free
+    // window if the plugin was swapped mid-call. With the lease, unloadPlugin's
+    // bounded wait + deferredDoomedPlugins_ queue guarantees the instance stays
+    // alive for the duration of this call.
+    auto* plugin = acquirePluginForUse();
+    if (plugin == nullptr) return 0;
+
+    struct ScopedRelease
+    {
+        const PluginHostManager* host;
+        ~ScopedRelease() { if (host != nullptr) host->releasePluginFromUse(); }
+    } release{ this };
+    juce::ignoreUnused(release);
 
     auto& params = plugin->getParameters();
     if (index < 0 || index >= static_cast<int>(params.size())) return 0;

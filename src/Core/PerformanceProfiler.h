@@ -10,6 +10,19 @@ namespace more_phi {
 
 /**
  * Statistics for profiling a specific operation.
+ *
+ * AUDIT-FIX (M4, documented slice): these are RUNNING totals accumulated since
+ * the section was first registered. Consequences a consumer must know:
+ *   - averageTimeMs is dominated by early history late in a long session. For a
+ *     "what just happened" view, snapshot reset() between reporting windows.
+ *   - Only mean/min/max are tracked here — no per-section p50/p95/p99. A ring
+ *     buffer of the last N samples would add them but doubles the per-section
+ *     allocation and adds a write to the audio-thread hot path (the C-2/C-16
+ *     no-alloc/no-block fixes must be preserved). Upgrade path: add a
+ *     std::array<double, kRingSamples> per section, push in updateStats() under
+ *     the existing try-lock, compute percentiles in getAllStats().
+ *   - The nested-section double-count caveat (container vs leaf sections) is
+ *     noted in MorePhiProcessor::getProfilingReport.
  */
 struct ProfileStats {
     size_t callCount = 0;

@@ -15,6 +15,7 @@
 #include "Core/InterpolationEngine.h"
 
 #include <vector>
+#include <cmath>
 
 using Catch::Approx;
 using namespace more_phi;
@@ -87,5 +88,60 @@ TEST_CASE("End-to-end signal path: fader sweep is monotonic between two snapshot
             REQUIRE(out[p] <= 1.0f);
         }
         prev = out;
+    }
+}
+
+// AUDIT-FIX (T2): dense finite/bounded sweep across the full morph field.
+// Endpoint tests (above) check t=0/t=1; this sweeps every fader step at
+// multiple XY cursor positions and asserts no NaN/Inf ever appears and every
+// output stays in [0,1]. Catches interpolation-path regressions (divide-by-zero
+// at coincident points, subnormal accumulation, out-of-range blend weights)
+// that endpoint-only tests miss. A full MorePhiProcessor::processBlock audio
+// assertion would additionally cover the gain-staging/capture-tap orchestration
+// but needs a hosted-plugin harness; this is the completable morph-path slice.
+TEST_CASE("End-to-end signal path: dense sweep stays finite and in-range across the morph field", "[e2e][signal][denormals]")
+{
+    constexpr int paramCount = 16;
+    constexpr float kRefDt = 512.0f / 44100.0f;
+
+    SnapshotBank bank;
+    bank.prepare(paramCount);
+
+    // Two distinct snapshots so interpolation produces non-trivial output.
+    std::vector<float> snapshotA(paramCount), snapshotB(paramCount);
+    for (int p = 0; p < paramCount; ++p)
+    {
+        snapshotA[p] = static_cast<float>(p) / static_cast<float>(paramCount - 1);
+        snapshotB[p] = 1.0f - snapshotA[p];
+    }
+    bank.captureValues(0, snapshotA);
+    bank.captureValues(1, snapshotB);
+
+    MorphProcessor processor(bank);
+    processor.prepare(paramCount);
+    processor.setSmoothingRate(0.0f);  // instant — isolate the interpolation math
+
+    std::vector<float> out(paramCount, 0.0f);
+
+    // Sweep fader [0,1] x a few cursor positions. The interpolation engine must
+    // remain finite and in [0,1] everywhere — no NaN from a divide-by-zero at a
+    // coincident cursor, no Inf from a runaway weight, no clamp failure.
+    for (int fStep = 0; fStep <= 50; ++fStep)
+    {
+        const float fader = static_cast<float>(fStep) / 50.0f;
+        for (int xyStep = 0; xyStep <= 10; ++xyStep)
+        {
+            const float pos = static_cast<float>(xyStep) / 10.0f;
+            processor.process(pos, pos, fader, MorphSource::Fader, MorphMode::Direct, kRefDt, out);
+
+            for (int p = 0; p < paramCount; ++p)
+            {
+                INFO("param " << p << " fader=" << fader << " pos=" << pos);
+                REQUIRE_FALSE(std::isnan(out[p]));
+                REQUIRE_FALSE(std::isinf(out[p]));
+                REQUIRE(out[p] >= 0.0f);
+                REQUIRE(out[p] <= 1.0f);
+            }
+        }
     }
 }

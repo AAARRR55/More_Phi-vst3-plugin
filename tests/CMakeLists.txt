@@ -98,6 +98,7 @@ add_executable(MorePhiTests
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
     Unit/TestTruePeakEstimator.cpp
+    Unit/TestDenormals.cpp
     Unit/TestLUFSMeter.cpp
     Unit/TestAdaptiveEQ.cpp
     Unit/TestModulationAndEnvelope.cpp

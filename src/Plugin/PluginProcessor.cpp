@@ -123,6 +123,8 @@ MorePhiProcessor::MorePhiProcessor()
     // Constructor is kept minimal for FL Studio validation.
     pendingAgentAutonomy_ = more_phi::AutonomyLevel::Assist;   // H6: default until restored from state
     cacheRawParameterPointers();
+    // BP-3 FIX (audit): cache the bypass parameter for getBypassParameter().
+    bypassParameter_ = apvts.getParameter("bypass");
     licenseManager_ = std::make_shared<licensing::LicenseManager>(licenseRuntimeState_);
     requestMessageThreadMaintenance();
 
@@ -999,6 +1001,14 @@ juce::String MorePhiProcessor::getProfilingReport() const
     report << "=== CPU Performance Profile ===\n\n";
     report << "Total profiled operations: " << stats.size() << "\n";
     report << "Total time (all operations): " << (totalTime * 1000.0) << " µs\n\n";
+    // AUDIT-FIX (M4): the percentages below can sum to >100% because sections
+    // nest — spectral_engine/granular_engine/formant_engine/hybrid_blend are
+    // timed INSIDE audio_domain_total, which is inside processBlock_total. Only
+    // processBlock_total is excluded from the subtotal; container sections still
+    // double-count their children. Leaf sections (the *_engine markers) are the
+    // reliable attribution; treat container rows as upper bounds. Stats are
+    // running means since session start — reset() between windows for a "now" view.
+    report << "Note: nested sections double-count; leaf sections are the attribution.\n\n";
 
     // Sort by total time (descending)
     std::vector<std::pair<std::string, ProfileStats>> sortedStats(
@@ -1736,6 +1746,27 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                        static_cast<std::size_t>(buffer.getNumSamples()));
         }
     }
+}
+
+juce::AudioProcessorParameter* MorePhiProcessor::getBypassParameter() const
+{
+    // BP-3 FIX (audit): returning the APVTS "bypass" param tells the host to
+    // drive its native bypass gesture through it. processBlock then reads the
+    // bypass state (isBypassed) and runs the C-6 wet/dry crossfade — so host
+    // bypass is click-free instead of the hard JUCE default.
+    return bypassParameter_;
+}
+
+void MorePhiProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer,
+                                            juce::MidiBuffer& midi) noexcept
+{
+    // BP-3 FIX (audit): with getBypassParameter() returning the bypass param,
+    // JUCE routes host bypass through the param → processBlock → C-6 crossfade,
+    // so this override is normally unreachable. Implement it as a safe fallback
+    // for any host that calls the dedicated bypassed path directly: route back
+    // through the normal pipeline (the bypass param's current value governs the
+    // crossfade), preserving click-free behavior.
+    processBlock(buffer, midi);
 }
 
 // ── Private helpers ─────────────────────────────────────────────────────────

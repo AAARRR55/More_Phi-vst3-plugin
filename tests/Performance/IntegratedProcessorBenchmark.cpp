@@ -669,6 +669,11 @@ ScenarioResultSet scenarioCombinedOzone(const Config& cfg, int blockSize)
     size_t peak = memBefore.peakWorkingSet;
     processor.resetProfiler();
 
+    // AUDIT-FIX (M3): collect EVERY per-block timing across ALL passes for
+    // population-level percentiles (see scenarioProcess for the rationale).
+    std::vector<double> allTimings;
+    allTimings.reserve(static_cast<size_t>(cfg.passes) * static_cast<size_t>(cfg.blocksPerPass));
+
     for (int pass = 0; pass < cfg.passes; ++pass)
     {
         std::vector<double> timings;
@@ -687,14 +692,15 @@ ScenarioResultSet scenarioCombinedOzone(const Config& cfg, int blockSize)
             timings.push_back(t.elapsedUs());
             if ((b & 63) == 0) pumpMessageThread(2);
         }
+        allTimings.insert(allTimings.end(), timings.begin(), timings.end());  // AUDIT-FIX (M3)
         TimingStats s = TimingStats::fromSamples(std::move(timings));
         r.perPassAvgUs.push_back(s.avgUs);
         r.folded.avgUs += s.avgUs;
         peak = std::max(peak, takeMemorySnapshot().peakWorkingSet);
     }
     r.folded.avgUs /= cfg.passes;
-    std::vector<double> passAvgs = r.perPassAvgUs;
-    TimingStats ps = TimingStats::fromSamples(std::move(passAvgs));
+    // AUDIT-FIX (M3): folded percentiles from the full per-block population.
+    TimingStats ps = TimingStats::fromSamples(std::move(allTimings));
     r.folded.p50Us = ps.p50Us; r.folded.p95Us = ps.p95Us; r.folded.p99Us = ps.p99Us;
     r.folded.minUs = ps.minUs; r.folded.maxUs = ps.maxUs; r.folded.samples = ps.samples;
     r.cpuPercent = (r.folded.avgUs / bufferUs) * 100.0;

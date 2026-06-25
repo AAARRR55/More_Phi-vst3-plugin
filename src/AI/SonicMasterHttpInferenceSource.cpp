@@ -156,27 +156,39 @@ bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
     auto ok    = std::make_shared<std::atomic<bool>>(false);
     auto respHolder = std::make_shared<std::string>();
 
-    std::thread worker([baseUrlCopy, portCopy, targetLufsCopy, bodyHolder, done, ok, respHolder]() {
-        try
-        {
-            juce::URL url(baseUrlCopy + ":" + std::to_string(portCopy)
-                          + "/infer?target_lufs=" + juce::String(targetLufsCopy, 3).toStdString());
-            const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
-                                  .withConnectionTimeoutMs(2000);
-            auto stream = url.withPOSTData(*bodyHolder).createInputStream(opts);
-            if (stream != nullptr)
+    // Wrap thread creation: std::thread's constructor can throw std::system_error
+    // (out of resources), and infer() is noexcept — catch and fail-closed.
+    try
+    {
+        std::thread worker([baseUrlCopy, portCopy, targetLufsCopy, bodyHolder, done, ok, respHolder]() {
+            try
             {
-                *respHolder = stream->readEntireStreamAsString().toStdString();
-                ok->store(!respHolder->empty(), std::memory_order_release);
+                juce::URL url(baseUrlCopy + ":" + std::to_string(portCopy)
+                              + "/infer?target_lufs=" + juce::String(targetLufsCopy, 3).toStdString());
+                const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                                      .withConnectionTimeoutMs(2000);
+                auto stream = url.withPOSTData(*bodyHolder).createInputStream(opts);
+                if (stream != nullptr)
+                {
+                    *respHolder = stream->readEntireStreamAsString().toStdString();
+                    ok->store(!respHolder->empty(), std::memory_order_release);
+                }
             }
-        }
-        catch (...)
-        {
-            ok->store(false, std::memory_order_release);
-        }
-        done->store(true, std::memory_order_release);
-    });
-    worker.detach();  // ponytail: detach — ~thread does not join, so timeout is effective
+            catch (...)
+            {
+                ok->store(false, std::memory_order_release);
+            }
+            done->store(true, std::memory_order_release);
+        });
+        worker.detach();  // ponytail: detach — ~thread does not join, so timeout is effective
+    }
+    catch (...)
+    {
+        // Could not spawn the worker thread. Release the in-flight slot and
+        // decline this cycle; the caller retries on the next analysis tick.
+        inFlight_.store(false, std::memory_order_release);
+        return false;
+    }
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline)

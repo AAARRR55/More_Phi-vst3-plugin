@@ -47,13 +47,18 @@ public:
     /**
      * Acquire a stable plugin pointer for short-lived processing work.
      * Must be paired with releasePluginFromUse(). Returns nullptr when no plugin is loaded.
+     * W-10 FIX (audit): const-qualified so getNumSteps() (a const host-called
+     * method) can take a ref-counted lease instead of raw-loading the plugin
+     * pointer (which raced unloadPlugin → use-after-free). The methods only
+     * touch atomics (refcounting is logically const), mirroring the documented
+     * "hostManager is mutable" pattern for const host callbacks.
      */
-    juce::AudioPluginInstance* acquirePluginForUse() noexcept;
+    juce::AudioPluginInstance* acquirePluginForUse() const noexcept;
 
     /**
      * Release a previously acquired plugin usage lease.
      */
-    void releasePluginFromUse() noexcept;
+    void releasePluginFromUse() const noexcept;
 
     /**
      * Request exclusive non-audio access to the hosted plugin for opaque state
@@ -157,8 +162,11 @@ private:
     // Number of active short-lived plugin users (audio thread processing and
     // parameter-bridge operations). unloadPlugin() waits for this to reach 0
     // after publishing hostedPluginPtr_=nullptr.
-    std::atomic<uint32_t> activePluginUsers_{0};
-    std::atomic<bool> exclusivePluginUseRequested_{false};
+    // W-10 FIX (audit): mutable so const host callbacks (getNumSteps,
+    // getTailLengthSeconds) can take ref-counted leases via the now-const
+    // acquirePluginForUse()/releasePluginFromUse().
+    mutable std::atomic<uint32_t> activePluginUsers_{0};
+    mutable std::atomic<bool> exclusivePluginUseRequested_{false};
 
     // C12 FIX: Use unsigned to prevent signed-overflow UB. Cap at MAX+1 to avoid
     // wrap-around which would falsely reset the suspension counter.

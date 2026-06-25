@@ -86,6 +86,16 @@ public:
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) noexcept override;
 
+    // BP-3 FIX (audit): expose the "bypass" APVTS parameter as the processor's
+    // official bypass parameter. Hosts that drive bypass via the dedicated VST3
+    // bypass path (rather than writing the bypass param directly) will then
+    // route through it, which applyOutputGainAndMetering reads — running the
+    // C-6 wet/dry crossfade instead of a hard JUCE default bypass (which would
+    // skip all processing and click). Cached in the constructor (APVTS owns the
+    // parameter; the pointer is stable for the processor's lifetime).
+    juce::AudioProcessorParameter* getBypassParameter() const override;
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) noexcept override;
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
@@ -769,6 +779,11 @@ private:
         std::atomic<float>* waypointBPM = nullptr;
     };
     RawParameters rawParams_{};
+
+    // BP-3 FIX (audit): cached pointer to the APVTS "bypass" parameter,
+    // returned from getBypassParameter() so hosts route native bypass through
+    // it (and thus through the C-6 crossfade). Set once in the constructor.
+    juce::RangedAudioParameter* bypassParameter_ = nullptr;
 
     // Morph position (UI/MCP → audio thread)
     std::atomic<float> morphX_{0.5f};

@@ -246,7 +246,12 @@ void InterpolationEngine::compute1D(float faderPos,
         return;
     }
 
-    std::fill(output.begin(), output.end(), 0.5f);
+    // W-1 FIX (audit): do NOT pre-fill output here. computeWithRetry leaves
+    // output untouched on seqlock exhaustion, so a pre-fill would clobber the
+    // caller's previous-frame morph result (the "hold previous" invariant the
+    // retry helper relies on). The lambda below writes every element on a
+    // successful read — including the occupied==0 neutral case (0.5f) — so
+    // output is always fully defined when the read succeeds.
 
     computeWithRetry(bank,
         [&output, faderPos](const auto& slots)
