@@ -414,6 +414,21 @@ public:
     {
         return neuralMasteringController_.getLastStatus().fallbackMode;
     }
+    // AUDIT (W1, 2026-06-25): surface OzonePlanApplicator mapping readiness to
+    // the MCP tool layer WITHOUT exposing the raw unique_ptr. When no hosted
+    // plugin is loaded (or the hosted plugin's parameter names don't match the
+    // Ozone-shaped discovery in buildFromHostedPlugin), the applicator is null
+    // and these report false/0 — the exact "silent no-op" condition the
+    // sonicmaster_decision tool now surfaces as mapping_status.ozone_mapped.
+    bool hasOzonePlanApplicator() const noexcept { return ozonePlanApplicator_ != nullptr; }
+    bool ozoneMappingReady() const noexcept
+    {
+        return ozonePlanApplicator_ != nullptr && ozonePlanApplicator_->isReady();
+    }
+    int ozoneMappedSlotCount() const noexcept
+    {
+        return ozoneParamMap_ != nullptr ? ozoneParamMap_->mappedSlotCount() : 0;
+    }
     NeuralMasteringEvidenceLevel getNeuralMasteringEvidenceLevel() const noexcept
     {
         return neuralMasteringController_.getLastStatus().evidenceLevel;

@@ -1007,6 +1007,23 @@ TEST_CASE("sonicmaster_decision separates raw model telemetry from projected eng
     // Legacy aliases remain available for older clients.
     REQUIRE(response["decision"]["eq_bands"].is_array());
     REQUIRE(response["plan_eq_normalized"].is_array());
+
+    // AUDIT (W1, 2026-06-25): the sonicmaster_decision tool must surface the
+    // OzonePlanApplicator mapping status so a caller can tell WHY a plan applied
+    // zero parameters. This bare processor hosts no plugin, so the map is absent
+    // (ozone_mapped==false). Previously this condition was invisible — only a
+    // DBG line that never reached the assistant.
+    REQUIRE(response["mapping_status"].is_object());
+    REQUIRE(response["mapping_status"]["field_semantics"].get<std::string>()
+            == "static_hosted_plugin_parameter_discovery");
+    REQUIRE(response["mapping_status"]["ozone_mapped"].get<bool>() == false);
+    REQUIRE(response["mapping_status"]["has_applicator"].get<bool>() == false);
+    REQUIRE(response["mapping_status"]["mapped_slot_count"].get<int>() == 0);
+    REQUIRE(response["mapping_status"]["max_slot_count"].get<int>() == 50);
+    // No apply has run on this decision-only call, so the per-slot outcome
+    // fields read their zero defaults.
+    REQUIRE(response["mapping_status"]["last_apply_enqueued"].get<int>() == 0);
+    REQUIRE(response["mapping_status"]["last_apply_was_partial"].get<bool>() == false);
 }
 
 TEST_CASE("MCP capture window reports no samples before analysis tap has data", "[mcp][analysis][MeterWindow]")

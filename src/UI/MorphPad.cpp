@@ -734,10 +734,50 @@ bool MorphPad::keyPressed(const juce::KeyPress& key)
 
 std::unique_ptr<juce::AccessibilityHandler> MorphPad::createAccessibilityHandler()
 {
-    // Announce the pad as a labelled group so screen readers read its name.
-    // (Keyboard operability is provided by keyPressed above; a full value
-    // interface is not feasible for a 2D pad.)
-    return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
+    // R4: expose the morph position to assistive tech. A 2D pad can't map to a
+    // single linear value cleanly, so we report a custom value-string of the form
+    // "X 50%, Y 50%" via a read-only value interface (keyboard operability is
+    // already provided by keyPressed above). This lets screen-reader users hear
+    // the current morph location instead of just the control's name.
+    class MorphPadValueInterface : public juce::AccessibilityValueInterface
+    {
+    public:
+        explicit MorphPadValueInterface(MorphPad& owner) : owner_(owner) {}
+
+        bool isReadOnly() const override { return true; }
+        double getCurrentValue() const override
+        {
+            // Report the X axis as the nominal value (0-100) for AT that reads a
+            // numeric value; the full X/Y is in the value string below.
+            return juce::jlimit(0.0, 100.0, owner_.proc_.getMorphX() * 100.0);
+        }
+        void setValue(double) override {}   // read-only: value set via keyboard/mouse
+        juce::String getCurrentValueAsString() const override
+        {
+            const int pctX = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getMorphX()) * 100.0);
+            const int pctY = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getMorphY()) * 100.0);
+            return "X " + juce::String(pctX) + "%, Y " + juce::String(pctY) + "%";
+        }
+        void setValueAsString(const juce::String&) override {}
+        AccessibleValueRange getRange() const override
+        {
+            // AUDIT (pre-existing-build-unblock, 2026-06-25): construct MinAndMax
+            // explicitly. MSVC failed to resolve the prior nested brace-init
+            // `return { { 0.0, 100.0 }, 0.01 };` (C2039 'NormalisedRange' spew),
+            // blocking the full MorePhi build. Behaviour unchanged.
+            return { juce::AccessibilityValueInterface::AccessibleValueRange::MinAndMax{ 0.0, 100.0 }, 0.01 };
+        }
+
+    private:
+        MorphPad& owner_;
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphPadValueInterface)
+    };
+
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this,
+        juce::AccessibilityRole::group,
+        juce::AccessibilityActions{},
+        juce::AccessibilityHandler::Interfaces { std::make_unique<MorphPadValueInterface>(*this) });
 }
 
 } // namespace more_phi

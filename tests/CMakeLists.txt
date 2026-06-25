@@ -93,6 +93,9 @@ add_executable(MorePhiTests
     # Contract parsing regression guard (C1: shipped contract schema mismatch).
     # ONNX-independent — runs in every CI config.
     Unit/TestSonicMasterContractParsing.cpp
+    # Ozone parameter-map discovery regression guard (W1: silent no-op when the
+    # hosted plugin's names don't match the discovery heuristic).
+    Unit/TestOzoneParameterMapDiscovery.cpp
     Unit/TestAuditFixes.cpp
     Unit/TestAudioCaptureRing.cpp
     Unit/TestNeuralPlanVerification.cpp

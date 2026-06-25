@@ -129,9 +129,45 @@ bool SnapFader::keyPressed(const juce::KeyPress& key)
 
 std::unique_ptr<juce::AccessibilityHandler> SnapFader::createAccessibilityHandler()
 {
-    // AUDIT-FIX (accessibility): expose as a slider so screen readers announce
-    // the role + name; keyboard operability is provided by keyPressed.
-    return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::slider);
+    // R4: expose the fader position (0-100%) to assistive tech via a value
+    // interface. Keyboard operability is provided by keyPressed above; this adds
+    // a readable value string so screen readers announce "Morph fader, 50%".
+    class FaderValueInterface : public juce::AccessibilityValueInterface
+    {
+    public:
+        explicit FaderValueInterface(SnapFader& owner) : owner_(owner) {}
+
+        bool isReadOnly() const override { return true; }
+        double getCurrentValue() const override
+        {
+            return juce::jlimit(0.0, 100.0, owner_.proc_.getFaderPos() * 100.0);
+        }
+        void setValue(double) override {}
+        juce::String getCurrentValueAsString() const override
+        {
+            const int pct = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getFaderPos()) * 100.0);
+            return juce::String(pct) + "%";
+        }
+        void setValueAsString(const juce::String&) override {}
+        AccessibleValueRange getRange() const override
+        {
+            // AUDIT (pre-existing-build-unblock, 2026-06-25): construct MinAndMax
+            // explicitly. MSVC failed to resolve the prior nested brace-init
+            // `return { { 0.0, 100.0 }, 0.01 };` (C2039 'NormalisedRange' spew),
+            // blocking the full MorePhi build. Behaviour unchanged.
+            return { juce::AccessibilityValueInterface::AccessibleValueRange::MinAndMax{ 0.0, 100.0 }, 0.01 };
+        }
+
+    private:
+        SnapFader& owner_;
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FaderValueInterface)
+    };
+
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this,
+        juce::AccessibilityRole::slider,
+        juce::AccessibilityActions{},
+        juce::AccessibilityHandler::Interfaces { std::make_unique<FaderValueInterface>(*this) });
 }
 
 void SnapFader::updateValue(float yPos)

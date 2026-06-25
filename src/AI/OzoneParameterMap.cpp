@@ -199,6 +199,34 @@ bool OzoneParameterMap::hasAnyMapping() const noexcept
     return false;
 }
 
+int OzoneParameterMap::mappedSlotCount() const noexcept
+{
+    // AUDIT (W1): count every mapped (>= 0) index so the sonicmaster_decision
+    // tool can report concrete coverage, not just a readiness bool. The total is
+    // recomputed on each call (it's only read at decision time, ~0.3 Hz, so the
+    // small loop is not a hot path). Max possible = 8*5 + 4 + 4 + 2 = 50.
+    int count = 0;
+    for (int i = 0; i < kEQBands; ++i)
+    {
+        const auto& b = eq[static_cast<std::size_t>(i)];
+        if (b.freqIdx >= 0)    ++count;
+        if (b.gainIdx >= 0)    ++count;
+        if (b.qIdx >= 0)       ++count;
+        if (b.typeIdx >= 0)    ++count;
+        if (b.enabledIdx >= 0) ++count;
+    }
+    if (dynamics.thresholdIdx >= 0) ++count;
+    if (dynamics.ratioIdx >= 0)     ++count;
+    if (dynamics.attackIdx >= 0)    ++count;
+    if (dynamics.releaseIdx >= 0)   ++count;
+    for (int i = 0; i < 4; ++i)
+        if (imager.widthIdx[static_cast<std::size_t>(i)] >= 0)
+            ++count;
+    if (maximizer.outputLevelIdx >= 0) ++count;
+    if (maximizer.ceilingIdx >= 0)     ++count;
+    return count;
+}
+
 OzoneParameterMap OzoneParameterMap::buildForOzone11()
 {
     OzoneParameterMap m;

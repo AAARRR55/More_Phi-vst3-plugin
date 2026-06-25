@@ -97,6 +97,17 @@ public:
     [[nodiscard]] bool hasAnyMapping() const noexcept;
 
     /**
+     * AUDIT (W1, 2026-06-25): count of mapped parameter indices (>= 0) across
+     * all modules — EQ bands (freq/gain/q/type/enabled), dynamics (4), imager
+     * (4 width), maximizer (2). Exposed via the sonicmaster_decision MCP tool so
+     * a caller can tell WHY a plan applied zero parameters (unmapped hosted
+     * plugin) vs. the plan genuinely contained no changes. Stable across modules:
+     * a "ready" map has >= 1; a fully-mapped Ozone instance approaches the slot
+     * ceiling (8*5 + 4 + 4 + 2 = 50).
+     */
+    [[nodiscard]] int mappedSlotCount() const noexcept;
+
+    /**
      * Return true if the given plugin display name appears to be iZotope Ozone 11.
      * Checked case-insensitively; matches "Ozone 11" or "iZotope Ozone 11".
      */

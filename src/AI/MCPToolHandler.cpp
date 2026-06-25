@@ -6209,6 +6209,35 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     result["projected_plan"] = projectedPlan;
     result["actual_engine_mapping"] = engineMapping;
 
+    // AUDIT (W1+M1, 2026-06-25): surface OzonePlanApplicator mapping readiness
+    // and the last-apply breakdown so a caller can distinguish "plan applied
+    // zero parameters because the hosted plugin is unmapped" from "plan applied
+    // zero parameters because it genuinely contained no changes." Previously
+    // the only signal was a DBG line (OzonePlanApplicator.cpp:83-92) that never
+    // reached the assistant. `ozone_mapped==false` here means the neural plan's
+    // writes silently no-op regardless of the decoded decision.
+    {
+        json ms;
+        ms["ozone_mapped"]       = p.ozoneMappingReady();
+        ms["has_applicator"]     = p.hasOzonePlanApplicator();
+        ms["mapped_slot_count"]  = p.ozoneMappedSlotCount();
+        ms["max_slot_count"]     = 50;  // 8*5 EQ + 4 dyn + 4 imager + 2 maximizer
+        ms["field_semantics"]    = "static_hosted_plugin_parameter_discovery";
+        // If a neural apply has run, fold in its per-slot outcome so the
+        // readiness signal is paired with what actually landed last cycle.
+        // Decision-only calls (no prior apply) read zeros — that is expected.
+        const auto breakdown = p.getAutoMasteringEngine().getChainPlanner().getLastOzoneApplyBreakdown();
+        const auto verify    = p.getAutoMasteringEngine().getLastApplyVerification();
+        ms["last_apply_enqueued"]      = breakdown.enqueued;
+        ms["last_apply_skipped"]       = breakdown.skipped;
+        ms["last_apply_unmapped"]      = breakdown.unmapped;
+        ms["last_apply_ambiguous"]     = breakdown.ambiguous;
+        ms["last_apply_verified"]      = verify.verified;
+        ms["last_apply_mismatched"]    = verify.mismatched;
+        ms["last_apply_was_partial"]   = p.getAutoMasteringEngine().lastApplyWasPartial();
+        result["mapping_status"] = ms;
+    }
+
     // AUDIT-FIX-R2: include genuine BS.1770-4 / EBU R128 measurements from the
     // AutoMasteringEngine's already-running meters. These are MEASUREMENTS
     // (K-weighting, gated integration, 4x polyphase ISP), distinct from the
