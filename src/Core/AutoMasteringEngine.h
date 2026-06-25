@@ -86,6 +86,35 @@ namespace more_phi {
 // Full definition pulled in the .cpp only.
 class ActionLedger;
 
+// ── ApplyVerification (P1.2 / AUDIT-FIX Fix 2) ──────────────────────────────
+// Readback verification of the last mastering-plan apply. Populated by the
+// chain planner / OzonePlanApplicator after enqueueing a plan: it counts how
+// many parameter writes were requested, enqueued, and then verified by reading
+// the hosted plugin back, plus why any weren't verified (drifted to a discrete
+// step, mismatched beyond tolerance, unmapped to a param index, or ambiguous).
+//
+// DEFINED HERE (not in ChainPlanExecutor.h) because AutoMasteringEngine holds
+// it by value (lastApplyVerification_); ChainPlanExecutor.h and
+// OzonePlanApplicator.h forward-declare it and include this header only in
+// their .cpp files where the complete type is needed.
+struct ApplyVerification
+{
+    int requested       = 0;   // total parameter writes the plan asked for
+    int enqueued        = 0;   // actually enqueued onto the hosted plugin
+    int verified        = 0;   // readback matched the requested value (within tol)
+    int driftedDiscrete = 0;   // readback differs but snaps to a valid discrete step
+    int mismatched      = 0;   // readback differs beyond tolerance (write didn't land)
+    int unmapped        = 0;   // plan referenced a param index with no mapping (-1)
+    int ambiguous       = 0;   // plan referenced an index that maps ambiguously
+
+    // Fraction of enqueued writes that verified cleanly. Used by
+    // AutoMasteringEngine to classify an apply as full vs partial (<0.80).
+    [[nodiscard]] float verifiedFraction() const noexcept
+    {
+        return enqueued > 0 ? static_cast<float>(verified) / static_cast<float>(enqueued) : 0.0f;
+    }
+};
+
 
 
 class AutoMasteringEngine : public juce::Timer
@@ -291,6 +320,9 @@ private:
     ApplyVerification lastApplyVerification_ {};
     // AUDIT-FIX (Fix 2/6): partial-apply flag (see lastApplyWasPartial()).
     std::atomic<bool> lastApplyWasPartial_ { false };
+    // P2.5: optional ledger for auditing neural writes. Set by the processor after
+    // the MCP server's AutomationRuntime exists. nullptr when not wired (tests).
+    ActionLedger* actionLedger_ = nullptr;
     // Same lifecycle invariant: single audio-thread writer during playback,
     // mutated by reset()/prepare() only when the host has stopped playback.
     double analysisElapsedSeconds_ = 0.0;
@@ -307,9 +339,6 @@ private:
     // AUDIT CRITICAL-7: count of hosted-plugin parameters written by the last
     // neural→Ozone bridge apply. -1 = no applicator / not yet applied.
     std::atomic<int> lastOzoneAppliedCount_ { -1 };
-    // P2.5 (AUDIT): non-owning pointer to the MCP ActionLedger. Wired by
-    // the processor after the MCP server's AutomationRuntime exists.
-    ActionLedger* actionLedger_ = nullptr;
 };
 
 } // namespace more_phi

@@ -132,18 +132,18 @@ ToolCallOutcome parseAssistantApplyArgs(const json& body, AssistantParameterAppl
 
 } // namespace
 
-StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> backendIn,
-                                         std::unique_ptr<IZotopeIPCDiscovery> ipcDiscoveryIn,
-                                         std::unique_ptr<IZotopeIPCAssistant> ipcAssistantIn)
+StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<MorePhiPluginBackend> backendIn,
+                                         std::unique_ptr<MorePhiIPCDiscovery> ipcDiscoveryIn,
+                                         std::unique_ptr<MorePhiIPCAssistant> ipcAssistantIn)
     : backend(std::move(backendIn)),
       ipcDiscovery(std::move(ipcDiscoveryIn)),
       ipcAssistant(std::move(ipcAssistantIn))
 {
     tools = {
         {
-            "ozone_get_parameters",
-            "Get Ozone Parameters",
-            "Read Ozone's hosted plugin parameters and current normalized values.",
+            "ipc_get_parameters",
+            "Get Plugin Parameters",
+            "Read the hosted plugin parameters and current normalized values.",
             {
                 {"type", "object"},
                 {"properties", {
@@ -155,110 +155,110 @@ StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> bac
                     }}
                 }}
             },
-            {{"title", "Get Ozone Parameters"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Get Plugin Parameters"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "ozone_set_parameter",
-            "Set Ozone Parameter",
-            "Set one Ozone hosted-plugin parameter by normalized index.",
+            "ipc_set_parameter",
+            "Set Plugin Parameter",
+            "Set one hosted-plugin parameter by normalized index.",
             {
                 {"type", "object"},
                 {"properties", {
-                    {"index", integerProperty("Parameter index from ozone_get_parameters.", 0, 0)},
+                    {"index", integerProperty("Parameter index from ipc_get_parameters.", 0, 0)},
                     {"value", numberProperty("Normalized parameter value.", 0.0, 1.0, 0.0)}
                 }},
                 {"required", {"index", "value"}}
             },
-            {{"title", "Set Ozone Parameter"}, {"destructiveHint", true}, {"idempotentHint", true}}
+            {{"title", "Set Plugin Parameter"}, {"destructiveHint", true}, {"idempotentHint", true}}
         },
         {
-            "ozone_run_master_assistant",
+            "ipc_run_master_assistant",
             "Run Master Assistant",
-            "Trigger Ozone's automatable assistant/analyze parameter when exposed by this Ozone version.",
+            "Trigger the hosted plugin's automatable assistant/analyze parameter.",
             {
                 {"type", "object"},
                 {"properties", {
                     {"assistant_parameter_index", integerProperty("Optional explicit assistant/analyze parameter index.", 0, 0)},
-                    {"input_audio_path", stringProperty("Optional local audio file to render through Ozone during analysis.")},
+                    {"input_audio_path", stringProperty("Optional local audio file to render through the plugin during analysis.")},
                     {"analysis_seconds", numberProperty("Maximum seconds of input_audio_path to process.", 0.01, 600.0, 30.0)}
                 }}
             },
             {{"title", "Run Master Assistant"}, {"destructiveHint", true}, {"idempotentHint", false}}
         },
         {
-            "ozone_get_state",
-            "Get Ozone State",
-            "Capture Ozone's opaque plugin state as standard Base64.",
+            "ipc_get_state",
+            "Get Plugin State",
+            "Capture the hosted plugin's opaque state as standard Base64.",
             {
                 {"type", "object"},
                 {"properties", json::object()}
             },
-            {{"title", "Get Ozone State"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Get Plugin State"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "ozone_set_state",
-            "Set Ozone State",
-            "Restore Ozone's opaque plugin state from standard Base64.",
+            "ipc_set_state",
+            "Set Plugin State",
+            "Restore the hosted plugin's opaque state from standard Base64.",
             {
                 {"type", "object"},
                 {"properties", {
-                    {"state_base64", stringProperty("Base64 data previously returned by ozone_get_state.")}
+                    {"state_base64", stringProperty("Base64 data previously returned by ipc_get_state.")}
                 }},
                 {"required", {"state_base64"}}
             },
-            {{"title", "Set Ozone State"}, {"destructiveHint", true}, {"idempotentHint", true}}
+            {{"title", "Set Plugin State"}, {"destructiveHint", true}, {"idempotentHint", true}}
         },
         {
-            "izotope_ipc_attach",
-            "Attach iZotope IPC",
-            "Attach read-only to a named iZotope inter-plugin communication shared-memory segment.",
+            "morephi_ipc_attach",
+            "Attach IPC",
+            "Attach read-only to a named shared-memory IPC segment.",
             {
                 {"type", "object"},
                 {"properties", {
-                    {"segment_name", stringProperty("Explicit shared-memory segment name. Falls back to IZOTOPE_IPC_SEGMENT_NAME.")},
+                    {"segment_name", stringProperty("Explicit shared-memory segment name. Falls back to MOREPHI_IPC_SEGMENT_NAME.")},
                     {"daw_process_id", integerProperty("Optional DAW process ID used to build a candidate segment name.", 1, 0)},
                     {"mapped_size_bytes", integerProperty("Maximum bytes to map/read from the segment.", 1, 4194304)}
                 }}
             },
-            {{"title", "Attach iZotope IPC"}, {"readOnlyHint", true}, {"openWorldHint", true}}
+            {{"title", "Attach IPC"}, {"readOnlyHint", true}, {"openWorldHint", true}}
         },
         {
-            "izotope_ipc_detach",
-            "Detach iZotope IPC",
-            "Detach from the currently mapped iZotope IPC shared-memory segment.",
+            "morephi_ipc_detach",
+            "Detach IPC",
+            "Detach from the currently mapped IPC shared-memory segment.",
             {
                 {"type", "object"},
                 {"properties", json::object()}
             },
-            {{"title", "Detach iZotope IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Detach IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "izotope_ipc_status",
-            "iZotope IPC Status",
+            "morephi_ipc_status",
+            "IPC Status",
             "Report read-only IPC attachment state and last attach error.",
             {
                 {"type", "object"},
                 {"properties", json::object()}
             },
-            {{"title", "iZotope IPC Status"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "IPC Status"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "izotope_ipc_snapshot",
-            "Snapshot iZotope IPC",
+            "morephi_ipc_snapshot",
+            "Snapshot IPC",
             "Read a bounded byte range from the attached IPC segment and return raw bytes plus heuristic frame candidates.",
             {
                 {"type", "object"},
                 {"properties", {
                     {"offset", integerProperty("Byte offset within the mapped segment.", 0, 0)},
                     {"size_bytes", integerProperty("Number of bytes to read, capped by the backend.", 1, 1024)},
-                    {"max_frames", integerProperty("Maximum candidate IZOT frames to report.", 0, 16)}
+                    {"max_frames", integerProperty("Maximum candidate MORP frames to report.", 0, 16)}
                 }}
             },
-            {{"title", "Snapshot iZotope IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Snapshot IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "izotope_ipc_dump",
-            "Dump iZotope IPC",
+            "morephi_ipc_dump",
+            "Dump IPC",
             "Write a bounded raw byte range from the attached IPC segment to a local file.",
             {
                 {"type", "object"},
@@ -269,12 +269,12 @@ StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> bac
                 }},
                 {"required", {"output_path"}}
             },
-            {{"title", "Dump iZotope IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Dump IPC"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "izotope_ipc_capture",
-            "Capture iZotope IPC Diffs",
-            "Sample a bounded read-only IPC memory window and record byte changes for reverse-engineering Assistant activity.",
+            "morephi_ipc_capture",
+            "Capture IPC Diffs",
+            "Sample a bounded read-only IPC memory window and record byte changes for Assistant activity decoding.",
             {
                 {"type", "object"},
                 {"properties", {
@@ -284,7 +284,7 @@ StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> bac
                     {"interval_ms", integerProperty("Delay between live samples.", 1, 25)},
                     {"max_changes", integerProperty("Maximum changed samples to record before stopping.", 1, 64)},
                     {"max_ranges_per_change", integerProperty("Maximum changed byte ranges stored for each changed sample.", 1, 64)},
-                    {"max_frames", integerProperty("Maximum candidate IZOT frames reported per changed sample.", 0, 16)},
+                    {"max_frames", integerProperty("Maximum candidate MORP frames reported per changed sample.", 0, 16)},
                     {"baseline_base64", stringProperty("Optional previous snapshot bytes for one-shot before/after diffing.")},
                     {"output_path", stringProperty("Optional local JSONL file path for changed-sample events.")},
                     {"include_changed_bytes", {
@@ -294,37 +294,37 @@ StandaloneMcpServer::StandaloneMcpServer(std::unique_ptr<OzonePluginBackend> bac
                     }}
                 }}
             },
-            {{"title", "Capture iZotope IPC Diffs"}, {"readOnlyHint", true}, {"openWorldHint", false}}
+            {{"title", "Capture IPC Diffs"}, {"readOnlyHint", true}, {"openWorldHint", false}}
         },
         {
-            "ozone_run_assistant",
-            "Run Ozone Assistant via IPC",
-            "Experimental Windows-first tool that injects an AssistantRequest into a manifest-defined iZotope IPC ring buffer and waits for AssistantResult parameter decisions.",
+            "morephi_ipc_run_assistant",
+            "Run Assistant via IPC",
+            "Inject an AssistantRequest into a manifest-defined IPC ring buffer and wait for AssistantResult parameter decisions.",
             {
                 {"type", "object"},
                 {"properties", {
-                    {"schema_path", stringProperty("Path to the versioned IPC schema manifest JSON. Falls back to IZOTOPE_IPC_SCHEMA_PATH.")},
-                    {"segment_name", stringProperty("Explicit shared-memory segment name. Falls back to IZOTOPE_IPC_SEGMENT_NAME or manifest template + daw_process_id.")},
+                    {"schema_path", stringProperty("Path to the versioned IPC schema manifest JSON. Falls back to MOREPHI_IPC_SCHEMA_PATH.")},
+                    {"segment_name", stringProperty("Explicit shared-memory segment name. Falls back to MOREPHI_IPC_SEGMENT_NAME or manifest template + daw_process_id.")},
                     {"daw_process_id", integerProperty("Optional DAW process ID for manifest segment_name_template replacement.", 1, 0)},
-                    {"ozone_instance_id", integerProperty("Optional explicit Ozone IPC instance ID.", 1, 0)},
-                    {"plugin_name_query", stringProperty("Case-insensitive registry name query used when ozone_instance_id is not supplied.")},
+                    {"instance_id", integerProperty("Optional explicit IPC plugin instance ID.", 1, 0)},
+                    {"plugin_name_query", stringProperty("Case-insensitive registry name query used when instance_id is not supplied.")},
                     {"timeout_ms", integerProperty("Maximum time to wait for AssistantResult.", 0, 10000)},
                     {"poll_interval_ms", integerProperty("Delay between AssistantResult polling attempts.", 1, 10)},
                     {"observer_id", integerProperty("Synthetic observer sender ID for AssistantRequest.", 1, 0x7fffffff)},
                     {"allow_unsafe_write", {
                         {"type", "boolean"},
                         {"default", false},
-                        {"description", "Must be true, with MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE=1, before any IPC write occurs."}
+                        {"description", "Must be true, with MOREPHI_IPC_ENABLE_WRITE=1, before any IPC write occurs."}
                     }},
                     {"apply_result", {
                         {"type", "boolean"},
                         {"default", false},
-                        {"description", "Apply AssistantResult parameter decisions to the hosted Ozone plugin. Defaults to capture-only."}
+                        {"description", "Apply AssistantResult parameter decisions to the hosted plugin. Defaults to capture-only."}
                     }}
                 }},
                 {"required", {"allow_unsafe_write"}}
             },
-            {{"title", "Run Ozone Assistant via IPC"}, {"destructiveHint", true}, {"idempotentHint", false}, {"openWorldHint", true}}
+            {{"title", "Run Assistant via IPC"}, {"destructiveHint", true}, {"idempotentHint", false}, {"openWorldHint", true}}
         }
     };
 }
@@ -389,7 +389,7 @@ json StandaloneMcpServer::handleInitialize(const json& id)
     return JsonRpc::makeResult(id, {
         {"protocolVersion", "2025-06-18"},
         {"capabilities", {{"tools", {{"listChanged", false}}}}},
-        {"serverInfo", {{"name", "morephi-ozone-plugin-mcp"}, {"version", "1.0.0"}}}
+        {"serverInfo", {{"name", "morephi-ipc-plugin-mcp"}, {"version", "1.0.0"}}}
     });
 }
 
@@ -421,14 +421,14 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
     ToolCallOutcome outcome;
 
-    if (name == "ozone_get_parameters")
+    if (name == "ipc_get_parameters")
     {
         ParameterListArgs parsed;
         parsed.query = optionalString(args, "query");
         parsed.includeValues = optionalBool(args, "include_values", true);
         outcome = backend->getParameters(parsed);
     }
-    else if (name == "ozone_set_parameter")
+    else if (name == "ipc_set_parameter")
     {
         if (!args.contains("index") || !args["index"].is_number_integer())
             return invalidParams(id, "index must be an integer.");
@@ -444,7 +444,7 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = backend->setParameter(index, static_cast<float>(value));
     }
-    else if (name == "ozone_run_master_assistant")
+    else if (name == "ipc_run_master_assistant")
     {
         RunAssistantArgs parsed;
         parsed.assistantParameterIndex = optionalInt(args, "assistant_parameter_index");
@@ -458,18 +458,18 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = backend->runMasterAssistant(parsed);
     }
-    else if (name == "ozone_get_state")
+    else if (name == "ipc_get_state")
     {
         outcome = backend->getState();
     }
-    else if (name == "ozone_set_state")
+    else if (name == "ipc_set_state")
     {
         if (!hasRequiredString(args, "state_base64"))
             return invalidParams(id, "state_base64 is required.");
 
         outcome = backend->setState(args["state_base64"].get<std::string>());
     }
-    else if (name == "izotope_ipc_attach")
+    else if (name == "morephi_ipc_attach")
     {
         IpcAttachArgs parsed;
         parsed.segmentName = optionalString(args, "segment_name");
@@ -486,15 +486,15 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = ipcDiscovery->attach(parsed);
     }
-    else if (name == "izotope_ipc_detach")
+    else if (name == "morephi_ipc_detach")
     {
         outcome = ipcDiscovery->detach();
     }
-    else if (name == "izotope_ipc_status")
+    else if (name == "morephi_ipc_status")
     {
         outcome = ipcDiscovery->status();
     }
-    else if (name == "izotope_ipc_snapshot")
+    else if (name == "morephi_ipc_snapshot")
     {
         if (args.contains("offset") && !optionalSize(args, "offset"))
             return invalidParams(id, "offset must be a non-negative integer.");
@@ -513,7 +513,7 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = ipcDiscovery->snapshot(parsed);
     }
-    else if (name == "izotope_ipc_dump")
+    else if (name == "morephi_ipc_dump")
     {
         if (!hasRequiredString(args, "output_path"))
             return invalidParams(id, "output_path is required.");
@@ -531,7 +531,7 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = ipcDiscovery->dump(parsed);
     }
-    else if (name == "izotope_ipc_capture")
+    else if (name == "morephi_ipc_capture")
     {
         if (args.contains("offset") && !optionalSize(args, "offset"))
             return invalidParams(id, "offset must be a non-negative integer.");
@@ -570,12 +570,12 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
 
         outcome = ipcDiscovery->capture(parsed);
     }
-    else if (name == "ozone_run_assistant")
+    else if (name == "morephi_ipc_run_assistant")
     {
         if (args.contains("daw_process_id") && !optionalSize(args, "daw_process_id"))
             return invalidParams(id, "daw_process_id must be a non-negative integer.");
-        if (args.contains("ozone_instance_id") && !optionalSize(args, "ozone_instance_id"))
-            return invalidParams(id, "ozone_instance_id must be a non-negative integer.");
+        if (args.contains("instance_id") && !optionalSize(args, "instance_id"))
+            return invalidParams(id, "instance_id must be a non-negative integer.");
         if (args.contains("timeout_ms") && !optionalSize(args, "timeout_ms"))
             return invalidParams(id, "timeout_ms must be a non-negative integer.");
         if (args.contains("poll_interval_ms") && !optionalSize(args, "poll_interval_ms"))
@@ -592,8 +592,8 @@ json StandaloneMcpServer::handleToolsCall(const json& id, const json& params)
         parsed.segmentName = optionalString(args, "segment_name");
         if (auto pid = optionalSize(args, "daw_process_id"))
             parsed.dawProcessId = static_cast<uint32_t>(*pid);
-        if (auto ozoneId = optionalSize(args, "ozone_instance_id"))
-            parsed.ozoneInstanceId = static_cast<uint32_t>(*ozoneId);
+        if (auto instId = optionalSize(args, "instance_id"))
+            parsed.instanceId = static_cast<uint32_t>(*instId);
         if (auto query = optionalString(args, "plugin_name_query"); query && !query->empty())
             parsed.pluginNameQuery = *query;
         if (auto timeout = optionalSize(args, "timeout_ms"))

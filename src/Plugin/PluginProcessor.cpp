@@ -4,14 +4,15 @@
  */
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Version.h"   // VERSION_STRING — single source of truth for the state-version literal
 #include "Core/InterpolationEngine.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/ABCompareEngine.h"
 #include "AI/InstanceRegistry.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
-#include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
-#include "AI/StandaloneMcp/IZotopeIPCDiscovery.h"
+#include "AI/StandaloneMcp/MorePhiIPCAssistant.h"
+#include "AI/StandaloneMcp/MorePhiIPCDiscovery.h"
 #include "AI/VST3IPCBridge.h"
 #include "AI/Agents/AgentRuntime.h"
 #include "AI/Agents/Blackboard/BlackboardBridge.h"
@@ -117,8 +118,8 @@ MorePhiProcessor::MorePhiProcessor()
       paramBridge(hostManager),
       morphProcessor(snapshotBank),
       mcpServer(*this),
-      ipcDiscovery_(standalone_mcp::createIZotopeIPCDiscovery()),
-      ipcAssistant_(standalone_mcp::createIZotopeIPCAssistant()),
+      ipcDiscovery_(standalone_mcp::createMorePhiIPCDiscovery()),
+      ipcAssistant_(standalone_mcp::createMorePhiIPCAssistant()),
       diagnostics_(*this, profiler_)
 {
     processorGenerationToken_ = gNextProcessorGenerationToken.fetch_add(1, std::memory_order_relaxed);
@@ -207,14 +208,79 @@ void MorePhiProcessor::initializeSonicMaster()
         requestMessageThreadMaintenance();
     });
 
-    // Search for the exported ONNX model alongside the plugin binary.
+    const char* modelName = "masteringbrain_v2_decision.onnx";
+    const char* contractName = "masteringbrain_v2_decision.contract.json";
+
+#if MORE_PHI_HAS_ONNX
+    // W8: try the bundled binary-data resource first (embedded at compile time
+    // via juce_add_binary_data). Extract to a temp file so ONNX Runtime can
+    // mmap it, then SHA-256 verify before loading.
+    {
+        juce::File tempDir = juce::File::getSpecialLocation(
+            juce::File::SpecialLocationType::tempDirectory);
+        juce::File extractedModel = tempDir.getChildFile("morephi_sonicmaster_model.onnx");
+        juce::File extractedContract = tempDir.getChildFile("morephi_sonicmaster_contract.json");
+
+        bool extracted = false;
+        int modelBinSize = 0;
+        const char* modelBinData = BinaryData::getNamedResource("masteringbrain_v2_decision_onnx", modelBinSize);
+        int contractBinSize = 0;
+        const char* contractBinData = BinaryData::getNamedResource("masteringbrain_v2_decision_contract_json", contractBinSize);
+
+        if (modelBinData != nullptr && modelBinSize > 0)
+        {
+            extractedModel.replaceWithData(modelBinData, modelBinSize);
+            extracted = true;
+        }
+        if (contractBinData != nullptr && contractBinSize > 0)
+            extractedContract.replaceWithData(contractBinData, contractBinSize);
+
+        if (extracted && extractedModel.existsAsFile())
+        {
+            // SHA-256 integrity check (W8)
+            bool hashOk = true;
+#if MORE_PHI_HAS_ONNX
+            {   // Compute SHA-256 of the extracted file and compare with the
+                // expected hash baked at CMake configure time.
+                juce::MemoryBlock fileData;
+                if (extractedModel.loadFileAsData(fileData) && fileData.getSize() > 0)
+                {
+                    juce::SHA256 actualHash(static_cast<const uint8_t*>(fileData.getData()),
+                                            fileData.getSize());
+                    const juce::String actualHex = actualHash.toHexString().toLowerCase();
+                    const juce::String expectedHex = juce::String(sonicmaster::kExpectedModelHash).toLowerCase();
+                    if (actualHex != expectedHex)
+                    {
+                        DBG("[MorePhiProcessor] W8: model SHA-256 mismatch (got " + actualHex
+                            + ", expected " + expectedHex + "). Refusing bundled model.");
+                        hashOk = false;
+                    }
+                }
+                else
+                {
+                    hashOk = false;
+                }
+            }
+#endif
+            if (hashOk && sonicMasterRunner_.loadModel(
+                    extractedModel.getFullPathName().toStdString(),
+                    extractedContract.existsAsFile()
+                        ? extractedContract.getFullPathName().toStdString()
+                        : ""))
+            {
+                sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
+                sonicMasterEngine_.setFallbackInferenceSource(&sonicMasterHttpSource_);
+                DBG("[MorePhiProcessor] SonicMaster ONNX model loaded from bundled resource");
+                return;
+            }
+        }
+    }
+#endif
+
+    // W8 fallback: search for the model alongside the plugin binary and dev paths.
     const auto pluginDir = juce::File::getSpecialLocation(
         juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
 
-    const char* modelName = "masteringbrain_v2_decision.onnx";
-    const char* contractName = "masteringbrain_v2_decision.contract.json";  // AUDIT-FIX (A2): sibling contract
-
-    // Also search a "sonicmaster" subdirectory and build/sonicmaster (dev path).
     const juce::File searchDirs[] = {
         pluginDir,
         pluginDir.getChildFile("sonicmaster"),
@@ -222,7 +288,7 @@ void MorePhiProcessor::initializeSonicMaster()
     };
 
     std::string modelPath;
-    std::string contractPath;  // AUDIT-FIX (A2): optional; missing contract still loads (legacy), present contract must validate
+    std::string contractPath;
     for (auto& dir : searchDirs)
     {
         auto f = dir.getChildFile(modelName);
@@ -234,18 +300,14 @@ void MorePhiProcessor::initializeSonicMaster()
         if (c.existsAsFile()) { contractPath = c.getFullPathName().toStdString(); break; }
     }
 
-    // Try ONNX in-process inference first.
     if (!modelPath.empty() && sonicMasterRunner_.loadModel(modelPath, contractPath))
     {
         sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
-        // AUDIT LOW-4: wire the HTTP source as automatic fallback when ONNX
-        // fails consecutively. The HTTP source has no fallback of its own.
         sonicMasterEngine_.setFallbackInferenceSource(&sonicMasterHttpSource_);
         DBG("[MorePhiProcessor] SonicMaster ONNX model loaded: " + juce::String(modelPath));
     }
     else
     {
-        // Fall back to the local Python HTTP inference server.
         sonicMasterEngine_.setInferenceSource(&sonicMasterHttpSource_);
         DBG("[MorePhiProcessor] SonicMaster ONNX model not found, "
             "using HTTP inference server (127.0.0.1:8765)");
@@ -289,12 +351,12 @@ MorePhiProcessor::~MorePhiProcessor()
     DBG("[~MorePhiProcessor] cleaned up midiCallbackWeakRef_");
 }
 
-standalone_mcp::IZotopeIPCDiscovery& MorePhiProcessor::getIZotopeIPCDiscovery()
+standalone_mcp::MorePhiIPCDiscovery& MorePhiProcessor::getMorePhiIPCDiscovery()
 {
     return *ipcDiscovery_;
 }
 
-standalone_mcp::IZotopeIPCAssistant& MorePhiProcessor::getIZotopeIPCAssistant()
+standalone_mcp::MorePhiIPCAssistant& MorePhiProcessor::getMorePhiIPCAssistant()
 {
     return *ipcAssistant_;
 }
@@ -373,6 +435,22 @@ bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
         sonicMasterEngine_.notifyHostedParameterChanged();
 
     return pushed;
+}
+
+bool MorePhiProcessor::enqueuePlanBoundary(std::uint64_t planId, ParameterEditSource source)
+{
+    // P3.10 (AUDIT): enqueue a no-op boundary command that closes a plan. The
+    // audio-thread drain pops it and stamps lastDrainedPlanId_ so a caller can
+    // confirm the full plan committed. paramIndex=-1 ensures writeParameter is
+    // never invoked (it early-returns on out-of-range indices).
+    return commandQueue.push(ParamCommand{
+        -1, 0.0f,
+        false, -1,
+        source,
+        /*holdAgainstMorph=*/false,
+        /*isPlanBoundary=*/true,
+        planId
+    });
 }
 
 bool MorePhiProcessor::enqueueParameterBatch(const std::vector<ParamCommand>& commands)
@@ -698,6 +776,16 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
 
     while (drainedCommands < commandLimit && commandQueue.pop(cmd))
     {
+        // P3.10 (AUDIT): plan transaction boundary. A no-op command (paramIndex=-1)
+        // that closes an AI/neural plan. Stamp lastDrainedPlanId_ so a caller can
+        // confirm the full plan drained (vs. still partial in the queue), then
+        // continue — never reach the parameter-write path.
+        if (cmd.isPlanBoundary)
+        {
+            lastDrainedPlanId_.store(cmd.planId, std::memory_order_release);
+            ++drainedCommands;
+            continue;
+        }
         if (cmd.isSnapshotMarker)
         {
             MORE_PHI_PROFILE(profiler_, "command_drain_snapshot");
@@ -2713,8 +2801,8 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
     xml->addChildElement(sanityXml.release());
 
     // 6) Persist RecallMode
-    // State version for forward migration
-    xml->setAttribute("stateVersion", "3.3.0");
+    // State version for forward migration (single source of truth: Version.h).
+    xml->setAttribute("stateVersion", juce::String(more_phi::VERSION_STRING));
     xml->setAttribute("recallMode", recallMode_.load(std::memory_order_relaxed));
 
     // 7) Persist morph cursor position so morph resumes from where it was
@@ -2784,10 +2872,10 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
     // diagnostic breadcrumb, not a migration gate.
     {
         const juce::String stateVersion = xml->getStringAttribute("stateVersion", "0.0.0");
-        if (stateVersion != "3.3.0")
+        if (stateVersion != juce::String(more_phi::VERSION_STRING))
         {
             DBG("MorePhiProcessor::setStateInformation — loading state from version " + stateVersion
-                + " (current: 3.3.0). Some settings may not be compatible.");
+                + " (current: " + juce::String(more_phi::VERSION_STRING) + "). Some settings may not be compatible.");
         }
     }
 
@@ -3239,6 +3327,14 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
 
     auto& automationRuntime = mcpServer.getAutomationRuntime();
 
+    // P2.5 (AUDIT): wire the ActionLedger to AutoMasteringEngine so neural
+    // mastering writes (which bypass MCPToolHandler::handle) are auditable. The
+    // MCP path already records via MCPToolHandler; this closes the gap for the
+    // SonicMaster → applyValidatedPlan path. Ledger lifetime is bound to the MCP
+    // server's AutomationRuntime, which outlives the agent runtime (see the
+    // member-destruction-order note below).
+    autoMasteringEngine_.setActionLedger(&automationRuntime.ledger());
+
     // Long-lived holders for the runtime's by-reference dependencies. The runtime
     // borrows these by raw reference, so they must outlive it. Member declaration
     // order in PluginProcessor.h guarantees that: the holders are declared BEFORE
@@ -3473,9 +3569,11 @@ bool MorePhiProcessor::applyStateMigration(juce::XmlElement& stateXml, const juc
 
     const int savedKey = savedMajor * 1000000 + savedMinor * 1000 + savedPatch;
 
-    // Current version (keep in sync with Version.h). Migrations below bring the
-    // state up to this version.
-    constexpr int kCurrentMajor = 3, kCurrentMinor = 4, kCurrentPatch = 0;
+    // Current version — sourced from Version.h (single source of truth). Migrations
+    // below bring the state up to this version.
+    const juce::String kCurrentStateVersion = juce::String(more_phi::VERSION_STRING);
+    int kCurrentMajor = 0, kCurrentMinor = 0, kCurrentPatch = 0;
+    parseVersion(kCurrentStateVersion, kCurrentMajor, kCurrentMinor, kCurrentPatch);
     const int currentKey = kCurrentMajor * 1000000 + kCurrentMinor * 1000 + kCurrentPatch;
 
     // Newer-than-current state (e.g. a project saved with a future build) is
@@ -3533,8 +3631,7 @@ bool MorePhiProcessor::applyStateMigration(juce::XmlElement& stateXml, const juc
 
     // Mark the state as migrated to the current version so downstream code sees
     // a consistent schema and so a re-save does not re-enter the chain.
-    stateXml.setAttribute("stateVersion",
-        juce::String(kCurrentMajor) + "." + juce::String(kCurrentMinor) + "." + juce::String(kCurrentPatch));
+    stateXml.setAttribute("stateVersion", kCurrentStateVersion);
 
     return true;
 }

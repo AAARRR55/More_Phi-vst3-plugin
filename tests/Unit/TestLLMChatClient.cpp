@@ -40,13 +40,13 @@ auto collectNames = [](const nlohmann::json& arr, bool isAnthropic) {
 // regression has reintroduced the blocklist and the in-plugin AI assistant
 // has lost "full unrestricted" tool access.
 const std::vector<std::string> kPreviouslyBlockedToolNames = {
-    "izotope_ipc_attach",
-    "izotope_ipc_detach",
-    "izotope_ipc_status",
-    "izotope_ipc_snapshot",
-    "izotope_ipc_dump",
-    "izotope_ipc_capture",
-    "ozone_run_assistant",
+    "morephi_ipc_attach",
+    "morephi_ipc_detach",
+    "morephi_ipc_status",
+    "morephi_ipc_snapshot",
+    "morephi_ipc_dump",
+    "morephi_ipc_capture",
+    "morephi_ipc_run_assistant",
     "hosted_plugin_scan",
     "hosted_plugin_load",
     "plugin_profile_save",
@@ -185,7 +185,7 @@ TEST_CASE("LLM chat client system prompt encodes underscore naming and confirmat
     CHECK(prompt.contains("hosted_plugin_load"));
     CHECK(prompt.contains("mastering_render_batch"));
     CHECK(prompt.contains("generate_dataset"));
-    CHECK(prompt.contains("izotope_ipc_"));
+    CHECK(prompt.contains("morephi_ipc_"));
 
     // The prompt must explicitly warn the LLM away from the dotted form (which
     // would route through resolveApi... as unmapped and silently fail). The

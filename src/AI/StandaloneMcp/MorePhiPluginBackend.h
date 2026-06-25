@@ -64,10 +64,10 @@ struct AssistantParameterApplyArgs
     std::vector<AssistantParameterDecision> parameters;
 };
 
-class OzonePluginBackend
+class MorePhiPluginBackend
 {
 public:
-    virtual ~OzonePluginBackend() = default;
+    virtual ~MorePhiPluginBackend() = default;
 
     virtual ToolCallOutcome getParameters(const ParameterListArgs& args) = 0;
     virtual ToolCallOutcome setParameter(int index, float value) = 0;
@@ -77,12 +77,12 @@ public:
     virtual ToolCallOutcome setState(const std::string& stateBase64) = 0;
 };
 
-class HostedOzonePluginBackend final : public OzonePluginBackend
+class HostedNamedPluginBackend final : public MorePhiPluginBackend
 {
 public:
-    HostedOzonePluginBackend();
-    explicit HostedOzonePluginBackend(IPluginHostManager& externalHost);
-    ~HostedOzonePluginBackend() override;
+    HostedNamedPluginBackend();
+    explicit HostedNamedPluginBackend(IPluginHostManager& externalHost);
+    ~HostedNamedPluginBackend() override;
 
     ToolCallOutcome getParameters(const ParameterListArgs& args) override;
     ToolCallOutcome setParameter(int index, float value) override;
@@ -111,7 +111,7 @@ private:
                                      int& renderedSamples);
 };
 
-std::unique_ptr<OzonePluginBackend> createOzonePluginBackend();
+std::unique_ptr<MorePhiPluginBackend> createMorePhiPluginBackend();
 
 } // namespace standalone_mcp
 } // namespace more_phi

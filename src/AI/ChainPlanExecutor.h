@@ -56,20 +56,16 @@ struct OzoneApplyBreakdown
 // reached the command queue; 'verified' = how many read back within tolerance after
 // the drain; 'driftedDiscrete' = discrete params whose value snapped to a different
 // step than requested (expected with setParameterNormalizedSnapped); 'mismatched' =
-// params whose readback was outside tolerance for non-snap reasons. Defined here
-// (alongside OzoneApplyBreakdown) because ChainPlanExecutor returns it by value.
-struct ApplyVerification
-{
-    int requested = 0;
-    int enqueued = 0;
-    int verified = 0;
-    int driftedDiscrete = 0;
-    int mismatched = 0;
-    int ambiguous = 0;      // slots the OzoneParameterMap flagged ambiguous (Fix 3)
-    int unmapped = 0;       // slots with no audit mapping
-    [[nodiscard]] float verifiedFraction() const noexcept
-    { return enqueued > 0 ? static_cast<float>(verified) / static_cast<float>(enqueued) : 0.0f; }
-};
+// params whose readback was outside tolerance for non-snap reasons.
+//
+// AUDIT-FIX (Fix 2): ApplyVerification is DEFINED in Core/AutoMasteringEngine.h
+// (the engine owns the verification concept). Forward-declared here so this header
+// can declare getLastOzoneVerification() returning it by value without pulling in
+// AutoMasteringEngine.h (which would create a cycle: AutoMasteringEngine.h includes
+// this header). The complete type is required only where the method is defined
+// (ChainPlanExecutor.cpp includes AutoMasteringEngine.h) or where instances are
+// constructed/inspected (callers include AutoMasteringEngine.h).
+struct ApplyVerification;
 
 struct MultiEffectPlan
 {

@@ -2,9 +2,9 @@
 #include <catch2/catch_approx.hpp>
 #include <nlohmann/json.hpp>
 
-#include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
-#include "AI/StandaloneMcp/IZotopeIPCDiscovery.h"
-#include "AI/StandaloneMcp/OzonePluginBackend.h"
+#include "AI/StandaloneMcp/MorePhiIPCAssistant.h"
+#include "AI/StandaloneMcp/MorePhiIPCDiscovery.h"
+#include "AI/StandaloneMcp/MorePhiPluginBackend.h"
 #include "AI/StandaloneMcp/StandaloneMcpServer.h"
 #include "Host/IPluginHostManager.h"
 
@@ -26,10 +26,10 @@ using json = nlohmann::json;
 
 namespace {
 
-class FakeOzonePlugin final : public juce::AudioPluginInstance
+class FakeHostedPlugin final : public juce::AudioPluginInstance
 {
 public:
-    explicit FakeOzonePlugin(bool includeAssistant = true)
+    explicit FakeHostedPlugin(bool includeAssistant = true)
         : juce::AudioPluginInstance(juce::AudioProcessor::BusesProperties()
             .withInput("Input", juce::AudioChannelSet::stereo(), true)
             .withOutput("Output", juce::AudioChannelSet::stereo(), true))
@@ -49,15 +49,15 @@ public:
             juce::ParameterID{"maximizer_enabled", 1}, "Maximizer Enabled", true));
     }
 
-    const juce::String getName() const override { return "Ozone 11"; }
+    const juce::String getName() const override { return "MorePhi Hosted Plugin"; }
 
     void fillInPluginDescription(juce::PluginDescription& description) const override
     {
         description.name = getName();
         description.descriptiveName = getName();
         description.pluginFormatName = "VST3";
-        description.manufacturerName = "iZotope";
-        description.fileOrIdentifier = "Fake/Ozone 11.vst3";
+        description.manufacturerName = "MorePhi";
+        description.fileOrIdentifier = "Fake/MorePhiHostedPlugin.vst3";
     }
 
     void prepareToPlay(double, int) override {}
@@ -170,25 +170,25 @@ json request(int id, const std::string& method, json params = json::object())
 more_phi::standalone_mcp::StandaloneMcpServer makeServer(FakePluginHostManager& host)
 {
     return more_phi::standalone_mcp::StandaloneMcpServer(
-        std::make_unique<more_phi::standalone_mcp::HostedOzonePluginBackend>(host));
+        std::make_unique<more_phi::standalone_mcp::HostedNamedPluginBackend>(host));
 }
 
 more_phi::standalone_mcp::StandaloneMcpServer makeServer(
     FakePluginHostManager& host,
-    std::unique_ptr<more_phi::standalone_mcp::IZotopeIPCDiscovery> discovery)
+    std::unique_ptr<more_phi::standalone_mcp::MorePhiIPCDiscovery> discovery)
 {
     return more_phi::standalone_mcp::StandaloneMcpServer(
-        std::make_unique<more_phi::standalone_mcp::HostedOzonePluginBackend>(host),
+        std::make_unique<more_phi::standalone_mcp::HostedNamedPluginBackend>(host),
         std::move(discovery));
 }
 
 more_phi::standalone_mcp::StandaloneMcpServer makeServer(
     FakePluginHostManager& host,
-    std::unique_ptr<more_phi::standalone_mcp::IZotopeIPCDiscovery> discovery,
-    std::unique_ptr<more_phi::standalone_mcp::IZotopeIPCAssistant> assistant)
+    std::unique_ptr<more_phi::standalone_mcp::MorePhiIPCDiscovery> discovery,
+    std::unique_ptr<more_phi::standalone_mcp::MorePhiIPCAssistant> assistant)
 {
     return more_phi::standalone_mcp::StandaloneMcpServer(
-        std::make_unique<more_phi::standalone_mcp::HostedOzonePluginBackend>(host),
+        std::make_unique<more_phi::standalone_mcp::HostedNamedPluginBackend>(host),
         std::move(discovery),
         std::move(assistant));
 }
@@ -252,7 +252,7 @@ std::string base64Slice(const std::vector<uint8_t>& bytes, size_t offset, size_t
 
 std::vector<uint8_t> createFakeAssistantMemory()
 {
-    constexpr uint32_t ozoneId = 0x01020304u;
+    constexpr uint32_t instanceIdValue = 0x01020304u;
     constexpr uint32_t observerId = 0xDEADBEEFu;
     constexpr size_t registryOffset = 64;
     constexpr size_t ringWriteOffset = 260;
@@ -261,8 +261,8 @@ std::vector<uint8_t> createFakeAssistantMemory()
     constexpr size_t frameHeaderSize = 28;
 
     std::vector<uint8_t> bytes(2048, 0);
-    writeU32LE(bytes, registryOffset + 0, ozoneId);
-    const std::string name = "Ozone 11";
+    writeU32LE(bytes, registryOffset + 0, instanceIdValue);
+    const std::string name = "MorePhiPlugin";
     std::memcpy(bytes.data() + registryOffset + 8, name.data(), name.size());
     writeU32LE(bytes, registryOffset + 36, 1);
 
@@ -272,7 +272,7 @@ std::vector<uint8_t> createFakeAssistantMemory()
     writeU32LE(bytes, frameOffset + 0, 0x495A4F54u);
     writeU16LE(bytes, frameOffset + 4, 3);
     writeU16LE(bytes, frameOffset + 6, 0x0021);
-    writeU32LE(bytes, frameOffset + 8, ozoneId);
+    writeU32LE(bytes, frameOffset + 8, instanceIdValue);
     writeU32LE(bytes, frameOffset + 12, observerId);
     writeU32LE(bytes, frameOffset + 16, 14);
     writeU64LE(bytes, frameOffset + 20, 1234);
@@ -380,7 +380,7 @@ void appendIpcFrameAtCurrentRingWrite(std::vector<uint8_t>& bytes,
 
 void appendAssistantResultAtCurrentRingWrite(std::vector<uint8_t>& bytes,
                                              const std::vector<std::pair<int, float>>& params,
-                                             uint32_t ozoneId = 0x01020304u,
+                                             uint32_t instanceIdValue = 0x01020304u,
                                              uint32_t observerId = 0xDEADBEEFu,
                                              size_t ringWriteOffset = 260,
                                              size_t ringDataOffset = 512,
@@ -389,7 +389,7 @@ void appendAssistantResultAtCurrentRingWrite(std::vector<uint8_t>& bytes,
     appendIpcFrameAtCurrentRingWrite(
         bytes,
         0x0021,
-        ozoneId,
+        instanceIdValue,
         observerId,
         makeAssistantResultPayload(params),
         ringWriteOffset,
@@ -398,7 +398,7 @@ void appendAssistantResultAtCurrentRingWrite(std::vector<uint8_t>& bytes,
 }
 
 template <typename Invoke, typename Writer>
-json invokeWithDelayedIpcWriter(more_phi::standalone_mcp::IZotopeIPCAssistant& assistant,
+json invokeWithDelayedIpcWriter(more_phi::standalone_mcp::MorePhiIPCAssistant& assistant,
                                 const std::string& segmentName,
                                 Invoke invoke,
                                 Writer writer,
@@ -472,9 +472,9 @@ juce::File createAssistantInputFile()
 
 } // namespace
 
-TEST_CASE("Standalone Ozone MCP server lists hosted-plugin tools", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server lists hosted-plugin tools", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
@@ -482,7 +482,7 @@ TEST_CASE("Standalone Ozone MCP server lists hosted-plugin tools", "[mcp][standa
 
     const auto init = server.processJson(request(1, "initialize"));
     REQUIRE(init["result"]["protocolVersion"].get<std::string>() == "2025-06-18");
-    REQUIRE(init["result"]["serverInfo"]["name"].get<std::string>() == "morephi-ozone-plugin-mcp");
+    REQUIRE(init["result"]["serverInfo"]["name"].get<std::string>() == "morephi-ipc-plugin-mcp");
 
     const auto listed = server.processJson(request(2, "tools/list"));
     REQUIRE(listed["result"]["tools"].is_array());
@@ -503,17 +503,17 @@ TEST_CASE("Standalone Ozone MCP server lists hosted-plugin tools", "[mcp][standa
     {
         REQUIRE(tool.contains("annotations"));
         const auto name = tool["name"].get<std::string>();
-        foundGetParameters = foundGetParameters || name == "ozone_get_parameters";
-        foundSetParameter = foundSetParameter || name == "ozone_set_parameter";
-        foundAssistant = foundAssistant || name == "ozone_run_master_assistant";
-        foundGetState = foundGetState || name == "ozone_get_state";
-        foundSetState = foundSetState || name == "ozone_set_state";
-        foundIpcAttach = foundIpcAttach || name == "izotope_ipc_attach";
-        foundIpcStatus = foundIpcStatus || name == "izotope_ipc_status";
-        foundIpcSnapshot = foundIpcSnapshot || name == "izotope_ipc_snapshot";
-        foundIpcDump = foundIpcDump || name == "izotope_ipc_dump";
-        foundIpcCapture = foundIpcCapture || name == "izotope_ipc_capture";
-        foundRunAssistantIpc = foundRunAssistantIpc || name == "ozone_run_assistant";
+        foundGetParameters = foundGetParameters || name == "ipc_get_parameters";
+        foundSetParameter = foundSetParameter || name == "ipc_set_parameter";
+        foundAssistant = foundAssistant || name == "ipc_run_master_assistant";
+        foundGetState = foundGetState || name == "ipc_get_state";
+        foundSetState = foundSetState || name == "ipc_set_state";
+        foundIpcAttach = foundIpcAttach || name == "morephi_ipc_attach";
+        foundIpcStatus = foundIpcStatus || name == "morephi_ipc_status";
+        foundIpcSnapshot = foundIpcSnapshot || name == "morephi_ipc_snapshot";
+        foundIpcDump = foundIpcDump || name == "morephi_ipc_dump";
+        foundIpcCapture = foundIpcCapture || name == "morephi_ipc_capture";
+        foundRunAssistantIpc = foundRunAssistantIpc || name == "morephi_ipc_run_assistant";
     }
 
     REQUIRE(foundGetParameters);
@@ -529,16 +529,16 @@ TEST_CASE("Standalone Ozone MCP server lists hosted-plugin tools", "[mcp][standa
     REQUIRE(foundRunAssistantIpc);
 }
 
-TEST_CASE("Standalone Ozone MCP server reads and writes hosted parameters", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server reads and writes hosted parameters", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
     auto server = makeServer(host);
 
     const auto listed = server.processJson(request(3, "tools/call", {
-        {"name", "ozone_get_parameters"},
+        {"name", "ipc_get_parameters"},
         {"arguments", {{"include_values", true}}}
     }));
     REQUIRE_FALSE(listed["result"]["isError"].get<bool>());
@@ -546,7 +546,7 @@ TEST_CASE("Standalone Ozone MCP server reads and writes hosted parameters", "[mc
     REQUIRE(listed["result"]["structuredContent"]["parameters"][0]["name"].get<std::string>() == "EQ Gain");
 
     const auto filtered = server.processJson(request(4, "tools/call", {
-        {"name", "ozone_get_parameters"},
+        {"name", "ipc_get_parameters"},
         {"arguments", {{"query", "assistant"}, {"include_values", false}}}
     }));
     REQUIRE_FALSE(filtered["result"]["isError"].get<bool>());
@@ -554,7 +554,7 @@ TEST_CASE("Standalone Ozone MCP server reads and writes hosted parameters", "[mc
     REQUIRE_FALSE(filtered["result"]["structuredContent"]["parameters"][0].contains("value"));
 
     const auto set = server.processJson(request(5, "tools/call", {
-        {"name", "ozone_set_parameter"},
+        {"name", "ipc_set_parameter"},
         {"arguments", {{"index", 0}, {"value", 0.75}}}
     }));
     REQUIRE_FALSE(set["result"]["isError"].get<bool>());
@@ -562,16 +562,16 @@ TEST_CASE("Standalone Ozone MCP server reads and writes hosted parameters", "[mc
     REQUIRE(pluginPtr->getParameters()[0]->getValue() == Approx(0.75f));
 }
 
-TEST_CASE("Standalone Ozone MCP server captures and restores plugin state", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server captures and restores plugin state", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
     auto server = makeServer(host);
 
     const auto captured = server.processJson(request(6, "tools/call", {
-        {"name", "ozone_get_state"},
+        {"name", "ipc_get_state"},
         {"arguments", json::object()}
     }));
     REQUIRE_FALSE(captured["result"]["isError"].get<bool>());
@@ -582,16 +582,16 @@ TEST_CASE("Standalone Ozone MCP server captures and restores plugin state", "[mc
     const auto restoredBase64 = juce::Base64::toBase64(
         restoredState.data(), restoredState.size()).toStdString();
     const auto restored = server.processJson(request(7, "tools/call", {
-        {"name", "ozone_set_state"},
+        {"name", "ipc_set_state"},
         {"arguments", {{"state_base64", restoredBase64}}}
     }));
     REQUIRE_FALSE(restored["result"]["isError"].get<bool>());
     REQUIRE(pluginPtr->state == "restored-state");
 }
 
-TEST_CASE("Standalone Ozone MCP server triggers assistant parameter and renders input audio", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server triggers assistant parameter and renders input audio", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
@@ -600,7 +600,7 @@ TEST_CASE("Standalone Ozone MCP server triggers assistant parameter and renders 
     const auto inputFile = createAssistantInputFile();
 
     const auto assistant = server.processJson(request(8, "tools/call", {
-        {"name", "ozone_run_master_assistant"},
+        {"name", "ipc_run_master_assistant"},
         {"arguments", {
             {"input_audio_path", inputFile.getFullPathName().toStdString()},
             {"analysis_seconds", 0.05}
@@ -616,15 +616,15 @@ TEST_CASE("Standalone Ozone MCP server triggers assistant parameter and renders 
     inputFile.deleteFile();
 }
 
-TEST_CASE("Standalone Ozone MCP server reports assistant discovery failure as a tool error", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server reports assistant discovery failure as a tool error", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>(false);
+    auto plugin = std::make_unique<FakeHostedPlugin>(false);
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
     auto server = makeServer(host);
 
     const auto assistant = server.processJson(request(9, "tools/call", {
-        {"name", "ozone_run_master_assistant"},
+        {"name", "ipc_run_master_assistant"},
         {"arguments", json::object()}
     }));
 
@@ -632,15 +632,15 @@ TEST_CASE("Standalone Ozone MCP server reports assistant discovery failure as a 
     REQUIRE(assistant["result"]["structuredContent"]["error"].get<std::string>() == "assistant_parameter_not_found");
 }
 
-TEST_CASE("Standalone Ozone MCP server uses protocol errors for malformed tool params", "[mcp][standalone]")
+TEST_CASE("Standalone MCP server uses protocol errors for malformed tool params", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
     auto server = makeServer(host);
 
     const auto badSet = server.processJson(request(10, "tools/call", {
-        {"name", "ozone_set_parameter"},
+        {"name", "ipc_set_parameter"},
         {"arguments", {{"index", 0}, {"value", 1.5}}}
     }));
 
@@ -648,7 +648,7 @@ TEST_CASE("Standalone Ozone MCP server uses protocol errors for malformed tool p
     REQUIRE(badSet["error"]["code"].get<int>() == -32602);
 
     const auto badState = server.processJson(request(11, "tools/call", {
-        {"name", "ozone_set_state"},
+        {"name", "ipc_set_state"},
         {"arguments", json::object()}
     }));
 
@@ -656,9 +656,9 @@ TEST_CASE("Standalone Ozone MCP server uses protocol errors for malformed tool p
     REQUIRE(badState["error"]["code"].get<int>() == -32602);
 }
 
-TEST_CASE("Standalone Ozone MCP stdio run handles newline-delimited JSON", "[mcp][standalone]")
+TEST_CASE("Standalone MCP stdio run handles newline-delimited JSON", "[mcp][standalone]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
     auto server = makeServer(host);
@@ -672,32 +672,32 @@ TEST_CASE("Standalone Ozone MCP stdio run handles newline-delimited JSON", "[mcp
 
     std::string line;
     std::getline(output, line);
-    REQUIRE(json::parse(line)["result"]["serverInfo"]["name"].get<std::string>() == "morephi-ozone-plugin-mcp");
+    REQUIRE(json::parse(line)["result"]["serverInfo"]["name"].get<std::string>() == "morephi-ipc-plugin-mcp");
 
     std::getline(output, line);
     REQUIRE(json::parse(line)["result"]["tools"].is_array());
 }
 
-TEST_CASE("Standalone MCP iZotope IPC tools inspect fake read-only memory", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC tools inspect fake read-only memory", "[mcp][standalone][ipc]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto discovery = std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>();
-    discovery->setFakeSegmentForTests("fake_izotope_ipc", createFakeIpcMemory());
+    auto discovery = std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>();
+    discovery->setFakeSegmentForTests("fake_morephi_ipc", createFakeIpcMemory());
     auto server = makeServer(host, std::move(discovery));
 
     const auto attach = server.processJson(request(20, "tools/call", {
-        {"name", "izotope_ipc_attach"},
-        {"arguments", {{"segment_name", "fake_izotope_ipc"}}}
+        {"name", "morephi_ipc_attach"},
+        {"arguments", {{"segment_name", "fake_morephi_ipc"}}}
     }));
     REQUIRE_FALSE(attach["result"]["isError"].get<bool>());
     REQUIRE(attach["result"]["structuredContent"]["attached"].get<bool>());
     REQUIRE(attach["result"]["structuredContent"]["mapped_size_bytes"].get<size_t>() == 256);
 
     const auto status = server.processJson(request(21, "tools/call", {
-        {"name", "izotope_ipc_status"},
+        {"name", "morephi_ipc_status"},
         {"arguments", json::object()}
     }));
     REQUIRE_FALSE(status["result"]["isError"].get<bool>());
@@ -705,7 +705,7 @@ TEST_CASE("Standalone MCP iZotope IPC tools inspect fake read-only memory", "[mc
     REQUIRE(status["result"]["structuredContent"]["platform"].get<std::string>() == "test");
 
     const auto snapshot = server.processJson(request(22, "tools/call", {
-        {"name", "izotope_ipc_snapshot"},
+        {"name", "morephi_ipc_snapshot"},
         {"arguments", {{"offset", 0}, {"size_bytes", 96}, {"max_frames", 4}}}
     }));
     REQUIRE_FALSE(snapshot["result"]["isError"].get<bool>());
@@ -720,7 +720,7 @@ TEST_CASE("Standalone MCP iZotope IPC tools inspect fake read-only memory", "[mc
     const auto dumpFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
         .getNonexistentChildFile("morephi_ipc_dump", ".bin");
     const auto dumped = server.processJson(request(23, "tools/call", {
-        {"name", "izotope_ipc_dump"},
+        {"name", "morephi_ipc_dump"},
         {"arguments", {
             {"output_path", dumpFile.getFullPathName().toStdString()},
             {"offset", 32},
@@ -733,54 +733,54 @@ TEST_CASE("Standalone MCP iZotope IPC tools inspect fake read-only memory", "[mc
     dumpFile.deleteFile();
 
     const auto detached = server.processJson(request(24, "tools/call", {
-        {"name", "izotope_ipc_detach"},
+        {"name", "morephi_ipc_detach"},
         {"arguments", json::object()}
     }));
     REQUIRE_FALSE(detached["result"]["isError"].get<bool>());
     REQUIRE_FALSE(detached["result"]["structuredContent"]["attached"].get<bool>());
 }
 
-TEST_CASE("Standalone MCP iZotope IPC tools return tool errors for unsafe ranges and missing segments", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC tools return tool errors for unsafe ranges and missing segments", "[mcp][standalone][ipc]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto discovery = std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>();
-    discovery->setFakeSegmentForTests("fake_izotope_ipc", createFakeIpcMemory());
+    auto discovery = std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>();
+    discovery->setFakeSegmentForTests("fake_morephi_ipc", createFakeIpcMemory());
     auto server = makeServer(host, std::move(discovery));
 
     const auto missingSegment = server.processJson(request(30, "tools/call", {
-        {"name", "izotope_ipc_attach"},
+        {"name", "morephi_ipc_attach"},
         {"arguments", json::object()}
     }));
     REQUIRE(missingSegment["result"]["isError"].get<bool>());
     REQUIRE(missingSegment["result"]["structuredContent"]["error"].get<std::string>() == "missing_segment_name");
 
     const auto attach = server.processJson(request(31, "tools/call", {
-        {"name", "izotope_ipc_attach"},
-        {"arguments", {{"segment_name", "fake_izotope_ipc"}}}
+        {"name", "morephi_ipc_attach"},
+        {"arguments", {{"segment_name", "fake_morephi_ipc"}}}
     }));
     REQUIRE_FALSE(attach["result"]["isError"].get<bool>());
 
     const auto badRange = server.processJson(request(32, "tools/call", {
-        {"name", "izotope_ipc_snapshot"},
+        {"name", "morephi_ipc_snapshot"},
         {"arguments", {{"offset", 250}, {"size_bytes", 32}}}
     }));
     REQUIRE(badRange["result"]["isError"].get<bool>());
     REQUIRE(badRange["result"]["structuredContent"]["error"].get<std::string>() == "invalid_range");
 
     const auto malformed = server.processJson(request(33, "tools/call", {
-        {"name", "izotope_ipc_snapshot"},
+        {"name", "morephi_ipc_snapshot"},
         {"arguments", {{"offset", -1}, {"size_bytes", 32}}}
     }));
     REQUIRE(malformed.contains("error"));
     REQUIRE(malformed["error"]["code"].get<int>() == -32602);
 }
 
-TEST_CASE("Standalone MCP iZotope IPC capture reports baseline diffs and JSONL events", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC capture reports baseline diffs and JSONL events", "[mcp][standalone][ipc]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
@@ -788,13 +788,13 @@ TEST_CASE("Standalone MCP iZotope IPC capture reports baseline diffs and JSONL e
     auto changed = baseline;
     changed[62] = 0x55;
 
-    auto discovery = std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>();
-    discovery->setFakeSegmentForTests("fake_izotope_ipc", changed);
+    auto discovery = std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>();
+    discovery->setFakeSegmentForTests("fake_morephi_ipc", changed);
     auto server = makeServer(host, std::move(discovery));
 
     const auto attach = server.processJson(request(40, "tools/call", {
-        {"name", "izotope_ipc_attach"},
-        {"arguments", {{"segment_name", "fake_izotope_ipc"}}}
+        {"name", "morephi_ipc_attach"},
+        {"arguments", {{"segment_name", "fake_morephi_ipc"}}}
     }));
     REQUIRE_FALSE(attach["result"]["isError"].get<bool>());
 
@@ -802,7 +802,7 @@ TEST_CASE("Standalone MCP iZotope IPC capture reports baseline diffs and JSONL e
         .getNonexistentChildFile("morephi_ipc_capture", ".jsonl");
 
     const auto captured = server.processJson(request(41, "tools/call", {
-        {"name", "izotope_ipc_capture"},
+        {"name", "morephi_ipc_capture"},
         {"arguments", {
             {"offset", 32},
             {"size_bytes", 34},
@@ -833,24 +833,24 @@ TEST_CASE("Standalone MCP iZotope IPC capture reports baseline diffs and JSONL e
     captureFile.deleteFile();
 }
 
-TEST_CASE("Standalone MCP iZotope IPC capture validates bounds and baseline size", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC capture validates bounds and baseline size", "[mcp][standalone][ipc]")
 {
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto discovery = std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>();
-    discovery->setFakeSegmentForTests("fake_izotope_ipc", createFakeIpcMemory());
+    auto discovery = std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>();
+    discovery->setFakeSegmentForTests("fake_morephi_ipc", createFakeIpcMemory());
     auto server = makeServer(host, std::move(discovery));
 
     const auto attach = server.processJson(request(50, "tools/call", {
-        {"name", "izotope_ipc_attach"},
-        {"arguments", {{"segment_name", "fake_izotope_ipc"}}}
+        {"name", "morephi_ipc_attach"},
+        {"arguments", {{"segment_name", "fake_morephi_ipc"}}}
     }));
     REQUIRE_FALSE(attach["result"]["isError"].get<bool>());
 
     const auto mismatchedBaseline = server.processJson(request(51, "tools/call", {
-        {"name", "izotope_ipc_capture"},
+        {"name", "morephi_ipc_capture"},
         {"arguments", {
             {"offset", 32},
             {"size_bytes", 34},
@@ -862,41 +862,41 @@ TEST_CASE("Standalone MCP iZotope IPC capture validates bounds and baseline size
     REQUIRE(mismatchedBaseline["result"]["structuredContent"]["error"].get<std::string>() == "baseline_size_mismatch");
 
     const auto oversized = server.processJson(request(52, "tools/call", {
-        {"name", "izotope_ipc_capture"},
+        {"name", "morephi_ipc_capture"},
         {"arguments", {{"offset", 0}, {"size_bytes", 2 * 1024 * 1024}}}
     }));
     REQUIRE(oversized["result"]["isError"].get<bool>());
     REQUIRE(oversized["result"]["structuredContent"]["error"].get<std::string>() == "invalid_range");
 
     const auto malformed = server.processJson(request(53, "tools/call", {
-        {"name", "izotope_ipc_capture"},
+        {"name", "morephi_ipc_capture"},
         {"arguments", {{"duration_ms", -1}}}
     }));
     REQUIRE(malformed.contains("error"));
     REQUIRE(malformed["error"]["code"].get<int>() == -32602);
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant enforces write gates", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant enforces write gates", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemory());
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemory());
     auto server = makeServer(
         host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto disabled = server.processJson(request(60, "tools/call", {
-        {"name", "ozone_run_assistant"},
+        {"name", "morephi_ipc_run_assistant"},
         {"arguments", {
             {"schema_path", manifestFile.getFullPathName().toStdString()},
-            {"segment_name", "fake_izotope_assistant_1234"},
+            {"segment_name", "fake_morephi_assistant_1234"},
             {"allow_unsafe_write", true}
         }}
     }));
@@ -904,12 +904,12 @@ TEST_CASE("Standalone MCP Ozone IPC assistant enforces write gates", "[mcp][stan
     REQUIRE(disabled["result"]["isError"].get<bool>());
     REQUIRE(disabled["result"]["structuredContent"]["error"].get<std::string>().find("blocked") != std::string::npos);
 
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
     const auto missingArgGate = server.processJson(request(61, "tools/call", {
-        {"name", "ozone_run_assistant"},
+        {"name", "morephi_ipc_run_assistant"},
         {"arguments", {
             {"schema_path", manifestFile.getFullPathName().toStdString()},
-            {"segment_name", "fake_izotope_assistant_1234"},
+            {"segment_name", "fake_morephi_assistant_1234"},
             {"allow_unsafe_write", false}
         }}
     }));
@@ -917,36 +917,36 @@ TEST_CASE("Standalone MCP Ozone IPC assistant enforces write gates", "[mcp][stan
     REQUIRE(missingArgGate["result"]["isError"].get<bool>());
     REQUIRE(missingArgGate["result"]["structuredContent"]["error"].get<std::string>().find("blocked") != std::string::npos);
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant writes request frame and parses fake result", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant writes request frame and parses fake result", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemory());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemory());
     auto server = makeServer(
         host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(70, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
-                    {"plugin_name_query", "ozone"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
+                    {"plugin_name_query", "morephiplugin"},
                     {"timeout_ms", 500},
                     {"observer_id", 0xDEADBEEFu},
                     {"allow_unsafe_write", true}
@@ -965,7 +965,7 @@ TEST_CASE("Standalone MCP Ozone IPC assistant writes request frame and parses fa
     REQUIRE(body["parameters"][1]["index"].get<int>() == 2);
     REQUIRE(body["parameters"][1]["value"].get<float>() == Approx(0.91f));
 
-    const auto* memoryPtr = assistantPtr->getFakeSegmentForTests("fake_izotope_assistant_1234");
+    const auto* memoryPtr = assistantPtr->getFakeSegmentForTests("fake_morephi_assistant_1234");
     REQUIRE(memoryPtr != nullptr);
     const auto& memory = *memoryPtr;
     REQUIRE(readU32LEFromVector(memory, 260) == 240u);
@@ -976,22 +976,22 @@ TEST_CASE("Standalone MCP Ozone IPC assistant writes request frame and parses fa
     REQUIRE(readU32LEFromVector(memory, 512 + 186) == 0u);
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant validates schema and timeouts", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant validates schema and timeouts", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemory());
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemory());
     auto server = makeServer(
         host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto badSchemaFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -999,10 +999,10 @@ TEST_CASE("Standalone MCP Ozone IPC assistant validates schema and timeouts", "[
     REQUIRE(badSchemaFile.replaceWithText("{\"mapped_size_bytes\":2048}"));
 
     const auto badSchema = server.processJson(request(80, "tools/call", {
-        {"name", "ozone_run_assistant"},
+        {"name", "morephi_ipc_run_assistant"},
         {"arguments", {
             {"schema_path", badSchemaFile.getFullPathName().toStdString()},
-            {"segment_name", "fake_izotope_assistant_1234"},
+            {"segment_name", "fake_morephi_assistant_1234"},
             {"allow_unsafe_write", true}
         }}
     }));
@@ -1011,19 +1011,19 @@ TEST_CASE("Standalone MCP Ozone IPC assistant validates schema and timeouts", "[
 
     auto timeoutMemory = createFakeAssistantMemory();
     std::fill(timeoutMemory.begin() + 512 + 128, timeoutMemory.begin() + 512 + 128 + 42, static_cast<uint8_t>(0));
-    auto timeoutAssistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
-    timeoutAssistant->setFakeSegmentForTests("fake_izotope_timeout_1234", timeoutMemory);
+    auto timeoutAssistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
+    timeoutAssistant->setFakeSegmentForTests("fake_morephi_timeout_1234", timeoutMemory);
     auto timeoutServer = makeServer(
         host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(timeoutAssistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto timeout = timeoutServer.processJson(request(81, "tools/call", {
-        {"name", "ozone_run_assistant"},
+        {"name", "morephi_ipc_run_assistant"},
         {"arguments", {
             {"schema_path", manifestFile.getFullPathName().toStdString()},
-            {"segment_name", "fake_izotope_timeout_1234"},
+            {"segment_name", "fake_morephi_timeout_1234"},
             {"timeout_ms", 50},
             {"allow_unsafe_write", true}
         }}
@@ -1033,12 +1033,12 @@ TEST_CASE("Standalone MCP Ozone IPC assistant validates schema and timeouts", "[
 
     badSchemaFile.deleteFile();
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
 std::vector<uint8_t> createFakeAssistantMemoryForWrapTest()
 {
-    constexpr uint32_t ozoneId = 0x01020304u;
+    constexpr uint32_t instanceIdValue = 0x01020304u;
     constexpr uint32_t observerId = 0xDEADBEEFu;
     constexpr size_t registryOffset = 64;
     constexpr size_t ringWriteOffset = 260;
@@ -1050,8 +1050,8 @@ std::vector<uint8_t> createFakeAssistantMemoryForWrapTest()
     constexpr uint32_t initialWritePtr = 502;
 
     std::vector<uint8_t> bytes(2048, 0);
-    writeU32LE(bytes, registryOffset + 0, ozoneId);
-    const std::string name = "Ozone 11";
+    writeU32LE(bytes, registryOffset + 0, instanceIdValue);
+    const std::string name = "MorePhiPlugin";
     std::memcpy(bytes.data() + registryOffset + 8, name.data(), name.size());
     writeU32LE(bytes, registryOffset + 36, 1);
 
@@ -1062,7 +1062,7 @@ std::vector<uint8_t> createFakeAssistantMemoryForWrapTest()
     writeU32LE(bytes, frameOffset + 0,  0x495A4F54u);
     writeU16LE(bytes, frameOffset + 4,  3);
     writeU16LE(bytes, frameOffset + 6,  0x0021);
-    writeU32LE(bytes, frameOffset + 8,  ozoneId);
+    writeU32LE(bytes, frameOffset + 8,  instanceIdValue);
     writeU32LE(bytes, frameOffset + 12, observerId);
     writeU32LE(bytes, frameOffset + 16, 8);
     writeU64LE(bytes, frameOffset + 20, 1234);
@@ -1076,7 +1076,7 @@ std::vector<uint8_t> createFakeAssistantMemoryForWrapTest()
 
 std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
 {
-    constexpr uint32_t ozoneId = 0x01020304u;
+    constexpr uint32_t instanceIdValue = 0x01020304u;
     constexpr uint32_t observerId = 0xDEADBEEFu;
     constexpr size_t registryOffset = 64;
     constexpr size_t ringWriteOffset = 260;
@@ -1084,8 +1084,8 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
     constexpr size_t frameHeaderSize = 28;
 
     std::vector<uint8_t> bytes(2048, 0);
-    writeU32LE(bytes, registryOffset + 0, ozoneId);
-    const std::string name = "Ozone 11";
+    writeU32LE(bytes, registryOffset + 0, instanceIdValue);
+    const std::string name = "MorePhiPlugin";
     std::memcpy(bytes.data() + registryOffset + 8, name.data(), name.size());
     writeU32LE(bytes, registryOffset + 36, 1);
     writeU32LE(bytes, ringWriteOffset, 112u);
@@ -1095,7 +1095,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
     writeU32LE(bytes, preamble0 + 0,  0x495A4F54u);
     writeU16LE(bytes, preamble0 + 4,  3);
     writeU16LE(bytes, preamble0 + 6,  0x0010);
-    writeU32LE(bytes, preamble0 + 8,  ozoneId);
+    writeU32LE(bytes, preamble0 + 8,  instanceIdValue);
     writeU32LE(bytes, preamble0 + 12, observerId);
     writeU32LE(bytes, preamble0 + 16, 12);
     writeU64LE(bytes, preamble0 + 20, 111);
@@ -1105,7 +1105,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
     writeU32LE(bytes, preamble1 + 0,  0x495A4F54u);
     writeU16LE(bytes, preamble1 + 4,  3);
     writeU16LE(bytes, preamble1 + 6,  0x0011);
-    writeU32LE(bytes, preamble1 + 8,  ozoneId);
+    writeU32LE(bytes, preamble1 + 8,  instanceIdValue);
     writeU32LE(bytes, preamble1 + 12, observerId);
     writeU32LE(bytes, preamble1 + 16, 8);
     writeU64LE(bytes, preamble1 + 20, 222);
@@ -1115,7 +1115,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
     writeU32LE(bytes, resultFrame + 0,  0x495A4F54u);
     writeU16LE(bytes, resultFrame + 4,  3);
     writeU16LE(bytes, resultFrame + 6,  0x0021);
-    writeU32LE(bytes, resultFrame + 8,  ozoneId);
+    writeU32LE(bytes, resultFrame + 8,  instanceIdValue);
     writeU32LE(bytes, resultFrame + 12, observerId);
     writeU32LE(bytes, resultFrame + 16, 8);
     writeU64LE(bytes, resultFrame + 20, 333);
@@ -1129,7 +1129,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
 
 std::vector<uint8_t> createFakeAssistantMemoryAllSlotsOccupied()
 {
-    // All 4 registry slots filled with non-Ozone entries (no entry named "Ozone")
+    // All 4 registry slots filled with non-matching entries (no entry named "MorePhiPlugin")
     constexpr size_t registryOffset = 64;
     constexpr size_t ringWriteOffset = 260;
 
@@ -1148,32 +1148,32 @@ std::vector<uint8_t> createFakeAssistantMemoryAllSlotsOccupied()
     return bytes;
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant handles ring wrap-around write", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant handles ring wrap-around write", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryForWrapTest());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryForWrapTest());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(90, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
-                    {"plugin_name_query", "ozone"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
+                    {"plugin_name_query", "morephiplugin"},
                     {"timeout_ms", 50},
                     {"observer_id", 0xDEADBEEFu},
                     {"allow_unsafe_write", true}
@@ -1192,7 +1192,7 @@ TEST_CASE("Standalone MCP Ozone IPC assistant handles ring wrap-around write", "
     // Verify wrap-around: request frame magic bytes 0-3 = 0x495A4F54 LE = [0x54, 0x4F, 0x5A, 0x49]
     // With initial write ptr = 502 and ring data at offset 512:
     //   frame byte 0 → memory[512 + 502], frame bytes 10-27 → memory[512 + 0..17]
-    const auto* memPtr = assistantPtr->getFakeSegmentForTests("fake_izotope_assistant_1234");
+    const auto* memPtr = assistantPtr->getFakeSegmentForTests("fake_morephi_assistant_1234");
     REQUIRE(memPtr != nullptr);
     const auto& memory = *memPtr;
     REQUIRE(memory[512 + 502] == 0x54u);  // 'T' — low byte of magic LE
@@ -1203,36 +1203,36 @@ TEST_CASE("Standalone MCP Ozone IPC assistant handles ring wrap-around write", "
     REQUIRE(readU32LEFromVector(memory, 260) == 54u);
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
 
-TEST_CASE("Standalone MCP Ozone IPC assistant deregisters observer when manifest supports cleanup", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant deregisters observer when manifest supports cleanup", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemory());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemory());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile(true);
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(94, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
-                    {"plugin_name_query", "ozone"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
+                    {"plugin_name_query", "morephiplugin"},
                     {"timeout_ms", 50},
                     {"observer_id", 0xDEADBEEFu},
                     {"allow_unsafe_write", true}
@@ -1244,7 +1244,7 @@ TEST_CASE("Standalone MCP Ozone IPC assistant deregisters observer when manifest
         });
 
     REQUIRE_FALSE(result["result"]["isError"].get<bool>());
-    const auto* memPtr = assistantPtr->getFakeSegmentForTests("fake_izotope_assistant_1234");
+    const auto* memPtr = assistantPtr->getFakeSegmentForTests("fake_morephi_assistant_1234");
     REQUIRE(memPtr != nullptr);
     const auto& memory = *memPtr;
     REQUIRE(readU32LEFromVector(memory, 260) == 240u);
@@ -1254,14 +1254,14 @@ TEST_CASE("Standalone MCP Ozone IPC assistant deregisters observer when manifest
     REQUIRE_FALSE(observerFound);
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant skips corrupt frames and finds valid result", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant skips corrupt frames and finds valid result", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
@@ -1271,24 +1271,24 @@ TEST_CASE("Standalone MCP Ozone IPC assistant skips corrupt frames and finds val
     // Overwrite ring positions 0-27 with invalid magic to simulate corruption.
     std::fill(memory.begin() + 512, memory.begin() + 512 + 28, static_cast<uint8_t>(0xAA));
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", memory);
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", memory);
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(91, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
-                    {"plugin_name_query", "ozone"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
+                    {"plugin_name_query", "morephiplugin"},
                     {"timeout_ms", 50},
                     {"observer_id", 0xDEADBEEFu},
                     {"allow_unsafe_write", true}
@@ -1306,35 +1306,35 @@ TEST_CASE("Standalone MCP Ozone IPC assistant skips corrupt frames and finds val
     REQUIRE(body["parameters"][0]["index"].get<int>() == 0);
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant skips non-result frames before AssistantResult", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant skips non-result frames before AssistantResult", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryWithPreambleFrames());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryWithPreambleFrames());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(92, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
-                    {"plugin_name_query", "ozone"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
+                    {"plugin_name_query", "morephiplugin"},
                     {"timeout_ms", 50},
                     {"observer_id", 0xDEADBEEFu},
                     {"allow_unsafe_write", true}
@@ -1354,30 +1354,30 @@ TEST_CASE("Standalone MCP Ozone IPC assistant skips non-result frames before Ass
     REQUIRE(body["parameters"][0]["value"].get<float>() == Approx(0.44f));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("Standalone MCP Ozone IPC assistant returns not-found when all registry slots are occupied by non-Ozone plugins", "[mcp][standalone][ipc]")
+TEST_CASE("Standalone MCP IPC assistant returns not-found when all registry slots are occupied by non-matching plugins", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryAllSlotsOccupied());
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryAllSlotsOccupied());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = server.processJson(request(93, "tools/call", {
-        {"name", "ozone_run_assistant"},
+        {"name", "morephi_ipc_run_assistant"},
         {"arguments", {
             {"schema_path", manifestFile.getFullPathName().toStdString()},
-            {"segment_name", "fake_izotope_assistant_1234"},
-            {"plugin_name_query", "Ozone"},
+            {"segment_name", "fake_morephi_assistant_1234"},
+            {"plugin_name_query", "MorePhiPlugin"},
             {"allow_unsafe_write", true}
         }}
     }));
@@ -1386,13 +1386,13 @@ TEST_CASE("Standalone MCP Ozone IPC assistant returns not-found when all registr
     REQUIRE(result["result"]["structuredContent"]["error"].get<std::string>().find("not found") != std::string::npos);
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-// Returns an AssistantResult with parameter indices 0 and 1 — valid for the 3-param FakeOzonePlugin.
+// Returns an AssistantResult with parameter indices 0 and 1 — valid for the 3-param FakeHostedPlugin.
 std::vector<uint8_t> createFakeAssistantMemoryWithValidIndices()
 {
-    constexpr uint32_t ozoneId = 0x01020304u;
+    constexpr uint32_t instanceIdValue = 0x01020304u;
     constexpr uint32_t observerId = 0xDEADBEEFu;
     constexpr size_t registryOffset = 64;
     constexpr size_t ringWriteOffset = 260;
@@ -1401,8 +1401,8 @@ std::vector<uint8_t> createFakeAssistantMemoryWithValidIndices()
     constexpr size_t frameHeaderSize = 28;
 
     std::vector<uint8_t> bytes(2048, 0);
-    writeU32LE(bytes, registryOffset + 0, ozoneId);
-    const std::string name = "Ozone 11";
+    writeU32LE(bytes, registryOffset + 0, instanceIdValue);
+    const std::string name = "MorePhiPlugin";
     std::memcpy(bytes.data() + registryOffset + 8, name.data(), name.size());
     writeU32LE(bytes, registryOffset + 36, 1);
 
@@ -1412,7 +1412,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithValidIndices()
     writeU32LE(bytes, frameOffset + 0, 0x495A4F54u);
     writeU16LE(bytes, frameOffset + 4, 3);
     writeU16LE(bytes, frameOffset + 6, 0x0021);
-    writeU32LE(bytes, frameOffset + 8, ozoneId);
+    writeU32LE(bytes, frameOffset + 8, instanceIdValue);
     writeU32LE(bytes, frameOffset + 12, observerId);
     writeU32LE(bytes, frameOffset + 16, 14);
     writeU64LE(bytes, frameOffset + 20, 1234);
@@ -1434,20 +1434,20 @@ std::vector<uint8_t> createFakeAssistantMemoryWithInvalidValue()
     return bytes;
 }
 
-TEST_CASE("ozone_run_assistant returns IPC results without applying by default", "[mcp][standalone][ipc]")
+TEST_CASE("morephi_ipc_run_assistant returns IPC results without applying by default", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryWithValidIndices());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryWithValidIndices());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
@@ -1456,13 +1456,13 @@ TEST_CASE("ozone_run_assistant returns IPC results without applying by default",
 
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(94, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
                     {"timeout_ms", 50},
                     {"allow_unsafe_write", true}
                 }}
@@ -1480,35 +1480,35 @@ TEST_CASE("ozone_run_assistant returns IPC results without applying by default",
     REQUIRE(pluginPtr->getParameters()[1]->getValue() == Approx(defaultAnalyze));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("ozone_run_assistant applies IPC results only when requested", "[mcp][standalone][ipc]")
+TEST_CASE("morephi_ipc_run_assistant applies IPC results only when requested", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryWithValidIndices());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryWithValidIndices());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(95, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
                     {"timeout_ms", 50},
                     {"allow_unsafe_write", true},
                     {"apply_result", true}
@@ -1529,26 +1529,26 @@ TEST_CASE("ozone_run_assistant applies IPC results only when requested", "[mcp][
     REQUIRE(pluginPtr->getParameters()[1]->getValue() == Approx(0.3f));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("ozone_run_assistant rejects out-of-range IPC parameter indices when applying without partial apply", "[mcp][standalone][ipc]")
+TEST_CASE("morephi_ipc_run_assistant rejects out-of-range IPC parameter indices when applying without partial apply", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
     auto memory = createFakeAssistantMemoryWithValidIndices();
     constexpr size_t payloadOffset = 512 + 128 + 28;
     writeU16LE(memory, payloadOffset + 8, 99);
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", memory);
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", memory);
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
@@ -1557,13 +1557,13 @@ TEST_CASE("ozone_run_assistant rejects out-of-range IPC parameter indices when a
 
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(96, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
                     {"timeout_ms", 50},
                     {"allow_unsafe_write", true},
                     {"apply_result", true}
@@ -1585,23 +1585,23 @@ TEST_CASE("ozone_run_assistant rejects out-of-range IPC parameter indices when a
     REQUIRE(pluginPtr->getParameters()[1]->getValue() == Approx(defaultAnalyze));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
-TEST_CASE("ozone_run_assistant rejects invalid normalized values when applying without partial apply", "[mcp][standalone][ipc]")
+TEST_CASE("morephi_ipc_run_assistant rejects invalid normalized values when applying without partial apply", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryWithInvalidValue());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryWithInvalidValue());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
@@ -1610,13 +1610,13 @@ TEST_CASE("ozone_run_assistant rejects invalid normalized values when applying w
 
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(97, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
                     {"timeout_ms", 50},
                     {"allow_unsafe_write", true},
                     {"apply_result", true}
@@ -1638,7 +1638,7 @@ TEST_CASE("ozone_run_assistant rejects invalid normalized values when applying w
     REQUIRE(pluginPtr->getParameters()[1]->getValue() == Approx(defaultAnalyze));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }
 
 std::vector<uint8_t> createFakeAssistantMemoryWithEmptyResult()
@@ -1651,20 +1651,20 @@ std::vector<uint8_t> createFakeAssistantMemoryWithEmptyResult()
     return bytes;
 }
 
-TEST_CASE("ozone_run_assistant succeeds with empty AssistantResult parameter list", "[mcp][standalone][ipc]")
+TEST_CASE("morephi_ipc_run_assistant succeeds with empty AssistantResult parameter list", "[mcp][standalone][ipc]")
 {
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "1");
 
-    auto plugin = std::make_unique<FakeOzonePlugin>();
+    auto plugin = std::make_unique<FakeHostedPlugin>();
     auto* pluginPtr = plugin.get();
     FakePluginHostManager host(std::move(plugin));
     host.prepare(44100.0, 512, 2);
 
-    auto assistant = std::make_unique<more_phi::standalone_mcp::IZotopeIPCAssistant>();
+    auto assistant = std::make_unique<more_phi::standalone_mcp::MorePhiIPCAssistant>();
     auto* assistantPtr = assistant.get();
-    assistant->setFakeSegmentForTests("fake_izotope_assistant_1234", createFakeAssistantMemoryWithEmptyResult());
+    assistant->setFakeSegmentForTests("fake_morephi_assistant_1234", createFakeAssistantMemoryWithEmptyResult());
     auto server = makeServer(host,
-        std::make_unique<more_phi::standalone_mcp::IZotopeIPCDiscovery>(),
+        std::make_unique<more_phi::standalone_mcp::MorePhiIPCDiscovery>(),
         std::move(assistant));
 
     const auto manifestFile = createAssistantManifestFile();
@@ -1673,13 +1673,13 @@ TEST_CASE("ozone_run_assistant succeeds with empty AssistantResult parameter lis
 
     const auto result = invokeWithDelayedIpcWriter(
         *assistantPtr,
-        "fake_izotope_assistant_1234",
+        "fake_morephi_assistant_1234",
         [&]() {
             return server.processJson(request(98, "tools/call", {
-                {"name", "ozone_run_assistant"},
+                {"name", "morephi_ipc_run_assistant"},
                 {"arguments", {
                     {"schema_path", manifestFile.getFullPathName().toStdString()},
-                    {"segment_name", "fake_izotope_assistant_1234"},
+                    {"segment_name", "fake_morephi_assistant_1234"},
                     {"timeout_ms", 50},
                     {"allow_unsafe_write", true},
                     {"apply_result", true}
@@ -1702,5 +1702,5 @@ TEST_CASE("ozone_run_assistant succeeds with empty AssistantResult parameter lis
     REQUIRE(pluginPtr->getParameters()[1]->getValue() == Approx(defaultAnalyze));
 
     manifestFile.deleteFile();
-    setTestEnv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "");
+    setTestEnv("MOREPHI_IPC_ENABLE_WRITE", "");
 }

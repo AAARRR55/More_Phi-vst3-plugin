@@ -111,4 +111,9 @@ void MacroKnobStrip::syncKnobsToPlugin()
     syncing_ = false;
 }
 
+std::unique_ptr<juce::AccessibilityHandler> MacroKnobStrip::createAccessibilityHandler()
+{
+    return std::make_unique<juce::AccessibilityHandler>(*this, juce::AccessibilityRole::group);
+}
+
 } // namespace more_phi

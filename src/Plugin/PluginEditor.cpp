@@ -28,10 +28,25 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     setLookAndFeel(&lnf);
     setSize(920, 760);
     setResizable(true, true);
-    setResizeLimits(720, 600, 1600, 1120);
+    setResizeLimits(760, 640, 1600, 1200);
     // AUDIT-FIX (accessibility): make the editor a focus container so keyboard
     // (Tab/arrow) traversal reaches the hosted controls (MorphPad, SnapFader, …).
     setFocusContainerType(juce::Component::FocusContainerType::focusContainer);
+
+#if JUCE_WINDOWS
+    // HiDPI: scale the editor canvas to match the desktop scale factor.
+    // Only on Windows/FL-Studio where JUCE's built-in HiDPI support may not
+    // apply the desktop-scale transform automatically (macOS already scales).
+    {
+        auto& desktop = juce::Desktop::getInstance();
+        if (auto* display = desktop.getDisplays().getPrimaryDisplay())
+        {
+            const float scale = display->scale;
+            if (scale > 1.0f && scale < 3.0f)
+                setTransform(juce::AffineTransform::scale(scale));
+        }
+    }
+#endif
 
     paramToggleBtn_.setButtonText("All Parameters \u25B8");
     paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");
@@ -64,6 +79,23 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     addAndMakeVisible(breedingPanel);
     addAndMakeVisible(modeBar);
     addAndMakeVisible(controlStrip);
+
+    // Accessibility: mark key components as accessible with explicit focus order.
+    morphPad.setAccessible(true);
+    morphPad.setExplicitFocusOrder(1);
+    snapFader.setAccessible(true);
+    snapFader.setExplicitFocusOrder(2);
+    macroStrip.setAccessible(true);
+    macroStrip.setExplicitFocusOrder(3);
+    modeBar.setAccessible(true);
+    modeBar.setExplicitFocusOrder(4);
+    controlStrip.setAccessible(true);
+    controlStrip.setExplicitFocusOrder(5);
+    tabBar_.setAccessible(true);
+    tabBar_.setExplicitFocusOrder(6);
+    snapshotRing.setAccessible(true);
+    snapshotRing.setExplicitFocusOrder(7);
+    bypassBtn_.setExplicitFocusOrder(8);
 
     // Parameter panel (initially hidden)
     addChildComponent(paramPanel);

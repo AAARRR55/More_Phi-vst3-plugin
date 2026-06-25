@@ -3,6 +3,7 @@
  */
 #include "AutoMasteringEngine.h"
 #include "AI/SonicMasterDecisionDecoder.h"   // AUDIT-2/3: model band counts + dynamics slot layout
+#include "AI/AutomationControlPlane.h"        // P2.5: ActionLedger for neural-write auditing
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -639,6 +640,38 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
             && (lastApplyVerification_.verifiedFraction() < 0.80f);
         lastApplyWasPartial_.store(enqueuedShortfall || verifiedShortfall,
                                    std::memory_order_release);
+    }
+
+    // P2.5 (AUDIT): record the neural apply in the ActionLedger so it is auditable
+    // alongside MCP/agent tool calls. The neural path bypasses MCPToolHandler::handle
+    // (it is invoked directly from SonicMasterAnalysisEngine), so without this hook
+    // its hosted-plugin writes left no trace. Carries the verification breakdown so a
+    // reviewer can see exactly how many of the requested slots enqueued, how many read
+    // back within tolerance, and whether the apply was partial. No-op when no ledger
+    // is wired (tests / MCP-disabled builds).
+    if (actionLedger_ != nullptr)
+    {
+        AutomationTransaction txn;
+        txn.toolName = "neural_mastering.apply_validated_plan";
+        txn.risk = RiskLevel::HighImpact;
+        txn.params = {
+            {"target_lufs", plan.projectedTargets.loudness[0]},
+            {"ceiling_dbtp", plan.projectedTargets.limiter[0]},
+            {"intelligence_active", intelligenceActive_},
+        };
+        txn.result = {
+            {"ozone_enqueued", ozoneApplied},
+            {"requested", lastApplyVerification_.requested},
+            {"enqueued", lastApplyVerification_.enqueued},
+            {"verified", lastApplyVerification_.verified},
+            {"drifted_discrete", lastApplyVerification_.driftedDiscrete},
+            {"mismatched", lastApplyVerification_.mismatched},
+            {"unmapped", lastApplyVerification_.unmapped},
+            {"ambiguous", lastApplyVerification_.ambiguous},
+            {"partial", lastApplyWasPartial_.load(std::memory_order_acquire)},
+        };
+        txn.success = (ozoneApplied > 0) || intelligenceActive_;
+        actionLedger_->record(std::move(txn));
     }
 
     // P0.2: if an Ozone applicator IS registered but applied 0 params, the map

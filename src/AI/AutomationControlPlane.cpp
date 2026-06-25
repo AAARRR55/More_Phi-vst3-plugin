@@ -788,10 +788,10 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
 {
     const auto method = toolName.trim().toLowerCase();
 
-    if (method == "izotope_ipc_dump")
+    if (method == "morephi_ipc_dump")
         return RiskLevel::Destructive;
 
-    if (nameStartsWith(method, "izotope_ipc_") || method == "ozone_run_assistant" || method == "sync.apply_envelope")
+    if (nameStartsWith(method, "morephi_ipc_") || method == "morephi_ipc_run_assistant" || method == "sync.apply_envelope")
         return RiskLevel::External;
 
     if (method == "hosted_plugin.load" || method == "plugin_profile.save")

@@ -202,6 +202,7 @@ ActivationResponse parseActivationResponse(int statusCode, const juce::String& b
         if (response.errorCode.isEmpty())
             response.errorCode = jsonStringOrEmpty(root, "code");
         response.message = jsonStringOrEmpty(root, "message");
+        response.activationId = jsonStringOrEmpty(root, "activation_id");
 
         if (auto cert = certificateFromResponse(root))
             response.certificate = *cert;

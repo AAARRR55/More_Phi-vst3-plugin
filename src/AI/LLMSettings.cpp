@@ -79,13 +79,16 @@ juce::String toDisplayString(LLMProviderId id)
 
 juce::String toDisplayString(LLMValidationStatus status)
 {
+    // R6: glyph prefix gives shape redundancy so state isn't carried by colour
+    // alone (colourblind-safe). Kept ASCII-safe + ✓/✕ which JUCE's default
+    // fonts render reliably.
     switch (status)
     {
-        case LLMValidationStatus::NoProviderConfigured: return "No provider configured";
-        case LLMValidationStatus::Untested: return "Untested";
-        case LLMValidationStatus::Testing: return "Testing";
-        case LLMValidationStatus::Active: return "Active";
-        case LLMValidationStatus::Failed: return "Failed";
+        case LLMValidationStatus::NoProviderConfigured: return "-- No provider configured";
+        case LLMValidationStatus::Untested: return "? Untested";
+        case LLMValidationStatus::Testing: return "... Testing";
+        case LLMValidationStatus::Active: return juce::String::charToString(0x2713) + " Active";      // check mark
+        case LLMValidationStatus::Failed:  return juce::String::charToString(0x2715) + " Failed";    // ballot X
     }
 
     jassertfalse;

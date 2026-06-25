@@ -148,6 +148,18 @@ juce::Font MorePhiLookAndFeel::makeRoleFont(FontRole role, int style) const
 
 // ── Buttons ──────────────────────────────────────────────────────────────────
 
+void MorePhiLookAndFeel::drawFocusRingIfFocused(juce::Graphics& g, juce::Component& comp,
+                                                   juce::Rectangle<float> bounds) const
+{
+    if (! comp.hasKeyboardFocus(true))
+        return;
+    // Cyan, ~55% alpha, 2px ring just outside the control. Visible on the dark
+    // surfaces without competing with the gold active-state fill.
+    const juce::Colour focusRingColour = accentCyan.withAlpha(0.55f);
+    g.setColour(focusRingColour);
+    g.drawRoundedRectangle(bounds.expanded(1.5f), cornerRadius + 1.0f, 2.0f);
+}
+
 void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
                                                   const juce::Colour&,
                                                   bool isOver, bool isDown)
@@ -181,6 +193,8 @@ void MorePhiLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& b
         g.setColour(borderGlow);
         g.drawRoundedRectangle(bounds.expanded(1), cornerRadius + 1, 2.0f);
     }
+
+    drawFocusRingIfFocused(g, button, bounds);
 }
 
 void MorePhiLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
@@ -300,6 +314,8 @@ void MorePhiLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w
     const float tipY = cy - std::cos(angle) * tipDist;
     g.setColour(fillColour);
     g.fillEllipse(tipX - tipRadius, tipY - tipRadius, tipRadius * 2.0f, tipRadius * 2.0f);
+
+    drawFocusRingIfFocused(g, slider, bounds.expanded(4.0f));
 }
 
 // ── Linear Slider ────────────────────────────────────────────────────────────
@@ -308,7 +324,7 @@ void MorePhiLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w
                                               float sliderPos, float /*minSliderPos*/,
                                               float /*maxSliderPos*/,
                                               juce::Slider::SliderStyle style,
-                                              juce::Slider&)
+                                              juce::Slider& slider)
 {
     const bool isVertical = (style == juce::Slider::LinearVertical ||
                               style == juce::Slider::LinearBarVertical);
@@ -349,6 +365,10 @@ void MorePhiLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w
         g.setColour(textPrimary);
         g.fillEllipse(sliderPos - 5, trackY - 5, 10, 10);
     }
+
+    drawFocusRingIfFocused(g, slider,
+                           juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
+                                                   static_cast<float>(w), static_cast<float>(h)));
 }
 
 // ── ComboBox ─────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-#include "IZotopeIPCDiscovery.h"
+#include "MorePhiIPCDiscovery.h"
 
 #include <algorithm>
 #include <chrono>
@@ -161,12 +161,12 @@ DiffSummary diffBytes(const std::vector<uint8_t>& previous,
 
 } // namespace
 
-IZotopeIPCDiscovery::~IZotopeIPCDiscovery()
+MorePhiIPCDiscovery::~MorePhiIPCDiscovery()
 {
     clearMapping();
 }
 
-void IZotopeIPCDiscovery::clearMapping()
+void MorePhiIPCDiscovery::clearMapping()
 {
     attachedFromFakeMemory = false;
     fakeAttachedBytes.clear();
@@ -190,28 +190,28 @@ void IZotopeIPCDiscovery::clearMapping()
     attachedSegmentName.clear();
 }
 
-std::string IZotopeIPCDiscovery::resolveSegmentName(const IpcAttachArgs& args) const
+std::string MorePhiIPCDiscovery::resolveSegmentName(const IpcAttachArgs& args) const
 {
     if (args.segmentName && !args.segmentName->empty())
         return *args.segmentName;
 
-    const auto envName = envString("IZOTOPE_IPC_SEGMENT_NAME");
+    const auto envName = envString("MOREPHI_IPC_SEGMENT_NAME");
     if (!envName.empty())
         return envName;
 
     if (args.dawProcessId)
     {
 #if JUCE_WINDOWS
-        return "Global\\iZotope_IPC_Session_" + std::to_string(*args.dawProcessId);
+        return "Global\\MorePhi_IPC_Session_" + std::to_string(*args.dawProcessId);
 #else
-        return "/izotope_ipc_" + std::to_string(*args.dawProcessId);
+        return "/morephi_ipc_" + std::to_string(*args.dawProcessId);
 #endif
     }
 
     return {};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::attach(const IpcAttachArgs& args)
+ToolCallOutcome MorePhiIPCDiscovery::attach(const IpcAttachArgs& args)
 {
     clearMapping();
     lastError.clear();
@@ -219,7 +219,7 @@ ToolCallOutcome IZotopeIPCDiscovery::attach(const IpcAttachArgs& args)
     const auto segmentName = resolveSegmentName(args);
     if (segmentName.empty())
     {
-        lastError = "segment_name, IZOTOPE_IPC_SEGMENT_NAME, or daw_process_id is required.";
+        lastError = "segment_name, MOREPHI_IPC_SEGMENT_NAME, or daw_process_id is required.";
         return makeToolError("missing_segment_name", lastError);
     }
 
@@ -234,7 +234,7 @@ ToolCallOutcome IZotopeIPCDiscovery::attach(const IpcAttachArgs& args)
     return attachRealReadOnly(segmentName, requestedBytes);
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::attachFake(const std::string& segmentName)
+ToolCallOutcome MorePhiIPCDiscovery::attachFake(const std::string& segmentName)
 {
     const auto it = fakeSegments.find(segmentName);
     if (it == fakeSegments.end())
@@ -259,7 +259,7 @@ ToolCallOutcome IZotopeIPCDiscovery::attachFake(const std::string& segmentName)
     }, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::attachRealReadOnly(const std::string& segmentName, size_t requestedBytes)
+ToolCallOutcome MorePhiIPCDiscovery::attachRealReadOnly(const std::string& segmentName, size_t requestedBytes)
 {
 #if JUCE_WINDOWS
     const auto wideName = juce::String(segmentName).toWideCharPointer();
@@ -312,7 +312,7 @@ ToolCallOutcome IZotopeIPCDiscovery::attachRealReadOnly(const std::string& segme
     }
 #else
     juce::ignoreUnused(segmentName, requestedBytes);
-    lastError = "Platform does not support iZotope IPC shared-memory attach.";
+    lastError = "Platform does not support IPC shared-memory attach.";
     return makeToolError("unsupported_platform", lastError);
 #endif
 
@@ -327,14 +327,14 @@ ToolCallOutcome IZotopeIPCDiscovery::attachRealReadOnly(const std::string& segme
     }, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::detach()
+ToolCallOutcome MorePhiIPCDiscovery::detach()
 {
     const bool wasAttached = isAttached();
     clearMapping();
     return {json{{"success", true}, {"was_attached", wasAttached}, {"attached", false}}, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::status() const
+ToolCallOutcome MorePhiIPCDiscovery::status() const
 {
     return {json{
         {"success", true},
@@ -347,7 +347,7 @@ ToolCallOutcome IZotopeIPCDiscovery::status() const
     }, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::rangeError(const char* operation, size_t offset, size_t sizeBytes) const
+ToolCallOutcome MorePhiIPCDiscovery::rangeError(const char* operation, size_t offset, size_t sizeBytes) const
 {
     return makeToolError("invalid_range",
         std::string(operation) + " range is outside the mapped segment: offset="
@@ -355,7 +355,7 @@ ToolCallOutcome IZotopeIPCDiscovery::rangeError(const char* operation, size_t of
         + ", mapped_size_bytes=" + std::to_string(mappedSize));
 }
 
-json IZotopeIPCDiscovery::frameCandidates(size_t absoluteOffset,
+json MorePhiIPCDiscovery::frameCandidates(size_t absoluteOffset,
                                           const uint8_t* bytes,
                                           size_t sizeBytes,
                                           size_t maxFrames) const
@@ -370,7 +370,7 @@ json IZotopeIPCDiscovery::frameCandidates(size_t absoluteOffset,
     {
         const auto* p = bytes + i;
         const auto magic = readU32LE(p);
-        if (magic != kMagicIzot)
+        if (magic != kMagic)
             continue;
 
         const auto version = readU16LE(p + 4);
@@ -388,7 +388,7 @@ json IZotopeIPCDiscovery::frameCandidates(size_t absoluteOffset,
 
         candidates.push_back({
             {"offset", absoluteOffset + i},
-            {"magic", "IZOT"},
+            {"magic", "MORP"},
             {"version", version},
             {"message_type", messageType},
             {"sender_id", senderId},
@@ -402,10 +402,10 @@ json IZotopeIPCDiscovery::frameCandidates(size_t absoluteOffset,
     return candidates;
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::snapshot(const IpcSnapshotArgs& args) const
+ToolCallOutcome MorePhiIPCDiscovery::snapshot(const IpcSnapshotArgs& args) const
 {
     if (!isAttached())
-        return makeToolError("not_attached", "Attach to an iZotope IPC segment before snapshot.");
+        return makeToolError("not_attached", "Attach to an IPC segment before snapshot.");
 
     if (args.sizeBytes == 0 || args.sizeBytes > kMaxSnapshotSize)
         return makeToolError("invalid_range", "snapshot size_bytes must be between 1 and 262144.");
@@ -425,10 +425,10 @@ ToolCallOutcome IZotopeIPCDiscovery::snapshot(const IpcSnapshotArgs& args) const
     }, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::dump(const IpcDumpArgs& args) const
+ToolCallOutcome MorePhiIPCDiscovery::dump(const IpcDumpArgs& args) const
 {
     if (!isAttached())
-        return makeToolError("not_attached", "Attach to an iZotope IPC segment before dump.");
+        return makeToolError("not_attached", "Attach to an IPC segment before dump.");
 
     if (args.outputPath.empty())
         return makeToolError("missing_output_path");
@@ -460,10 +460,10 @@ ToolCallOutcome IZotopeIPCDiscovery::dump(const IpcDumpArgs& args) const
     }, false};
 }
 
-ToolCallOutcome IZotopeIPCDiscovery::capture(const IpcCaptureArgs& args) const
+ToolCallOutcome MorePhiIPCDiscovery::capture(const IpcCaptureArgs& args) const
 {
     if (!isAttached())
-        return makeToolError("not_attached", "Attach to an iZotope IPC segment before capture.");
+        return makeToolError("not_attached", "Attach to an IPC segment before capture.");
 
     if (args.sizeBytes == 0 || args.sizeBytes > kMaxCaptureSize)
         return makeToolError("invalid_range", "capture size_bytes must be between 1 and 1048576.");
@@ -623,14 +623,14 @@ ToolCallOutcome IZotopeIPCDiscovery::capture(const IpcCaptureArgs& args) const
     }, false};
 }
 
-void IZotopeIPCDiscovery::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)
+void MorePhiIPCDiscovery::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)
 {
     fakeSegments[std::move(name)] = std::move(bytes);
 }
 
-std::unique_ptr<IZotopeIPCDiscovery> createIZotopeIPCDiscovery()
+std::unique_ptr<MorePhiIPCDiscovery> createMorePhiIPCDiscovery()
 {
-    return std::make_unique<IZotopeIPCDiscovery>();
+    return std::make_unique<MorePhiIPCDiscovery>();
 }
 
 } // namespace more_phi::standalone_mcp

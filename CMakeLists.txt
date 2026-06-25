@@ -182,6 +182,39 @@ if(MORE_PHI_ENABLE_ONNX)
     set(MORE_PHI_HAS_ONNX 1)
 endif()
 
+# ── SonicMaster ONNX model (bundled binary data) ──────────────────────────────
+# When MORE_PHI_ENABLE_ONNX=ON, embed the ONNX model and contract into the
+# plugin binary via juce_add_binary_data so initializeSonicMaster() can extract
+# the model at runtime without relying on a sibling file on disk. The expected
+# model file is models/sonicmaster/masteringbrain_v2_decision.onnx and its
+# sibling contract. Fail-closed at configure time if either file is absent.
+if(MORE_PHI_HAS_ONNX)
+    set(MOREPHI_SONICMASTER_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/sonicmaster")
+    set(MOREPHI_SONICMASTER_MODEL    "${MOREPHI_SONICMASTER_MODEL_DIR}/masteringbrain_v2_decision.onnx")
+    set(MOREPHI_SONICMASTER_CONTRACT "${MOREPHI_SONICMASTER_MODEL_DIR}/masteringbrain_v2_decision.contract.json")
+
+    if(NOT EXISTS "${MOREPHI_SONICMASTER_MODEL}")
+        message(FATAL_ERROR "SonicMaster ONNX model not found at ${MOREPHI_SONICMASTER_MODEL}. "
+            "Place masteringbrain_v2_decision.onnx in models/sonicmaster/ or set MORE_PHI_ENABLE_ONNX=OFF.")
+    endif()
+    if(NOT EXISTS "${MOREPHI_SONICMASTER_CONTRACT}")
+        message(FATAL_ERROR "SonicMaster ONNX contract not found at ${MOREPHI_SONICMASTER_CONTRACT}. "
+            "Place masteringbrain_v2_decision.contract.json in models/sonicmaster/ or set MORE_PHI_ENABLE_ONNX=OFF.")
+    endif()
+
+    juce_add_binary_data(MorePhiSonicMasterModel
+        SOURCES
+            "${MOREPHI_SONICMASTER_MODEL}"
+            "${MOREPHI_SONICMASTER_CONTRACT}"
+    )
+
+    # Generate a hash header at configure time so the runtime can verify
+    # the extracted model file matches the embedded source.
+    include(cmake/GenerateModelHash.cmake)
+    generate_model_hash("${MOREPHI_SONICMASTER_MODEL}"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/SonicMasterModelHash.h")
+endif()
+
 
 # Plugin formats: AU is macOS-only, do not emit it on other platforms
 if(APPLE)
@@ -496,11 +529,11 @@ set(MORE_PHI_AI_SOURCES
     src/AI/OzoneParameterMap.cpp
     src/AI/OzonePlanApplicator.h
     src/AI/OzonePlanApplicator.cpp
-    src/AI/StandaloneMcp/OzonePluginBackend.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
+    src/AI/StandaloneMcp/MorePhiPluginBackend.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.cpp
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.h
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.cpp
     ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
     ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )
@@ -623,12 +656,12 @@ add_executable(MorePhiCLI
 
 set(MORE_PHI_STANDALONE_MCP_CORE_SOURCES
     src/AI/StandaloneMcp/JsonRpc.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
-    src/AI/StandaloneMcp/OzonePluginBackend.h
-    src/AI/StandaloneMcp/OzonePluginBackend.cpp
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.cpp
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.h
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.cpp
+    src/AI/StandaloneMcp/MorePhiPluginBackend.h
+    src/AI/StandaloneMcp/MorePhiPluginBackend.cpp
     src/AI/StandaloneMcp/StandaloneMcpServer.h
     src/AI/StandaloneMcp/StandaloneMcpServer.cpp
     ${MORE_PHI_HOST_SOURCES}
@@ -690,11 +723,11 @@ target_link_libraries(MorePhiMcpServer
         juce::juce_gui_basics
 )
 
-# ── OzoneHeadlessHost: GUI-initialized Ozone host for headless Assistant R&D ──
-add_executable(OzoneHeadlessHost
-    src/Tools/OzoneHeadlessHost/OzoneHeadlessHostMain.cpp
+# ── HeadlessHost: GUI-initialized plugin host for headless R&D ──
+add_executable(HeadlessHost
+    src/Tools/HeadlessHost/HeadlessHostMain.cpp
 )
-target_link_libraries(OzoneHeadlessHost
+target_link_libraries(HeadlessHost
     PRIVATE
         juce::juce_core
         juce::juce_events
@@ -702,10 +735,10 @@ target_link_libraries(OzoneHeadlessHost
         juce::juce_audio_basics
         juce::juce_audio_processors
 )
-target_include_directories(OzoneHeadlessHost PRIVATE
+target_include_directories(HeadlessHost PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_compile_definitions(OzoneHeadlessHost PRIVATE
+target_compile_definitions(HeadlessHost PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_PLUGINHOST_VST3=1
@@ -822,7 +855,13 @@ endif()
 # default; flipping MORE_PHI_ENABLE_ONNX=ON is the single activation switch.
 if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAS_ONNX=1)
-    target_link_libraries(MorePhi PRIVATE more_phi::onnxruntime)
+    target_link_libraries(MorePhi PRIVATE
+        more_phi::onnxruntime
+        MorePhiSonicMasterModel
+    )
+    target_include_directories(MorePhi PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
 endif()
 
 # ── libsodium linkage (Ed25519 license-certificate verification) ──────────────
@@ -838,7 +877,7 @@ more_phi_apply_build_tuning(MorePhi)
 more_phi_apply_build_tuning(MorePhiCLI)
 more_phi_apply_build_tuning(MorePhiMcpCore)
 more_phi_apply_build_tuning(MorePhiMcpServer)
-more_phi_apply_build_tuning(OzoneHeadlessHost)
+more_phi_apply_build_tuning(HeadlessHost)
 if(TARGET MorePhi_VST3)
     more_phi_apply_build_tuning(MorePhi_VST3)
 endif()

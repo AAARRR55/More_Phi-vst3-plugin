@@ -26,7 +26,7 @@ enum class ToolGroupId : std::size_t
     Analysis,
     Mastering,
     PluginProfiles,
-    Izotope,
+    Ipc,
     Dataset,
     ParameterAi,
     Other,
@@ -48,7 +48,7 @@ std::array<ToolGroupSummary, static_cast<std::size_t>(ToolGroupId::Count)> makeE
         {"Analysis and metering", 0},
         {"Mastering workflow", 0},
         {"Plugin profile and safety", 0},
-        {"iZotope/Ozone IPC", 0},
+        {"More-Phi IPC", 0},
         {"Dataset generation", 0},
         {"Parameter AI utilities", 0},
         {"Diagnostics and other tools", 0},
@@ -85,8 +85,8 @@ ToolGroupId classifyToolName(const juce::String& name)
     if (name.startsWith("plugin_profile.") || name == "describe_plugin_semantic_map")
         return ToolGroupId::PluginProfiles;
 
-    if (name.startsWith("izotope_ipc") || name.startsWith("ozone"))
-        return ToolGroupId::Izotope;
+    if (name.startsWith("morephi_ipc") || name.startsWith("ozone"))
+        return ToolGroupId::Ipc;
 
     if (name.startsWith("generate_dataset"))
         return ToolGroupId::Dataset;

@@ -54,6 +54,7 @@ struct ActivationResponse
     juce::String errorCode;
     juce::String message;
     std::optional<SignedCertificate> certificate;
+    juce::String activationId;  // from the server response's "activation_id" field
 };
 
 class IActivationClient

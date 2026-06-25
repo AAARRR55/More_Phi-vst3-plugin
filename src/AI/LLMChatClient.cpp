@@ -114,7 +114,7 @@ std::string makeUniqueToolName(const std::string& originalName, std::set<std::st
 // can perform direct edits on the hosted plugin and on More-Phi itself.
 //
 // Historically this filter blocked the following tool families:
-//   - izotope_ipc_*  / ozone_run_assistant         (external IPC attach)
+//   - morephi_ipc_*  / morephi_ipc_run_assistant        (external IPC attach)
 //   - hosted_plugin.scan / hosted_plugin.load      (long blocking scan / state-clearing load)
 //   - plugin_profile.save                          (overwrites profile DB)
 //   - mastering.render_batch / .render_status / .select_candidate  (long offline render)
@@ -252,9 +252,9 @@ const char* const LLMChatClient::kSystemPrompt =
     "(long offline render job)\n"
     "- generate_dataset / generate_dataset_v2 / generate_dataset_v3  "
     "(long-running async dataset pipeline)\n"
-    "- Any tool whose name starts with izotope_ipc_ (e.g. izotope_ipc_attach, "
-    "izotope_ipc_dump, izotope_ipc_capture) and ozone_run_assistant  "
-    "(external Ozone/iZotope IPC attach)\n"
+    "- Any tool whose name starts with morephi_ipc_ (e.g. morephi_ipc_attach, "
+    "morephi_ipc_dump, morephi_ipc_capture) and morephi_ipc_run_assistant  "
+    "(external IPC attach)\n"
     "\n"
     "Mastering decisions — use the neural model first:\n"
     "- When the user asks to master, set loudness/levels, fix EQ, or improve the "

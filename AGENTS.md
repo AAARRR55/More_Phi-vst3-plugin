@@ -88,7 +88,7 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
 | `src/Host/` | `PluginHostManager`, `ParameterBridge` | VST3/AU hosting, parameter read/write (AUDIT-DOC: a prior revision listed a `PluginScanner` class in this layer; no such file exists in `src/Host/`.) |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
-| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses a ~6s window on a 3s cycle on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. The primary inference path is the in-process ONNX runner (`SonicMasterDecisionRunner`, loads `masteringbrain_v2_decision.onnx`); the HTTP source (`tools/inference_server/`) is the fallback. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
+| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses a **5.94 s** window (`kSonicMasterSegmentFrames = 262138` @ 44.1 kHz — *not* 6 s) on a 3 s cycle on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. **The model is loudness-blind**: the input is peak-normalized to −1 dBFS before inference, so the model cannot measure absolute input LUFS — the decoded loudness slot is a caller-supplied *target*, not a measurement (see `SonicMasterMeasurementSnapshot` for the genuine BS.1770-4 telemetry reported alongside). The primary inference path is the in-process ONNX runner (`SonicMasterDecisionRunner`, loads `masteringbrain_v2_decision.onnx`); the HTTP source (`tools/inference_server/`) is the fallback. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md` and the **SonicMaster Audit Notes** below. |
 | `src/MIDI/` | `MIDIRouter` | Note triggers + CC routing |
 | `src/Preset/` | `MetaPresetManager`, `PresetSerializer` | Meta-preset save/load |
 | `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, etc. | All UI components |
@@ -136,6 +136,25 @@ An additive agent layer sits ABOVE the existing `MCPToolHandler` / `AutomationCo
 - **PERF-CPU: CPU Saver mode** (2026-07-16) — New `cpuSaver` APVTS bool parameter (default OFF). When enabled, halves audio-domain FFT size (min 512) and caps oversampling at ×2. Reduces audio-domain CPU by ~40-60%. Applied in both `prepareToPlay` and `syncStateFromAPVTS`.
 - **PERF-MEM: SonicMaster lazy ring allocation** (2026-07-16) — The ~16 MiB `AudioCaptureRing` (`captureRingFrames = 8 * 192000`, power-of-2 rounded to 2,097,152 frames × 2ch × 4B = 16,777,216 bytes) is now allocated lazily via `ensureRing()` on first `setActive(true)`, `requestDecisionNow()`, or `runCycle()`. `prepare()` resets the ring to nullptr. Saves the bulk of More-Phi's owned memory when SonicMaster is inactive. (AUDIT-DOC: a prior revision cited "12.3 MB"; the code's own AUDIT-2026-06-25 comment at `SonicMasterAnalysisEngine.cpp:182-185` flags that as a stale underestimate.)
 - **PERF-MEM: throttleStates_ reduction** (2026-07-16) — Reduced from 8192 to 4096 entries (~64 KB saved).
+
+### SonicMaster Audit Notes (2026-06-25)
+
+The AI mastering path has **two edit entry points with intentionally aligned safety properties**. Both funnel through `MorePhiProcessor::enqueueParameterSet` → `LockFreeQueue` → audio-thread drain → `ParameterBridge`.
+
+| Property | MCP/agent path (`setParameter`) | Neural path (`applyValidatedPlan` → `OzonePlanApplicator`) |
+|----------|---------------------------------|-------------------------------------------------------------|
+| ParamID resolution | Live re-query via `ParameterBridge::resolveParameter` (robust to plugin swap) | `OzoneParameterMap` positional indices, **re-validated by name** in `enqueueIfMapped` (`OzonePlanApplicator.cpp`) — stale indices from a swapped plugin are skipped, not misrouted |
+| Hold against morph | `holdAgainstMorph=true` | `holdAgainstMorph=true` (P2.4) |
+| Read-back verification | `classifyVerification` → `success`/`value_drift`/`morph_overwrite_risk` | `getLastApplyVerification()` / `lastApplyWasPartial()` (P1.2) — `applyValidatedPlan` now consults the applicator's read-back and classifies Applied vs AppliedPartial |
+| Action-ledger record | `MCPToolHandler.cpp:451` | `AutoMasteringEngine::applyValidatedPlan` records `neural_mastering.apply_validated_plan` via `setActionLedger` (P2.5); ledger cap raised 256 → 4096 |
+
+**Known DSP limitations (do not treat as measurement-grade):**
+- **True-peak estimator under-reads ~25 dB near Nyquist** (`tests/Unit/TestTruePeakEstimator.cpp:172-201` pins the defect). Any "avoid clipping" recommendation must not rely solely on dBTP for bright material.
+- **No DC-offset removal** in the spectrum/crest/THD path (only LUFS's RLB filter and the stereo correlation mitigate DC).
+- **Missing metrics**: noise floor, SNR, muddiness, harshness, low/high energy ratio, transient/attack/punch are not computed.
+- **Transition guard** (P2.8): `enqueueParameterSet` arms `SonicMasterAnalysisEngine::notifyHostedParameterChanged()`; the analysis cycle discards a capture window that straddles a hosted-parameter change and flushes the ring, so the model never analyzes a hybrid state. A 0.5 s settle period (configurable via `setParamTransitionSettleSeconds`) lets plugin tails flush first.
+- **Plan atomicity** (P3.10): `OzonePlanApplicator::apply` closes each plan with a `enqueuePlanBoundary` marker; the audio thread stamps `lastDrainedPlanId_` when it drains the boundary, so callers can detect a partial (not-yet-drained) plan via `getLastDrainedPlanId()`. True cross-block all-or-nothing buffering is intentionally NOT implemented (risk); the marker is an observability/commit signal.
+- **OptimizationAgent scoring** (P3.9): the dry-run `mastering.render_batch` path now populates a real `lufs_error` per candidate (`|targetLUFS − measuredLUFS|`), so `OptimizationAgent`'s `min(lufs_error)` selection is no longer a no-op (previously every candidate read infinity → zero proposed actions).
 
 ### Interfaces for Testability
 

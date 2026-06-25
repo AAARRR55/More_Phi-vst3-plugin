@@ -478,7 +478,7 @@ TEST_CASE("AUDIT-2.1: applyValidatedPlan lands all six comp params when compPara
     // and ratio. Before this fix, attack/release/makeup/knee were decoded by the
     // model but discarded; the DSP kept its heuristic defaults for those four.
     AutoMasteringEngine engine;
-    engine.prepare(48000.0, 512, false);
+    engine.prepare(48000.0, 512, true);
 
     ValidatedNeuralMasteringPlan plan;
     plan.valid = true;
@@ -534,7 +534,7 @@ TEST_CASE("AUDIT-2.1: applyValidatedPlan falls back to normalized pair without c
     // pair and leave hasCompParams=false. The engine must still apply threshold
     // + ratio from the normalized array and not regress.
     AutoMasteringEngine engine;
-    engine.prepare(48000.0, 512, false);
+    engine.prepare(48000.0, 512, true);
 
     ValidatedNeuralMasteringPlan plan;
     plan.valid = true;

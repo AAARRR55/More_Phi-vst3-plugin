@@ -121,12 +121,12 @@ TEST_CASE("Activation end-to-end against a production backend", "[activation][e2
     REQUIRE(verifierFn != nullptr);
 
     // ── refresh ─────────────────────────────────────────────────────────────
-    const auto refreshResp = client.refresh(juce::String(cert.activationId), req.machineHash);
+    const auto refreshResp = client.refresh(actResp.activationId, req.machineHash);
     INFO("refresh() status=" << refreshResp.status.toStdString());
     REQUIRE(refreshResp.success);
 
     // ── deactivate (frees the test seat) ────────────────────────────────────
-    const auto deactResp = client.deactivate(juce::String(cert.activationId), req.machineHash);
+    const auto deactResp = client.deactivate(actResp.activationId, req.machineHash);
     INFO("deactivate() status=" << deactResp.status.toStdString());
     REQUIRE(deactResp.success);
 }

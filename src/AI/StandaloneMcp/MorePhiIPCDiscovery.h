@@ -1,6 +1,6 @@
 #pragma once
 
-#include "OzonePluginBackend.h"
+#include "MorePhiPluginBackend.h"
 
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
@@ -65,11 +65,11 @@ struct IpcCaptureArgs
     std::optional<std::string> outputPath;
 };
 
-class IZotopeIPCDiscovery
+class MorePhiIPCDiscovery
 {
 public:
-    IZotopeIPCDiscovery() = default;
-    ~IZotopeIPCDiscovery();
+    MorePhiIPCDiscovery() = default;
+    ~MorePhiIPCDiscovery();
 
     ToolCallOutcome attach(const IpcAttachArgs& args);
     ToolCallOutcome detach();
@@ -89,7 +89,9 @@ private:
     static constexpr size_t kMaxCaptureDurationMs = 60u * 1000u;
     static constexpr size_t kMaxCaptureChanges = 1000;
     static constexpr size_t kMaxChangeRanges = 512;
-    static constexpr uint32_t kMagicIzot = 0x495A4F54u;
+    // Neutral IPC wire magic — ASCII "MORP" (More-Phi). Matches kDefaultMagic in
+    // MorePhiIPCAssistant.cpp. (Was 0x495A4F54 = "IZOT"; neutralized during de-brand.)
+    static constexpr uint32_t kMagic = 0x4D4F5250u;
 
     const uint8_t* mappedBytes = nullptr;
     size_t mappedSize = 0;
@@ -118,6 +120,6 @@ private:
                                    size_t maxFrames) const;
 };
 
-std::unique_ptr<IZotopeIPCDiscovery> createIZotopeIPCDiscovery();
+std::unique_ptr<MorePhiIPCDiscovery> createMorePhiIPCDiscovery();
 
 } // namespace more_phi::standalone_mcp

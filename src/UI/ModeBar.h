@@ -28,6 +28,8 @@ private:
     void updateModeSelection();
     void syncButtonsToState();
     void syncSmoothingToState();
+    // R1b: show the Elastic preset combo only while Elastic physics is active.
+    void updateElasticPresetVisibility();
 
     MorePhiProcessor& proc_;
 
@@ -44,6 +46,13 @@ private:
     juce::Label sourceLabel_;
     juce::Label modeLabel_;
     bool syncing_ = false;
+
+    // R1b: Elastic spring-physics preset (Slow / Medium / Heavy). The engine
+    // always holds a value (default Medium); the control is only surfaced when
+    // Elastic is the active physics mode so it isn't inert on Direct/Drift.
+    juce::ComboBox elasticPresetCombo_;
+    juce::Label    elasticLabel_;
+    bool           elasticPresetSyncing_ = false;
 };
 
 } // namespace more_phi

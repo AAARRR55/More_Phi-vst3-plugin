@@ -1,4 +1,4 @@
-#include "IZotopeIPCAssistant.h"
+#include "MorePhiIPCAssistant.h"
 
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
@@ -30,7 +30,11 @@ using json = nlohmann::json;
 namespace {
 
 constexpr size_t kMaxMappedSize = 64u * 1024u * 1024u;
-constexpr uint32_t kDefaultMagicIzot = 0x495A4F54u;
+// Neutral IPC wire magic. ASCII "MORP" (0x4D 0x4F 0x52 0x50) — More-Phi's own
+// generic shared-memory protocol marker. (Was 0x495A4F54 = "IZOT", a leftover
+// from the earlier iZotope-targeted R&D; neutralized during the de-brand so the
+// wire format no longer carries any third-party identity.)
+constexpr uint32_t kDefaultMagic = 0x4D4F5250u;
 constexpr uint32_t kBroadcastTarget = 0xffffffffu;
 
 ToolCallOutcome makeToolError(std::string code, std::string message = {})
@@ -192,7 +196,7 @@ struct FrameLayout
     size_t targetIdOffset = 12;
     size_t payloadSizeOffset = 16;
     size_t timestampOffset = 20;
-    uint32_t magic = kDefaultMagicIzot;
+    uint32_t magic = kDefaultMagic;
     uint16_t version = 3;
 };
 
@@ -657,7 +661,7 @@ std::string resolveSegmentName(const IpcAssistantRunArgs& args, const IpcSchemaM
     if (manifest.segmentNameTemplate && args.dawProcessId)
         return applyPidTemplate(*manifest.segmentNameTemplate, *args.dawProcessId);
 
-    return envString("IZOTOPE_IPC_SEGMENT_NAME");
+    return envString("MOREPHI_IPC_SEGMENT_NAME");
 }
 
 bool stringContainsCaseInsensitive(const std::string& haystack, const std::string& needle)
@@ -1020,7 +1024,7 @@ bool writeObserverDeregister(uint8_t* bytes,
                              size_t mappedSize,
                              const IpcSchemaManifest& manifest,
                              uint32_t observerId,
-                             uint32_t ozoneId)
+                             uint32_t instanceId)
 {
     if (!manifest.messages.observerDeregister)
         return true;
@@ -1029,7 +1033,7 @@ bool writeObserverDeregister(uint8_t* bytes,
         manifest.frame,
         *manifest.messages.observerDeregister,
         observerId,
-        ozoneId,
+        instanceId,
         {});
 
     return writeFrameToRing(bytes, mappedSize, manifest.ring, frame) == RingWriteResult::ok;
@@ -1037,7 +1041,7 @@ bool writeObserverDeregister(uint8_t* bytes,
 
 std::optional<json> findAssistantResult(const uint8_t* bytes,
                                         const IpcSchemaManifest& manifest,
-                                        uint32_t ozoneId,
+                                        uint32_t instanceId,
                                         uint32_t observerId,
                                         uint32_t requestWatermark,
                                         std::string& error)
@@ -1049,7 +1053,7 @@ std::optional<json> findAssistantResult(const uint8_t* bytes,
         return std::nullopt;
     }
 
-    // Ozone owns the ring read pointer. The MCP server only observes the
+    // The external plugin owns the ring read pointer. The MCP server only observes the
     // immutable post-request window and never writes readIndexOffset.
     juce::ignoreUnused(readU32LE(bytes + manifest.ring.readIndexOffset));
     const auto scanStart = requestWatermark % static_cast<uint32_t>(manifest.ring.capacityBytes);
@@ -1079,7 +1083,7 @@ std::optional<json> findAssistantResult(const uint8_t* bytes,
 
         const auto consumedBytes = std::max<size_t>(1, parsed.consumedBytes);
         if (parsed.frame->messageType == manifest.messages.assistantResult
-            && parsed.frame->senderId == ozoneId
+            && parsed.frame->senderId == instanceId
             && (parsed.frame->targetId == observerId || parsed.frame->targetId == kBroadcastTarget || parsed.frame->targetId == 0))
         {
             auto params = parseAssistantResultPayload(parsed.frame->payload, manifest.assistantResult, error);
@@ -1102,18 +1106,18 @@ std::optional<json> findAssistantResult(const uint8_t* bytes,
 
 } // namespace
 
-IZotopeIPCAssistant::~IZotopeIPCAssistant() = default;
+MorePhiIPCAssistant::~MorePhiIPCAssistant() = default;
 
-ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& args)
+ToolCallOutcome MorePhiIPCAssistant::runAssistant(const IpcAssistantRunArgs& args)
 {
-    if (!args.allowUnsafeWrite || !envEnabled("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE"))
+    if (!args.allowUnsafeWrite || !envEnabled("MOREPHI_IPC_ENABLE_WRITE"))
     {
         return makeToolError(
             "ipc_write_disabled",
-            "Active iZotope IPC write is blocked; set MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE=1 and allow_unsafe_write=true to enable it.");
+            "Active IPC write is blocked; set MOREPHI_IPC_ENABLE_WRITE=1 and allow_unsafe_write=true to enable it.");
     }
 
-    const auto schemaPath = args.schemaPath.value_or(envString("IZOTOPE_IPC_SCHEMA_PATH"));
+    const auto schemaPath = args.schemaPath.value_or(envString("MOREPHI_IPC_SCHEMA_PATH"));
     IpcSchemaManifest manifest;
     std::string schemaError;
     if (!parseManifestFile(schemaPath, manifest, schemaError))
@@ -1130,7 +1134,7 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     }
 
     if (segmentName.empty())
-        return makeToolError("missing_segment_name", "segment_name, IZOTOPE_IPC_SEGMENT_NAME, or manifest template + daw_process_id is required.");
+        return makeToolError("missing_segment_name", "segment_name, MOREPHI_IPC_SEGMENT_NAME, or manifest template + daw_process_id is required.");
 
     AttachedMemory attached;
     if (auto it = fakeSegments.find(segmentName); it != fakeSegments.end())
@@ -1150,17 +1154,17 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     if (attached.bytes == nullptr || attached.size < manifest.mappedSizeBytes)
         return makeToolError("ipc_attach_failed", "Attached segment is smaller than manifest mapped_size_bytes.");
 
-    const auto ozoneId = args.ozoneInstanceId
-        ? args.ozoneInstanceId
+    const auto instanceId = args.instanceId
+        ? args.instanceId
         : findPluginInstance(attached.bytes, attached.size, manifest.registry, args.pluginNameQuery);
-    if (!ozoneId)
-        return makeToolError("ozone_instance_not_found", "Ozone instance not found in manifest-defined plugin registry.");
+    if (!instanceId)
+        return makeToolError("ipc_instance_not_found", "Plugin instance not found in manifest-defined plugin registry.");
 
     const auto requestFrame = makeFrame(
         manifest.frame,
         manifest.messages.assistantRequest,
         args.observerId,
-        *ozoneId,
+        *instanceId,
         {});
 
     const auto requestStartIndex = readU32LE(attached.bytes + manifest.ring.writeIndexOffset)
@@ -1178,10 +1182,10 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
         return makeToolError("assistant_request_write_failed", "Could not write AssistantRequest frame to manifest-defined ring buffer.");
 
     std::optional<json> magicProbe;
-    if (envEnabled("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC"))
+    if (envEnabled("MOREPHI_IPC_DEBUG_MAGIC"))
     {
         magicProbe = makeMagicProbe(attached.bytes, manifest, requestStartIndex, requestWatermark);
-        DBG("MorePhi iZotope IPC magic probe: "
+        DBG("MorePhi IPC magic probe: "
             + juce::String(magicProbe->dump()));
     }
 
@@ -1198,14 +1202,14 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     for (;;)
     {
         std::string parseError;
-        if (auto result = findAssistantResult(attached.bytes, manifest, *ozoneId, args.observerId, requestWatermark, parseError))
+        if (auto result = findAssistantResult(attached.bytes, manifest, *instanceId, args.observerId, requestWatermark, parseError))
         {
             const bool observerDeregisterSent = writeObserverDeregister(
                 attached.bytes,
                 attached.size,
                 manifest,
                 args.observerId,
-                *ozoneId);
+                *instanceId);
             clearRegistryObserver(attached.bytes, attached.size, manifest.registry, args.observerId);
 
             auto successBody = json{
@@ -1215,7 +1219,7 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
                 {"platform", attached.fake ? "test" : platformName()},
                 {"observer_id", args.observerId},
                 {"observer_deregister_sent", observerDeregisterSent},
-                {"ozone_instance_id", *ozoneId},
+                {"instance_id", *instanceId},
                 {"elapsed_ms", elapsedMs()},
                 {"assistant_result", *result},
                 {"parameters", result->value("parameters", json::array())}
@@ -1253,20 +1257,20 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     return timeout;
 }
 
-void IZotopeIPCAssistant::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)
+void MorePhiIPCAssistant::setFakeSegmentForTests(std::string name, std::vector<uint8_t> bytes)
 {
     fakeSegments[std::move(name)] = std::move(bytes);
 }
 
-const std::vector<uint8_t>* IZotopeIPCAssistant::getFakeSegmentForTests(const std::string& name) const
+const std::vector<uint8_t>* MorePhiIPCAssistant::getFakeSegmentForTests(const std::string& name) const
 {
     const auto it = fakeSegments.find(name);
     return it != fakeSegments.end() ? &it->second : nullptr;
 }
 
-std::unique_ptr<IZotopeIPCAssistant> createIZotopeIPCAssistant()
+std::unique_ptr<MorePhiIPCAssistant> createMorePhiIPCAssistant()
 {
-    return std::make_unique<IZotopeIPCAssistant>();
+    return std::make_unique<MorePhiIPCAssistant>();
 }
 
 } // namespace more_phi::standalone_mcp

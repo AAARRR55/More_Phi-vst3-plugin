@@ -14,8 +14,8 @@
  *     full-plugin level, and no per-component RSS attribution.
  *
  * Reuses the HighResTimer / MemorySnapshot / TimingStats design proven in the
- * (orphaned) ComprehensiveProfilingHarness.cpp, but drives the full processor
- * instead of isolated engines.
+ * earlier ComprehensiveProfilingHarness (since removed as dead code), but drives
+ * the full processor instead of isolated engines.
  */
 #ifndef MORE_PHI_INTEGRATED_PROCESSOR_BENCHMARK_H
 #define MORE_PHI_INTEGRATED_PROCESSOR_BENCHMARK_H

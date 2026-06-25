@@ -268,11 +268,11 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
         }
         if (name == "analysis.get_stereo_field")
             foundStereoField = true;
-        if (name == "izotope_ipc_status")
+        if (name == "morephi_ipc_status")
             foundIpcStatus = true;
-        if (name == "izotope_ipc_snapshot")
+        if (name == "morephi_ipc_snapshot")
             foundIpcSnapshot = true;
-        if (name == "ozone_run_assistant")
+        if (name == "morephi_ipc_run_assistant")
             foundIpcRunAssistant = true;
         if (name == "more_phi.parameters")
             foundMorePhiParameters = true;
@@ -703,14 +703,14 @@ TEST_CASE("VST3 MCP handler exposes IPC assistant status and write gate", "[mcp]
     more_phi::InstanceIdentity identity;
 
     const auto status = nlohmann::json::parse(
-        more_phi::MCPToolHandler::handle("izotope_ipc_status", {}, processor, identity).toStdString());
+        more_phi::MCPToolHandler::handle("morephi_ipc_status", {}, processor, identity).toStdString());
     REQUIRE(status.contains("attached"));
     REQUIRE_FALSE(status["attached"].get<bool>());
 
     juce::DynamicObject::Ptr runParams = new juce::DynamicObject();
     runParams->setProperty("allow_unsafe_write", false);
     const auto blocked = nlohmann::json::parse(
-        more_phi::MCPToolHandler::handle("ozone_run_assistant", juce::var(runParams.get()), processor, identity).toStdString());
+        more_phi::MCPToolHandler::handle("morephi_ipc_run_assistant", juce::var(runParams.get()), processor, identity).toStdString());
 
     REQUIRE_FALSE(blocked["success"].get<bool>());
     REQUIRE(blocked["error"].get<std::string>() == "approval_required");

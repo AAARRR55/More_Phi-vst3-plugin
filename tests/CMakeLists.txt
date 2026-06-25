@@ -81,7 +81,7 @@ add_executable(MorePhiTests
     Unit/TestVST3IPCBridge.cpp
     Unit/TestAsyncToolExecutor.cpp
     # Ozone 11 mastering integration
-    Unit/TestOzoneIntegration.cpp
+    Unit/TestMorePhiIpcIntegration.cpp
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
     Unit/TestNeuralMasteringController.cpp
@@ -92,6 +92,8 @@ add_executable(MorePhiTests
     Unit/TestSonicMasterDecisionDecoder.cpp
     Unit/TestAuditFixes.cpp
     Unit/TestAudioCaptureRing.cpp
+    Unit/TestNeuralPlanVerification.cpp
+    Unit/TestMasteringMeters.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
     Unit/TestSonicMasterHttpInferenceSource.cpp
     Unit/TestSonicMasterHttpLive.cpp
@@ -236,7 +238,7 @@ catch_discover_tests(MorePhiTests
 # ── Standalone stdio MCP server tests ────────────────────────────────────────
 add_executable(MorePhiMcpServerTests
     Unit/TestStandaloneMcpServer.cpp
-    Unit/TestIZotopeIPCAssistant.cpp
+    Unit/TestMorePhiIPCAssistant.cpp
 )
 
 target_link_libraries(MorePhiMcpServerTests PRIVATE

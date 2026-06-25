@@ -1,4 +1,4 @@
-#include "OzonePluginBackend.h"
+#include "MorePhiPluginBackend.h"
 
 #include "Host/IPluginHostManager.h"
 #include "Host/ParameterBridge.h"
@@ -105,46 +105,46 @@ void releasePlugin(PluginHostManager* concreteHost, bool exclusive)
 
 } // namespace
 
-HostedOzonePluginBackend::HostedOzonePluginBackend()
+HostedNamedPluginBackend::HostedNamedPluginBackend()
 {
     ownedHost = std::make_unique<PluginHostManager>();
     host = ownedHost.get();
     bridge = std::make_unique<ParameterBridge>(*host);
 
-    sampleRate = envDouble("OZONE_SAMPLE_RATE", 44100.0, 8000.0, 384000.0);
-    blockSize = envInt("OZONE_BLOCK_SIZE", 512, 16, 8192);
-    numChannels = envInt("OZONE_NUM_CHANNELS", 2, 1, 16);
+    sampleRate = envDouble("MOREPHI_SAMPLE_RATE", 44100.0, 8000.0, 384000.0);
+    blockSize = envInt("MOREPHI_BLOCK_SIZE", 512, 16, 8192);
+    numChannels = envInt("MOREPHI_NUM_CHANNELS", 2, 1, 16);
 
     loadFromEnvironment();
 }
 
-HostedOzonePluginBackend::HostedOzonePluginBackend(IPluginHostManager& externalHost)
+HostedNamedPluginBackend::HostedNamedPluginBackend(IPluginHostManager& externalHost)
     : host(&externalHost),
       bridge(std::make_unique<ParameterBridge>(externalHost))
 {
 }
 
-HostedOzonePluginBackend::~HostedOzonePluginBackend()
+HostedNamedPluginBackend::~HostedNamedPluginBackend()
 {
     if (ownedHost != nullptr)
         ownedHost->unloadPlugin();
 }
 
-void HostedOzonePluginBackend::loadFromEnvironment()
+void HostedNamedPluginBackend::loadFromEnvironment()
 {
     jassert(host != nullptr);
 
-    const auto ozonePath = envOrDefault("OZONE_VST3_PATH");
-    if (ozonePath.isEmpty())
+    const auto pluginPath = envOrDefault("MOREPHI_VST3_PATH");
+    if (pluginPath.isEmpty())
     {
-        loadError = "OZONE_VST3_PATH is required for the standalone Ozone MCP server.";
+        loadError = "MOREPHI_VST3_PATH is required for the standalone MCP server.";
         return;
     }
 
-    const juce::File pluginFile(ozonePath);
+    const juce::File pluginFile(pluginPath);
     if (!pluginFile.exists())
     {
-        loadError = "OZONE_VST3_PATH does not exist: " + ozonePath;
+        loadError = "MOREPHI_VST3_PATH does not exist: " + pluginPath;
         return;
     }
 
@@ -152,7 +152,7 @@ void HostedOzonePluginBackend::loadFromEnvironment()
 
     juce::PluginDescription description;
     juce::String discoveryDetails;
-    const bool verbose = envOrDefault("OZONE_DISCOVERY_VERBOSE").getIntValue() != 0;
+    const bool verbose = envOrDefault("MOREPHI_DISCOVERY_VERBOSE").getIntValue() != 0;
     const bool discovered = PluginHostManager::discoverPlugin(
         host->getFormatManager(), pluginFile, description, discoveryDetails, verbose);
 
@@ -160,13 +160,13 @@ void HostedOzonePluginBackend::loadFromEnvironment()
     {
         loadError = discoveryDetails.isNotEmpty()
             ? discoveryDetails
-            : "Could not discover Ozone plugin at: " + ozonePath;
+            : "Could not discover plugin at: " + pluginPath;
         return;
     }
 
     if (!host->loadPlugin(description))
     {
-        loadError = "Failed to load Ozone plugin from " + ozonePath;
+        loadError = "Failed to load plugin from " + pluginPath;
         if (discoveryDetails.isNotEmpty())
             loadError += " (" + discoveryDetails + ")";
         return;
@@ -175,21 +175,21 @@ void HostedOzonePluginBackend::loadFromEnvironment()
     loadError.clear();
 }
 
-bool HostedOzonePluginBackend::hasLoadedPlugin() const
+bool HostedNamedPluginBackend::hasLoadedPlugin() const
 {
     return host != nullptr && host->hasPlugin() && host->getPlugin() != nullptr;
 }
 
-ToolCallOutcome HostedOzonePluginBackend::pluginNotLoaded() const
+ToolCallOutcome HostedNamedPluginBackend::pluginNotLoaded() const
 {
     return makeToolError(
         "plugin_not_loaded",
         loadError.isNotEmpty()
             ? loadError.toStdString()
-            : "No Ozone plugin instance is loaded.");
+            : "No plugin instance is loaded.");
 }
 
-json HostedOzonePluginBackend::pluginInfo() const
+json HostedNamedPluginBackend::pluginInfo() const
 {
     json info = {
         {"loaded", hasLoadedPlugin()},
@@ -220,7 +220,7 @@ json HostedOzonePluginBackend::pluginInfo() const
     return info;
 }
 
-json HostedOzonePluginBackend::parameterDescriptorToJson(int index, bool includeValues) const
+json HostedNamedPluginBackend::parameterDescriptorToJson(int index, bool includeValues) const
 {
     const auto descriptor = bridge->getParameterDescriptor(index);
     if (descriptor.index < 0)
@@ -246,7 +246,7 @@ json HostedOzonePluginBackend::parameterDescriptorToJson(int index, bool include
     return result;
 }
 
-ToolCallOutcome HostedOzonePluginBackend::getParameters(const ParameterListArgs& args)
+ToolCallOutcome HostedNamedPluginBackend::getParameters(const ParameterListArgs& args)
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -291,7 +291,7 @@ ToolCallOutcome HostedOzonePluginBackend::getParameters(const ParameterListArgs&
     }, false};
 }
 
-ToolCallOutcome HostedOzonePluginBackend::setParameter(int index, float value)
+ToolCallOutcome HostedNamedPluginBackend::setParameter(int index, float value)
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -309,7 +309,7 @@ ToolCallOutcome HostedOzonePluginBackend::setParameter(int index, float value)
     }, false};
 }
 
-ToolCallOutcome HostedOzonePluginBackend::applyAssistantParameters(const AssistantParameterApplyArgs& args)
+ToolCallOutcome HostedNamedPluginBackend::applyAssistantParameters(const AssistantParameterApplyArgs& args)
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -376,12 +376,12 @@ ToolCallOutcome HostedOzonePluginBackend::applyAssistantParameters(const Assista
     }, false};
 }
 
-std::optional<int> HostedOzonePluginBackend::resolveAssistantParameter(const RunAssistantArgs& args) const
+std::optional<int> HostedNamedPluginBackend::resolveAssistantParameter(const RunAssistantArgs& args) const
 {
     if (args.assistantParameterIndex)
         return args.assistantParameterIndex;
 
-    const auto envIndex = envOrDefault("OZONE_ASSISTANT_PARAM_INDEX");
+    const auto envIndex = envOrDefault("MOREPHI_ASSISTANT_PARAM_INDEX");
     if (envIndex.isNotEmpty())
         return envIndex.getIntValue();
 
@@ -400,7 +400,7 @@ std::optional<int> HostedOzonePluginBackend::resolveAssistantParameter(const Run
     return std::nullopt;
 }
 
-ToolCallOutcome HostedOzonePluginBackend::renderInputAudio(const std::string& inputAudioPath,
+ToolCallOutcome HostedNamedPluginBackend::renderInputAudio(const std::string& inputAudioPath,
                                                            double analysisSeconds,
                                                            int& renderedSamples)
 {
@@ -443,7 +443,7 @@ ToolCallOutcome HostedOzonePluginBackend::renderInputAudio(const std::string& in
     return {json{{"success", true}, {"rendered_samples", renderedSamples}}, false};
 }
 
-ToolCallOutcome HostedOzonePluginBackend::runMasterAssistant(const RunAssistantArgs& args)
+ToolCallOutcome HostedNamedPluginBackend::runMasterAssistant(const RunAssistantArgs& args)
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -453,8 +453,8 @@ ToolCallOutcome HostedOzonePluginBackend::runMasterAssistant(const RunAssistantA
     {
         return makeToolError(
             "assistant_parameter_not_found",
-            "No automatable Ozone parameter containing 'assistant' or 'analyze' was found. "
-            "Set OZONE_ASSISTANT_PARAM_INDEX or pass assistant_parameter_index if this Ozone version exposes one.");
+            "No automatable parameter containing 'assistant' or 'analyze' was found. "
+            "Set MOREPHI_ASSISTANT_PARAM_INDEX or pass assistant_parameter_index.");
     }
 
     const int index = *maybeIndex;
@@ -485,7 +485,7 @@ ToolCallOutcome HostedOzonePluginBackend::runMasterAssistant(const RunAssistantA
     }, false};
 }
 
-ToolCallOutcome HostedOzonePluginBackend::getState()
+ToolCallOutcome HostedNamedPluginBackend::getState()
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -494,7 +494,7 @@ ToolCallOutcome HostedOzonePluginBackend::getState()
     bool exclusive = false;
     auto* plugin = acquirePlugin(*host, concreteHost, exclusive);
     if (plugin == nullptr)
-        return makeToolError("plugin_busy", "Could not acquire Ozone for state capture.");
+        return makeToolError("plugin_busy", "Could not acquire plugin for state capture.");
 
     juce::MemoryBlock state;
     try
@@ -516,7 +516,7 @@ ToolCallOutcome HostedOzonePluginBackend::getState()
     }, false};
 }
 
-ToolCallOutcome HostedOzonePluginBackend::setState(const std::string& stateBase64)
+ToolCallOutcome HostedNamedPluginBackend::setState(const std::string& stateBase64)
 {
     if (!hasLoadedPlugin())
         return pluginNotLoaded();
@@ -532,7 +532,7 @@ ToolCallOutcome HostedOzonePluginBackend::setState(const std::string& stateBase6
     bool exclusive = false;
     auto* plugin = acquirePlugin(*host, concreteHost, exclusive);
     if (plugin == nullptr)
-        return makeToolError("plugin_busy", "Could not acquire Ozone for state restore.");
+        return makeToolError("plugin_busy", "Could not acquire plugin for state restore.");
 
     try
     {
@@ -552,9 +552,9 @@ ToolCallOutcome HostedOzonePluginBackend::setState(const std::string& stateBase6
     }, false};
 }
 
-std::unique_ptr<OzonePluginBackend> createOzonePluginBackend()
+std::unique_ptr<MorePhiPluginBackend> createMorePhiPluginBackend()
 {
-    return std::make_unique<HostedOzonePluginBackend>();
+    return std::make_unique<HostedNamedPluginBackend>();
 }
 
 } // namespace more_phi::standalone_mcp

@@ -63,7 +63,7 @@ TEST_CASE("AUDIT-FIX-3: decoded ratio survives applyValidatedPlan without re-cla
           "[audit][sonicmaster][engine]")
 {
     AutoMasteringEngine engine;
-    engine.prepare(48000.0, 512, false);
+    engine.prepare(48000.0, 512, true);
 
     ValidatedNeuralMasteringPlan plan {};
     plan.valid = true;

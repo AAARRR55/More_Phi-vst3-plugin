@@ -99,6 +99,18 @@ int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
     total += applyDynamics(plan);
     total += applyStereoImager(plan);
     total += applyMaximizer(plan);
+
+    // P3.10 (AUDIT): close the plan with a transaction boundary so the audio
+    // thread can confirm the full plan drained (getLastDrainedPlanId). Only emit
+    // when at least one parameter was enqueued — a zero-param apply has nothing to
+    // commit. The boundary is a no-op command (paramIndex=-1) and does not count
+    // toward the returned total.
+    if (total > 0)
+    {
+        const std::uint64_t planId = ++lastPlanId_;
+        processor_.enqueuePlanBoundary(planId, MorePhiProcessor::ParameterEditSource::MCP);
+    }
+
     lastAppliedCount_ = total;
     return total;
 }

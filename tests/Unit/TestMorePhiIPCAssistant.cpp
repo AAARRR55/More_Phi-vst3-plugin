@@ -1,11 +1,11 @@
-// TestIZotopeIPCAssistant.cpp
-// Deterministic unit tests — no live DAW or Ozone required.
+// TestMorePhiIPCAssistant.cpp
+// Deterministic unit tests — no live DAW or plugin required.
 // All tests use fake mutable segments via setFakeSegmentForTests.
 
 #ifdef _WIN32
 #  include <windows.h>
 #endif
-#include "AI/StandaloneMcp/IZotopeIPCAssistant.h"
+#include "AI/StandaloneMcp/MorePhiIPCAssistant.h"
 #include <catch2/catch_test_macros.hpp>
 #include <atomic>
 #include <chrono>
@@ -21,7 +21,9 @@ using namespace more_phi::standalone_mcp;
 // Test helpers
 // ═══════════════════════════════════════════════════════════════════════════
 
-static constexpr uint32_t kMagic      = 0x495A4F54u;
+// Neutral IPC magic — ASCII "MORP" (More-Phi). Matches kDefaultMagic in
+// MorePhiIPCAssistant.cpp / MorePhiIPCDiscovery.h.
+static constexpr uint32_t kMagic      = 0x4D4F5250u;
 static constexpr size_t   kSegSz      = 4u * 1024u * 1024u;
 static constexpr size_t   kRingOff    = 512u;
 static constexpr size_t   kRingSize   = kSegSz - kRingOff;
@@ -48,7 +50,7 @@ static std::vector<uint8_t> blankSeg() {
     return std::vector<uint8_t>(kSegSz, 0u);
 }
 
-// Write a plugin registry entry (slot 0 = Ozone by default)
+// Write a plugin registry entry (slot 0 = MorePhiPlugin by default)
 static void writeRegistryEntry(std::vector<uint8_t>& seg,
                                 uint32_t instanceId,
                                 const char* nameTag,
@@ -142,7 +144,7 @@ static void appendFrameAtCurrentWrite(std::vector<uint8_t>& seg,
 }
 
 template <typename Writer>
-static ToolCallOutcome runWithDelayedIpcWriter(IZotopeIPCAssistant& assistant,
+static ToolCallOutcome runWithDelayedIpcWriter(MorePhiIPCAssistant& assistant,
                                                const std::string& segName,
                                                const IpcAssistantRunArgs& args,
                                                Writer writer,
@@ -193,7 +195,7 @@ static IpcAssistantRunArgs baseArgs(const std::string& segName)
 {
     IpcAssistantRunArgs a;
     a.segmentName     = segName;
-    a.ozoneInstanceId = 0xABCD1234u;
+    a.instanceId = 0xABCD1234u;
     a.observerId      = 0xDEADBEEFu;
     a.timeoutMs       = 100;   // fast for tests
     a.pollIntervalMs  = 1;
@@ -204,21 +206,21 @@ static IpcAssistantRunArgs baseArgs(const std::string& segName)
 // Set the env gate for the duration of a test scope
 struct WriteGateGuard {
 #ifdef _WIN32
-    WriteGateGuard()  { SetEnvironmentVariableA("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1"); }
-    ~WriteGateGuard() { SetEnvironmentVariableA("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", nullptr); }
+    WriteGateGuard()  { SetEnvironmentVariableA("MOREPHI_IPC_ENABLE_WRITE", "1"); }
+    ~WriteGateGuard() { SetEnvironmentVariableA("MOREPHI_IPC_ENABLE_WRITE", nullptr); }
 #else
-    WriteGateGuard()  { setenv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", "1", 1); }
-    ~WriteGateGuard() { unsetenv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE"); }
+    WriteGateGuard()  { setenv("MOREPHI_IPC_ENABLE_WRITE", "1", 1); }
+    ~WriteGateGuard() { unsetenv("MOREPHI_IPC_ENABLE_WRITE"); }
 #endif
 };
 
 struct DebugMagicGuard {
 #ifdef _WIN32
-    DebugMagicGuard()  { SetEnvironmentVariableA("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC", "1"); }
-    ~DebugMagicGuard() { SetEnvironmentVariableA("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC", nullptr); }
+    DebugMagicGuard()  { SetEnvironmentVariableA("MOREPHI_IPC_DEBUG_MAGIC", "1"); }
+    ~DebugMagicGuard() { SetEnvironmentVariableA("MOREPHI_IPC_DEBUG_MAGIC", nullptr); }
 #else
-    DebugMagicGuard()  { setenv("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC", "1", 1); }
-    ~DebugMagicGuard() { unsetenv("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC"); }
+    DebugMagicGuard()  { setenv("MOREPHI_IPC_DEBUG_MAGIC", "1", 1); }
+    ~DebugMagicGuard() { unsetenv("MOREPHI_IPC_DEBUG_MAGIC"); }
 #endif
 };
 
@@ -230,10 +232,10 @@ struct DebugMagicGuard {
 TEST_CASE("Staged write publishes complete AssistantRequest frame and advances write pointer last")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
 
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
     // Plant a stale result before the request. The delayed writer appends the
     // fresh result only after runAssistant publishes AssistantRequest.
     auto stalePayload = makeAssistantResultPayload({{88, 0.91f}});
@@ -271,12 +273,12 @@ TEST_CASE("Write blocked when env gate is missing")
 {
     // Do NOT open the env gate
 #ifdef _WIN32
-    SetEnvironmentVariableA("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE", nullptr);
+    SetEnvironmentVariableA("MOREPHI_IPC_ENABLE_WRITE", nullptr);
 #else
-    unsetenv("MORE_PHI_ENABLE_IZOTOPE_IPC_WRITE");
+    unsetenv("MOREPHI_IPC_ENABLE_WRITE");
 #endif
 
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
     const std::vector<uint8_t> before(seg.begin(), seg.end());
 
@@ -297,7 +299,7 @@ TEST_CASE("Write blocked when env gate is missing")
 TEST_CASE("Write blocked when allow_unsafe_write is false")
 {
     WriteGateGuard gate;  // env gate open
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
     const std::vector<uint8_t> before(seg.begin(), seg.end());
 
@@ -318,9 +320,9 @@ TEST_CASE("Write blocked when allow_unsafe_write is false")
 TEST_CASE("Corrupt bytes before AssistantResult are resynced and result is returned")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_corrupt", seg);
     auto args = baseArgs("test_seg_corrupt");
@@ -345,9 +347,9 @@ TEST_CASE("Corrupt bytes before AssistantResult are resynced and result is retur
 TEST_CASE("Unknown valid frames are consumed and poll continues to AssistantResult")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_skip", seg);
     auto args = baseArgs("test_seg_skip");
@@ -371,9 +373,9 @@ TEST_CASE("Unknown valid frames are consumed and poll continues to AssistantResu
 TEST_CASE("Incomplete frame in ring causes clean timeout error")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_incomplete", seg);
     auto args = baseArgs("test_seg_incomplete");
@@ -406,9 +408,9 @@ TEST_CASE("Incomplete frame in ring causes clean timeout error")
 TEST_CASE("Oversized payload claim returns error without consuming segment")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_oversized", seg);
     auto args = baseArgs("test_seg_oversized");
@@ -439,9 +441,9 @@ TEST_CASE("Oversized payload claim returns error without consuming segment")
 TEST_CASE("Observer slot is cleared from plugin registry after successful run")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone", 0);
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin", 0);
     // Leave slot 1 empty for observer registration
 
     assistant->setFakeSegmentForTests("test_seg_observer_success", seg);
@@ -469,19 +471,19 @@ TEST_CASE("Observer slot is cleared from plugin registry after successful run")
     REQUIRE_FALSE(found); // should have been cleared
 }
 
-// ── 8. Observer slot cleared on error path (no Ozone instance) ────────────
-TEST_CASE("Observer slot is cleared after error when Ozone instance not found")
+// ── 8. Observer slot cleared on error path (no plugin instance) ────────────
+TEST_CASE("Observer slot is cleared after error when plugin instance not found")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
     // Do NOT write any plugin registry entry — findPluginByName will fail
 
     assistant->setFakeSegmentForTests("test_seg_observer_err", seg);
 
     IpcAssistantRunArgs args = baseArgs("test_seg_observer_err");
-    args.ozoneInstanceId = std::nullopt;  // force name lookup
-    args.pluginNameQuery = "Ozone";
+    args.instanceId = std::nullopt;  // force name lookup
+    args.pluginNameQuery = "MorePhiPlugin";
 
     auto result = assistant->runAssistant(args);
     REQUIRE_FALSE(result.isSuccess());
@@ -497,15 +499,15 @@ TEST_CASE("Observer slot is cleared after error when Ozone instance not found")
     REQUIRE_FALSE(found);
 }
 
-// ── 9. schema_path arg takes precedence over IZOTOPE_IPC_SCHEMA_PATH env ──
-TEST_CASE("schema_path argument takes precedence over IZOTOPE_IPC_SCHEMA_PATH env")
+// ── 9. schema_path arg takes precedence over MOREPHI_IPC_SCHEMA_PATH env ──
+TEST_CASE("schema_path argument takes precedence over MOREPHI_IPC_SCHEMA_PATH env")
 {
     WriteGateGuard gate;
     // Set env to a nonexistent path that would cause wrong offsets
 #ifdef _WIN32
-    SetEnvironmentVariableA("IZOTOPE_IPC_SCHEMA_PATH", "C:\\nonexistent\\wrong_schema.json");
+    SetEnvironmentVariableA("MOREPHI_IPC_SCHEMA_PATH", "C:\\nonexistent\\wrong_schema.json");
 #else
-    setenv("IZOTOPE_IPC_SCHEMA_PATH", "/nonexistent/wrong_schema.json", 1);
+    setenv("MOREPHI_IPC_SCHEMA_PATH", "/nonexistent/wrong_schema.json", 1);
 #endif
 
     // Write a schema JSON using default offsets to a temp file
@@ -516,9 +518,9 @@ TEST_CASE("schema_path argument takes precedence over IZOTOPE_IPC_SCHEMA_PATH en
           << R"("ringOff":512,"ringSize":4193792,"entrySize":16,"maxEntries":32})";
     }
 
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_schema", seg);
     auto args = baseArgs("test_seg_schema");
@@ -538,9 +540,9 @@ TEST_CASE("schema_path argument takes precedence over IZOTOPE_IPC_SCHEMA_PATH en
 
     // Cleanup
 #ifdef _WIN32
-    SetEnvironmentVariableA("IZOTOPE_IPC_SCHEMA_PATH", nullptr);
+    SetEnvironmentVariableA("MOREPHI_IPC_SCHEMA_PATH", nullptr);
 #else
-    unsetenv("IZOTOPE_IPC_SCHEMA_PATH");
+    unsetenv("MOREPHI_IPC_SCHEMA_PATH");
 #endif
     std::remove(schemaFile.c_str());
 }
@@ -549,9 +551,9 @@ TEST_CASE("schema_path argument takes precedence over IZOTOPE_IPC_SCHEMA_PATH en
 TEST_CASE("Ring wrap-around: frame written at end of ring is read correctly")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     // Start both pointers 8 bytes before the end of the ring so the request
     // and delayed AssistantResult exercise ring wrap-around.
@@ -585,7 +587,7 @@ TEST_CASE("Structured string magic uses wire-byte order")
         std::ofstream f(schemaFile);
         f << R"({
             "mapped_size_bytes":4194304,
-            "frame":{"header_size":28,"magic":"IZOT","version":3},
+            "frame":{"header_size":28,"magic":"MORP","version":3},
             "registry":{"offset":264,"entry_size":16,"max_entries":32,"id_offset":0,"name_offset":8,"name_size":8},
             "ring":{"read_index_offset":256,"write_index_offset":260,"data_offset":512,"capacity_bytes":4193792},
             "assistant_result":{"count_offset":0,"entry_offset":2,"entry_size":6,"param_index_offset":0,"value_offset":2},
@@ -593,9 +595,9 @@ TEST_CASE("Structured string magic uses wire-byte order")
         })";
     }
 
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_wire_magic", seg);
     auto args = baseArgs("test_seg_wire_magic");
@@ -631,9 +633,9 @@ TEST_CASE("Debug IPC magic probe reports request frame bytes")
 {
     WriteGateGuard gate;
     DebugMagicGuard debugMagic;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_magic_probe", seg);
     auto args = baseArgs("test_seg_magic_probe");
@@ -666,9 +668,9 @@ TEST_CASE("Debug IPC magic probe reports request frame bytes")
 TEST_CASE("Full ring prevents AssistantRequest write")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     writeU32At(seg, kReadPtrOff, 1);
     writeU32At(seg, kWrtPtrOff, 0);
@@ -702,9 +704,9 @@ TEST_CASE("Observer deregistration failure is reported without failing Assistant
         })";
     }
 
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
-    writeRegistryEntry(seg, 0xABCD1234u, "Ozone");
+    writeRegistryEntry(seg, 0xABCD1234u, "MorePhiPlugin");
 
     assistant->setFakeSegmentForTests("test_seg_deregister_best_effort", seg);
     auto args = baseArgs("test_seg_deregister_best_effort");
@@ -739,7 +741,7 @@ TEST_CASE("Invalid schema bounds return typed error without touching ring")
           << R"("ringOff":512,"ringSize":99999999})";
     }
 
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
     const auto before = seg;
 
@@ -761,21 +763,21 @@ TEST_CASE("Invalid schema bounds return typed error without touching ring")
 // ── 16. getFakeSegmentForTests returns pointer, not copy ──────────────────
 TEST_CASE("getFakeSegmentForTests returns null for unknown segment name")
 {
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     REQUIRE(assistant->getFakeSegmentForTests("nonexistent") == nullptr);
 }
 
-// ── 17. Valid explicit ozoneInstanceId bypasses registry lookup ────────────
-TEST_CASE("Explicit ozoneInstanceId skips plugin registry lookup")
+// ── 17. Valid explicit instanceId bypasses registry lookup ────────────
+TEST_CASE("Explicit instanceId skips plugin registry lookup")
 {
     WriteGateGuard gate;
-    auto assistant = createIZotopeIPCAssistant();
+    auto assistant = createMorePhiIPCAssistant();
     auto seg = blankSeg();
     // Registry is empty — but we pass an explicit instance ID
 
     assistant->setFakeSegmentForTests("test_seg_explicit_id", seg);
     auto args = baseArgs("test_seg_explicit_id");
-    args.ozoneInstanceId = 0x11223344u;
+    args.instanceId = 0x11223344u;
     args.timeoutMs = 500;
 
     auto result = runWithDelayedIpcWriter(

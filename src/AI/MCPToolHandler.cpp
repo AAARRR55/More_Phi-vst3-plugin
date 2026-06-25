@@ -27,8 +27,8 @@
 #include "Agents/AgentRuntime.h"
 #include "SonicMasterDecisionDecoder.h"
 #include "AutomationControlPlane.h"
-#include "StandaloneMcp/IZotopeIPCAssistant.h"
-#include "StandaloneMcp/IZotopeIPCDiscovery.h"
+#include "StandaloneMcp/MorePhiIPCAssistant.h"
+#include "StandaloneMcp/MorePhiIPCDiscovery.h"
 #include "Dataset/OfflineBatchRenderer.h"
 #include "SemanticPluginProfile.h"
 #include <nlohmann/json.hpp>
@@ -1004,7 +1004,7 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
         // rejects the ENTIRE batch if any index >= MAX_PARAMETERS — breaking the
         // whole rollback. (writeParameter still drops any index beyond the live
         // hosted-plugin count, so this is robustness, not memory-safety.)
-        constexpr int kMaxRollbackParamIndex = 2047;
+        constexpr int kMaxRollbackParamIndex = 4095;
         for (size_t i = 0; i < valuesJson.size() && static_cast<int>(i) <= kMaxRollbackParamIndex; ++i)
         {
             if (!valuesJson[i].is_number())
@@ -1998,13 +1998,13 @@ static const ToolDefinition kCoreTools[] = {
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
      {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses ONNX in-process inference when available; falls back to the local Python HTTP inference server at 127.0.0.1:8765 (see tools/inference_server/README.md). Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (echoing the caller-supplied target_lufs param), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use analyze_audio for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response now includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates) — use them to distinguish input loudness from the model's target_lufs. NOTE (application target, AUDIT-FIX-4): the neural mastering decision is applied to More-Phi's INTERNAL mastering chain (AutoMasteringEngine: 4-band comp, 32-band EQ, stereo imager, true-peak limiter), NOT to the hosted Ozone plugin. The hosted plugin is driven separately via ozone.audit_parameters + the heuristic apply_mastering_plan path. Do not tell the user the AI 'masters through Ozone' — it masters the internal chain in series ahead of whatever the user has loaded. NOTE (applied_to_audio_path, F2): the internal mastering chain is DORMANT in the shipped plugin (no audio flows through it, hosted plugin untouched); applied_to_audio_path reports the chain's active state so a silent apply is never mistaken for an audible one. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk).", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
-    {"izotope_ipc_attach", "Attach read-only to a named iZotope IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
-    {"izotope_ipc_detach", "Detach from the currently mapped iZotope IPC segment.", R"({"type":"object","properties":{}})"},
-    {"izotope_ipc_status", "Report iZotope IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
-    {"izotope_ipc_snapshot", "Read a bounded byte range from the attached IPC segment and report candidate IZOT frames.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":1024},"max_frames":{"type":"integer","minimum":0,"default":16}}})"},
-    {"izotope_ipc_dump", "Write a bounded raw byte range from the attached IPC segment to a local file.", R"({"type":"object","properties":{"output_path":{"type":"string"},"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":65536}},"required":["output_path"]})"},
-    {"izotope_ipc_capture", "Sample a bounded IPC memory window and record byte changes for Assistant troubleshooting.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":4096},"duration_ms":{"type":"integer","minimum":0,"default":2000},"interval_ms":{"type":"integer","minimum":1,"default":25},"max_changes":{"type":"integer","minimum":1,"default":64},"max_ranges_per_change":{"type":"integer","minimum":1,"default":64},"max_frames":{"type":"integer","minimum":0,"default":16},"baseline_base64":{"type":"string"},"output_path":{"type":"string"},"include_changed_bytes":{"type":"boolean","default":false}}})"},
-    {"ozone_run_assistant", "Inject an AssistantRequest into the manifest-defined iZotope IPC ring and wait for AssistantResult parameter decisions.", R"({"type":"object","properties":{"schema_path":{"type":"string"},"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"ozone_instance_id":{"type":"integer","minimum":0},"plugin_name_query":{"type":"string","default":"Ozone"},"timeout_ms":{"type":"integer","minimum":0,"default":10000},"poll_interval_ms":{"type":"integer","minimum":1,"default":10},"observer_id":{"type":"integer","minimum":0,"default":3735928559},"allow_unsafe_write":{"type":"boolean","default":false},"apply_result":{"type":"boolean","default":false}},"required":["allow_unsafe_write"]})"},
+    {"morephi_ipc_attach", "Attach read-only to a named IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
+    {"morephi_ipc_detach", "Detach from the currently mapped IPC segment.", R"({"type":"object","properties":{}})"},
+    {"morephi_ipc_status", "Report IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
+    {"morephi_ipc_snapshot", "Read a bounded byte range from the attached IPC segment and report candidate MORP frames.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":1024},"max_frames":{"type":"integer","minimum":0,"default":16}}})"},
+    {"morephi_ipc_dump", "Write a bounded raw byte range from the attached IPC segment to a local file.", R"({"type":"object","properties":{"output_path":{"type":"string"},"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":65536}},"required":["output_path"]})"},
+    {"morephi_ipc_capture", "Sample a bounded IPC memory window and record byte changes for Assistant troubleshooting.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":4096},"duration_ms":{"type":"integer","minimum":0,"default":2000},"interval_ms":{"type":"integer","minimum":1,"default":25},"max_changes":{"type":"integer","minimum":1,"default":64},"max_ranges_per_change":{"type":"integer","minimum":1,"default":64},"max_frames":{"type":"integer","minimum":0,"default":16},"baseline_base64":{"type":"string"},"output_path":{"type":"string"},"include_changed_bytes":{"type":"boolean","default":false}}})"},
+    {"morephi_ipc_run_assistant", "Inject an AssistantRequest into the manifest-defined IPC ring and wait for AssistantResult parameter decisions.", R"({"type":"object","properties":{"schema_path":{"type":"string"},"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"instance_id":{"type":"integer","minimum":0},"plugin_name_query":{"type":"string","default":""},"timeout_ms":{"type":"integer","minimum":0,"default":10000},"poll_interval_ms":{"type":"integer","minimum":1,"default":10},"observer_id":{"type":"integer","minimum":0,"default":3735928559},"allow_unsafe_write":{"type":"boolean","default":false},"apply_result":{"type":"boolean","default":false}},"required":["allow_unsafe_write"]})"},
     {"hosted_plugin.scan", "Inspect a VST3 plugin path and return the discoverable plugin description.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
     {"hosted_plugin.load", "Load a hosted VST3 plugin from an explicit path.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
     {"hosted_plugin.info", "Alias for get_plugin_info.", R"({"type":"object","properties":{}})"},
@@ -3096,13 +3096,13 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameter(params, p); });
     else if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameters(params, p); });
     else if (method == "ozone.audit_parameters")  result = auditOzoneParameters(params, p);
-    else if (method == "izotope_ipc_attach")      result = izotopeIpcAttach(params, p);
-    else if (method == "izotope_ipc_detach")      result = izotopeIpcDetach(p);
-    else if (method == "izotope_ipc_status")      result = izotopeIpcStatus(p);
-    else if (method == "izotope_ipc_snapshot")    result = izotopeIpcSnapshot(params, p);
-    else if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcDump(params, p); });
-    else if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcCapture(params, p); });
-    else if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return ozoneRunAssistantIpc(params, p); });
+    else if (method == "morephi_ipc_attach")      result = morePhiIpcAttach(params, p);
+    else if (method == "morephi_ipc_detach")      result = morePhiIpcDetach(p);
+    else if (method == "morephi_ipc_status")      result = morePhiIpcStatus(p);
+    else if (method == "morephi_ipc_snapshot")    result = morePhiIpcSnapshot(params, p);
+    else if (method == "morephi_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcDump(params, p); });
+    else if (method == "morephi_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcCapture(params, p); });
+    else if (method == "morephi_ipc_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcRunAssistant(params, p); });
     else if (method == "async_tool.submit")  return submitAsyncTool(method, params, p, identity, runtime);
     else if (method == "async_tool.status")  return getAsyncToolStatus(params);
     else if (method == "async_tool.result")  return getAsyncToolResult(params);
@@ -6268,9 +6268,9 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     return toJString(result);
 }
 
-// ── iZotope IPC Assistant tools ──────────────────────────────────────────────
+// ── IPC Assistant tools ──────────────────────────────────────────────────────
 
-juce::String MCPToolHandler::izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcAttach(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcAttachArgs parsed;
     juce::String error;
@@ -6290,20 +6290,20 @@ juce::String MCPToolHandler::izotopeIpcAttach(const juce::var& params, MorePhiPr
     if (mappedSize)
         parsed.mappedSizeBytes = *mappedSize;
 
-    return toJString(p.getIZotopeIPCDiscovery().attach(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().attach(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcDetach(MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcDetach(MorePhiProcessor& p)
 {
-    return toJString(p.getIZotopeIPCDiscovery().detach().body);
+    return toJString(p.getMorePhiIPCDiscovery().detach().body);
 }
 
-juce::String MCPToolHandler::izotopeIpcStatus(MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcStatus(MorePhiProcessor& p)
 {
-    return toJString(p.getIZotopeIPCDiscovery().status().body);
+    return toJString(p.getMorePhiIPCDiscovery().status().body);
 }
 
-juce::String MCPToolHandler::izotopeIpcSnapshot(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcSnapshot(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcSnapshotArgs parsed;
     juce::String error;
@@ -6326,10 +6326,10 @@ juce::String MCPToolHandler::izotopeIpcSnapshot(const juce::var& params, MorePhi
     if (value)
         parsed.maxFrames = *value;
 
-    return toJString(p.getIZotopeIPCDiscovery().snapshot(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().snapshot(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcDump(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcDump(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcDumpArgs parsed;
     juce::String error;
@@ -6349,10 +6349,10 @@ juce::String MCPToolHandler::izotopeIpcDump(const juce::var& params, MorePhiProc
     if (value)
         parsed.sizeBytes = *value;
 
-    return toJString(p.getIZotopeIPCDiscovery().dump(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().dump(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcCapture(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcCapture(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcCaptureArgs parsed;
     juce::String error;
@@ -6406,10 +6406,10 @@ juce::String MCPToolHandler::izotopeIpcCapture(const juce::var& params, MorePhiP
     if (!optionalBoolProperty(params, "include_changed_bytes", parsed.includeChangedBytes, error))
         return invalidParamsResponse(error.toRawUTF8());
 
-    return toJString(p.getIZotopeIPCDiscovery().capture(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().capture(parsed).body);
 }
 
-juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcRunAssistant(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcAssistantRunArgs parsed;
     juce::String error;
@@ -6426,9 +6426,9 @@ juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MoreP
         return invalidParamsResponse(error.toRawUTF8());
 
     value.reset();
-    if (!optionalSizeProperty(params, "ozone_instance_id", value, error))
+    if (!optionalSizeProperty(params, "instance_id", value, error))
         return invalidParamsResponse(error.toRawUTF8());
-    if (!assignOptionalUInt32(value, parsed.ozoneInstanceId, "ozone_instance_id", error))
+    if (!assignOptionalUInt32(value, parsed.instanceId, "instance_id", error))
         return invalidParamsResponse(error.toRawUTF8());
 
     std::optional<std::string> pluginNameQuery;
@@ -6464,7 +6464,7 @@ juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MoreP
     if (!optionalBoolProperty(params, "apply_result", applyResult, error))
         return invalidParamsResponse(error.toRawUTF8());
 
-    auto outcome = p.getIZotopeIPCAssistant().runAssistant(parsed);
+    auto outcome = p.getMorePhiIPCAssistant().runAssistant(parsed);
     if (!outcome.isError && applyResult)
     {
         auto applyOutcome = applyIpcAssistantParametersToHostedPlugin(outcome.body, p);

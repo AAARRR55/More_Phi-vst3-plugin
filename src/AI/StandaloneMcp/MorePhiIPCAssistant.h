@@ -1,6 +1,6 @@
 #pragma once
 
-#include "OzonePluginBackend.h"
+#include "MorePhiPluginBackend.h"
 
 #include <cstdint>
 #include <memory>
@@ -16,19 +16,19 @@ struct IpcAssistantRunArgs
     std::optional<std::string> schemaPath;
     std::optional<std::string> segmentName;
     std::optional<uint32_t> dawProcessId;
-    std::optional<uint32_t> ozoneInstanceId;
-    std::string pluginNameQuery = "Ozone";
+    std::optional<uint32_t> instanceId;
+    std::string pluginNameQuery;
     size_t timeoutMs = 10000;
     size_t pollIntervalMs = 10;
     uint32_t observerId = 0xDEADBEEFu;
     bool allowUnsafeWrite = false;
 };
 
-class IZotopeIPCAssistant
+class MorePhiIPCAssistant
 {
 public:
-    IZotopeIPCAssistant() = default;
-    ~IZotopeIPCAssistant();
+    MorePhiIPCAssistant() = default;
+    ~MorePhiIPCAssistant();
 
     ToolCallOutcome runAssistant(const IpcAssistantRunArgs& args);
 
@@ -39,6 +39,6 @@ private:
     std::unordered_map<std::string, std::vector<uint8_t>> fakeSegments;
 };
 
-std::unique_ptr<IZotopeIPCAssistant> createIZotopeIPCAssistant();
+std::unique_ptr<MorePhiIPCAssistant> createMorePhiIPCAssistant();
 
 } // namespace more_phi::standalone_mcp

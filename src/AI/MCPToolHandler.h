@@ -91,14 +91,14 @@ private:
      *  or set_parameters once the user confirms. Params: target_lufs (float, default -14). */
     static juce::String sonicmasterDecision(const juce::var& params, MorePhiProcessor& p);
 
-    // ── iZotope IPC Assistant tools ─────────────────────────────────────────
-    static juce::String izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcDetach(MorePhiProcessor& p);
-    static juce::String izotopeIpcStatus(MorePhiProcessor& p);
-    static juce::String izotopeIpcSnapshot(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcDump(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcCapture(const juce::var& params, MorePhiProcessor& p);
-    static juce::String ozoneRunAssistantIpc(const juce::var& params, MorePhiProcessor& p);
+    // ── IPC Assistant tools ─────────────────────────────────────────────────
+    static juce::String morePhiIpcAttach(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcDetach(MorePhiProcessor& p);
+    static juce::String morePhiIpcStatus(MorePhiProcessor& p);
+    static juce::String morePhiIpcSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcDump(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcCapture(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcRunAssistant(const juce::var& params, MorePhiProcessor& p);
 
     // ── Ozone Track Assistant tools (guide-aligned) ──────────────────────────
 

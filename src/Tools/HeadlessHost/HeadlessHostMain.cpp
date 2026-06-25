@@ -1,20 +1,21 @@
-// OzoneHeadlessHost — a GUI-initialized JUCE host that loads Ozone Pro, constructs
-// its AudioProcessorEditor (which instantiates the Master Assistant controller),
-// streams audio on a REAL high-priority audio thread, and runs a message loop so
-// the controller is ALIVE and Ozone sees genuine real-time streaming + isPlaying.
+// HeadlessHost — a GUI-initialized JUCE host that loads a VST3 plugin, constructs
+// its AudioProcessorEditor, streams audio on a REAL high-priority audio thread,
+// and runs a message loop so the plugin controller is ALIVE and sees genuine
+// real-time streaming + isPlaying.
 //
 // Why this exists: the stdio MorePhiMcpServer cannot bootstrap a JUCE
-// MessageManager (it deadlocks), so the Assistant controller is never
-// constructed there. A GUI-initialized process can. Streaming on a real audio
-// thread (not a message-thread Timer) is the hypothesis-tested route to make
-// Ozone's Master Assistant consider the signal valid and open its panel.
+// MessageManager (it deadlocks), so plugin controllers are never constructed
+// there. A GUI-initialized process can. Streaming on a real audio thread (not a
+// message-thread Timer) is the route to make a plugin's assistant/modal
+// controller consider the signal valid and open its panel.
 //
 // Env:
-//   OZONE_HOST_SECONDS  (default 45) — message-loop duration
-//   OZONE_AUDIO_FILE    (optional)   — WAV/AIFF looped as the stream (else synth)
-//   OZONE_BLOCK         (optional)   — block size (default 512)
+//   MOREPHI_HOST_SECONDS  (default 45) — message-loop duration
+//   MOREPHI_HOST_AUDIO_FILE (optional) — WAV/AIFF looped as the stream (else synth)
+//   MOREPHI_HOST_BLOCK     (optional) — block size (default 512)
+//   MOREPHI_HOST_PLUGIN    (optional) — path to VST3 to load (default iZotope Ozone Pro)
 //
-// Logs to stderr; prints OZONE_EDITOR_HWND=0x... for UI-automation drivers.
+// Logs to stderr; prints EDITOR_HWND=0x... for UI-automation drivers.
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -30,7 +31,7 @@
 namespace {
 void log(const juce::String& s)
 {
-    std::fprintf(stderr, "[OzoneHeadlessHost] %s\n", s.toRawUTF8());
+    std::fprintf(stderr, "[HeadlessHost] %s\n", s.toRawUTF8());
     std::fflush(stderr);
 }
 
@@ -57,7 +58,7 @@ int countTree(juce::Component* c)
 } // namespace
 
 // AudioPlayHead reporting a continuously-advancing, playing transport on the
-// audio thread. Rich PositionInfo so Ozone sees a well-formed streaming host.
+// audio thread. Rich PositionInfo so the target plugin sees a well-formed streaming host.
 struct HeadlessPlayHead : juce::AudioPlayHead
 {
     juce::AudioPlayHead::PositionInfo info;
@@ -86,7 +87,7 @@ struct HeadlessPlayHead : juce::AudioPlayHead
 
 // Real-time audio thread: fills a block, advances the playhead, calls
 // processBlock, then paces to the block's real-time duration. This is the
-// crucial change vs. the old message-thread Timer — Ozone now sees genuine
+// crucial change vs. the old message-thread Timer — the plugin now sees genuine
 // streaming audio delivered on a dedicated high-priority thread.
 struct RealtimeAudioThread : juce::Thread
 {
@@ -104,7 +105,7 @@ struct RealtimeAudioThread : juce::Thread
     std::atomic<long long> blocksProcessed { 0 };
 
     RealtimeAudioThread(double sr_, int bs_, int chans_)
-        : juce::Thread("OzoneHeadlessAudio"), buf(chans_, bs_), sr(sr_), bs(bs_) {}
+        : juce::Thread("HeadlessHostAudio"), buf(chans_, bs_), sr(sr_), bs(bs_) {}
 
     void fillBlock()
     {
@@ -172,8 +173,8 @@ struct RealtimeAudioThread : juce::Thread
 };
 
 // ponytail: real-audio-file streaming (juce_audio_formats module) deferred — the
-// real-time thread + synth signal is the hypothesis test; add file loading if
-// Ozone still rejects the synthetic stream.
+// real-time thread + synth signal is the initial approach; add file loading if
+// the target plugin still rejects the synthetic stream.
 
 int main()
 {
@@ -183,15 +184,21 @@ int main()
     log("JUCE GUI initialized.");
 
     const double sr = 44100.0;
-    const int bs = juce::SystemStats::getEnvironmentVariable("OZONE_BLOCK", "512").getIntValue();
+    const int bs = juce::SystemStats::getEnvironmentVariable("MOREPHI_HOST_BLOCK", "512").getIntValue();
     const int chans = 2;
 
     juce::AudioPluginFormatManager fm;
     fm.addDefaultFormats();
-    juce::File pluginFile(R"(C:\Program Files\Common Files\VST3\iZotope\Ozone Pro.vst3)");
+    auto pluginPath = juce::SystemStats::getEnvironmentVariable("MOREPHI_HOST_PLUGIN", "");
+    juce::File pluginFile;
+    if (pluginPath.isNotEmpty())
+        pluginFile = juce::File(pluginPath);
+    else
+        pluginFile = juce::File(R"(C:\Program Files\Common Files\VST3\iZotope\Ozone Pro.vst3)");
+
     if (! pluginFile.existsAsFile())
     {
-        log("Ozone Pro.vst3 not found.");
+        log("Plugin not found at: " + pluginFile.getFullPathName());
         return 1;
     }
 
@@ -211,10 +218,10 @@ int main()
         fm.createPluginInstance(*found.getFirst(), sr, bs, err));
     if (plugin == nullptr)
     {
-        log("Failed to load Ozone: " + err);
+        log("Failed to load plugin: " + err);
         return 1;
     }
-    log("Ozone loaded: " + plugin->getName());
+    log("Plugin loaded: " + plugin->getName());
 
     plugin->enableAllBuses();
     plugin->prepareToPlay(sr, bs);
@@ -229,13 +236,13 @@ int main()
         log("editor constructed: " + juce::String(editor->getWidth()) + "x"
             + juce::String(editor->getHeight()) + " components=" + juce::String(countTree(editor.get())));
         // Give the editor a real native HWND (offscreen) so Windows UI Automation
-        // can drive Ozone's Assistant controls with no human interaction.
+        // can drive the plugin's Assistant controls with no human interaction.
         editor->setTopLeftPosition(-32000, -32000);
         editor->addToDesktop(0);
         if (auto* peer = editor->getPeer())
         {
             auto hwnd = reinterpret_cast<intptr_t>(peer->getNativeHandle());
-            log("OZONE_EDITOR_HWND=0x" + juce::String::toHexString(hwnd));
+            log("EDITOR_HWND=0x" + juce::String::toHexString(hwnd));
         }
     }
 
@@ -253,7 +260,7 @@ int main()
 
     // Run the message loop (keeps editor timers + the controller alive) for the
     // configured duration; the audio thread streams concurrently.
-    int seconds = juce::SystemStats::getEnvironmentVariable("OZONE_HOST_SECONDS", "45").getIntValue();
+    int seconds = juce::SystemStats::getEnvironmentVariable("MOREPHI_HOST_SECONDS", "45").getIntValue();
     if (seconds <= 0)
         seconds = 45;
     log("running message loop for " + juce::String(seconds) + "s. Attach Frida / UI-automate now.");

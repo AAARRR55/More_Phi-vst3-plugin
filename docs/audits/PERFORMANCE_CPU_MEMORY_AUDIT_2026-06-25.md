@@ -26,7 +26,7 @@
 | 1 | Hoist the batched `getValue()` read into a single virtual-table-resolved call / cache `pluginParams` ptr-type | -5–15% processBlock CPU | Medium |
 | 2 | Add per-section p99 budget alarms + a `getProfilingReport()` MCP tool so live DAW sessions surface tail spikes | Observability (no direct CPU) | Low |
 | 3 | Replace `unordered_map<string, ProfileStats>` lookup-by-string on the audio path with index-by-int (C-16 adjacent) | -1–3% profiled-build CPU | Low |
-| 4 | Right-size `AudioCaptureRing` for 44.1/48 kHz hosts (8 s @ 192 kHz is 16 MiB; most hosts run ≤96 kHz) | -8–12 MiB resident | Low |
+| 4 | Right-size `AudioCaptureRing` for 44.1/48 kHz hosts (8 s @ 192 kHz is 16 MiB; most hosts run ≤96 kHz) | -8–12 MiB resident | Low | **DONE (PERF-MEM-RATE, 2026-07-16)** — now rate-proportional; ~4 MiB at 48 kHz. |
 | 5 | Wire `ComprehensiveProfilingHarness.cpp` in or delete it (currently orphaned — §10.1) | Compile-time / clarity | Trivial |
 
 ---
@@ -179,7 +179,7 @@ All sizes computed from source (`sizeof` + constexpr + heap allocations). Reconc
 
 | Component | Source | Size | Lazy? | Notes |
 |-----------|--------|------|-------|-------|
-| `AudioCaptureRing` | `AudioCaptureRing.h:39` (pow2 of 1,536,000 × 2 ch × 4 B) | **16.0 MiB** | ✅ `ensureRing()` on first `setActive`/`requestDecisionNow` | **Corrected from "12.3 MB"** — see §10.2. Exact: 16,777,216 B. |
+| `AudioCaptureRing` | `AudioCaptureRing.h:39` (pow2 of 8 s × actual sample rate × 2 ch × 4 B) | **~2–4 MiB @ 48 kHz; ~16 MiB @ 192 kHz** | ✅ `ensureRing()` on first `setActive`/`requestDecisionNow` | Now rate-proportional via PERF-MEM-RATE (2026-07-16). At 48 kHz: 8 × 48000 = 384k → pow2(524k) × 2 × 4 = 4.0 MiB. |
 | ORT model weights | `masteringbrain_v2_decision.onnx` | **3.36 MiB** | ✅ `SonicMasterDecisionRunner::loadModel` | 3,520,680 B on disk. |
 | ORT input buffer | `SonicMasterDecisionRunner.cpp` (2 × 262138 float) | **2.0 MiB** | ✅ part of session handle | 524,276 × 4 B = 2,097,104 B. |
 | ORT session/arena | ORT internal | ~1–3 MiB | ✅ | Allocator + graph optimization arena. |

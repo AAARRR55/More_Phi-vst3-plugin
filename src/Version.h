@@ -70,7 +70,7 @@ inline const ChangelogEntry CHANGELOG[] = {
         "- FIX: Editor lease RAII + unload-lifetime safety\n"
         "- FIX: Real REST LLM hardening (retry/backoff, schema validation, token accounting)\n"
         "- FIX: Honest AI labeling (online provider vs offline heuristic)\n"
-        "- FIX: State migration replaces stub (versioned transform chain)\n"
+        "- FIX: State migration: versioned transform chain (rejects pre-3.0.0; 3.3.0→3.4.0 normalizes legacy 'More-Phi' snapshot names to canonical 'MorePhi')\n"
         "- FIX: VST3 program/IUnitInfo preset surface\n"
         "- DOC: Corrected false AAX claim (only VST3 + AU are built; AAX is not)\n"
     },

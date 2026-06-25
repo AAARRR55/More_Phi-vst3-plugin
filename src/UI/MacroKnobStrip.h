@@ -18,6 +18,7 @@ public:
     explicit MacroKnobStrip(MorePhiProcessor& p);
     void resized() override;
     void paint(juce::Graphics& g) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 private:
     void timerCallback() override;

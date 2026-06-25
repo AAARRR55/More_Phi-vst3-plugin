@@ -16,6 +16,7 @@
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"   // brings in OzoneApplyBreakdown + MultiEffectPlan (Fix 6)
 #include <juce_core/juce_core.h>
+#include <cstdint>   // P3.10: std::uint64_t for plan ids
 
 namespace more_phi {
 
@@ -118,6 +119,9 @@ private:
     MorePhiProcessor&        processor_;
     const OzoneParameterMap& map_;
     int                      lastAppliedCount_ = 0;
+    // P3.10 (AUDIT): monotonic plan id stamped into each enqueuePlanBoundary so
+    // the audio thread's getLastDrainedPlanId() can confirm a full plan drained.
+    std::uint64_t            lastPlanId_ = 0;
     // AUDIT-FIX (Fix 6): populated by apply() via enqueueIfMapped. Cleared at the
     // start of each apply() so it always reflects the most recent call.
     OzoneApplyBreakdown      lastBreakdown_ {};

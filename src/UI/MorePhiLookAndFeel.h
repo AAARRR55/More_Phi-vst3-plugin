@@ -59,9 +59,10 @@ public:
     // Text
     const juce::Colour textPrimary     {0xffeeeef2};
     const juce::Colour textSecondary   {0xff8e8f95};
-    // L5: raised from 0xff5a5a60 (~2.9:1, fails WCAG AA) to ~0xff6e6e76 (~4.6:1)
-    // against the near-black surfaces. Used for the smallest captions.
-    const juce::Colour textDim         {0xff6e6e76};
+    // L5: raised from 0xff5a5a60 (~2.9:1, fails WCAG AA) to 0xff9a9aa2 (~5.2:1
+    // against backgroundDark 0xff070709), clearing WCAG AA for small text.
+    // Used for the smallest captions.
+    const juce::Colour textDim         {0xff9a9aa2};
 
     // Borders
     const juce::Colour borderColour    {0xff323237};
@@ -117,6 +118,13 @@ public:
 private:
     // Registers the embedded BinaryData fonts with JUCE exactly once.
     static void ensureFontsRegistered();
+
+    // R5: draws a 2px cyan focus ring around a component when it has keyboard
+    // focus. Called from the button/slider overrides below so every focusable
+    // control shows where it is (WCAG 2.4.7). No-op when unfocused, so it's
+    // cheap on the normal paint path.
+    void drawFocusRingIfFocused(juce::Graphics&, juce::Component&,
+                                juce::Rectangle<float> bounds) const;
 
     mutable float editorWidth_ = 920.0f;
 };

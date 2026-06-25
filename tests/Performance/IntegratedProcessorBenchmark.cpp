@@ -639,7 +639,7 @@ ScenarioResultSet scenarioCombinedOzone(const Config& cfg, int blockSize)
     juce::ScopedJuceInitialiser_GUI juceInit;
 
     // Discover the plugin description (message thread), using the proven
-    // findAllTypesForFile pattern from OzoneHeadlessHostMain.cpp.
+    // findAllTypesForFile pattern from HeadlessHostMain.cpp.
     juce::PluginDescription desc;
     {
         juce::AudioPluginFormatManager fm;

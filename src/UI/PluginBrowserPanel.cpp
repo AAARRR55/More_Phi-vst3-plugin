@@ -153,6 +153,39 @@ void PluginBrowserPanel::loadSelectedPlugin(const juce::PluginDescription& desc)
 {
     closePluginEditor();
 
+    // R2: loading a new plugin changes the parameter layout and forces a snapshot
+    // clear. Confirm ONLY when the user actually has snapshots to lose; an empty
+    // bank loads instantly as before. Cancel is the safe (non-default) choice.
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    const int occupiedCount = proc_.getSnapshotBank().getOccupiedSlots(occupied);
+    if (occupiedCount > 0)
+    {
+        // JUCE 8: synchronous modal APIs require JUCE_MODAL_LOOPS_PERMITTED,
+        // which is off for VST3 editors. Use the async showOkCancelBox with a
+        // callback; the actual load + snapshot-clear happens only if the user
+        // confirms (callback result == 1 == OK).
+        auto safeThis = juce::Component::SafePointer<PluginBrowserPanel>(this);
+        juce::NativeMessageBox::showOkCancelBox(
+            juce::MessageBoxIconType::WarningIcon,
+            "Replace plugin?",
+            "Loading \"" + desc.name + "\" will clear all " + juce::String(occupiedCount)
+                + " captured snapshot" + (occupiedCount == 1 ? "" : "s")
+                + " (the new plugin has different parameters).\n\nClick OK to load and clear snapshots.",
+            nullptr,
+            juce::ModalCallbackFunction::create(
+                [safeThis, desc](int result)
+                {
+                    if (safeThis != nullptr && result != 0)
+                        safeThis->performPluginLoad(desc);
+                }));
+        return;  // actual load deferred to the callback
+    }
+
+    performPluginLoad(desc);
+}
+
+void PluginBrowserPanel::performPluginLoad(const juce::PluginDescription& desc)
+{
     if (host_.loadPlugin(desc))
     {
         pluginNameLabel_.setText(desc.name, juce::dontSendNotification);
@@ -232,9 +265,12 @@ void PluginBrowserPanel::captureToNextSlot()
             return;
         }
     }
-    // All slots full — overwrite slot 0
-    proc_.captureSnapshotToSlot(0, true);
-    pluginNameLabel_.setText("Captured -> Slot 1 (overwrite)", juce::dontSendNotification);
+    // R3: all slots full — refuse to silently overwrite slot 1. Tell the user to
+    // free a slot first (right-click a dot on the MorphPad to capture over a
+    // specific slot deliberately).
+    pluginNameLabel_.setText("All 12 slots full — right-click a dot on the pad to replace a slot",
+                             juce::dontSendNotification);
+    pluginNameLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff9e596));
 }
 
 } // namespace more_phi

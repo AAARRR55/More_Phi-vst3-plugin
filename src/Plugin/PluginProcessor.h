@@ -41,6 +41,10 @@
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "AI/SonicMasterDecisionRunner.h"
 #include "AI/SonicMasterHttpInferenceSource.h"
+#if MORE_PHI_HAS_ONNX
+#include "SonicMasterModelHash.h"
+#include "BinaryData.h"
+#endif
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include "Licensing/LicenseManager.h"
@@ -54,8 +58,8 @@ namespace more_phi {
 class VST3IPCBridge;
 
 namespace standalone_mcp {
-class IZotopeIPCAssistant;
-class IZotopeIPCDiscovery;
+class MorePhiIPCAssistant;
+class MorePhiIPCDiscovery;
 }
 
 namespace agents {
@@ -139,8 +143,8 @@ public:
     const MCPServer&   getMCPServer() const                { return mcpServer; }
     VST3IPCBridge*     getVST3IPCBridge() noexcept         { return vst3IpcBridge_.get(); }
     const VST3IPCBridge* getVST3IPCBridge() const noexcept { return vst3IpcBridge_.get(); }
-    standalone_mcp::IZotopeIPCDiscovery& getIZotopeIPCDiscovery();
-    standalone_mcp::IZotopeIPCAssistant& getIZotopeIPCAssistant();
+    standalone_mcp::MorePhiIPCDiscovery& getMorePhiIPCDiscovery();
+    standalone_mcp::MorePhiIPCAssistant& getMorePhiIPCAssistant();
     const InstanceIdentity& getInstanceIdentity() const   { return instanceIdentity_; }
     licensing::LicenseRuntimeState& getLicenseRuntimeState() noexcept { return licenseRuntimeState_; }
     const licensing::LicenseRuntimeState& getLicenseRuntimeState() const noexcept { return licenseRuntimeState_; }
@@ -208,11 +212,33 @@ public:
         int   snapshotSlot = -1;        // Applicable if isSnapshotMarker is true
         ParameterEditSource source = ParameterEditSource::Unknown;
         bool  holdAgainstMorph = false;
+        // P3.10 (AUDIT): plan transaction marker. Set on the LAST command of a
+        // neural/AI plan so the audio-thread drain and observers can detect a
+        // partial apply (a plan enqueued but not fully drained when a new block
+        // boundary / snapshot recall interrupts it). Unlike isSnapshotMarker this
+        // does NOT block draining mid-plan — true cross-block all-or-nothing would
+        // require buffering the plan on the audio thread — but it makes a partial
+        // plan detectable so the assistant can re-issue or wait. planId lets a
+        // caller correlate the boundary with the plan it closed.
+        bool  isPlanBoundary = false;
+        std::uint64_t planId = 0;
     };
     bool enqueueParameterSet(int paramIndex,
                              float normalizedValue,
                              ParameterEditSource source = ParameterEditSource::UI,
                              bool holdAgainstMorph = true);
+    // P3.10 (AUDIT): enqueue a plan-transaction boundary marker as the LAST
+    // command of an AI/neural plan. Returns true if pushed. The audio-thread drain
+    // pops it like any command (it carries paramIndex=-1 so it writes nothing) and
+    // bumps lastDrainedPlanId_ so callers can detect that a full plan committed.
+    bool enqueuePlanBoundary(std::uint64_t planId,
+                             ParameterEditSource source = ParameterEditSource::MCP);
+    // P3.10: id of the most recent plan boundary the audio thread drained.
+    // 0 before any plan drained. Read from any thread (atomic). A caller that
+    // enqueued a plan can compare its planId to this to detect a partial apply
+    // (enqueued but not yet drained) without polling the queue depth.
+    [[nodiscard]] std::uint64_t getLastDrainedPlanId() const noexcept
+    { return lastDrainedPlanId_.load(std::memory_order_acquire); }
     bool enqueueParameterBatch(const std::vector<ParamCommand>& commands);
     int enqueueParameterState(const std::vector<float>& normalizedValues,
                               ParameterEditSource source = ParameterEditSource::UI,
@@ -489,11 +515,16 @@ private:
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
     std::unique_ptr<VST3IPCBridge> vst3IpcBridge_;
-    std::unique_ptr<standalone_mcp::IZotopeIPCDiscovery> ipcDiscovery_;
-    std::unique_ptr<standalone_mcp::IZotopeIPCAssistant> ipcAssistant_;
+    std::unique_ptr<standalone_mcp::MorePhiIPCDiscovery> ipcDiscovery_;
+    std::unique_ptr<standalone_mcp::MorePhiIPCAssistant> ipcAssistant_;
     LinkBroadcaster    linkBroadcaster_;
     InstanceIdentity   instanceIdentity_;
     juce::uint64       processorGenerationToken_ = 0;
+    // P3.10 (AUDIT): id of the last plan-boundary command drained on the audio
+    // thread. Written (release) when the drain pops an isPlanBoundary command,
+    // read (acquire) by getLastDrainedPlanId(). Lets a caller detect that a full
+    // AI/neural plan committed vs. is still partial in the queue.
+    std::atomic<std::uint64_t> lastDrainedPlanId_ { 0 };
     licensing::LicenseRuntimeState licenseRuntimeState_;
     // L-5 FIX: shared_ptr so detached refresh threads can safely extend the
     // manager's lifetime past processor destruction.
