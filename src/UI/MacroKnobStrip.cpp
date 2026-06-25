@@ -44,7 +44,7 @@ MacroKnobStrip::MacroKnobStrip(MorePhiProcessor& p) : proc_(p)
         labels_[i].setFont(MorePhiLookAndFeel::bodyFont(10.0f));
         labels_[i].setColour(juce::Label::textColourId, Theme::Colours::textDim());
         labels_[i].setJustificationType(juce::Justification::centred);
-        labels_[i].setText("P" + juce::String(i + 1), juce::dontSendNotification);
+        labels_[i].setText("--", juce::dontSendNotification);
         addAndMakeVisible(labels_[i]);
     }
 
@@ -105,7 +105,7 @@ void MacroKnobStrip::syncKnobsToPlugin()
         {
             knobs_[i].setEnabled(false);
             knobs_[i].setTooltip("No hosted parameter assigned to this macro");
-            labels_[i].setText("-", juce::dontSendNotification);
+            labels_[i].setText("--", juce::dontSendNotification);
         }
     }
     syncing_ = false;

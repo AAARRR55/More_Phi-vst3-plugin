@@ -41,7 +41,9 @@ static const juce::Colour textSecondary { 0xff8e8f95 };
 
 static juce::StringArray buildSourceNames()
 {
-    // Show first 8 Macros only (Macro_1 .. Macro_8) to fit space.
+    // L2: only Macros 1–8 are exposed in the source combo for space; the engine
+    // also defines Macros 9–16 (see sourceIdFromComboIndex) but they have no UI
+    // surface yet. Adding them would extend both this list and the index map.
     return {
         "LFO 1", "LFO 2", "LFO 3", "LFO 4",
         "Env 1", "Env 2",
@@ -145,13 +147,19 @@ RouteRow::RouteRow(int routeId, MorePhiProcessor& proc)
 
     // --- Depth knob (bipolar rotary) ---
     depthKnob_.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    depthKnob_.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    depthKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, true, 30, 12);
     depthKnob_.setRange(-1.0, 1.0, 0.001);
     depthKnob_.setValue(0.0, juce::dontSendNotification);
     depthKnob_.setColour(juce::Slider::rotarySliderFillColourId,    colours::activeAccent);
     depthKnob_.setColour(juce::Slider::rotarySliderOutlineColourId, colours::border);
     depthKnob_.setColour(juce::Slider::thumbColourId,               colours::activeAccent);
+    depthKnob_.setColour(juce::Slider::textBoxTextColourId,         colours::comboText);
+    depthKnob_.setColour(juce::Slider::textBoxOutlineColourId,      juce::Colours::transparentBlack);
     depthKnob_.setTooltip("Modulation depth [-1.0, +1.0]");
+    depthKnob_.textFromValueFunction = [](double v) {
+        int pct = juce::roundToInt(v * 100.0);
+        return (pct >= 0 ? "+" : "") + juce::String(pct) + "%";
+    };
     depthKnob_.onValueChange = [this] { onDepthChanged(); };
     addAndMakeVisible(depthKnob_);
 
@@ -377,6 +385,19 @@ ModulationMatrixPanel::ModulationMatrixPanel(MorePhiProcessor& proc)
     routeListHeader_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(routeListHeader_);
 
+    // C1: column headers describing each row's widgets (Enable/Source/Dest/Depth).
+    const auto setupColHeader = [this](juce::Label& lbl, const juce::String& text)
+    {
+        lbl.setText(text, juce::dontSendNotification);
+        lbl.setFont(MorePhiLookAndFeel::bodyFont(9.0f));
+        lbl.setColour(juce::Label::textColourId, colours::textSecondary);
+        lbl.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(lbl);
+    };
+    setupColHeader(colSourceHeader_, "Source");
+    setupColHeader(colDestHeader_,   "Destination");
+    setupColHeader(colDepthHeader_,  "Depth");
+
     // ---- Viewport + container ----
     routeViewport_.setViewedComponent(&routeContainer_, false);
     routeViewport_.setScrollBarsShown(true, false);
@@ -441,9 +462,15 @@ void ModulationMatrixPanel::paint(juce::Graphics& g)
     g.drawLine(static_cast<float>(dividerX), 0.0f,
                static_cast<float>(dividerX), static_cast<float>(getHeight()), 0.5f);
 
-    // Alternate-row tinting inside the route container is handled per-row in
-    // RouteRow::paint; we draw it here via the container background instead.
-    // (See rebuildRouteRows for per-row colouring.)
+    // C3: empty-state hint when there are no routes (was a bare blank area).
+    if (routeRows_.empty())
+    {
+        g.setFont(MorePhiLookAndFeel::bodyFont(11.0f));
+        g.setColour(colours::textSecondary);
+        g.drawText("No modulation routes yet. Click \"Add Route\" to start.",
+                   8, 22, dividerX - 16, 24,
+                   juce::Justification::centredLeft);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -465,6 +492,23 @@ void ModulationMatrixPanel::resized()
     // Header label
     routeListHeader_.setBounds(leftArea.removeFromTop(16));
     leftArea.removeFromTop(2);
+
+    // C1: column-header row mirroring RouteRow's column geometry
+    // (enable 20, gap 4, source ~1/3, gap 4, dest fill, gap 4, depth 34-42).
+    {
+        auto headerArea = leftArea.removeFromTop(14);
+        leftArea.removeFromTop(2);
+        headerArea.removeFromLeft(20);  // enable column (unlabeled checkbox)
+        headerArea.removeFromLeft(4);
+        const int depthW = juce::jlimit(34, 42, headerArea.getWidth() / 8);
+        const int sourceW = juce::jlimit(76, 120, headerArea.getWidth() / 3);
+        colSourceHeader_.setBounds(headerArea.removeFromLeft(sourceW));
+        headerArea.removeFromLeft(4);
+        colDestHeader_.setBounds(headerArea.removeFromLeft(
+            juce::jmax(70, headerArea.getWidth() - depthW - 4)));
+        headerArea.removeFromLeft(4);
+        colDepthHeader_.setBounds(headerArea.removeFromLeft(depthW));
+    }
 
     // Bottom strip: [Add Route 70] [4] [Remove 60] [4] [Clear All 60] [4] [count label rest]
     auto bottomStrip = leftArea.removeFromBottom(24);

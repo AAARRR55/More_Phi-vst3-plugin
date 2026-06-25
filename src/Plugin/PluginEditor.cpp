@@ -34,6 +34,21 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");
     openPluginBtn_.setTooltip("Open the hosted plugin editor in a separate window.");
 
+    // ── Bypass (title bar) ─────────────────────────────────────────────────────
+    bypassBtn_.setClickingTogglesState(true);
+    bypassBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    bypassBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentCoral);
+    bypassBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    bypassBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    bypassBtn_.setTooltip("Bypass: disable all More-Phi processing and pass audio through unchanged.");
+    if (auto* param = processor.getAPVTS().getParameter("bypass"))
+    {
+        bypassBtn_.onClick = [this, param]() {
+            param->setValueNotifyingHost(bypassBtn_.getToggleState() ? 1.0f : 0.0f);
+        };
+    }
+    addAndMakeVisible(bypassBtn_);
+
     // ── Always-visible components ──────────────────────────────────────────────
     addAndMakeVisible(morphPad);
     addAndMakeVisible(snapFader);
@@ -234,6 +249,10 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("v3.3.0", titleTextArea.removeFromLeft(72).translated(0, 1),
                juce::Justification::centredLeft, false);
 
+    // Bypass button (right side of title bar, before meter)
+    auto bypassArea = titleArea.removeFromRight(80).reduced(6, 12);
+    bypassBtn_.setBounds(bypassArea);
+
     // RMS meter — uses the eased level updated in timerCallback() for a smooth glide
     auto meterArea = titleArea.removeFromRight(120).reduced(10, 14);
     float dbLevel = juce::jlimit(0.0f, 1.0f, smoothedDbLevel_);
@@ -278,6 +297,15 @@ void MorePhiEditor::paint(juce::Graphics& g)
     // Title bar border
     g.setColour(lnf.borderColour);
     g.drawLine(0, 48, static_cast<float>(getWidth()), 48, 1.0f);
+
+    // SonicMaster panel background
+    if (sonicMasterRowBounds_.getWidth() > 0)
+    {
+        g.setColour(lnf.surfaceColour.withAlpha(0.85f));
+        g.fillRoundedRectangle(sonicMasterRowBounds_.toFloat().reduced(4, 2), 4.0f);
+        g.setColour(lnf.borderColour);
+        g.drawRoundedRectangle(sonicMasterRowBounds_.toFloat().reduced(4, 2), 4.0f, 0.5f);
+    }
 }
 
 void MorePhiEditor::resized()
@@ -293,12 +321,12 @@ void MorePhiEditor::resized()
     // Deactivate License — moved to bottom bar for less visual intrusion
     // (positioned later, next to AI status)
 
-    // Parameter panel (right side, togglable)
-    const int paramWidth = paramPanelVisible_
-        ? juce::jlimit(240, 320, getWidth() / 3)
-        : 0;
+    // Parameter panel (overlay — floats on top, doesn't push content)
     if (paramPanelVisible_)
-        paramPanel.setBounds(area.removeFromRight(paramWidth));
+    {
+        const int pw = juce::jlimit(240, 320, getWidth() / 3);
+        paramPanel.setBounds(getWidth() - pw - 8, area.getY(), pw, area.getHeight());
+    }
 
     // Plugin browser row (FlexBox row) — 42px tall
     {
@@ -321,9 +349,9 @@ void MorePhiEditor::resized()
     }
 
     // ── SonicMaster neural-mastering toggle + status (just above AI bar) ───────
-    auto sonicRow = area.removeFromBottom(28);
-    sonicMasterToggle_.setBounds(sonicRow.removeFromLeft(200));
-    sonicMasterStatus_.setBounds(sonicRow);
+    sonicMasterRowBounds_ = area.removeFromBottom(30);
+    sonicMasterToggle_.setBounds(sonicMasterRowBounds_.removeFromLeft(200).reduced(4, 2));
+    sonicMasterStatus_.setBounds(sonicMasterRowBounds_.reduced(4, 2));
 
     // ── Tab bar ────────────────────────────────────────────────────────────────
     const bool compactWidth = area.getWidth() < 760;
@@ -339,8 +367,8 @@ void MorePhiEditor::resized()
     // 3px gap between tab content and tab bar
     area.removeFromBottom(3);
 
-    // Tab bar (28px, above gap)
-    auto tabBarArea = area.removeFromBottom(28);
+    // Tab bar (32px — L4: comfortable touch/high-DPI hit target; was 28)
+    auto tabBarArea = area.removeFromBottom(32);
     tabBar_.setBounds(tabBarArea);
 
     // ── Main area: Snap fader + square MorphPad ────────────────────────────────
@@ -482,6 +510,11 @@ void MorePhiEditor::timerCallback()
         lastDbLevel_ = smoothedDbLevel_;
         repaint(0, 0, getWidth(), 48);
     }
+
+    // Mirror bypass state from APVTS into title-bar button
+    if (auto* bp = dynamic_cast<juce::AudioParameterBool*>(
+            processor.getAPVTS().getParameter("bypass")))
+        bypassBtn_.setToggleState(bp->get(), juce::dontSendNotification);
 
     // Throttled refresh of the SonicMaster toggle + status (cheap atomic reads).
     refreshSonicMasterStatus();

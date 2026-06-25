@@ -117,10 +117,10 @@ bool RealtimeSpectrumAnalyzer::getSnapshot(SpectrumSnapshot& out) const noexcept
 
 void RealtimeSpectrumAnalyzer::processFrame() noexcept
 {
-    // AUDIT-FIX: Write windowed samples in JUCE's interleaved real/imag format.
-    // Previously samples were packed contiguously (scratch[i]=x[i]) which JUCE's
-    // performRealOnlyForwardTransform interprets as x[0]=real[0], x[1]=imag[0],
-    // x[2]=real[1], ... — corrupting the entire spectrum from bin 0 upward.
+    // JUCE's performRealOnlyForwardTransform expects fftSize_ contiguous real
+    // samples as input (not interleaved). The output is packed in JUCE's
+    // real-only format: output[0]=DC, output[1]=real[1], output[2]=imag[1],
+    // output[3]=real[2], output[4]=imag[2], ..., output[N-1]=Nyquist.
     // AUDIT-FIX (M2): also keep an UN-WINDOWED copy (rawFrame_) so peak/RMS/crest
     // are measured on the true signal, not the Hann-attenuated frame.
     for (int i = 0; i < fftSize_; ++i)
@@ -130,11 +130,8 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
         rawFrame_[static_cast<size_t>(i)] = raw;
         const float sample = raw * window_[static_cast<size_t>(i)];
         linearFrame_[static_cast<size_t>(i)] = sample;
-        fftScratch_[static_cast<size_t>(i * 2)]     = sample;   // real
-        fftScratch_[static_cast<size_t>(i * 2 + 1)] = 0.0f;     // imag = 0 (purely real input)
+        fftScratch_[static_cast<size_t>(i)] = sample;                // contiguous real input
     }
-    // The loop above now fills the entire fftScratch_ (positions 0..2*fftSize_-1),
-    // so the old trailing-zero fill is no longer needed.
 
     fft_->performRealOnlyForwardTransform(fftScratch_.data(), true);
 
@@ -165,8 +162,29 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     int fluxCount = 0;
     for (int bin = 0; bin < numBins_; ++bin)
     {
-        const float real = fftScratch_[static_cast<size_t>(bin * 2)];
-        const float imag = fftScratch_[static_cast<size_t>(bin * 2 + 1)];
+        // JUCE's real-only FFT output format:
+        //   output[0] = DC real    (imag always 0)
+        //   output[1] = real[1], output[2] = imag[1]
+        //   output[3] = real[2], output[4] = imag[2]
+        //   ...
+        //   output[2k-1] = real[k], output[2k] = imag[k]  for 1 <= k < N/2
+        //   output[N-1] = Nyquist real  (imag always 0)
+        float real, imag;
+        if (bin == 0)
+        {
+            real = fftScratch_[0];
+            imag = 0.0f;
+        }
+        else if (bin == numBins_ - 1)
+        {
+            real = fftScratch_[static_cast<size_t>(fftSize_ - 1)];
+            imag = 0.0f;
+        }
+        else
+        {
+            real = fftScratch_[static_cast<size_t>(2 * bin - 1)];
+            imag = fftScratch_[static_cast<size_t>(2 * bin)];
+        }
 
         const float mag = std::sqrt(real * real + imag * imag) / static_cast<float>(fftSize_);
         const float energy = mag * mag;
@@ -265,10 +283,18 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
 
 void RealtimeSpectrumAnalyzer::publishSnapshot(const SpectrumSnapshot& snapshot) noexcept
 {
+    // AUDIT-FIX (A4): mirror the C2-FIX pattern from StereoFieldAnalyzer. A plain
+    // release store does NOT prevent the snapshot copy from being hoisted above
+    // the odd-marker store on weakly-ordered CPUs (ARM/Apple Silicon), which
+    // lets a reader observe a torn snapshot through an even version. The
+    // explicit thread_fence(release) guarantees the publisher's prior writes are
+    // visible before the version flips odd->even.
     const auto before = version_.load(std::memory_order_relaxed);
-    version_.store(before + 1u, std::memory_order_release);
+    version_.store(before + 1u, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
     publishedSnapshot_ = snapshot;
-    version_.store(before + 2u, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
+    version_.store(before + 2u, std::memory_order_relaxed);
 }
 
 void RealtimeSpectrumAnalyzer::computeHannWindow() noexcept

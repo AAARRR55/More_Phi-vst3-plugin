@@ -165,9 +165,39 @@ public:
     [[nodiscard]] bool hasLastSafeNeuralMasteringPlan() const noexcept { return hasLastSafeNeuralPlan_; }
     [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept { return lastSafeNeuralPlan_; }
 
+    // AUDIT CRITICAL-6/7/17: the neural plan is bridged to the hosted plugin via
+    // the OzonePlanApplicator path (chainPlanner_.applyPlan forwards the plan to
+    // whatever mastering plugin is loaded). Returns the parameter-enqueue count
+    // from the last apply (>0 means the hosted plugin actually received writes),
+    // or -1 when no applicator is registered / no apply has run. Read from any
+    // thread (atomic).
+    [[nodiscard]] int getLastOzoneAppliedCount() const noexcept { return lastOzoneAppliedCount_.load(std::memory_order_acquire); }
+
+    // True when the last neural apply reached an audible path: either the
+    // internal chain is active, or the Ozone applicator wrote at least one
+    // parameter. SonicMasterAnalysisEngine uses this to distinguish Applied from
+    // AppliedNoAudioPath.
+    [[nodiscard]] bool lastApplyReachedAudioPath() const noexcept
+    {
+        return isActive() || getLastOzoneAppliedCount() > 0;
+    }
+
+    // ── State persistence (MED-11: survive save/restore) ────────────────────
+    // Serializes the last applied neural plan (if any) as a MASTERING_PLAN child
+    // of `parent`. No-op when no plan is held. Message thread only.
+    void serializeLastPlan(juce::XmlElement& parent) const;
+    // Restores a previously serialized plan. Returns true on success. Safe to
+    // call when no MASTERING_PLAN element exists (no-op, returns false).
+    bool restoreLastPlan(const juce::XmlElement& parent);
+
 private:
     void timerCallback() override;
     void applyPlan(const MultiEffectPlan& plan);
+    // AUDIT CRITICAL-7: convert a neural plan into the MultiEffectPlan the
+    // OzonePlanApplicator consumes. Kept as a member so it can read the engine's
+    // current stereo/limiter state to fill fields the neural plan leaves at
+    // defaults. Message thread only.
+    MultiEffectPlan buildBridgePlanFromNeural(const ValidatedNeuralMasteringPlan& plan) const noexcept;
     void updateAnalysisWindow(const juce::AudioBuffer<float>& buf) noexcept;
     void sumBands(juce::AudioBuffer<float> bands[MultibandSplitter::kNumBands],
                   juce::AudioBuffer<float>& out) noexcept;
@@ -217,6 +247,9 @@ private:
     float smoothedSpectralTilt_ = 0.0f;
     ValidatedNeuralMasteringPlan lastSafeNeuralPlan_ {};
     bool hasLastSafeNeuralPlan_ = false;
+    // AUDIT CRITICAL-7: count of hosted-plugin parameters written by the last
+    // neural→Ozone bridge apply. -1 = no applicator / not yet applied.
+    std::atomic<int> lastOzoneAppliedCount_ { -1 };
 };
 
 } // namespace more_phi

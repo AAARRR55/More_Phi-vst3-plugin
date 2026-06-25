@@ -8,7 +8,6 @@
 #include "AI/SonicMasterDecisionRunner.h"
 
 #include <algorithm>
-#include <fstream>
 #include <numeric>
 
 #ifndef MORE_PHI_HAS_ONNX
@@ -17,7 +16,6 @@
 
 #if MORE_PHI_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
-#include <nlohmann/json.hpp>
 #endif
 
 namespace more_phi {
@@ -42,22 +40,15 @@ struct SonicMasterSessionHandle {};
 SonicMasterDecisionRunner::SonicMasterDecisionRunner() noexcept = default;
 SonicMasterDecisionRunner::~SonicMasterDecisionRunner() = default;
 
-bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::string_view contractPath)
+bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath)
 {
     unloadModel();
 
     if (modelPath.empty()) return false;
 
 #if !MORE_PHI_HAS_ONNX
-    (void) contractPath;
     return false;
 #else
-    // ── Read the contract JSON (I/O shapes/names the runner validates) ──────
-    std::ifstream cf(std::string { contractPath });
-    if (!cf.good()) return false;
-    nlohmann::json contract = nlohmann::json::parse(cf, nullptr, /*allow_exceptions=*/false);
-    if (contract.is_discarded()) return false;
-
     try
     {
         session_ = std::make_unique<SonicMasterSessionHandle>();

@@ -699,6 +699,60 @@ TEST_CASE("MorphProcessor: produces consistent output across varying block sizes
     }
 }
 
+TEST_CASE("MorphProcessor: Direct mode applies a minimum de-zipper (no full-vector jump)",
+          "[morph][direct][c4]")
+{
+    // C-4 FIX (audit): Direct mode used to skip smoothing entirely, so a
+    // discontinuous cursor move produced a full-vector jump in one block →
+    // click on unsmoothed hosted params. The fix guarantees a minimum ~2 ms
+    // one-pole de-zipper in Direct mode REGARDLESS of the user's smoothing
+    // setting (even when setSmoothingRate(0)). This test pins the invariant
+    // at a SMALL block size (32 / 48 k ≈ 0.667 ms < tau 2 ms): a single
+    // block after a maximal jump must move only partway toward the target
+    // (not snap to it), and must converge within a bounded number of blocks.
+    const int paramCount = 4;
+
+    SnapshotBank bank;
+    bank.prepare(paramCount);
+    // Snapshot 0 = all-zero, snapshot 6 = all-one. A fader move 0→1 is a
+    // maximal discontinuity (0.0 → 1.0 on every parameter).
+    std::vector<float> vA(paramCount, 0.0f);
+    std::vector<float> vB(paramCount, 1.0f);
+    bank.captureValues(0, vA);
+    bank.captureValues(6, vB);
+
+    MorphProcessor proc(bank);
+    proc.prepare(paramCount);
+    // User explicitly disabled smoothing — Direct mode must STILL de-zipper.
+    proc.setSmoothingRate(0.0f);
+
+    std::vector<float> out(paramCount, 0.0f);
+    const float dt = 32.0f / 48000.0f;   // ~0.667 ms — smaller than the 2 ms tau
+
+    // Park the cursor at slot 0 (target = 0.0) so the internal smoother
+    // settles at 0.0 before the jump.
+    for (int i = 0; i < 20; ++i)
+        proc.process(0.5f, 0.5f, 0.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+        REQUIRE(v == Approx(0.0f).margin(1e-4f));
+
+    // Single block after the maximal jump: the de-zipper must be active, so
+    // the output is strictly between 0 and target — NOT snapped to 1.0.
+    proc.process(0.5f, 0.5f, 1.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+    {
+        INFO("Direct-mode single-block output after jump: " << v);
+        REQUIRE(v > 0.0f);     // it moved
+        REQUIRE(v < 0.99f);    // but NOT all the way in one small block
+    }
+
+    // And it must converge to the target (1.0) within a bounded block count.
+    for (int i = 0; i < 400; ++i)
+        proc.process(0.5f, 0.5f, 1.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+        REQUIRE(v == Approx(1.0f).margin(1e-3f));
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Latency Calculation

@@ -28,7 +28,7 @@ int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
     // every plan field writes nothing — callers deserve to know.
     if (!map_.hasAnyMapping())
     {
-        juce::Logger::writeToLog(
+        DBG(
             "OzonePlanApplicator: WARNING — parameter map is all-stubs; "
             "no Ozone parameters will be set. Run audit_ozone_parameters(apply=true) "
             "against the hosted plugin to populate the map.");

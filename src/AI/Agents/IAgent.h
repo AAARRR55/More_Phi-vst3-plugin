@@ -36,6 +36,13 @@ enum class AgentState
     Stopped,
     Failed
 };
+// L4 NOTE: agents currently only emit Idle/Busy/Stopped in practice. Draining
+// is unused, and Failed is never stored even when execute() returns
+// success=false (the failure is surfaced via AgentResult.errorCode + the
+// agent-task-failed blackboard event instead). describeState() does not
+// propagate per-agent state() either. So this enum is currently advisory only.
+// If/when an operator dashboard needs failed-agent visibility, wire Failed into
+// the failure path and surface state() in describeState — until then leave as-is.
 
 enum class TaskPriority
 {

@@ -14,6 +14,12 @@
 
 namespace more_phi {
 
+// Single thread_local scratch buffer shared by all capture/recall functions.
+// Thread_local guarantees no data races across threads; using one buffer
+// instead of five saves ~32 KB per thread (~128 KB across 4 threads).
+// Not re-entrant (none of these functions call each other), so one is safe.
+thread_local std::array<float, MAX_PARAMETERS> tlsScratch;
+
 void SnapshotBank::prepare(int maxParamCount)
 {
     WriteScope write(*this);
@@ -28,13 +34,10 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     const int count = bridge.getParameterCount();
     if (count == 0) return;
 
-    // FIX C5: thread_local scratch buffer — no shared state across UI/MCP/audio threads.
-    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
-
     const int prepared = preparedParamCount_.load(std::memory_order_acquire);
     const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit);
-    captureScratch.fill(0.0f);
+    tlsScratch.fill(0.0f);
 
     // PERF-C1+BATCH: Read parameter values AND names via single plugin
     // acquisitions (captureAllNormalized / captureAllNames) instead of one
@@ -42,13 +45,13 @@ void SnapshotBank::capture(int slot, const IParameterBridge& bridge)
     // cuts ~4096 atomic lock cycles to 2 per capture — the contention the
     // PERF-C1 comment blamed for FL Studio stalls. Both reads stay OUTSIDE
     // the WriteScope (do not regress the seqlock-writer hold-time invariant).
-    bridge.captureAllNormalized(captureScratch.data(), safeCount);
+    bridge.captureAllNormalized(tlsScratch.data(), safeCount);
 
     juce::StringArray namesCapture;
     bridge.captureAllNames(namesCapture, safeCount);
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch.data(), safeCount);
+    (*slots_)[slot].capture(tlsScratch.data(), safeCount);
 
     paramNames_[slot] = std::move(namesCapture);
 }
@@ -58,17 +61,14 @@ void SnapshotBank::captureValues(int slot, const std::vector<float>& values)
     if (slot < 0 || slot >= NUM_SLOTS) return;
     if (values.empty()) return;
 
-    // FIX C5: thread_local scratch buffer.
-    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
-
     const int prepared = preparedParamCount_.load(std::memory_order_acquire);
     const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(static_cast<int>(values.size()), limit);
-    captureScratch.fill(0.0f);
-    std::copy_n(values.begin(), static_cast<size_t>(safeCount), captureScratch.begin());
+    tlsScratch.fill(0.0f);
+    std::copy_n(values.begin(), static_cast<size_t>(safeCount), tlsScratch.begin());
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch.data(), safeCount);
+    (*slots_)[slot].capture(tlsScratch.data(), safeCount);
 }
 
 void SnapshotBank::captureValuesWithNames(int slot,
@@ -79,14 +79,12 @@ void SnapshotBank::captureValuesWithNames(int slot,
     if (slot < 0 || slot >= NUM_SLOTS) return;
     if (values == nullptr || count <= 0) return;
 
-    thread_local std::array<float, MAX_PARAMETERS> captureScratch;
-
     const int prepared = preparedParamCount_.load(std::memory_order_acquire);
     const int limit = (prepared > 0) ? prepared : MAX_PARAMETERS;
     const int safeCount = juce::jmin(count, limit, MAX_PARAMETERS);
 
-    captureScratch.fill(0.0f);
-    std::copy_n(values, static_cast<size_t>(safeCount), captureScratch.begin());
+    tlsScratch.fill(0.0f);
+    std::copy_n(values, static_cast<size_t>(safeCount), tlsScratch.begin());
 
     // PERF-C1: Prepare names before WriteScope — StringArray::add/clear can
     // heap-allocate, and the names input is already available outside the lock.
@@ -96,7 +94,7 @@ void SnapshotBank::captureValuesWithNames(int slot,
         namesCapture.add(names[i]);
 
     WriteScope write(*this);
-    (*slots_)[slot].capture(captureScratch.data(), safeCount);
+    (*slots_)[slot].capture(tlsScratch.data(), safeCount);
     paramNames_[slot] = std::move(namesCapture);
 }
 
@@ -106,33 +104,24 @@ void SnapshotBank::recall(int slot, IParameterBridge& bridge) const
 
     int parameterCount = 0;
 
-    // FIX C5: thread_local scratch buffer.
-    thread_local std::array<float, MAX_PARAMETERS> recallScratch;
-
-    // Use pre-allocated scratch buffer instead of stack-local array (8 KB)
-    if (!copySlotValues(slot, recallScratch.data(), parameterCount))
+    if (!copySlotValues(slot, tlsScratch.data(), parameterCount))
         return;
 
     if (parameterCount > 0)
-        bridge.applyParameterState(recallScratch.data(), parameterCount);
+        bridge.applyParameterState(tlsScratch.data(), parameterCount);
 }
 
 void SnapshotBank::recallFast(int slot, IParameterBridge& bridge) const
 {
-    // Same as recall() — applies normalized float params only.
-    // Never applies opaque state chunks, so synthesizer notes sustain.
     if (slot < 0 || slot >= NUM_SLOTS) return;
 
     int parameterCount = 0;
 
-    // FIX C5: thread_local scratch buffer.
-    thread_local std::array<float, MAX_PARAMETERS> recallScratch;
-
-    if (!copySlotValues(slot, recallScratch.data(), parameterCount))
+    if (!copySlotValues(slot, tlsScratch.data(), parameterCount))
         return;
 
     if (parameterCount > 0)
-        bridge.applyParameterState(recallScratch.data(), parameterCount);
+        bridge.applyParameterState(tlsScratch.data(), parameterCount);
 }
 
 bool SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin)
@@ -146,21 +135,30 @@ bool SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin
     }
     catch (const std::exception& e)
     {
-        juce::Logger::writeToLog("SnapshotBank::captureStateChunk — getStateInformation failed: "
+#if JUCE_DEBUG
+        DBG("SnapshotBank::captureStateChunk — getStateInformation failed: "
             + juce::String(e.what()));
+#endif
         return false;
     }
     catch (...)
     {
-        juce::Logger::writeToLog("SnapshotBank::captureStateChunk — getStateInformation failed: unknown exception");
+#if JUCE_DEBUG
+        DBG("SnapshotBank::captureStateChunk — getStateInformation failed: unknown exception");
+#endif
         return false;
     }
 
-    // CRITICAL (Finding 4): Protect stateChunks_ write with chunksLock_.
+    // Phase 7: cache the plugin UID from the hosted plugin description
+    // Lock order: WriteScope (writeLock_) → chunksLock_ (consistent with fromXml).
+    const juce::PluginDescription& desc = plugin->getPluginDescription();
+    const juce::String uid = desc.name + "|" + desc.manufacturerName;
+
     WriteScope write(*this);
     {
         const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
         stateChunks_[static_cast<size_t>(slot)] = std::move(chunk);
+        cachedPluginUID_[static_cast<size_t>(slot)] = uid;
     }
     return true;
 }
@@ -197,13 +195,17 @@ bool SnapshotBank::recallStateChunk(int slot, juce::AudioPluginInstance* plugin)
         }
         catch (const std::exception& e)
         {
-            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: "
+#if JUCE_DEBUG
+            DBG("SnapshotBank::recallStateChunk — setStateInformation failed: "
                 + juce::String(e.what()));
+#endif
             return false;
         }
         catch (...)
         {
-            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+#if JUCE_DEBUG
+            DBG("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+#endif
             return false;
         }
     }
@@ -232,13 +234,17 @@ bool SnapshotBank::recallStateChunk(int slot, juce::AudioProcessor* plugin) cons
         }
         catch (const std::exception& e)
         {
-            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: "
+#if JUCE_DEBUG
+            DBG("SnapshotBank::recallStateChunk — setStateInformation failed: "
                 + juce::String(e.what()));
+#endif
             return false;
         }
         catch (...)
         {
-            juce::Logger::writeToLog("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+#if JUCE_DEBUG
+            DBG("SnapshotBank::recallStateChunk — setStateInformation failed: unknown exception");
+#endif
             return false;
         }
     }
@@ -367,6 +373,47 @@ bool SnapshotBank::hasStateChunk(int slot) const
     return copyStateChunkInternal(slot, chunk);
 }
 
+// ── Gravity Wells ───────────────────────────────────────────────────────────────
+
+void SnapshotBank::setMass(int slot, float mass)
+{
+    if (slot < 0 || slot >= NUM_SLOTS) return;
+    WriteScope write(*this);
+    (*slots_)[slot].mass = std::clamp(mass, 0.1f, 3.0f);
+}
+
+float SnapshotBank::getMass(int slot) const noexcept
+{
+    if (slot < 0 || slot >= NUM_SLOTS) return 1.0f;
+    for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
+    {
+        uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
+        if ((seq1 & 1) != 0) { spinPause(); continue; }
+        float m = (*slots_)[slot].mass;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+        if (seq1 == seq2)
+            return m;
+    }
+    return 1.0f;
+}
+
+void SnapshotBank::getMasses(std::array<float, NUM_SLOTS>& masses) const noexcept
+{
+    masses.fill(1.0f);
+    for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
+    {
+        uint32_t seq1 = seqlock_.load(std::memory_order_acquire);
+        if ((seq1 & 1) != 0) { spinPause(); continue; }
+        for (int i = 0; i < NUM_SLOTS; ++i)
+            masses[static_cast<size_t>(i)] = (*slots_)[i].mass;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
+        if (seq1 == seq2)
+            return;
+    }
+}
+
 void SnapshotBank::clearSlot(int slot)
 {
     if (slot < 0 || slot >= NUM_SLOTS) return;
@@ -377,6 +424,7 @@ void SnapshotBank::clearSlot(int slot)
     {
         const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
         stateChunks_[static_cast<size_t>(slot)].reset();
+        cachedPluginUID_[static_cast<size_t>(slot)].clear();
     }
 }
 
@@ -389,6 +437,8 @@ void SnapshotBank::clearAll()
         const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
         for (auto& chunk : stateChunks_)
             chunk.reset();
+        for (auto& uid : cachedPluginUID_)
+            uid.clear();
     }
 }
 

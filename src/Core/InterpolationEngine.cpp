@@ -246,10 +246,11 @@ void InterpolationEngine::compute1D(float faderPos,
         return;
     }
 
+    std::fill(output.begin(), output.end(), 0.5f);
+
     computeWithRetry(bank,
         [&output, faderPos](const auto& slots)
         {
-            std::fill(output.begin(), output.end(), 0.5f);
             std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlots{};
             int occupiedCount = 0;
 
@@ -316,8 +317,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
             std::array<float, SnapshotBank::NUM_SLOTS> weights{};
             float totalWeight = 0.0f;
 
-            // Epsilon² for squared-distance comparison (avoids sqrt entirely)
-            constexpr float kEpsilonSq = kEpsilon * kEpsilon;
+            // AUDIT-FIX (C7): kEpsilonSq is now the unified class constant.
 
             for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
             {
@@ -338,10 +338,11 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                     return;
                 }
 
-                // IDW power=2: w = 1/d² = 1/distSq
-                // Clamp denominator to avoid Inf when distSq is tiny but above the
-                // epsilon short-circuit threshold (e.g. float rounding on cursor move).
-                weights[i] = 1.0f / std::max(distSq, kEpsilonSq);
+                // IDW power=2 with per-slot mass (Gravity Well):
+                // w = mass / d² = slots[i].mass / max(distSq, epsilonSq)
+                // High mass expands the snapshot's zone of influence; low mass shrinks it.
+                // Mass is clamped to [0.1, 3.0] by SnapshotBank::setMass.
+                weights[i] = slots[i].mass / std::max(distSq, kEpsilonSq);
                 totalWeight += weights[i];
             }
 
@@ -375,6 +376,129 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 #elif defined(MORE_PHI_USE_SSE)
                 const __m128 wVec = _mm_set1_ps(w);
                 const size_t simdCount = count - (count % 4);
+                for (size_t p = 0; p < simdCount; p += 4)
+                {
+                    __m128 acc = _mm_loadu_ps(output.data() + p);
+                    __m128 src = _mm_loadu_ps(slot.data() + p);
+                    acc = _mm_add_ps(acc, _mm_mul_ps(src, wVec));
+                    _mm_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#else
+                for (size_t p = 0; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#endif
+            }
+        });
+}
+
+// ── 2D Voronoi/NNI Interpolation ──────────────────────────────────────────────
+
+void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
+                                             const SnapshotBank& bank,
+                                             const VoronoiMorphEngine& engine,
+                                             std::vector<float>& output) noexcept
+{
+    if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
+    {
+        std::fill(output.begin(), output.end(), 0.5f);
+        return;
+    }
+
+    // Fall back to IDW when triangulation is invalid (<3 occupied slots)
+    if (!engine.isValid())
+    {
+        compute2D(cursorX, cursorY, bank, output);
+        return;
+    }
+
+    const auto positions = getClockPositions();
+
+    // Compute NNI weights and blend in a single seqlock read for atomicity.
+    // Captures masses + values in one consistent snapshot.
+    computeWithRetry(bank,
+        [&](const auto& slots)
+        {
+            // Read masses
+            std::array<float, SnapshotBank::NUM_SLOTS> masses{};
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+                masses[static_cast<size_t>(i)] = slots[i].mass;
+
+            // Compute NNI weights
+            std::array<float, SnapshotBank::NUM_SLOTS> weights{};
+            float totalWeight = 0.0f;
+            engine.computeWeights(cursorX, cursorY, positions, masses, weights, totalWeight);
+
+            if (totalWeight < 1e-6f)
+            {
+                // Cursor outside convex hull — fall back to IDW
+                // (Replicate IDW inline to avoid a second seqlock call)
+                float idwTotal = 0.0f;
+                std::array<float, SnapshotBank::NUM_SLOTS> idwWeights{};
+                // AUDIT-FIX (C7): local kEpsilonSq redefinition removed — uses the unified class constant.
+
+                for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+                {
+                    if (!slots[i].occupied) continue;
+                    const float dx = cursorX - positions[i].x;
+                    const float dy = cursorY - positions[i].y;
+                    const float distSq = dx * dx + dy * dy;
+
+                    if (distSq < kEpsilonSq)
+                    {
+                        // Cursor directly on a snapshot
+                        const size_t c = juce::jmin(static_cast<size_t>(slots[i].size()), output.size());
+                        for (size_t p = 0; p < c; ++p)
+                            output[p] = slots[i].data()[p];
+                        return;
+                    }
+
+                    idwWeights[i] = slots[i].mass / std::max(distSq, kEpsilonSq);
+                    idwTotal += idwWeights[i];
+                }
+
+                if (idwTotal < 1e-12f) return;  // AUDIT-FIX (C7): preserved literal — idwTotal is a weight sum, not a distance²; changing to kEpsilon would alter the threshold by 1e6.
+
+                std::fill(output.begin(), output.end(), 0.0f);
+                for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+                {
+                    if (!slots[i].occupied) continue;
+                    const float w = idwWeights[i] / idwTotal;
+                    const size_t c = juce::jmin(static_cast<size_t>(slots[i].size()), output.size());
+                    for (size_t p = 0; p < c; ++p)
+                        output[p] += slots[i].data()[p] * w;
+                }
+                return;
+            }
+
+            // Blend using NNI weights
+            std::fill(output.begin(), output.end(), 0.0f);
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            {
+                if (!slots[i].occupied) continue;
+
+                const float w = weights[static_cast<size_t>(i)] / totalWeight;
+                if (w < 1e-8f) continue;
+
+                const auto& slot = slots[i];
+                const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
+
+#if defined(MORE_PHI_USE_AVX)
+                const __m256 wVec = _mm256_set1_ps(w);
+                size_t simdCount = count - (count % 8);
+                for (size_t p = 0; p < simdCount; p += 8)
+                {
+                    __m256 acc = _mm256_loadu_ps(output.data() + p);
+                    __m256 src = _mm256_loadu_ps(slot.data() + p);
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(src, wVec));
+                    _mm256_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#elif defined(MORE_PHI_USE_SSE)
+                const __m128 wVec = _mm_set1_ps(w);
+                size_t simdCount = count - (count % 4);
                 for (size_t p = 0; p < simdCount; p += 4)
                 {
                     __m128 acc = _mm_loadu_ps(output.data() + p);

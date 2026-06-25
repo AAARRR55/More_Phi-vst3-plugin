@@ -10,6 +10,7 @@
 
 #include "SnapshotBank.h"
 #include "InterpolationEngine.h"
+#include "VoronoiMorphEngine.h"
 #include "PhysicsEngine.h"
 #include <vector>
 #include <array>
@@ -93,6 +94,15 @@ public:
     float getProcessedX() const { return processedX_.load(std::memory_order_relaxed); }
     float getProcessedY() const { return processedY_.load(std::memory_order_relaxed); }
 
+    // Interpolation mode: 0=IDW (legacy), 1=Voronoi/NNI (Phase 2)
+    void setInterpolationMode(int mode) { interpolationMode_.store(mode, std::memory_order_relaxed); }
+    int getInterpolationMode() const { return interpolationMode_.load(std::memory_order_relaxed); }
+
+    // Rebuild Delaunay triangulation for Voronoi morphing.
+    // Must be called on the message thread (allocates).
+    void rebuildVoronoi();
+    const VoronoiMorphEngine& getVoronoiEngine() const { return voronoiEngine_; }
+
     // Cursor trail ring buffer (written by audio, read by UI)
     // C3 FIX: Each trail point is published as a single atomic 64-bit value
     // (two floats packed together) so the UI paint thread reads a consistent
@@ -112,15 +122,33 @@ public:
 
 private:
     void updatePhysics(float targetX, float targetY, MorphMode mode, float dt) noexcept;
+
+    VoronoiMorphEngine voronoiEngine_;
+    std::atomic<int> interpolationMode_{0};
     // Fix 2.1: dt is the block duration in seconds (blockSize / sampleRate).
     // The one-pole coefficient is derived from the smoothing time constant τ
     // via α = exp(-dt/τ), making the smoothing behavior independent of host
     // sample rate and block size.
-    void applySmoothing(std::vector<float>& output, float dt) noexcept;
+    // C-4 FIX (audit): applySmoothing now takes an explicit one-pole rate
+    // (computed by computeSmoothingRateFor below) so Direct mode can opt into
+    // a guaranteed fast de-zipper without affecting Elastic/Drift behavior.
+    void applySmoothing(std::vector<float>& output, float rate) noexcept;
 
-    // Reference block config used to convert the legacy smoothing coefficient
-    // into a time constant (see setSmoothingRate). 512 samples @ 44.1 kHz.
-    static constexpr float kRefDt = 512.0f / 44100.0f;
+    // C-4 FIX (audit): Derives the per-block one-pole rate from the user's
+    // smoothTau_ and the active morph mode. Non-Direct modes honor smoothTau_
+    // (0 → instant, >0 → τ-second one-pole). Direct mode ALWAYS applies a
+    // minimum de-zipper (kDirectMinSmoothingTau) so a discontinuous pad move
+    // / automation step can't produce a full-vector jump → click, while still
+    // feeling effectively instant (~2 ms settle). Returns the clamped rate.
+    float computeSmoothingRateFor(MorphMode mode, float dt) noexcept;
+
+    // C-4 FIX (audit): minimum de-zipper time constant for Direct mode.
+    // ~2 ms: fast enough to feel instant, slow enough to suppress clicks from
+    // discontinuous cursor moves on unsmoothed hosted params (gain, output).
+    static constexpr float kDirectMinSmoothingTau = 0.002f;
+
+    // Reference block config — kRefDt is defined in ParameterState.h as a
+    // namespace-level constant shared by all consumers.
 
     SnapshotBank& bank_;
 
@@ -151,7 +179,7 @@ private:
     float trailTimer_ = 0.0f;
     static constexpr float TRAIL_INTERVAL = 0.016f;  // ~60 Hz trail sampling
 
-    bool prepared_ = false;
+    std::atomic<bool> prepared_{false};
 
     // Listen Mode
     std::atomic<bool> listenMode_{false};

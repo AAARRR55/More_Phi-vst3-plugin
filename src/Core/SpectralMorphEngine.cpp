@@ -550,11 +550,14 @@ void SpectralMorphEngine::interpolatePhase(const float* phaseA, const float* pha
 
         const float ifMorph = oneMinusAlpha * deltaA + alpha * deltaB;
         synthPhase[k] += ifMorph;
-        // Normalize synthPhase to [-π, π] to prevent float precision loss
-        // after long playback sessions (~10 h at 86 hops/s the accumulator
-        // would reach ~3 million radians, where 32-bit float mantissa bits
-        // are exhausted and phase increments become indistinguishable from 0).
-        if (synthPhase[k] > kSMPi || synthPhase[k] < -kSMPi)
+        // DEEP-DIVE FIX: wrap synthPhase after ~1000 full cycles (~62831 rad)
+        // instead of every ±π. The previous π threshold fired on ~50% of frames
+        // for steadily advancing phase, causing an unnecessary std::remainder
+        // call per-bin per-frame. Float mantissa precision is adequate up to
+        // ~3 million rad (~10 h at 86 hops/s), so 62831 rad (~33 min at
+        // 600 Hz bin) is a safe guard that cuts the remainder rate to ~0.1%.
+        constexpr float kPhaseWrapThreshold = 1000.0f * kSMTwoPi;
+        if (synthPhase[k] > kPhaseWrapThreshold || synthPhase[k] < -kPhaseWrapThreshold)
             synthPhase[k] = std::remainder(synthPhase[k], kSMTwoPi);
 
         prevPhaseA[k] = phaseA[k];

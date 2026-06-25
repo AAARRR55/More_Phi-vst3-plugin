@@ -12,6 +12,19 @@ juce::int64 nowMs() noexcept
 }
 } // namespace
 
+// H3 FIX: Hard ceiling on worker shutdown. A specialist making a blocking
+// mastering.render_batch or hung HTTP call would otherwise hold join() open
+// forever, freezing host teardown (MCPServer::stopServer uses stopThread(-1)).
+// Mirrors the audio path's bounded-drain discipline (releaseResources: 100ms).
+// On expiry we detach: the worker can only reference the AgentRuntime and the
+// four holders, all of which are torn down AFTER agentRuntime_.reset() in
+// ~MorePhiProcessor — and stop() is invoked inside that reset — so a detached
+// worker racing teardown touches already-freed state only if it vastly exceeds
+// this deadline AND the destructor proceeds past reset(). Acceptable: the
+// alternative (freezing the DAW) is strictly worse. ponytail: global ceiling,
+// per-worker cancel tokens if a cleaner cancel is ever needed.
+constexpr long long kShutdownJoinTimeoutMs = 2000;
+
 PriorityScheduler::PriorityScheduler() = default;
 
 PriorityScheduler::~PriorityScheduler()
@@ -33,9 +46,22 @@ void PriorityScheduler::stop()
     if (! running_.exchange(false))
         return;
     cv_.notify_all();
+    // H3 FIX: Bounded join. std::thread::join has no timeout, so poll
+    // joinability against a hard deadline; on expiry detach so host teardown
+    // is not frozen by a stuck agent task. See kShutdownJoinTimeoutMs note.
+    const auto deadline = nowMs() + kShutdownJoinTimeoutMs;
     for (auto& t : workers_)
+    {
+        if (! t.joinable())
+            continue;
+        while (t.joinable() && nowMs() < deadline)
+            juce::Thread::sleep(2);
         if (t.joinable())
-            t.join();
+        {
+            // ponytail: exceeded the 2s ceiling. Detach rather than hang the host.
+            t.detach();
+        }
+    }
     workers_.clear();
     // Drain anything left unexecuted so we don't keep dangling lambdas.
     std::lock_guard<std::mutex> lock(mutex_);

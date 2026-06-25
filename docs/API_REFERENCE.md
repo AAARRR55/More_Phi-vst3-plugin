@@ -1,6 +1,11 @@
 # More-Phi API Reference
 
-This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically.
+> **Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete 39 KB technical audit with 26 verifiable claims.
+
+This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically. More-Phi exposes **30+ MCP tools** across 8 categories including hosted plugin control, snapshot/morph management, analysis/metering, mastering workflow, More-Phi parameter control, AI/Learn Mode, agent orchestration, and dataset generation.
+
+---
+
 
 ---
 

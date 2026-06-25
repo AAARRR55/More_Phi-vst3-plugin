@@ -1181,7 +1181,7 @@ ToolCallOutcome IZotopeIPCAssistant::runAssistant(const IpcAssistantRunArgs& arg
     if (envEnabled("MORE_PHI_DEBUG_IZOTOPE_IPC_MAGIC"))
     {
         magicProbe = makeMagicProbe(attached.bytes, manifest, requestStartIndex, requestWatermark);
-        juce::Logger::writeToLog("MorePhi iZotope IPC magic probe: "
+        DBG("MorePhi iZotope IPC magic probe: "
             + juce::String(magicProbe->dump()));
     }
 

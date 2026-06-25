@@ -63,7 +63,7 @@ processBlock() → drain LockFreeQueue commands → MIDIRouter → MorphProcesso
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank` | Morph computation, all audio-thread-safe |
 | `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner` | VST3/AU hosting, parameter read/write |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `TokenOptimizer`, `InstanceRegistry` | JSON-RPC 2.0 server on localhost:30001 |
-| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses ~6s of audio on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. The primary inference path is the in-process ONNX runner (`SonicMasterDecisionRunner`, loads `masteringbrain_v2_decision.onnx`); the HTTP source (`tools/inference_server/`) is the fallback. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
+| `src/AI/` | `SonicMasterAnalysisEngine`, `SonicMasterDecisionRunner`, `SonicMasterDecisionDecoder`, `SonicMasterHttpInferenceSource` | Realtime neural mastering (preview, default OFF). The engine analyses a ~6s window on a 3s cycle on a background thread and feeds the built-in `AutoMasteringEngine` via `applyValidatedPlan`. The primary inference path is the in-process ONNX runner (`SonicMasterDecisionRunner`, loads `masteringbrain_v2_decision.onnx`); the HTTP source (`tools/inference_server/`) is the fallback. See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`. |
 | `src/MIDI/` | `MIDIRouter` | Note triggers + CC routing |
 | `src/Preset/` | `MetaPresetManager`, `PresetSerializer` | Meta-preset save/load |
 | `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, etc. | All UI components |
@@ -85,12 +85,12 @@ An additive agent layer sits ABOVE the existing `MCPToolHandler` / `AutomationCo
 | Layer | Key Classes | Role |
 |-------|------------|------|
 | `src/AI/Agents/` | `AgentRuntime`, `AgentRegistry`, `PriorityScheduler` | Container: registers agents, owns 2-worker pool, fans out blackboard events |
-| `src/AI/Agents/Conductor/` | `ConductorAgent` | Goal decomposition via `WorkflowOrchestrator` + `DeterministicFallbackLlmClient`; the ONLY agent that may delegate followUps |
+| `src/AI/Agents/Conductor/` | `ConductorAgent` | Goal decomposition via `WorkflowOrchestrator` + `DeterministicFallbackLlmClient`; the ONLY agent that may delegate followUps. **Production LLM transport:** the in-process runner is the `DeterministicFallbackLlmClient` (a fixed Analysis→Memory→Optimization heuristic with warm/bright/sparkle keyword flags), NOT a live LLM. `decomposeGoal` always falls through to it. The `ILlmClient` seam exists for a future real adapter (`LLMChatClient` does not yet implement `ILlmClient`); treat the heuristic as the shipping behavior until that adapter lands. |
 | `src/AI/Agents/Agents/` | `AnalysisAgent`, `OptimizationAgent`, `CreativeAgent`, `RealtimeControlAgent`, `QualitySafetyAgent`, `MemoryAgent` | Six specialists; cross-delegation is dropped with `agents.delegation_rejected` |
 | `src/AI/Agents/Blackboard/` | `BlackboardBridge` | Typed pub/sub OVER `IntegrationEventBus`; a pump thread drains + fans out |
 | `src/AI/Agents/Tooling/` | `DefaultToolInvoker` | Wraps `MCPToolHandler::handle`; enforces per-agent capability scope (fail-closed) + rate budget + attribution |
 | `src/AI/Agents/Logging/` | `NullAgentLogger`, `StructuredAgentLogger` | JSONL file logger with in-memory ring fallback |
-| `src/AI/Agents/Llm/` | `ILlmClient`, `DeterministicFallbackLlmClient`, `NullLlmClient` | LLM seam (Risk R1); real transport broken → deterministic fallback |
+| `src/AI/Agents/Llm/` | `ILlmClient`, `DeterministicFallbackLlmClient`, `NullLlmClient` | LLM seam (Risk R1). **The deterministic fallback IS the production client** — no real transport is wired into the agent layer yet. `LLMChatClient` (used by `UI/AIChatPanel`) does not implement `ILlmClient`. The "broken transport" framing is legacy; ship the heuristic, add the adapter only when a planning benchmark demands it. |
 
 **Threading invariant (strict):** agents execute on scheduler workers ONLY — never on the audio thread. `RealtimeCritical` priority jumps the *agent* queue, not the audio thread. `RealtimeControlAgent` writes corrections through `LockFreeQueue` / `MCPToolHandler::handle`, exactly like the UI/MCP paths.
 

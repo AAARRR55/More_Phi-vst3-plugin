@@ -33,9 +33,32 @@ void BlackboardBridge::subscribe(const juce::String& agentId,
         subscribers_[t.toStdString()].push_back({ agentId.toStdString(), std::move(callback) });
 }
 
+void BlackboardBridge::unsubscribe(const juce::String& agentId)
+{
+    std::lock_guard<std::mutex> lock(subscribersMutex_);
+    const auto id = agentId.toStdString();
+    for (auto it = subscribers_.begin(); it != subscribers_.end(); )
+    {
+        auto& vec = it->second;
+        vec.erase(std::remove_if(vec.begin(), vec.end(),
+            [&](const auto& pair) { return pair.first == id; }),
+            vec.end());
+        if (vec.empty())
+            it = subscribers_.erase(it);
+        else
+            ++it;
+    }
+}
+
+void BlackboardBridge::unsubscribeAll()
+{
+    std::lock_guard<std::mutex> lock(subscribersMutex_);
+    subscribers_.clear();
+}
+
 bool BlackboardBridge::hasNewEvents() const
 {
-    return bus_.lastSequence() > lastSeenSequence_;
+    return bus_.lastSequence() > lastSeenSequence_.load(std::memory_order_relaxed);
 }
 
 namespace {
@@ -106,7 +129,7 @@ void BlackboardBridge::poll()
     // last poll. A dropped count cursor (the old design) would re-deliver or skip
     // events under eviction; the sequence cursor cannot.
     const int window = 512;
-    auto recent = bus_.listRecentSince(lastSeenSequence_, window);
+    auto recent = bus_.listRecentSince(lastSeenSequence_.load(std::memory_order_relaxed), window);
     if (! recent.is_array() || recent.empty())
         return;
 
@@ -138,8 +161,8 @@ void BlackboardBridge::poll()
         // safe because it has no side effects we haven't already idempotently
         // guarded against via the rate/budget limiters in the reactive agents.
         const auto seq = ev.value("sequence", static_cast<uint64_t>(0));
-        if (seq > lastSeenSequence_)
-            lastSeenSequence_ = seq;
+        if (seq > lastSeenSequence_.load(std::memory_order_relaxed))
+            lastSeenSequence_.store(seq, std::memory_order_relaxed);
     }
 }
 

@@ -1526,33 +1526,46 @@ void WorkflowOrchestrator::load()
     }
 }
 
-void WorkflowOrchestrator::persist() const
+json WorkflowOrchestrator::serializeRunsToJson() const
 {
-    directory_.createDirectory();
     json runs = json::array();
     for (const auto& run : runs_)
         runs.push_back(toJson(run));
 
-    const json root{
+    return json{
         {"schema_version", 1},
         {"backend", "json_workflow_store_v1"},
         {"runs", runs}
     };
+}
+
+void WorkflowOrchestrator::persistInternal(const json& root) const
+{
+    directory_.createDirectory();
     file_.replaceWithText(juce::String(root.dump(2)), false, false, "\n");
+}
+
+void WorkflowOrchestrator::persist() const
+{
+    persistInternal(serializeRunsToJson());
 }
 
 void WorkflowOrchestrator::replaceStoredRun(const WorkflowRun& run)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto copy = run;
-    ++copy.revision;
-    const auto existing = std::find_if(runs_.begin(), runs_.end(),
-        [&copy](const WorkflowRun& candidate) { return candidate.id == copy.id; });
-    if (existing != runs_.end())
-        *existing = copy;
-    else
-        runs_.push_back(copy);
-    persist();
+    json snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto copy = run;
+        ++copy.revision;
+        const auto existing = std::find_if(runs_.begin(), runs_.end(),
+            [&copy](const WorkflowRun& candidate) { return candidate.id == copy.id; });
+        if (existing != runs_.end())
+            *existing = copy;
+        else
+            runs_.push_back(copy);
+        snapshot = serializeRunsToJson();
+    }
+    persistInternal(snapshot);
 }
 
 MemoryStore::MemoryStore(juce::File storeDirectory)
@@ -1586,10 +1599,14 @@ MemoryRecord MemoryStore::remember(MemoryRecord record)
     if (record.lastUsedAt == juce::Time{})
         record.lastUsedAt = record.createdAt;
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    records_.push_back(record);
-    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
-    persist();
+    json snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        records_.push_back(record);
+        enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+        snapshot = serializeRecordsToJson();
+    }
+    persistInternal(snapshot);
     return record;
 }
 
@@ -1611,32 +1628,44 @@ MemoryRecord MemoryStore::recordOutcome(ActionOutcome outcome)
     record.createdAt = juce::Time::getCurrentTime();
     record.lastUsedAt = record.createdAt;
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (outcome.actionId.isNotEmpty())
+    json snapshot;
     {
-        const auto actionId = outcome.actionId.toStdString();
-        auto existing = std::find_if(records_.begin(), records_.end(),
-            [&actionId](const MemoryRecord& item)
-            {
-                return item.kind == "action_outcome"
-                    && item.content.is_object()
-                    && item.content.value("actionId", "") == actionId;
-            });
-
-        if (existing != records_.end())
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (outcome.actionId.isNotEmpty())
         {
-            record.id = existing->id;
-            record.createdAt = existing->createdAt == juce::Time{} ? record.createdAt : existing->createdAt;
-            *existing = record;
-            persist();
-            return *existing;
+            const auto actionId = outcome.actionId.toStdString();
+            auto existing = std::find_if(records_.begin(), records_.end(),
+                [&actionId](const MemoryRecord& item)
+                {
+                    return item.kind == "action_outcome"
+                        && item.content.is_object()
+                        && item.content.value("actionId", "") == actionId;
+                });
+
+            if (existing != records_.end())
+            {
+                record.id = existing->id;
+                record.createdAt = existing->createdAt == juce::Time{} ? record.createdAt : existing->createdAt;
+                *existing = record;
+                snapshot = serializeRecordsToJson();
+            }
+            else
+            {
+                record.id = makeAutomationId("mem");
+                records_.push_back(record);
+                enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+                snapshot = serializeRecordsToJson();
+            }
+        }
+        else
+        {
+            record.id = makeAutomationId("mem");
+            records_.push_back(record);
+            enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+            snapshot = serializeRecordsToJson();
         }
     }
-
-    record.id = makeAutomationId("mem");
-    records_.push_back(record);
-    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
-    persist();
+    persistInternal(snapshot);
     return record;
 }
 
@@ -1829,20 +1858,29 @@ void MemoryStore::load()
     }
 }
 
-void MemoryStore::persist() const
+json MemoryStore::serializeRecordsToJson() const
 {
-    directory_.createDirectory();
     json records = json::array();
     for (const auto& record : records_)
         records.push_back(toJson(record));
 
-    const json root{
+    return json{
         {"schema_version", 1},
         {"backend", "json_local_store_v1"},
         {"vector_index_loaded", false},
         {"records", records}
     };
+}
+
+void MemoryStore::persistInternal(const json& root) const
+{
+    directory_.createDirectory();
     file_.replaceWithText(juce::String(root.dump(2)), false, false, "\n");
+}
+
+void MemoryStore::persist() const
+{
+    persistInternal(serializeRecordsToJson());
 }
 
 int MemoryStore::scoreRecord(const MemoryRecord& record,

@@ -52,22 +52,15 @@ TEST_CASE("SonicMasterDecisionRunner loads and infers the real ONNX model",
         "build/sonicmaster/masteringbrain_v2_decision.onnx",
         "build/tests/Release/masteringbrain_v2_decision.onnx",
     };
-    const char* contractCandidates[] = {
-        "masteringbrain_v2_contract.json",
-        "build/sonicmaster/masteringbrain_v2_contract.json",
-        "build/tests/Release/masteringbrain_v2_contract.json",
-    };
-
-    std::string modelPath, contractPath;
-    if (!findFile(modelCandidates, 3, modelPath)
-        || !findFile(contractCandidates, 3, contractPath))
+    std::string modelPath;
+    if (!findFile(modelCandidates, 3, modelPath))
     {
-        WARN("masteringbrain_v2_decision.onnx / contract not staged — skipping live test");
+        WARN("masteringbrain_v2_decision.onnx not staged — skipping live test");
         return;
     }
 
     more_phi::SonicMasterDecisionRunner runner;
-    REQUIRE(runner.loadModel(modelPath, contractPath));
+    REQUIRE(runner.loadModel(modelPath));
     REQUIRE(runner.isAvailable());
 
     // Synthetic 6 s stereo: 220 Hz sine + 2.5 kHz harmonic at -14 dBFS-ish.

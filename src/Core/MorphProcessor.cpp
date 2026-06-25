@@ -40,37 +40,52 @@ void MorphProcessor::prepare(int maxParamCount)
     processedY_.store(0.5f, std::memory_order_relaxed);
     driftTime_ = 0.0f;
 
-    prepared_ = true;
+    // L3: Pre-initialize InterpolationEngine's function-local static
+    // (kUnitPositions) on the message thread so the first audio-thread call
+    // avoids any potential static-init mutex.
+    InterpolationEngine::getClockPositions();
+
+    prepared_.store(true, std::memory_order_release);
 }
 
 void MorphProcessor::process(float rawX, float rawY, float faderPos,
                               MorphSource source, MorphMode mode,
                               float dt, std::vector<float>& output) noexcept
 {
-    if (!prepared_ || !bank_.hasAnyOccupied()) return;
+    if (!prepared_.load(std::memory_order_acquire) || !bank_.hasAnyOccupied()) return;
 
     // 1) Apply physics to cursor position
     if (source == MorphSource::XYPad)
     {
-        // Map [0,1] to [-1,1] for interpolation engine
         float targetX = rawX * 2.0f - 1.0f;
         float targetY = rawY * 2.0f - 1.0f;
         updatePhysics(targetX, targetY, mode, dt);
 
-        // Compute interpolated parameter values using physics-processed position
-        InterpolationEngine::compute2D(processedX_, processedY_, bank_, output);
+        // 1b) Compute interpolated parameter values using physics-processed position
+        const int interpMode = interpolationMode_.load(std::memory_order_relaxed);
+        if (interpMode == 1 && voronoiEngine_.isValid())
+            InterpolationEngine::compute2D_Voronoi(processedX_.load(std::memory_order_relaxed), processedY_.load(std::memory_order_relaxed), bank_, voronoiEngine_, output);
+        else
+            InterpolationEngine::compute2D(processedX_.load(std::memory_order_relaxed), processedY_.load(std::memory_order_relaxed), bank_, output);
     }
     else // Fader
     {
         InterpolationEngine::compute1D(faderPos, bank_, output);
-        // Store fader position as "processed" for trail
         processedX_.store(faderPos, std::memory_order_relaxed);
         processedY_.store(0.0f, std::memory_order_relaxed);
     }
 
     // 2) Apply per-parameter smoothing (SIMD optimized)
-    if (mode != MorphMode::Direct)
-        applySmoothing(output, dt);
+    // C-4 FIX (audit): Direct mode used to skip smoothing entirely, so a
+    // discontinuous cursor move produced a full-vector jump → click on
+    // unsmoothed hosted params. Direct mode now gets a guaranteed minimum
+    // de-zipper (computeSmoothingRateFor forces kDirectMinSmoothingTau);
+    // Elastic/Drift honor the user's smoothTau_ as before.
+    {
+        const float rate = computeSmoothingRateFor(mode, dt);
+        if (rate < 0.999f)   // 0.999 == effectively no smoothing needed
+            applySmoothing(output, rate);
+    }
 
     // 3) Apply Listen Mode filter — mark discrete params as "skip"
     applyListenFilter(output);
@@ -107,8 +122,19 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
         case MorphMode::Elastic:
             PhysicsEngine::updateElastic(elasticState_, targetX, targetY,
                                           static_cast<ElasticPreset>(elasticPreset_.load(std::memory_order_relaxed)), dt);
-            processedX_.store(std::clamp(elasticState_.x, -1.0f, 1.0f), std::memory_order_relaxed);
-            processedY_.store(std::clamp(elasticState_.y, -1.0f, 1.0f), std::memory_order_relaxed);
+            // AUDIT-FIX (C6): reflect the published-cursor clamp back into the
+            // spring state. Without this, an underdamped preset (Slow/Medium,
+            // ζ<1) overshoots ±1 internally while the readout shows a flat top —
+            // the pad "sticks then jumps" as the hidden state keeps ringing.
+            // Zeroing velocity on clamp kills the underlying oscillation cleanly.
+            {
+                const float clampedX = std::clamp(elasticState_.x, -1.0f, 1.0f);
+                const float clampedY = std::clamp(elasticState_.y, -1.0f, 1.0f);
+                if (clampedX != elasticState_.x) { elasticState_.x = clampedX; elasticState_.vx = 0.0f; }
+                if (clampedY != elasticState_.y) { elasticState_.y = clampedY; elasticState_.vy = 0.0f; }
+                processedX_.store(clampedX, std::memory_order_relaxed);
+                processedY_.store(clampedY, std::memory_order_relaxed);
+            }
             break;
 
         case MorphMode::Drift:
@@ -131,26 +157,43 @@ void MorphProcessor::updatePhysics(float targetX, float targetY,
     }
 }
 
-void MorphProcessor::applySmoothing(std::vector<float>& output, float dt) noexcept
+float MorphProcessor::computeSmoothingRateFor(MorphMode mode, float dt) noexcept
+{
+    // Fix 2.1 (preserved): derive the one-pole coefficient from the smoothing
+    // time constant τ and the actual block duration. This makes the smoothing
+    // response independent of host sample rate / block size: a given user
+    // "smoothing" setting yields the same effective time constant everywhere.
+    const float safeDt = (dt > 0.0f) ? dt : kRefDt;
+
+    float tau;
+    if (mode == MorphMode::Direct)
+    {
+        // C-4 FIX (audit): Direct mode always de-zippers with a fast minimum
+        // time constant, ignoring the user's smoothTau_ (which is intended for
+        // Elastic/Drift). This suppresses clicks from discontinuous moves
+        // while keeping Direct feeling instant.
+        tau = kDirectMinSmoothingTau;
+    }
+    else
+    {
+        tau = smoothTau_.load(std::memory_order_relaxed);
+        if (tau <= 0.0f)
+            return 0.0f;                   // user disabled smoothing → instant track
+    }
+
+    float rate = std::exp(-safeDt / tau);
+    if (rate < 0.0f) rate = 0.0f;
+    if (rate > 0.999f) rate = 0.999f;
+    return rate;
+}
+
+void MorphProcessor::applySmoothing(std::vector<float>& output, float rate) noexcept
 {
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());
 
-    // Fix 2.1: Derive the one-pole coefficient from the smoothing time constant
-    // τ (set via setSmoothingRate) and the actual block duration. This makes the
-    // smoothing response independent of host sample rate / block size: a given
-    // user "smoothing" setting yields the same effective time constant everywhere.
-    // Previously `rate` was the raw stored coefficient applied once per block,
-    // which gave wildly different time constants at different rates/sizes.
-    const float tau = smoothTau_.load(std::memory_order_relaxed);
-    const float safeDt = (dt > 0.0f) ? dt : kRefDt;
-    float rate;
-    if (tau <= 0.0f)
-        rate = 0.0f;                       // no smoothing — track instantly
-    else
-        rate = std::exp(-safeDt / tau);    // exact N-sample one-pole advance
-    if (rate < 0.0f) rate = 0.0f;
-    if (rate > 0.999f) rate = 0.999f;
+    // C-4 FIX (audit): rate is now computed by computeSmoothingRateFor and
+    // passed in. rate == 0 means instant tracking (no smoothing).
     const float oneMinusRate = 1.0f - rate;
 
 #if defined(MORE_PHI_USE_AVX)
@@ -233,6 +276,12 @@ void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
         if ((*discreteMap)[i] != 0)
             output[i] = SKIP_SENTINEL;
     }
+}
+
+void MorphProcessor::rebuildVoronoi()
+{
+    const auto positions = InterpolationEngine::getClockPositions();
+    voronoiEngine_.rebuild(positions, bank_);
 }
 
 } // namespace more_phi

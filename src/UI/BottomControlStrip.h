@@ -40,7 +40,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> scThreshAttach_;
 
     // Listen Mode toggle
-    juce::TextButton listenToggle_{"Listen"};
+    juce::TextButton listenToggle_{"Learn"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> listenAttach_;
 
     // Recall Toggle (sustain notes across snapshot switches)

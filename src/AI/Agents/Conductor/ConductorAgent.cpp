@@ -39,11 +39,20 @@ nlohmann::json ConductorAgent::decomposeGoal(const juce::String& intent)
         auto resp = ctx_->llm->complete(req);
         if (resp.ok && resp.toolCalls.is_array() && ! resp.toolCalls.empty())
         {
+            const auto foundCount = resp.toolCalls.size();
             for (const auto& tc : resp.toolCalls)
             {
                 if (tc.contains("arguments") && tc["arguments"].contains("steps"))
                     return tc["arguments"];
             }
+            // All tool calls were examined but none contained "steps" — log the count
+            // so operators can diagnose LLM response formatting issues.
+            if (ctx_->logger)
+                ctx_->logger->log(id(), "warn",
+                    "decomposeGoal: examined " + juce::String(static_cast<int>(foundCount))
+                    + " tool call(s) but none contained a valid 'steps' argument; "
+                    "falling back to deterministic decomposition",
+                    { { "foundCount", foundCount } });
         }
     }
     return DeterministicFallbackLlmClient::decomposeIntent(intent);

@@ -55,7 +55,9 @@ void AIStatusPanel::timerCallback()
     auto& mcp = proc_.getMCPServer();
     bool running = mcp.isRunning();
 
-    statusLabel_.setText(running ? "AI Ready" : "AI Offline", juce::dontSendNotification);
+    // L6: glyph prefix gives shape redundancy beyond colour (colorblind-safe).
+    statusLabel_.setText(running ? "\xE2\x97\x8F AI Ready" : "\xE2\x97\x8B AI Offline",
+                         juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId,
                            running ? juce::Colour(0xff34d399)  // green
                                    : juce::Colour(0xff888888));

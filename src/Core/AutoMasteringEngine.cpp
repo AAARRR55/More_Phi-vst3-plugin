@@ -5,8 +5,16 @@
 #include "AI/SonicMasterDecisionDecoder.h"   // AUDIT-2/3: model band counts + dynamics slot layout
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace more_phi {
+
+// AUDIT-3: decoder and engine must clamp compressor ratio to the SAME range.
+// If one is widened without the other, telemetry lies by up to 3.3x.
+static_assert(kSonicMasterCompRatioMin == 1.0f,
+              "kSonicMasterCompRatioMin mismatch: decoder and engine disagree");
+static_assert(kSonicMasterCompRatioMax == 6.0f,
+              "kSonicMasterCompRatioMax mismatch: decoder and engine disagree");
 
 namespace {
 // ponytail: inlined from the removed NeuralCompressor — its loadModel() always
@@ -187,7 +195,20 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
     // the already-limited signal back above the dBTP ceiling, defeating the
     // limiter and the B-1 true-peak fix. Now the brickwall limiter is the
     // terminal gain stage and catches any overshoot the normalizer introduces.
+    // ponytail: MED-20 — inter-stage clip risk if the limiter mask is off (the
+    // neural decoder leaves it off by default). The streaming-safe clamp on every
+    // apply (applyValidatedPlan :508-512) mitigates by ensuring the limiter
+    // ceiling is never above -1.0 dBTP regardless of mask state.
     normalizer_.processBlock(buf);
+    // ponytail MED-20: inter-stage clip risk — the normalizer can apply up to
+    // +6 dB gain before the limiter. If the neural plan's limiter mask is OFF
+    // (the default: limiter is high-risk) and the heuristic also has it off,
+    // there is no terminal brickwall, so a loudness target of -14 combined with
+    // high makeup gain could clip the DAC. The streaming-safe ceiling clamp in
+    // applyValidatedPlan guards the apply path; the heuristic applyPlan() does
+    // the same via kStreamingSafeCeilingDBTP. This is still less protection than
+    // having the limiter on — the clamp only caps the ceiling, not the gain
+    // before it.
 
     // ── Stage 9: M/S decode ──────────────────────────────────────────────
     // MSDECODE-1 FIX: decode to L/R BEFORE the brickwall limiter and the meter.
@@ -298,6 +319,8 @@ void AutoMasteringEngine::updateAnalysisWindow(const juce::AudioBuffer<float>& b
     sample.limiterGRDB = getLimiterGainReductionDB();
     sample.spectralCentroidHz = hasSpectrum ? spectrum.spectralCentroid : 0.0f;
     sample.spectralTiltDBPerOctave = hasSpectrum ? spectrum.spectralTilt : 0.0f;
+    sample.thdPercent = hasSpectrum ? spectrum.thdPercent : 0.0f;
+    sample.crestFactorProgram = hasSpectrum ? spectrum.crestFactorProgram : 0.0f;
     sample.stereoWidth = hasStereo ? stereo.stereoWidth : 0.0f;
     sample.midBandCorrelation = hasStereo ? stereo.correlation[2] : 0.0f;
 
@@ -364,6 +387,12 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
     const bool neuralHasEq     = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.eq;
     const bool neuralHasLoud   = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.loudness;
     const bool neuralHasStereo = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.stereo;
+    // AUDIT CRITICAL-7: the bridge re-enters this function via chainPlanner_'s
+    // callback. Without these guards the heuristic unconditionally overwrites
+    // the limiter ceiling and exciter enable the neural path just set. Defer to
+    // the neural plan when it holds those masks.
+    const bool neuralHasLimiter  = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.limiter;
+    const bool neuralHasHarmonic = hasNeuralPlan && lastSafeNeuralPlan_.appliedMask.harmonic;
 
     // Apply EQ prescription — defer to neural if it controls EQ bands 0-7.
     // AUDIT-FIX-R6: previously the heuristic always applied its full 32-band
@@ -387,14 +416,19 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
     // The plan's ceilingDBTP may be looser than -1.0 dBTP; clamp it down so the
     // 30s heuristic timer cannot relax the ceiling that the neural path (or a
     // prior call) tightened. Tighter ceilings always win.
-    limiter_.setCeiling(std::min(plan.ceilingDBTP, kStreamingSafeCeilingDBTP));
+    if (!neuralHasLimiter)
+        limiter_.setCeiling(std::min(plan.ceilingDBTP, kStreamingSafeCeilingDBTP));
 
     // Enable/disable exciter
-    exciter_.setEnabled(plan.exciterEnabled);
+    if (!neuralHasHarmonic)
+        exciter_.setEnabled(plan.exciterEnabled);
 }
 
 bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan& plan) noexcept
 {
+    // ponytail: MED-10 — instant parameter set is fine because the internal chain
+    // is dormant in the shipped plugin. If activated, add 5-10ms ramps to avoid
+    // discontinuities on live audio.
     if (!plan.valid || plan.fallbackMode != NeuralMasteringFallbackMode::None)
         return false;
 
@@ -474,6 +508,18 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
                                         -0.1f);
         limiter_.setCeiling(ceiling);
     }
+    else if (plan.applyLimiterCeiling)
+    {
+        // Limiter ceiling / AUDIT: opt-in path. The decoder leaves
+        // appliedMask.limiter OFF by default (true-peak limiting is high-risk);
+        // plan.applyLimiterCeiling lets a caller explicitly request the decoded
+        // ceiling be honoured, hard-clamped to the streaming-safe ceiling so the
+        // decision can never produce an inter-sample clip regardless of the
+        // model's emitted value.
+        const auto requested = std::clamp(-1.0f + plan.projectedTargets.limiter[0] * 0.5f,
+                                          -3.0f, -0.1f);
+        limiter_.setCeiling(std::min(requested, kStreamingSafeCeilingDBTP));
+    }
 
     // AUDIT-FIX-2: guarantee a streaming-safe terminal ceiling on EVERY neural
     // apply, not just when the limiter mask is on. The SonicMaster decoder leaves
@@ -496,6 +542,33 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
         normalizer_.setTargetLUFS(target);
     }
 
+    // AUDIT CRITICAL-6/7/17: bridge the neural plan to the hosted mastering
+    // plugin. The internal DSP chain above is dormant in the shipped plugin
+    // (prepare(...,false)); the neural model's decisions only reach audio if we
+    // forward them as a MultiEffectPlan through the OzonePlanApplicator path.
+    // chainPlanner_.applyPlan re-enters the heuristic applyPlan() above via its
+    // callback_, but that path now defers to lastSafeNeuralPlan_ on every
+    // contested stage (EQ/stereo/loudness/limiter/harmonic), so the re-entrant
+    // call is a no-op for the stages this function just set. The return value is
+    // the count of hosted-plugin parameters enqueued; 0 when no applicator is
+    // registered or the map is all-stubs.
+    //
+    // ponytail MED-10: instant-apply is safe while the internal chain is
+    // dormant. If the chain is ever activated as a realtime audio processor,
+    // the internal DSP parameter writes above (eq_.setBandGain, limiter_.setCeiling,
+    // etc.) should be ramped over 5-10ms to avoid clicks. The bridge path
+    // (chainPlanner_.applyPlan) already ramps through ParameterBridge's
+    // smoothing layer.
+    MultiEffectPlan multiPlan = buildBridgePlanFromNeural(plan);
+    const int ozoneApplied = chainPlanner_.applyPlan(multiPlan);
+    lastOzoneAppliedCount_.store(ozoneApplied, std::memory_order_release);
+
+    // P0.2: if an Ozone applicator IS registered but applied 0 params, the map
+    // is all-stubs (audit never ran). Returning true with all-stubs misleads
+    // callers into thinking the neural plan reached audio — it didn't.
+    if (ozoneApplied == 0 && chainPlanner_.hasOzoneApplicator())
+        return false;
+
     lastSafeNeuralPlan_ = plan;
     hasLastSafeNeuralPlan_ = true;
     return true;
@@ -505,6 +578,133 @@ void AutoMasteringEngine::clearLastSafeNeuralMasteringPlan() noexcept
 {
     lastSafeNeuralPlan_ = {};
     hasLastSafeNeuralPlan_ = false;
+}
+
+MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
+    const ValidatedNeuralMasteringPlan& plan) const noexcept
+{
+    MultiEffectPlan p;
+    p.valid = true;
+    p.useNeuralComp = true;
+
+    // EQ: 8 model bands @ 60/120/250/500/1k/2.5k/5k/10k Hz, gain = eq[i]*12 dB,
+    // Q 0.707, type "peak". Matches the schema OzonePlanApplicator::applyEQ
+    // consumes (freq/gain/Q/type per band).
+    {
+        juce::String json = "{ \"bands\": [";
+        for (std::size_t i = 0; i < kSonicMasterEqGainCount; ++i)
+        {
+            const float gainDb = std::clamp(plan.projectedTargets.eq[i]
+                                                * AdaptiveEQ::kMaxGainDB,
+                                            -AdaptiveEQ::kMaxGainDB,
+                                            AdaptiveEQ::kMaxGainDB);
+            if (i > 0) json += ", ";
+            // ponytail: fixed Q/type; the neural plan carries no per-band Q/type.
+            json += "{ \"freq\": " + juce::String(kSonicMasterEqFrequenciesHz[i], 0)
+                  + ", \"gain\": " + juce::String(gainDb, 2)
+                  + ", \"Q\": 0.707, \"type\": \"peak\" }";
+        }
+        json += "] }";
+        p.eqPrescriptionJSON = json;
+    }
+
+    // Compression need [0..1]: derive from the sidecar ratios when present,
+    // else from the normalized dynamics pair. Higher ratio → more need.
+    if (plan.hasCompParams)
+    {
+        float ratioSum = 0.0f;
+        for (std::size_t b = 0; b < kNeuralMasteringCompBandCount; ++b)
+            ratioSum += plan.compParams[b].ratio;
+        const float avgRatio = ratioSum / static_cast<float>(kNeuralMasteringCompBandCount);
+        // Map ratio [1..6] → [0..1].
+        p.compressionNeed = std::clamp((avgRatio - 1.0f) / 5.0f, 0.0f, 1.0f);
+    }
+    else
+    {
+        // Dynamics[2b+1] is the normalized ratio in [~0.4..~3.5]; map onto [0..1].
+        float val = 0.0f;
+        int n = 0;
+        for (std::size_t b = 0; b < kSonicMasterCompBandCount; ++b)
+        {
+            val += plan.projectedTargets.dynamics[b * kSonicMasterDynamicsSlotsPerBand + 1];
+            ++n;
+        }
+        p.compressionNeed = std::clamp(val / static_cast<float>(n) * 0.5f + 0.2f, 0.0f, 1.0f);
+    }
+
+    // Stereo width: the neural plan fills 2 regions; copy into widthCurve[0..1]
+    // and leave [2..3] at neutral so the hosted imager's mid/high bands aren't
+    // disturbed by the bridge.
+    p.widthCurve[0] = 0.0f;
+    p.widthCurve[1] = 0.6f;
+    p.widthCurve[2] = 1.0f;
+    p.widthCurve[3] = 1.4f;
+    if (plan.appliedMask.stereo)
+    {
+        for (std::size_t r = 0; r < kSonicMasterStereoRegionCount && r < 4; ++r)
+            // width = clamp(1.0 + v, 0, 2), matching applyValidatedPlan's mapping.
+            p.widthCurve[r] = std::clamp(1.0f + plan.projectedTargets.stereo[r], 0.0f, 2.0f);
+    }
+
+    // Loudness target (LUFS) and ceiling (dBTP): same inverse of the decoder
+    // math applyValidatedPlan uses, so the hosted plugin sees the same target the
+    // internal normalizer/limiter would have enforced.
+    p.targetLUFS  = std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f, -23.0f, -8.0f);
+    const float rawCeiling = std::clamp(-1.0f + plan.projectedTargets.limiter[0] * 0.5f, -3.0f, -0.1f);
+    p.ceilingDBTP = std::min(rawCeiling, kStreamingSafeCeilingDBTP);
+
+    p.exciterEnabled = plan.appliedMask.harmonic
+                       ? (plan.projectedTargets.harmonic[0] > 0.01f)
+                       : false;
+
+    return p;
+}
+
+// AUDIT MED-11: persist the last applied neural plan across save/restore.
+// ValidatedNeuralMasteringPlan is an aggregate of scalars + fixed-size arrays
+// (no pointers, no ownership), so a base64 blit is safe and round-trippable.
+void AutoMasteringEngine::serializeLastPlan(juce::XmlElement& parent) const
+{
+    if (!hasLastSafeNeuralPlan_)
+        return;
+
+    auto* el = parent.createNewChildElement("MASTERING_PLAN");
+    el->setAttribute("version", static_cast<int>(kNeuralMasteringPlanSchemaVersion));
+    el->setAttribute("hasPlan", true);
+
+    // Blit the POD plan into a base64 string.
+    const auto* raw = reinterpret_cast<const char*>(&lastSafeNeuralPlan_);
+    const auto size = static_cast<int>(sizeof(ValidatedNeuralMasteringPlan));
+    const juce::String base64 = juce::Base64::toBase64(raw, size);
+    el->setAttribute("data", base64);
+}
+
+bool AutoMasteringEngine::restoreLastPlan(const juce::XmlElement& parent)
+{
+    const auto* el = parent.getChildByName("MASTERING_PLAN");
+    if (el == nullptr)
+        return false;
+
+    const juce::String base64 = el->getStringAttribute("data");
+    if (base64.isEmpty())
+        return false;
+
+    ValidatedNeuralMasteringPlan restored {};
+    juce::MemoryOutputStream mos;
+    if (!juce::Base64::convertFromBase64(mos, base64))
+        return false;
+
+    const auto decodedSize = mos.getDataSize();
+    if (decodedSize != sizeof(ValidatedNeuralMasteringPlan))
+        return false;
+
+    std::memcpy(&restored, mos.getData(), sizeof(restored));
+    if (!restored.valid)
+        return false;
+
+    lastSafeNeuralPlan_ = restored;
+    hasLastSafeNeuralPlan_ = true;
+    return true;
 }
 
 } // namespace more_phi

@@ -17,6 +17,8 @@
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include "AI/ChainPlanExecutor.h"
+#include "Core/AutoMasteringEngine.h"
+#include "Core/NeuralMasteringTypes.h"
 
 using namespace more_phi;
 using Catch::Approx;
@@ -299,4 +301,114 @@ TEST_CASE("ChainPlanExecutor calls registered OzonePlanApplicator on executePlan
         executor.executePlan(3, 7.5f, -0.8f, 0.6f);
         REQUIRE(stub.callCount == 1);  // Still 1 — not called again
     }
+}
+
+// ── Test 7: neural plan → MultiEffectPlan bridge conversion ──────────────────
+
+namespace {
+
+// Stub applicator that returns a positive count so the bridge's
+// lastOzoneAppliedCount_ > 0 check works, and records the plan for
+// field-level verification.
+struct BridgeStub
+{
+    int callCount = 0;
+    MultiEffectPlan lastPlan;
+    int returnCount = 7;  // arbitrary positive
+
+    int apply(const MultiEffectPlan& plan)
+    {
+        ++callCount;
+        lastPlan = plan;
+        return returnCount;
+    }
+};
+
+class BridgeMockApplicator : public OzonePlanApplicatorBase
+{
+public:
+    explicit BridgeMockApplicator(BridgeStub& stub) : stub_(stub) {}
+    int apply(const MultiEffectPlan& plan) override { return stub_.apply(plan); }
+    int getLastAppliedCount() const noexcept override { return stub_.callCount; }
+private:
+    BridgeStub& stub_;
+};
+
+} // anonymous namespace
+
+TEST_CASE("Bridge converts neural plan to MultiEffectPlan fields correctly", "[ozone][bridge]")
+{
+    // CRITICAL-6/7/17 F2: verify that buildBridgePlanFromNeural correctly
+    // translates neural-plan fields into the MultiEffectPlan the Ozone
+    // applicator consumes. Use a known plan with loudness/limiter/stereo
+    // targets and check the stub received the expected values.
+
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+
+    BridgeStub stub;
+    BridgeMockApplicator mock(stub);
+    engine.getChainPlanner().setOzonePlanApplicator(&mock);
+    REQUIRE(engine.getChainPlanner().hasOzoneApplicator());
+
+    // Build a neural plan with known projected targets.
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    plan.valid = true;
+    plan.fallbackMode = more_phi::NeuralMasteringFallbackMode::None;
+    plan.projected = true;
+
+    // EQ: set band 0 to +6 dB (0.5 * 12 dB scale) and band 2 to -3 dB (-0.25 * 12)
+    plan.projectedTargets.eq[0] =  0.5f;
+    plan.projectedTargets.eq[2] = -0.25f;
+    // Loudness: -14 + 0.5*6 = -11 LUFS
+    plan.projectedTargets.loudness[0] = 0.5f;
+    plan.appliedMask.loudness = true;
+    // Limiter: -1 + 0.5*0.5 = -0.75 dBTP → streaming-safe clamp → -1.0
+    plan.projectedTargets.limiter[0] = 0.5f;
+    plan.appliedMask.limiter = true;
+    // Stereo: widen region 0
+    plan.projectedTargets.stereo[0] = 0.3f;
+    plan.appliedMask.stereo = true;
+    // Dynamics via compParams (hasCompParams=true path)
+    plan.hasCompParams = true;
+    plan.compParams[0].ratio = 3.0f;
+    plan.compParams[1].ratio = 2.5f;
+    plan.compParams[2].ratio = 4.0f;
+
+    REQUIRE(engine.applyValidatedPlan(plan));
+
+    // The stub should have been called.
+    CHECK(stub.callCount == 1);
+    REQUIRE(stub.lastPlan.valid);
+
+    // EQ: the bridge builds 8-band JSON from eq[]*12 dB, Q=0.707.
+    // We only verify presence; exact JSON parsing is out of scope.
+    CHECK(stub.lastPlan.eqPrescriptionJSON.isNotEmpty());
+    CHECK(stub.lastPlan.eqPrescriptionJSON.contains("peak"));
+    CHECK(stub.lastPlan.eqPrescriptionJSON.contains("\"freq\": 60"));
+    CHECK(stub.lastPlan.eqPrescriptionJSON.contains("\"freq\": 1000"));
+    CHECK(stub.lastPlan.eqPrescriptionJSON.contains("\"freq\": 10000"));
+
+    // Loudness target: -14 + loudness[0]*6 = -11
+    CHECK(stub.lastPlan.targetLUFS == Catch::Approx(-11.0f).margin(0.01f));
+
+    // Ceiling: raw = -1 + limiter[0]*0.5 = -0.75, clamped to kStreamingSafeCeilingDBTP = -1.0
+    CHECK(stub.lastPlan.ceilingDBTP == Catch::Approx(-1.0f).margin(0.01f));
+
+    // Compression need: avg ratio (3.0+2.5+4.0)/3 = 3.167 → (3.167-1)/5 = 0.433
+    CHECK(stub.lastPlan.compressionNeed == Catch::Approx(0.433f).margin(0.01f));
+
+    // Stereo width[0]: clamp(1.0 + stereo[0], 0, 2) = 1.3
+    CHECK(stub.lastPlan.widthCurve[0] == Catch::Approx(1.3f).margin(0.01f));
+
+    // Exciter: harmonic mask not set → should be false
+    CHECK_FALSE(stub.lastPlan.exciterEnabled);
+
+    // useNeuralComp should be true (set by bridge)
+    CHECK(stub.lastPlan.useNeuralComp);
+
+    // Ozone count should reflect the stub's return value.
+    CHECK(engine.getLastOzoneAppliedCount() == stub.returnCount);
+
+    engine.getChainPlanner().clearOzonePlanApplicator();
 }

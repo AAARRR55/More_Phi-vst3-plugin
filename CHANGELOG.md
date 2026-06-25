@@ -5,6 +5,24 @@ alongside the audit documents in `docs/audits/` and the production-readiness
 gates in `docs/validation/`. Format is loosely Keep-a-Changelog; entries are
 grouped by date with severity tags.
 
+## 2026-07-16 — Documentation overhaul & comprehensive audit
+
+- **New:** `VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md` — 39 KB comprehensive
+  audit with 8-criterion ratings (7.9/10 overall), 5-competitor analysis,
+  market positioning, 26 verifiable claims with exact code locations.
+  Based on direct review of ~165 source files across all 7 layers.
+- **Updated:** `README.md` — Complete rewrite: features expanded from 10 to
+  60+, architecture tree updated, MCP tools documented as 30+ across 8
+  categories, technical highlights table added with 9 verifiable claims,
+  installation/build instructions clarified, troubleshooting expanded.
+- **Updated:** `docs/API_REFERENCE.md` — Added audit score reference and
+  expanded tool category overview.
+- **Updated:** `docs/TECHNICAL_DOCUMENTATION.md` — Updated date, added
+  audit reference, expanded multi-agent description.
+- **Updated:** `docs/ARCHITECTURE.md` — Updated date, added audit score.
+- **Updated:** `docs/PERFORMANCE_AUDIT_REPORT.md` — Added cross-reference
+  to comprehensive audit.
+
 ## 2026-07-16 — Performance audit fixes (branch `chore/perf-audit-fixes`)
 
 Comprehensive CPU/memory performance audit (`docs/PERFORMANCE_AUDIT_REPORT.md`)

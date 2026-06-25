@@ -389,6 +389,8 @@ private:
     void load();
     void persist() const;
     void replaceStoredRun(const WorkflowRun& run);
+    nlohmann::json serializeRunsToJson() const;
+    void persistInternal(const nlohmann::json& root) const;
 
     juce::File directory_;
     juce::File file_;
@@ -418,6 +420,8 @@ public:
 private:
     void load();
     void persist() const;
+    nlohmann::json serializeRecordsToJson() const;
+    void persistInternal(const nlohmann::json& root) const;
     int scoreRecord(const MemoryRecord& record,
                     MemoryScope scope,
                     const juce::String& subjectId,

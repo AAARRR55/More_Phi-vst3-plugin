@@ -51,8 +51,17 @@ void QualitySafetyAgent::onEvent(const juce::String& type,
     {
         Proposal p;
         p.runId = runId;
-        if (payload.contains("actions"))
+        if (payload.contains("actions") && !payload["actions"].is_null())
             p.proposedActions = payload["actions"];
+
+        if (p.proposedActions.empty())
+        {
+            if (ctx_ && ctx_->blackboard)
+                ctx_->blackboard->publish(id(), "quality.no_actions",
+                    { { "type", type.toStdString() }, { "note", "proposal had no actions to evaluate" } }, runId);
+            return;
+        }
+
         auto verdict = evaluate(p);
         if (ctx_ && ctx_->blackboard)
         {

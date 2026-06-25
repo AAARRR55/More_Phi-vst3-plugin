@@ -194,6 +194,11 @@ void LinkBroadcaster::broadcast(float x, float y) noexcept
     sharedMem_->seqlock.fetch_add(1, std::memory_order_release);
     std::atomic_thread_fence(std::memory_order_release);
 
+    // C-4 FIX: Write magic + version on every broadcast so followers can
+    // validate that the shared memory block was written by a real More-Phi
+    // leader and not corrupted by another process.
+    sharedMem_->magic.store(LinkStateBlock::kMagic, std::memory_order_relaxed);
+    sharedMem_->version.fetch_add(1, std::memory_order_relaxed);
     sharedMem_->morphX.store(x, std::memory_order_relaxed);
     sharedMem_->morphY.store(y, std::memory_order_relaxed);
 
@@ -211,6 +216,11 @@ bool LinkBroadcaster::receive(float& x, float& y) const noexcept
     const uint64_t now = static_cast<uint64_t>(juce::Time::currentTimeMillis());
     const uint64_t last = sharedMem_->lastActivity.load(std::memory_order_relaxed);
     if (now > last + 100) return false;
+
+    // C-4 FIX: Validate magic number before trusting the shared memory content.
+    // If the block was written by a non-More-Phi process or was corrupted, abort.
+    if (sharedMem_->magic.load(std::memory_order_acquire) != LinkStateBlock::kMagic)
+        return false;
 
     // Seqlock read with retry
     for (int retry = 0; retry < 16; ++retry)

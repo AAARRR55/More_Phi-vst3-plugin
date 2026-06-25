@@ -34,7 +34,7 @@ GenreClassifier::GenreClassifier()
 bool GenreClassifier::loadModel(const juce::File& /*modelFile*/)
 {
     // ONNX Runtime integration stub.
-    juce::Logger::writeToLog("GenreClassifier: ONNX model loading not yet implemented. Using default genre.");
+    DBG("GenreClassifier: ONNX model loading not yet implemented. Using default genre.");
     return false;
 }
 

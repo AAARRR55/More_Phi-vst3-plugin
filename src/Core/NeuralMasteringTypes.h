@@ -251,6 +251,12 @@ struct ValidatedNeuralMasteringPlan
     // This flag is set false by every plan producer and asserted at decode time;
     // any future path that genuinely measures input loudness must set it true.
     bool loudnessIsMeasurement = false;
+
+    // AUDIT: opt-in flag. When true, applyValidatedPlan honours the limiter ceiling
+    // from the decoded SonicMaster decision, hard-clamped to [-3, -0.1] dB TP. The
+    // decoder leaves appliedMask.limiter OFF by default; callers (SonicMasterAnalysisEngine,
+    // MCP sonicmaster_decision tool) set this true when they want the ceiling applied.
+    bool applyLimiterCeiling = false;
 };
 
 } // namespace more_phi

@@ -77,7 +77,7 @@ ParameterMapPanel::ParameterMapPanel(MorePhiProcessor& proc) : proc_(proc)
     headerLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffe5c057));
     addAndMakeVisible(headerLabel_);
 
-    searchField_.setTextToShowWhenEmpty("Filter parameters…", juce::Colour(0xff5a5a60));
+    searchField_.setTextToShowWhenEmpty("Filter parameters…", juce::Colour(0xff6e6e76));
     searchField_.setFont(MorePhiLookAndFeel::bodyFont(11.0f));
     searchField_.setColour(juce::TextEditor::textColourId, juce::Colour(0xffeeeef2));
     searchField_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff17181c));

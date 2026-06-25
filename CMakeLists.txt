@@ -13,6 +13,9 @@ option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
 option(MORE_PHI_ENABLE_PROFILING "Enable PerformanceProfiler instrumentation and the MorePhiDiagnostics 10s message-thread sampler (writes diagnostics-<pid>.log)" OFF)
 set(MORE_PHI_ONNX_VERSION "1.22.1" CACHE STRING "ONNX Runtime prebuilt release version (used when MORE_PHI_ENABLE_ONNX=ON)")
+# Pinned at 1.22.1: GetShape() returned-by-value path segfaults against this
+# exported graph's ONNX Runtime cxx headers; the runner uses a raw C-API
+# invocation as a workaround (see SonicMasterDecisionRunner.cpp:89-99).
 
 if(MORE_PHI_ENABLE_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "clang-tidy")
@@ -148,7 +151,8 @@ include(cmake/PatchJuceForMSVC.cmake)
 # it as an imported target `more_phi::onnxruntime`. The prebuilt-binary route is
 # deliberately chosen over building ORT from source: source builds pull in onnx
 # + protobuf and add ~30+ minutes to configure, and the prebuilt static/dynamic
-# libs are the supported distribution for plugin embedding.
+# libs are the supported distribution for plugin embedding. Pin to ORT 1.22.1 —
+# later versions changed GetShape() semantics (see SonicMasterDecisionRunner.cpp:88-99).
 #
 # When OFF (default), none of this runs, the build is identical to pre-ONNX, and
 # OnnxNeuralMasteringRunner abstains (loadModel returns false).
@@ -215,6 +219,9 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/GeneticEngine.cpp
     src/Core/MorphProcessor.h
     src/Core/MorphProcessor.cpp
+    src/Core/VoronoiMorphEngine.h
+    src/Core/VoronoiMorphEngine.cpp
+    src/Core/WaypointEngine.h
     src/Core/LockFreeQueue.h
     src/Core/ThreadPool.h
     src/Core/ThreadPool.cpp

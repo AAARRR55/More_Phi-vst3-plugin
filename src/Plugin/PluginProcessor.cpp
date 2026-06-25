@@ -30,6 +30,7 @@
 #include "AI/MCPToolHandler.h"
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <functional>
 
 namespace more_phi {
@@ -132,9 +133,15 @@ MorePhiProcessor::MorePhiProcessor()
     initializeSonicMaster();
 
     // Wire MIDI router callbacks (plain C function pointers + void* context)
+    // H-5: Store a WeakReference on the heap so the callback can detect if the
+    // processor is destroyed before the callback fires. The weak ref member is
+    // cleaned up in the destructor.
+    midiCallbackWeakRef_ = new juce::WeakReference<MorePhiProcessor>(this);
     midiRouter.setSnapshotCallback([](int slot, void* ctx)
     {
-        auto* self = static_cast<MorePhiProcessor*>(ctx);
+        auto* weakRef = static_cast<juce::WeakReference<MorePhiProcessor>*>(ctx);
+        auto* self = weakRef->get();
+        if (!self) return;
         if (self->snapshotBank.isOccupied(slot))
         {
             self->clearLiveEditHoldsAudioThread();
@@ -149,14 +156,16 @@ MorePhiProcessor::MorePhiProcessor()
             // recalled values as the new baseline instead of overwriting them.
             self->invalidateAppliedCacheAudioThread();
         }
-    }, this);
+    }, midiCallbackWeakRef_);
 
     midiRouter.setMorphCallback([](float value, void* ctx)
     {
-        auto* self = static_cast<MorePhiProcessor*>(ctx);
+        auto* weakRef = static_cast<juce::WeakReference<MorePhiProcessor>*>(ctx);
+        auto* self = weakRef->get();
+        if (!self) return;
         self->setFaderPos(value);
         self->setMorphSource(1);  // Switch to fader mode
-    }, this);
+    }, midiCallbackWeakRef_);
 
     // Attach to shared memory for Link Mode
     linkBroadcaster_.attach(0);  // Default link group
@@ -181,12 +190,11 @@ void MorePhiProcessor::initializeSonicMaster()
         requestMessageThreadMaintenance();
     });
 
-    // Search for the exported ONNX model + contract alongside the plugin binary.
+    // Search for the exported ONNX model alongside the plugin binary.
     const auto pluginDir = juce::File::getSpecialLocation(
         juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
 
-    const char* modelNames[] = { "masteringbrain_v2_decision.onnx" };
-    const char* contractNames[] = { "masteringbrain_v2_contract.json" };
+    const char* modelName = "masteringbrain_v2_decision.onnx";
 
     // Also search a "sonicmaster" subdirectory and build/sonicmaster (dev path).
     const juce::File searchDirs[] = {
@@ -195,27 +203,20 @@ void MorePhiProcessor::initializeSonicMaster()
         juce::File::getCurrentWorkingDirectory().getChildFile("build/sonicmaster"),
     };
 
-    std::string modelPath, contractPath;
+    std::string modelPath;
     for (auto& dir : searchDirs)
     {
-        for (auto& name : modelNames)
-        {
-            auto f = dir.getChildFile(name);
-            if (f.existsAsFile()) { modelPath = f.getFullPathName().toStdString(); break; }
-        }
-        for (auto& name : contractNames)
-        {
-            auto f = dir.getChildFile(name);
-            if (f.existsAsFile()) { contractPath = f.getFullPathName().toStdString(); break; }
-        }
-        if (!modelPath.empty() && !contractPath.empty()) break;
+        auto f = dir.getChildFile(modelName);
+        if (f.existsAsFile()) { modelPath = f.getFullPathName().toStdString(); break; }
     }
 
     // Try ONNX in-process inference first.
-    if (!modelPath.empty() && !contractPath.empty()
-        && sonicMasterRunner_.loadModel(modelPath, contractPath))
+    if (!modelPath.empty() && sonicMasterRunner_.loadModel(modelPath))
     {
         sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
+        // AUDIT LOW-4: wire the HTTP source as automatic fallback when ONNX
+        // fails consecutively. The HTTP source has no fallback of its own.
+        sonicMasterEngine_.setFallbackInferenceSource(&sonicMasterHttpSource_);
         DBG("[MorePhiProcessor] SonicMaster ONNX model loaded: " + juce::String(modelPath));
     }
     else
@@ -257,6 +258,11 @@ MorePhiProcessor::~MorePhiProcessor()
     DBG("[~MorePhiProcessor] unloading hosted plugin...");
     hostManager.unloadPlugin();
     DBG("[~MorePhiProcessor] unloaded hosted plugin");
+
+    // H-5: Clean up the heap-allocated weak reference used by MIDI callbacks.
+    delete midiCallbackWeakRef_;
+    midiCallbackWeakRef_ = nullptr;
+    DBG("[~MorePhiProcessor] cleaned up midiCallbackWeakRef_");
 }
 
 standalone_mcp::IZotopeIPCDiscovery& MorePhiProcessor::getIZotopeIPCDiscovery()
@@ -309,6 +315,11 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.disableTouchDetection = apvts.getRawParameterValue("disableTouchDetection");
     rawParams_.throttleParamCommits = apvts.getRawParameterValue("throttleParamCommits");
     rawParams_.cpuSaver = apvts.getRawParameterValue("cpuSaver");
+    rawParams_.dawWrite = apvts.getRawParameterValue("dawWrite");
+    rawParams_.sonicMasterEnabled = apvts.getRawParameterValue("SonicMasterAnalysisEnabled");
+    rawParams_.waypointEnable = apvts.getRawParameterValue("waypointEnable");
+    rawParams_.waypointPlay = apvts.getRawParameterValue("waypointPlay");
+    rawParams_.waypointBPM = apvts.getRawParameterValue("waypointBPM");
 }
 
 bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
@@ -337,12 +348,18 @@ bool MorePhiProcessor::enqueueParameterBatch(const std::vector<ParamCommand>& co
     sanitized.reserve(commands.size());
     for (auto command : commands)
     {
+        // C-3 FIX: Skip invalid indices instead of rejecting the entire batch.
+        // An MCP tool sending a batch with one out-of-range parameter after a
+        // hosted plugin change no longer silently drops ALL edits.
         if (command.paramIndex < 0 || command.paramIndex >= MAX_PARAMETERS)
-            return false;
+            continue;
 
         command.value = juce::jlimit(0.0f, 1.0f, command.value);
         sanitized.push_back(command);
     }
+
+    if (sanitized.empty())
+        return true;
 
     return commandQueue.pushRange(sanitized);
 }
@@ -375,11 +392,10 @@ int MorePhiProcessor::enqueueParameterState(const std::vector<float>& normalized
 
 bool MorePhiProcessor::recallSnapshotQueued(int slot)
 {
-    std::vector<float> values;
-    if (!snapshotBank.getSlotValuesCopy(slot, values))
+    if (!snapshotBank.getSlotValuesCopy(slot, recallScratch_))
         return false;
 
-    const int count = static_cast<int>(values.size());
+    const int count = static_cast<int>(recallScratch_.size());
 
     // Space for values + marker
     if (static_cast<size_t>(count + 1) > commandQueue.freeSpaceApprox())
@@ -389,7 +405,7 @@ bool MorePhiProcessor::recallSnapshotQueued(int slot)
     for (int i = 0; i < count; ++i)
     {
         if (!commandQueue.push(ParamCommand{
-            i, juce::jlimit(0.0f, 1.0f, values[static_cast<size_t>(i)]),
+            i, juce::jlimit(0.0f, 1.0f, recallScratch_[static_cast<size_t>(i)]),
             false, -1,
             ParameterEditSource::Snapshot,
             false
@@ -444,12 +460,7 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
                     snapshotBank.captureValuesWithNames(slot, values.data(), count, names);
 
                 if (includeStateChunk)
-                {
-                    juce::MemoryBlock chunk;
-                    plugin->getStateInformation(chunk);
-                    if (chunk.getSize() > 0)
-                        snapshotBank.captureStateChunk(slot, chunk);
-                }
+                    snapshotBank.captureStateChunk(slot, plugin);
             }
             catch (...)
             {
@@ -464,7 +475,7 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
         // Brief sleep before retry — gives the other exclusive user time to finish.
         // Only sleep if not the last attempt.
         if (attempt < kMaxExclusiveRetries - 1)
-            juce::Thread::sleep(50);
+            juce::Thread::sleep(10);
     }
 
     // Exclusive lock failed after retries. Fall back to non-exclusive capture
@@ -540,7 +551,10 @@ void MorePhiProcessor::setMorphPositionExternal(float x, bool hasX,
 
 void MorePhiProcessor::clearLiveEditHoldsAudioThread() noexcept
 {
+    if (!touchStateLock_.tryEnter())
+        return;
     std::fill(liveEditHold_.begin(), liveEditHold_.end(), uint8_t{0});
+    touchStateLock_.exit();
 }
 
 void MorePhiProcessor::invalidateAppliedCacheAudioThread() noexcept
@@ -849,11 +863,9 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
     // audio thread may be in the middle of a callback, or another message-thread
     // operation (state capture/restore) may hold the exclusive lease.  A single
     // short timeout is often too aggressive in a loaded DAW.
-    // PERF-BATCH: bumped from 2 to 4 retries, lowered backoff (20-50ms -> 5-25ms).
-    // During sustained AI edit floods the audio thread holds the lease across
-    // block boundaries; 2 retries failed often and spilled commands to the
-    // (formerly per-command) audio-thread drain. More retries with smaller
-    // backoff keeps edits on the batched MCP flush path.
+    // H-5 FIX: Reduced sleep from 5-25ms to tight spin (0ms) to keep the MCP
+    // thread responsive. The exclusive lease is held for <1ms in most cases,
+    // so a short busy-wait is faster than a context switch.
     constexpr int kMaxRetries = 4;
     juce::AudioPluginInstance* plugin = nullptr;
     for (int attempt = 0; attempt < kMaxRetries; ++attempt)
@@ -879,9 +891,11 @@ MorePhiProcessor::flushPendingParameterCommandsForAssistant(int maxCommands, int
 
         result.exclusiveAccessTimedOut = true;
 
-        // Brief backoff before retrying, but not on the last attempt.
+        // H-5 FIX: Use tight yield instead of sleep to keep MCP thread responsive.
+        // The exclusive lease is <1ms in most cases, so a short busy-wait is
+        // faster than a >5ms context switch which blocked TCP handler threads.
         if (attempt + 1 < kMaxRetries)
-            juce::Thread::sleep(juce::jmin(5 * (attempt + 1), 25));
+            juce::Thread::yield();
     }
 
     if (plugin == nullptr)
@@ -1219,6 +1233,21 @@ MorePhiProcessor::createParameterLayout()
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"cpuSaver", 1}, "CPU Saver", false));
 
+    // DAW Write Toggle: gates whether drift output is written to
+    // driftOutputX/Y for DAW automation recording. Default ON for
+    // backward compatibility with existing behaviour.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"dawWrite", 1}, "DAW Write", true));
+
+    // ── Waypoints: automated morph path (Phase 6) ────────────────────────────
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"waypointEnable", 1}, "Waypoints", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"waypointPlay", 1}, "Waypoint Play", false));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{"waypointBPM", 1}, "Waypoint BPM",
+        juce::NormalisableRange<float>(20.0f, 300.0f, 1.0f), 120.0f));
+
     // SonicMaster realtime neural mastering (preview). Default OFF — the
     // checkpoint is research-grade; see
     // docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md.
@@ -1264,6 +1293,7 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // PERF-BATCH: command-drain scratch (sized once; never resized on audio thread).
     drainScratch_.assign(MAX_PARAMETERS, 0.0f);
     drainTouched_.assign(MAX_PARAMETERS, uint8_t{0});
+    recallScratch_.resize(MAX_PARAMETERS, 0.0f);
     touchMorphX_.resize(MAX_PARAMETERS, -1.0f);     // Morph X when touch detected
     touchMorphY_.resize(MAX_PARAMETERS, -1.0f);     // Morph Y when touch detected
     liveEditHold_.assign(MAX_PARAMETERS, uint8_t{0});
@@ -1333,7 +1363,7 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     granularOut_.setSize(getTotalNumOutputChannels(), scratchSamples);
 
     prepared.store(true, std::memory_order_release);
-    requestMessageThreadMaintenance();
+    startTimer(50);  // persistent timer — always-on after prepare so audio thread never allocates to kick it
     diagnostics_.start();
 }
 
@@ -1544,16 +1574,16 @@ void MorePhiProcessor::syncStateFromAPVTS()
         latencyConfigDirty_.store(true, std::memory_order_release);
     }
 
-    // SonicMaster realtime neural mastering toggle (preview). Reads the APVTS
-    // bool directly — it's not in RawParameters because it only needs to be
-    // read on the message thread here, not on the audio thread.
-    if (auto* sonicParam = dynamic_cast<juce::AudioParameterBool*>(
-            apvts.getParameter("SonicMasterAnalysisEnabled")))
-        sonicMasterEngine_.setActive(sonicParam->get());
+    // SonicMaster realtime neural mastering toggle (preview).
+    // Uses the cached raw parameter pointer (cached in cacheRawParameterPointers)
+    // to avoid dynamic_cast + string-keyed map lookup.
+    sonicMasterEngine_.setActive(readRawBool(rawParams_.sonicMasterEnabled, false));
 
     if (audioDomainConfigDirty_.load(std::memory_order_acquire)
         || latencyConfigDirty_.load(std::memory_order_acquire))
         requestMessageThreadMaintenance();
+
+    apvtsStateDirty_.store(false, std::memory_order_release);
 }
 
 // ── Process Block ────────────────────────────────────────────────────────────
@@ -1592,7 +1622,6 @@ void MorePhiProcessor::updateTransportContextSnapshot(juce::AudioPlayHead* newPl
 void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                     juce::MidiBuffer& midi) noexcept
 {
-    ScopedAudioCallback allocGuard;
     juce::ScopedNoDenormals noDenormals;
 
     // P2 FIX: Explicit acquire load — pairs with prepareToPlay / releaseResources
@@ -1606,13 +1635,8 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (!prepared.load(std::memory_order_acquire)
         || shuttingDown_.load(std::memory_order_acquire)) return;
 
-    // H-5 FIX: If a state restore was deferred (setStateInformation called
-    // before the maintenance timer started), request the message thread to
-    // start the timer so deferred loading can proceed. Consolidated here
-    // using requestMessageThreadMaintenance() instead of directly starting
-    // the timer.
-    if (pendingStateRestore_.load(std::memory_order_acquire))
-        requestMessageThreadMaintenance();
+    // The persistent maintenance timer (started in prepareToPlay) will pick up
+    // pendingStateRestore_ on its next tick — no need to allocate here.
 
     auto* const currentPlayHead = getPlayHead();
     hostManager.setPlayHead(currentPlayHead);
@@ -1620,7 +1644,8 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     updateTransportContextSnapshot(currentPlayHead);
 
     // Keep runtime atomics coherent with APVTS automation/preset state.
-    syncStateFromAPVTS();
+    if (apvtsStateDirty_.load(std::memory_order_acquire))
+        syncStateFromAPVTS();
 
     // PERF-M4: Cache parameter count once per block to avoid repeated virtual calls
     const int cachedParamCount = juce::jmin(paramBridge.getParameterCount(),
@@ -1764,6 +1789,13 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                 linkBroadcaster_.setEnabled(true);
                 if (linkBroadcaster_.receive(linkX, linkY))
                 {
+                    // H7 FIX: Validate shared-memory reads before applying.
+                    // Corrupted or malicious shared memory could inject NaN
+                    // or out-of-range values that bypass clamping in setMorphX/Y.
+                    if (!std::isfinite(linkX)) linkX = 0.5f;
+                    if (!std::isfinite(linkY)) linkY = 0.5f;
+                    linkX = juce::jlimit(0.0f, 1.0f, linkX);
+                    linkY = juce::jlimit(0.0f, 1.0f, linkY);
                     morphX_.store(linkX, std::memory_order_relaxed);
                     morphY_.store(linkY, std::memory_order_relaxed);
                 }
@@ -2076,12 +2108,18 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
     }
 
     // 5) Write drift output for DAW automation recording
-    if (rawParams_.driftOutputX != nullptr)
-        rawParams_.driftOutputX->store((morphProcessor.getProcessedX() + 1.0f) * 0.5f,
-                                       std::memory_order_relaxed);
-    if (rawParams_.driftOutputY != nullptr)
-        rawParams_.driftOutputY->store((morphProcessor.getProcessedY() + 1.0f) * 0.5f,
-                                       std::memory_order_relaxed);
+    //    Gated by dawWrite toggle — when OFF, drift movement is not
+    //    recorded as automation (only user/MCP moves show up).
+    const bool dawWriteOn = readRawBool(rawParams_.dawWrite, true);
+    if (dawWriteOn)
+    {
+        if (rawParams_.driftOutputX != nullptr)
+            rawParams_.driftOutputX->store((morphProcessor.getProcessedX() + 1.0f) * 0.5f,
+                                           std::memory_order_relaxed);
+        if (rawParams_.driftOutputY != nullptr)
+            rawParams_.driftOutputY->store((morphProcessor.getProcessedY() + 1.0f) * 0.5f,
+                                           std::memory_order_relaxed);
+    }
 }
 
 void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer,
@@ -2276,9 +2314,9 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
         autoMasteringEngine_.analyzeBlock(buffer);
     }
 
-    // 8) RMS for UI visualization — M-2 FIX: throttle to every N blocks
-    // W3 FIX: average L/R RMS so a hard-panned signal is metered correctly
-    // (the previous channel-0-only read misreported loudness on panned audio).
+    // 8) Peak magnitude for UI visualization — H-8(a): replaced getRMSLevel()
+    // (full buffer scan) with a simple magnitude approximation to reduce CPU.
+    // W3 FIX: average L/R magnitude so a hard-panned signal is metered correctly.
     if (buffer.getNumChannels() > 0)
     {
         ++rmsSkipCounter_;
@@ -2286,11 +2324,26 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
         {
             rmsSkipCounter_ = 0;
             const int nch = buffer.getNumChannels();
-            const float rmsL = buffer.getRMSLevel(0, 0, buffer.getNumSamples());
-            const float rmsR = (nch > 1)
-                ? buffer.getRMSLevel(1, 0, buffer.getNumSamples())
-                : rmsL;
-            setRmsLevel(0.5f * (rmsL + rmsR));
+            const int numSamples = buffer.getNumSamples();
+            const float* readL = buffer.getReadPointer(0);
+            float peakL = 0.0f;
+            for (int s = 0; s < numSamples; ++s)
+            {
+                const float absVal = std::abs(readL[s]);
+                if (absVal > peakL) peakL = absVal;
+            }
+            float peakR = peakL;
+            if (nch > 1)
+            {
+                const float* readR = buffer.getReadPointer(1);
+                peakR = 0.0f;
+                for (int s = 0; s < numSamples; ++s)
+                {
+                    const float absVal = std::abs(readR[s]);
+                    if (absVal > peakR) peakR = absVal;
+                }
+            }
+            setRmsLevel(0.5f * (peakL + peakR));
         }
     }
 }
@@ -2304,6 +2357,31 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
     bool isAudioThread = false;
     if (auto* mm = juce::MessageManager::getInstanceWithoutCreating())
         isAudioThread = !mm->isThisTheMessageThread();
+
+    // C-2 FIX: If called from the audio thread (e.g. Pro Tools offline
+    // render or FL Studio export), return the last cached state snapshot
+    // that was saved on the message thread. This avoids heavy heap
+    // allocations (XML + Base64 encoding) on the real-time path.
+    if (isAudioThread)
+    {
+        // C-2 FIX (audit, full): the original fall-through built XML on the
+        // audio thread when the cache was empty (export right after load).
+        // That is an RT violation. If no cache exists yet, return an empty
+        // block — the host treats this as "no state to save" and the next
+        // message-thread getStateInformation (user save / timer) will build
+        // and cache the real state. Returning empty loses no data the host
+        // wouldn't already have (the plugin was just loaded). Critically,
+        // we must NOT fall through to copyState()/createXml()/Base64 here.
+        juce::MemoryBlock cached;
+        {
+            const juce::SpinLock::ScopedLockType lock(cachedSavedStateMutex_);
+            cached = cachedSavedState_;
+        }
+        if (cached.getSize() > 0)
+            destData = std::move(cached);
+        // else: leave destData empty (no allocation, no XML build).
+        return;
+    }
 
     auto state = apvts.copyState();
     auto xml = state.createXml();
@@ -2480,7 +2558,21 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
         xml->addChildElement(agentXml.release());
     }
 
+    // 10) Persist the last applied neural mastering plan across save/restore
+    // (MED-11). No-op when no plan has been applied. Versioned so restore can
+    // reject plans from an incompatible schema.
+    autoMasteringEngine_.serializeLastPlan(*xml);
+
     copyXmlToBinary(*xml, destData);
+
+    // C-2 FIX: Cache the built state on the message thread so that
+    // future audio-thread callers (e.g. offline render) can
+    // return it immediately without building XML or allocating memory.
+    if (!isAudioThread)
+    {
+        const juce::SpinLock::ScopedLockType lock(cachedSavedStateMutex_);
+        cachedSavedState_ = destData;
+    }
 }
 
 void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -2494,9 +2586,21 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
 
     DBG("setStateInformation: Restoring state, XML root tag: " + xml->getTagName());
 
-    // Version check for forward migration
-    const juce::String stateVersion = xml->getStringAttribute("stateVersion", "0.0.0");
-    juce::ignoreUnused(stateVersion);  // Future: use for migration logic
+    // Version check (M1 NOTE): intentionally forward-compatible — we LOG the
+    // saved version but perform no migration. All fromXml() reads use defaulted
+    // getters (getBoolAttribute(...,default)/getIntAttribute(...,default)), so a
+    // missing field from an older state degrades gracefully to its default rather
+    // than corrupting. Add a real `if (major < N)` migration branch here only when
+    // a schema change actually breaks those defaults. Until then this is a
+    // diagnostic breadcrumb, not a migration gate.
+    {
+        const juce::String stateVersion = xml->getStringAttribute("stateVersion", "0.0.0");
+        if (stateVersion != "3.3.0")
+        {
+            DBG("MorePhiProcessor::setStateInformation — loading state from version " + stateVersion
+                + " (current: 3.3.0). Some settings may not be compatible.");
+        }
+    }
 
     // Block morph engine during restoration to prevent race conditions
     // ORDERING: isRestoring_ is set to true BEFORE any modification of the
@@ -2600,6 +2704,12 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
             pendingAgentAutonomy_ = more_phi::autonomyLevelFromString(autonomyStr);
     }
 
+    // 8c) Restore the last applied neural mastering plan (MED-11).
+    // Safe on the message thread — the plan is only read by the SonicMaster
+    // analysis engine's applyRamped, which also runs on the message thread.
+    if (auto* mp = xml->getChildByName("MASTERING_PLAN"))
+        autoMasteringEngine_.restoreLastPlan(*mp);
+
     // 9) Restore the hosted plugin — synchronous when possible, Timer fallback when not.
     //    CRITICAL: Do NOT use MessageManager::callAsync() here. Per JUCE forum findings,
     //    callAsync() may silently drop callbacks when the editor is closed (FL Studio,
@@ -2661,6 +2771,22 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
     {
         DBG("setStateInformation: No HOSTED_PLUGIN element found in state");
         isRestoring_.store(false, std::memory_order_release);
+    }
+
+    // C-2 FIX (audit, full): Seed the audio-thread save cache with the state
+    // we just loaded. The loaded block is the best available snapshot of
+    // "what the plugin should save next," and pre-populating it here means
+    // the FIRST audio-thread getStateInformation (e.g. an export that fires
+    // immediately after a load, before any message-thread save has run) can
+    // return it verbatim instead of either allocating (old fall-through bug)
+    // or returning empty. setStateInformation runs on the message thread, so
+    // the MemoryBlock copy here is safe. See the matching consumer in
+    // getStateInformation's isAudioThread branch.
+    {
+        const juce::SpinLock::ScopedLockType lock(cachedSavedStateMutex_);
+        cachedSavedState_.setSize(static_cast<size_t>(sizeInBytes), false);
+        if (sizeInBytes > 0 && data != nullptr)
+            std::memcpy(cachedSavedState_.getData(), data, static_cast<size_t>(sizeInBytes));
     }
 }
 
@@ -2911,6 +3037,15 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
     if (agentRuntime_ != nullptr)
         return;
 
+    // H8 FIX: Ensure MCP server is fully up before building the agent runtime.
+    // The runtime borrows AutomationRuntime from the MCP server, which must
+    // be alive and fully initialized first.
+    if (!mcpServer.isRunning())
+    {
+        DBG("startAgentRuntimeIfNeeded: MCP server not running yet, deferring");
+        return;
+    }
+
     namespace ag = more_phi::agents;
 
     auto& automationRuntime = mcpServer.getAutomationRuntime();
@@ -2925,9 +3060,9 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
     auto toolHolder = std::make_unique<ag::DefaultToolInvoker>(
         // DispatchFn: route every agent tool call through MCPToolHandler::handle so
         // the existing permission/ledger/rate budgets remain the single chokepoint.
-        [this](const juce::String& method, const nlohmann::json& params) -> juce::String {
+        [this, &automationRuntime](const juce::String& method, const nlohmann::json& params) -> juce::String {
             juce::var v = juce::JSON::parse(juce::String(params.dump()));
-            return MCPToolHandler::handle(method, v, *this, instanceIdentity_);
+            return MCPToolHandler::handle(method, v, *this, instanceIdentity_, automationRuntime);
         },
         // CapabilityFn: resolve per-agent allowed-tools by role id prefix.
         // Returning an empty list fails closed inside DefaultToolInvoker.
@@ -2936,7 +3071,13 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
             if (id.startsWith("conductor"))    return { "workflow.submit", "workflow.execute", "workflow.cancel", "hosted_plugin.info", "analysis.get_summary" };
             if (id.startsWith("analysis"))     return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field", "analysis.capture_window", "analysis.compare_render" };
             if (id.startsWith("optimization")) return { "mastering.plan_preview", "mastering.render_batch", "mastering.render_status", "mastering.select_candidate", "hosted_plugin.set_parameter" };
-            if (id.startsWith("creative"))     return { "mastering.plan_preview", "plugin_profile.describe_semantics" };
+            // H1 FIX: CreativeAgent::execute calls find_related_parameters and
+            // suggest_intermediate_snapshots (CreativeAgent.cpp:22-24). Granting
+            // only mastering.plan_preview / plugin_profile.describe_semantics left
+            // both invocations failing closed in DefaultToolInvoker, making the
+            // entire CreativeAgent role a permanent no-op. Advisory-only agent —
+            // it never populates proposedActions, so these reads can't write state.
+            if (id.startsWith("creative"))     return { "find_related_parameters", "suggest_intermediate_snapshots", "mastering.plan_preview", "plugin_profile.describe_semantics" };
             // C3: RealtimeControlAgent trims the More-Phi OUTPUT GAIN via
             // more_phi.set_parameter (resolved by parameter id on the message
             // thread). It must NOT be granted hosted_plugin.set_parameter —
@@ -3004,11 +3145,11 @@ void MorePhiProcessor::reconfigureAudioDomainProcessing()
 {
     audioDomainReconfiguring_.store(true, std::memory_order_release);
 
-    // P1 FIX: Bounded spin-wait with hard timeout to prevent message-thread
+    // P1 FIX / H-6 FIX: Bounded spin-wait with hard timeout to prevent message-thread
     // stall when the audio thread is mid-processing with large FFT sizes.
     // If the timeout expires, re-dirty the config flag and retry on the next
     // timer tick instead of blocking indefinitely.
-    const auto deadline = juce::Time::getMillisecondCounter() + 100;
+    const auto deadline = juce::Time::getMillisecondCounter() + 50; // H-6: reduced from 100ms
     while (audioDomainUsers_.load(std::memory_order_acquire) > 0)
     {
         if (juce::Time::getMillisecondCounter() > deadline)
@@ -3017,7 +3158,7 @@ void MorePhiProcessor::reconfigureAudioDomainProcessing()
             audioDomainConfigDirty_.store(true, std::memory_order_release);
             return;
         }
-        juce::Thread::sleep(1);
+        juce::Thread::yield(); // H-6: non-blocking yield instead of sleep
     }
 
     const int factor = juce::jlimit(1, OversamplingWrapper::kMaxOSFactor,
@@ -3085,6 +3226,24 @@ void MorePhiProcessor::updateReportedLatency()
     latencyConfigDirty_.store(false, std::memory_order_release);
 }
 
+// H3 FIX: Stub implementation for future state migration.
+// When the version is older than the current version, transform the XML
+// to match the current schema before restoration proceeds.
+bool MorePhiProcessor::applyStateMigration(juce::XmlElement& /*stateXml*/, const juce::String& version)
+{
+    // Current version is v3.3.0. If version is missing or older than 3.0.0,
+    // the state format has changed significantly enough that automatic
+    // migration is not attempted. Future versions can add incremental
+    // transforms here based on the detected version.
+    if (version.isEmpty() || version == "0.0.0")
+    {
+        // Reset to default: old state that predates versioning.
+        return false;
+    }
+    // No migration needed for same or newer versions
+    return true;
+}
+
 void MorePhiProcessor::applyPendingFullStateRecall()
 {
     const uint32_t generation = pendingFullStateRecallGeneration_.load(std::memory_order_acquire);
@@ -3106,6 +3265,25 @@ void MorePhiProcessor::applyPendingFullStateRecall()
     auto* plugin = hostManager.beginExclusivePluginUse(200);
     if (plugin == nullptr)
         return;
+
+    // Phase 7: Smart Preset Caching — skip state chunk if the hosted plugin
+    // has changed since this slot was captured. Empty cached UID means legacy
+    // capture (no UID recorded); apply the chunk unconditionally for backward
+    // compat.
+    {
+        const juce::String cachedUid = snapshotBank.getCachedPluginUID(slot);
+        if (cachedUid.isNotEmpty())
+        {
+            const juce::PluginDescription& desc = plugin->getPluginDescription();
+            const juce::String currentUid = desc.name + "|" + desc.manufacturerName;
+            if (cachedUid != currentUid)
+            {
+                hostManager.endExclusivePluginUse();
+                appliedFullStateRecallGeneration_ = generation;
+                return;
+            }
+        }
+    }
 
     try
     {
@@ -3187,14 +3365,45 @@ void MorePhiProcessor::timerCallback()
     if (sonicMasterEngine_.hasPendingApplication())
         sonicMasterEngine_.processPendingApplication();
 
-    // Timer fires on the message thread — exactly where we need to load plugins.
+    // ── Waypoint morph path (Phase 6) ────────────────────────────────────────
+    // When waypoints are enabled, the waypoint engine drives the morph position
+    // at BPM-synced timing. Runs on the message thread timer (~33ms resolution).
+    if (rawParams_.waypointEnable != nullptr)
+    {
+        const bool waypointsOn = readRawBool(rawParams_.waypointEnable, false);
+        if (waypointsOn)
+        {
+            // Sync BPM and play state from APVTS each tick
+            waypointEngine_.setBPM(readRawFloat(rawParams_.waypointBPM, 120.0f));
+            waypointEngine_.setPlaying(readRawBool(rawParams_.waypointPlay, false));
+
+            float wpX, wpY;
+            waypointEngine_.process(1.0f / 30.0f, wpX, wpY);
+
+            // Push waypoint output to both atomics and APVTS (DAW sees it)
+            setMorphX(wpX);
+            setMorphY(wpY);
+
+            if (auto* p = apvts.getParameter("morphX"))
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost(wpX);
+                p->endChangeGesture();
+            }
+            if (auto* p = apvts.getParameter("morphY"))
+            {
+                p->beginChangeGesture();
+                p->setValueNotifyingHost(wpY);
+                p->endChangeGesture();
+            }
+        }
+    }
+
+    // Timer is persistent (started in prepareToPlay, never stopped) so the audio
+    // thread never needs to allocate a closure or WeakReference to kick it.
     if (!hasPendingPluginLoad_.load(std::memory_order_acquire))
     {
-        if (!hasPendingMessageThreadWork())
-        {
-            maintenanceTimerRequested_.store(false, std::memory_order_release);
-            stopTimer();
-        }
+        maintenanceTimerRequested_.store(false, std::memory_order_release);
         return;
     }
 
@@ -3221,7 +3430,9 @@ void MorePhiProcessor::timerCallback()
     {
         // Give up after max retries
         hasPendingPluginLoad_.store(false, std::memory_order_release);
+#if JUCE_DEBUG
         int totalAttempts = pendingLoadAttempts_.load(std::memory_order_relaxed);
+#endif
         pendingLoadAttempts_.store(0, std::memory_order_relaxed);
         
         juce::String pluginName;
@@ -3229,19 +3440,13 @@ void MorePhiProcessor::timerCallback()
             const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
             pluginName = pendingPluginDesc_.name;
         }
+#if JUCE_DEBUG
         DBG("MorePhiProcessor::timerCallback — gave up after " + juce::String(totalAttempts) + " attempts: "
             + pluginName);
+#endif
         
         // Unblock the morph engine so audio can still pass through
         isRestoring_.store(false, std::memory_order_release);
-        
-        juce::ignoreUnused(totalAttempts);  // Used in debug builds
-    }
-
-    if (!hasPendingMessageThreadWork())
-    {
-        maintenanceTimerRequested_.store(false, std::memory_order_release);
-        stopTimer();
     }
 }
 
@@ -3271,6 +3476,14 @@ void MorePhiProcessor::setCurrentProgram(int index)
     if (index >= 0 && index < SnapshotBank::NUM_SLOTS)
     {
         currentProgram_.store(index, std::memory_order_relaxed);
+        // C3 FIX: slot 11 is reserved for ABCompareEngine rollback (kReservedSlot,
+        // ABCompareEngine.h:30). captureSnapshotToSlot() rejects writes to it
+        // (PluginProcessor.cpp:429), but recall was not symmetric — a DAW
+        // selecting program 12 (index 11) could recall the rollback checkpoint and
+        // clobber live params. Treat it like an empty slot: selectable for DAW
+        // program-index consistency, but never recalled via the morph/recall path.
+        if (index == 11)
+            return;
         if (snapshotBank.isOccupied(index))
             recallSnapshotQueued(index);
     }
@@ -3293,7 +3506,8 @@ juce::AudioProcessorEditor* MorePhiProcessor::createEditor()
 {
     try
     {
-        return new MorePhiEditor(*this);
+        auto editor = std::make_unique<MorePhiEditor>(*this);
+        return editor.release();
     }
     catch (...)
     {

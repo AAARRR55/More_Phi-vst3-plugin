@@ -6,6 +6,7 @@
 **Profiling harness:** `tests/Performance/ComprehensiveProfilingHarness.cpp` (new)  
 **Existing benchmarks:** `tests/Performance/BenchmarkSuite.cpp`  
 **Status:** ✅ **ALL 5 FIXES APPLIED** (2026-07-16) — see [Fixes Applied](#fixes-applied-2026-07-16) section below.
+**Cross-reference:** See also the comprehensive [VST3 Technical Audit & Market Analysis](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) (7.9/10 overall, Performance 8.5/10).
 
 ---
 

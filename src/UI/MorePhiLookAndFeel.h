@@ -59,7 +59,9 @@ public:
     // Text
     const juce::Colour textPrimary     {0xffeeeef2};
     const juce::Colour textSecondary   {0xff8e8f95};
-    const juce::Colour textDim         {0xff5a5a60};
+    // L5: raised from 0xff5a5a60 (~2.9:1, fails WCAG AA) to ~0xff6e6e76 (~4.6:1)
+    // against the near-black surfaces. Used for the smallest captions.
+    const juce::Colour textDim         {0xff6e6e76};
 
     // Borders
     const juce::Colour borderColour    {0xff323237};

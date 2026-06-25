@@ -27,6 +27,27 @@ BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
         "Randomize: jumps the morph cursor to a random position on the pad "
         "for unexpected sound exploration.");
 
+    waypointStartStop_.setClickingTogglesState(true);
+    waypointStartStop_.setTooltip(
+        "Toggle waypoint playback. Waypoints define a timed sequence of morph positions "
+        "for automated morph animation.");
+    waypointStartStop_.onClick = [this] {
+        auto& wp = proc_.getWaypointEngine();
+        wp.setPlaying(waypointStartStop_.getToggleState());
+        statusLabel_.setText(waypointStartStop_.getToggleState()
+            ? "Waypoint playback started"
+            : "Waypoint playback stopped", juce::dontSendNotification);
+    };
+
+    clearWaypoints_.setTooltip(
+        "Clear all waypoints and reset the waypoint sequence.");
+    clearWaypoints_.onClick = [this] {
+        auto& wp = proc_.getWaypointEngine();
+        wp.configure({});
+        waypointStartStop_.setToggleState(false, juce::dontSendNotification);
+        statusLabel_.setText("Waypoints cleared", juce::dontSendNotification);
+    };
+
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffa0a0b0));
     statusLabel_.setText("Snapshot genetics ready", juce::dontSendNotification);
@@ -34,6 +55,8 @@ BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
     addAndMakeVisible(breedButton_);
     addAndMakeVisible(mutateButton_);
     addAndMakeVisible(randomizeButton_);
+    addAndMakeVisible(waypointStartStop_);
+    addAndMakeVisible(clearWaypoints_);
     addAndMakeVisible(statusLabel_);
 }
 
@@ -53,6 +76,10 @@ void BreedingPanel::resized()
     mutateButton_.setBounds(area.removeFromLeft(76));
     area.removeFromLeft(6);
     randomizeButton_.setBounds(area.removeFromLeft(92));
+    area.removeFromLeft(6);
+    waypointStartStop_.setBounds(area.removeFromLeft(100));
+    area.removeFromLeft(4);
+    clearWaypoints_.setBounds(area.removeFromLeft(78));
     area.removeFromLeft(10);
     statusLabel_.setBounds(area);
 }

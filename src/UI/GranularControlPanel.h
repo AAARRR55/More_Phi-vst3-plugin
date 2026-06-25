@@ -6,9 +6,9 @@
  *
  * Sections (left → right):
  *   LEFT    — Granular active toggle
- *   CENTER  — Four rotary knobs: Grain Size, Density, Pitch Rand, Pos Rand
+ *   CENTER  — Four rotary knobs: Size, Density, Pitch Rand, Scatter
  *
- * All engine calls go directly to GranularMorphEngine; no APVTS binding.
+ * All controls route through APVTS for DAW automation support.
  */
 #pragma once
 

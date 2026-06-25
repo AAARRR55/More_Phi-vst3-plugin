@@ -69,3 +69,24 @@ TEST_CASE("AudioCaptureRing resets on reset()", "[SonicMaster][Ring]")
     ring.reset();
     CHECK(ring.capturedFrames() == 0);
 }
+
+TEST_CASE("AudioCaptureRing availableFrames saturates at capacity after wrap (no hasWrapped_ race)",
+          "[SonicMaster][Ring]")
+{
+    // Regression: availableFrames_ must return exactly capacity once the
+    // producer has written more than the ring can hold, regardless of how
+    // the consumer's reads interleave with writes.
+    more_phi::AudioCaptureRing ring(/*capacityFrames=*/512);
+    std::vector<float> l(512, 1.0f), r(512, 1.0f);
+    // Write exactly one ring's worth.
+    ring.write(l.data(), r.data(), 256);
+    CHECK(ring.capturedFrames() == 256);
+    // Wrap around: write another full ring's worth.
+    ring.write(l.data(), r.data(), 256);
+    CHECK(ring.capturedFrames() == 512);  // saturated at capacity
+    // Read the newest 256 — must be all 1.0 (from the second write).
+    std::vector<float> lo(256, -1.0f), ro(256, -1.0f);
+    REQUIRE(ring.readNewest(256, lo.data(), ro.data()) == 256);
+    for (auto v : lo) CHECK(v == 1.0f);
+    for (auto v : ro) CHECK(v == 1.0f);
+}

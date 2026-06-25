@@ -42,10 +42,8 @@ private:
     juce::ComboBox   fftSizeCombo_;
     juce::Label      fftSizeLabel_;
 
-    // ── Center section: Alpha knob ───────────────────────────────────────────
-    juce::Slider     alphaKnob_;
-    juce::Label      alphaLabel_;
-
+    // ── Center section: (removed duplicate Alpha knob — was shared morphAlpha,
+    //      now only in HybridBlendPanel to avoid confusion) ─────────────────────
     // ── Right section: OPTIONS ───────────────────────────────────────────────
     juce::TextButton transientToggle_ { "Transient" };
     juce::TextButton formantToggle_   { "Formant"   };

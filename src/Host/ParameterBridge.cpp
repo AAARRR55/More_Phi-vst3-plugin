@@ -60,9 +60,22 @@ Ret ParameterBridge::withPlugin(IPluginHostManager& host, PluginHostManager* cac
     juce::AudioPluginInstance* plugin = nullptr;
 
     if (cachedHost != nullptr)
+    {
+        // Production path: ref-counted lease. Safe against concurrent unload.
         plugin = cachedHost->acquirePluginForUse();
+    }
     else
+    {
+        // A1b NOTE: raw-pointer fallback for non-concrete hosts (test stubs /
+        // mocks). NO lease — the pointer is only safe for single-call check-then-
+        // use with no intervening yield (per IPluginHostManager.h contract).
+        // Production never reaches here: MorePhiProcessor constructs ParameterBridge
+        // with a concrete PluginHostManager, so cachedConcreteHost_ is always set.
+        // A mock that unloads concurrently with a bridge call would race this
+        // pointer — don't do that in tests. Debug assert guards the assumption.
         plugin = host.getPlugin();
+        jassert(plugin == nullptr || host.hasPlugin());
+    }
 
     if (!plugin)
         return defaultValue;

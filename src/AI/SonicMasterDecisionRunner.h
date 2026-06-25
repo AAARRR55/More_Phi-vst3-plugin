@@ -46,13 +46,10 @@ public:
     SonicMasterDecisionRunner(const SonicMasterDecisionRunner&) = delete;
     SonicMasterDecisionRunner& operator=(const SonicMasterDecisionRunner&) = delete;
 
-    // Message thread only. Loads + shape-validates an ONNX model whose contract
-    // matches masteringbrain_v2_decision (input product == 2 * segment frames,
-    // output product == decision width). Returns false (and leaves the runner
-    // unavailable) when ORT is not linked, the file is missing, the contract
-    // JSON is unreadable, or the I/O shapes do not match. `contractPath` points
-    // at the masteringbrain_v2_contract.json emitted by the export script.
-    bool loadModel(std::string_view modelPath, std::string_view contractPath);
+    // Message thread only. Loads + shape-validates an ONNX model. Returns false
+    // when ORT is not linked, the file is missing, or the I/O shapes do not
+    // match the expected segment_frames / decision_width constants.
+    bool loadModel(std::string_view modelPath);
 
     void unloadModel() noexcept;
 

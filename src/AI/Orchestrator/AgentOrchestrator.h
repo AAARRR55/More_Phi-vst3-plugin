@@ -24,6 +24,17 @@ namespace more_phi::orchestrator
  * Single-initialization facade that wires PluginProcessor -> AgentRuntime -> MCPServer.
  * Owns the full multi-agent lifecycle: BlackboardBridge, tool invoker, logger,
  * agent runtime, and registration of all 6 built-in agents.
+ *
+ * L3 NOTE (two wirings): the CANONICAL production wiring lives in
+ * MorePhiProcessor::startMCPServerIfNeeded (PluginProcessor.cpp:~3033) — it
+ * builds the AgentRuntime directly with a StructuredAgentLogger, the
+ * DeterministicFallbackLlmClient, and the CapabilityFn that grants per-role
+ * tools. This facade is a parallel wiring kept for the orchestrator test suite
+ * (TestAgentOrchestrator) and historical reasons; it resolves capability via
+ * agent->allowedTools() instead of the processor's CapabilityFn, so the two can
+ * drift (e.g. CreativeAgent must override allowedTools() here to match). Do not
+ * assume changes to one automatically apply to the other. If the facade ever
+ * becomes unused outside tests, delete it rather than maintaining two wirings.
  */
 class AgentOrchestrator
 {

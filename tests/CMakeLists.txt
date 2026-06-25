@@ -51,6 +51,13 @@ add_executable(MorePhiTests
     Unit/TestV2Integration.cpp
     # Unit/TestDatasetModules.cpp  # Existing suite is out of sync with current dataset APIs
 
+    # ── Phase 1/2: Gravity Wells & Voronoi Morph Engine ──────────────────────────
+    Unit/TestGravityWells.cpp
+    Unit/TestVoronoiMorph.cpp
+
+    # ── Phase 7: Smart Preset Caching ───────────────────────────────────────────
+    Unit/TestSmartCaching.cpp
+
     # ── Pre-Deployment Audit Protocol (2026-04-14) ──────────────────────────────
     # Module 2: Host Integration (P0)
     Unit/TestHostIntegration.cpp

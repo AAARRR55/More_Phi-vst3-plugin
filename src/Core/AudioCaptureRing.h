@@ -41,13 +41,10 @@ public:
     {
     }
 
-    // Resizes the ring and discards all contents. Message thread only — never
-    // the audio thread.
     void reset() noexcept
     {
         writePos_.store(0, std::memory_order_relaxed);
         totalWritten_.store(0, std::memory_order_relaxed);
-        hasWrapped_.store(false, std::memory_order_relaxed);
     }
 
     // Audio thread: append `n` stereo frames. Lock-free, no allocation.
@@ -64,9 +61,7 @@ public:
         }
         writePos_.store(w, std::memory_order_release);
 
-        const std::uint64_t prevTotal = totalWritten_.fetch_add(n, std::memory_order_relaxed);
-        if (prevTotal + n > cap)
-            hasWrapped_.store(true, std::memory_order_relaxed);
+        totalWritten_.fetch_add(n, std::memory_order_release);  // H-9: release so reader's acquire sees the write
     }
 
     // Analysis thread: copy the most recent `n` frames (chronological order)
@@ -115,17 +110,13 @@ private:
 
     std::size_t availableFrames_(std::uint64_t total) const noexcept
     {
-        const std::size_t cap = capacityFrames_;
-        return hasWrapped_.load(std::memory_order_relaxed)
-            ? cap
-            : static_cast<std::size_t>(std::min<std::uint64_t>(total, cap));
+        return static_cast<std::size_t>(std::min<std::uint64_t>(total, capacityFrames_));
     }
 
     const std::size_t capacityFrames_;
     std::vector<float> buffer_;           // [cap] lefts then [cap] rights
     alignas(64) std::atomic<std::size_t>  writePos_     { 0 };
     alignas(64) std::atomic<std::uint64_t> totalWritten_{ 0 };
-    alignas(64) std::atomic<bool>         hasWrapped_   { false };
 };
 
 #if defined(_MSC_VER)

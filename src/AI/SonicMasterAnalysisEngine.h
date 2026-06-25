@@ -60,9 +60,12 @@ public:
     virtual bool infer(const float* stereoInterleaved, float* outDecision,
                        std::size_t outCapacity) noexcept = 0;
     // Set the mastering target LUFS the next infer() will request. The HTTP
-    // source sends it as a query param; the ONNX source ignores it (target is
-    // baked into the exported graph). Default impl is a no-op so existing
-    // stubs/test sources don't need to override it.
+    // source sends it as a query param; the ONNX source ignores it — the ONNX
+    // graph was exported with input count == 1 (waveform only) and the target
+    // loudness is baked into the exported computation. Without the HTTP path's
+    // explicit target, the decoded loudness goal is unconstrained by the caller.
+    // Default impl is a no-op so existing stubs/test sources don't need to
+    // override it.
     virtual void setTargetLufs(float /*lufs*/) noexcept {}
 };
 
@@ -97,6 +100,9 @@ struct SonicMasterMeasurementSnapshot
     float spectralTilt    = 0.0f;
     float stereoWidth     = 0.0f;   // 0..1
     float correlationMid  = 0.0f;   // -1..+1
+    // Metrics/AUDIT: blind-spot metrics now computed by RealtimeSpectrumAnalyzer.
+    float thdPercent          = 0.0f;   // THD H2..H5 / fundamental, %
+    float crestFactorProgram  = 0.0f;   // program-level peak/RMS (smoothed)
     bool  valid           = false;
 };
 
@@ -126,6 +132,11 @@ public:
     // Inject the inference source (real runner or test stub). Caller owns it;
     // must outlive this engine. Passing nullptr reverts to "unavailable".
     void setInferenceSource(ISonicMasterInferenceSource* source) noexcept;
+    // AUDIT LOW-4: set a secondary inference source that the engine automatically
+    // swaps to when the primary fails consecutiveFailureLimit times. The fallback
+    // is tried once; if it also fails, the engine disables as before. Pass nullptr
+    // to clear. Caller owns the source; must outlive this engine.
+    void setFallbackInferenceSource(ISonicMasterInferenceSource* source) noexcept { fallbackSource_ = source; }
     void setApplicationEngine(AutoMasteringEngine* engine) noexcept { applicationEngine_ = engine; }
 
     // Message thread. Sizes the capture ring + scratch buffers and starts the
@@ -164,11 +175,21 @@ public:
         Disabled,
         CollectingAudio,
         Applied,
+        // F2/AUDIT: a plan was decoded, safety-validated, and written into the
+        // AutoMasteringEngine's DSP setters — BUT that chain is not active in
+        // the audio path (active_==false), so no audio sample flows through it
+        // and the hosted plugin is untouched. Distinct from Applied so the UI
+        // and the MCP client cannot mistake a dormant apply for an audible one.
+        AppliedNoAudioPath,
         HeldLowConfidence,
         ErrorAutoDisabled
     };
     [[nodiscard]] Status getStatus() const noexcept { return status_.load(std::memory_order_acquire); }
     [[nodiscard]] std::uint64_t getLastPlanId() const noexcept { return lastPlanId_; }
+    // F2/AUDIT: true when the last apply actually reached an active audio path.
+    // Mirrors the Applied vs AppliedNoAudioPath split for clients that read a
+    // boolean rather than the enum.
+    [[nodiscard]] bool lastApplyReachedAudioPath() const noexcept { return lastApplyReachedAudioPath_.load(std::memory_order_acquire); }
 
     // Test hook: run one analysis cycle synchronously on the calling thread
     // (does NOT spawn the background thread). Used by the unit tests to avoid
@@ -232,8 +253,17 @@ private:
     SonicMasterAnalysisEngineConfig config_ {};
     AutoMasteringEngine* applicationEngine_ = nullptr;
     ISonicMasterInferenceSource* source_ = nullptr;
+    ISonicMasterInferenceSource* fallbackSource_ = nullptr;
 
-    std::unique_ptr<AudioCaptureRing> ring_;
+    // C-3 FIX (audit): ring_ is published through an atomic raw pointer so the
+    // audio thread (capture()) observes either a fully-constructed AudioCaptureRing
+    // or nullptr — never a partially-constructed object. ringStorage_ owns the
+    // lifetime and is touched only on the message/analysis thread under the
+    // existing thread-join + host prepare/process mutual-exclusion discipline
+    // (capture() is only called from processBlock; JUCE guarantees prepare()/
+    // release() are mutually exclusive with processBlock).
+    std::unique_ptr<AudioCaptureRing> ringStorage_;
+    std::atomic<AudioCaptureRing*> ring_ { nullptr };
     std::vector<float> captureL_, captureR_;   // host-rate window
     std::vector<float> modelL_, modelR_;       // 44.1k window
     std::vector<float> interleaved_;           // 2 * kSonicMasterSegmentFrames
@@ -249,6 +279,8 @@ private:
     std::atomic<bool> stopRequested_ { false };
     std::atomic<bool> prepared_ { false };
     std::atomic<Status> status_ { Status::Disabled };
+    // F2/AUDIT: set true only when applyRamped targeted an active app engine.
+    std::atomic<bool> lastApplyReachedAudioPath_ { false };
     std::atomic<int> consecutiveFailures_ { 0 };
     std::uint64_t lastPlanId_ = 0;
     std::uint64_t nextPlanId_ = 1;

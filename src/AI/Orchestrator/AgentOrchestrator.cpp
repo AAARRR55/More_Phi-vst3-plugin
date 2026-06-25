@@ -31,7 +31,7 @@ bool AgentOrchestrator::start()
 {
     if (running_.exchange (true))
     {
-        juce::Logger::writeToLog ("AgentOrchestrator::start: already running");
+        DBG("AgentOrchestrator::start: already running");
         return true;
     }
 
@@ -96,7 +96,7 @@ bool AgentOrchestrator::start()
         {
             if (! agentRuntime_->registerAgent (std::move (agent)))
             {
-                juce::Logger::writeToLog ("AgentOrchestrator: failed to register agent");
+                DBG("AgentOrchestrator: failed to register agent");
             }
         };
 
@@ -125,12 +125,12 @@ bool AgentOrchestrator::start()
             processor_.getMCPServer().startServer (processor_.getInstanceIdentity().port);
         }
 
-        juce::Logger::writeToLog ("AgentOrchestrator::start: success");
+        DBG("AgentOrchestrator::start: success");
         return true;
     }
     catch (const std::exception& e)
     {
-        juce::Logger::writeToLog ("AgentOrchestrator::start exception: " + juce::String (e.what()));
+        DBG("AgentOrchestrator::start exception: " + juce::String (e.what()));
         stop();
         return false;
     }
@@ -141,7 +141,7 @@ void AgentOrchestrator::stop()
     if (! running_.exchange (false))
         return;
 
-    juce::Logger::writeToLog ("AgentOrchestrator::stop");
+    DBG("AgentOrchestrator::stop");
 
     if (agentRuntime_)
         agentRuntime_->stop();
@@ -158,7 +158,7 @@ juce::String AgentOrchestrator::submitUserGoal (const juce::String& intent)
 {
     if (! running_.load() || ! agentRuntime_)
     {
-        juce::Logger::writeToLog ("AgentOrchestrator::submitUserGoal: not running");
+        DBG("AgentOrchestrator::submitUserGoal: not running");
         return juce::String{};
     }
     return agentRuntime_->submitGoal (intent);

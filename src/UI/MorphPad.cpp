@@ -238,6 +238,100 @@ void MorphPad::paint(juce::Graphics& g)
         }
     }
 
+    // ── Voronoi cell overlay (Phase 3) ──────────────────────────────────────
+    // Draw Delaunay/Voronoi cells when Voronoi mode is active and triangulation exists.
+    auto& morph = proc_.getMorphProcessor();
+    if (morph.getInterpolationMode() == 1)
+    {
+        const auto& voronoi = morph.getVoronoiEngine();
+        if (voronoi.isValid())
+        {
+            const auto& cells = voronoi.getVoronoiCells();
+            for (const auto& cell : cells)
+            {
+                if (cell.vertices.size() < 3)
+                    continue;
+
+                // 12-hue palette: evenly spaced around the colour wheel.
+                const float hue = static_cast<float>(cell.slotIndex) / 12.0f;
+                const auto fillCol = juce::Colour::fromHSV(hue, 0.50f, 0.55f, 0.18f);
+                const auto edgeCol = juce::Colour::fromHSV(hue, 0.65f, 0.70f, 0.40f);
+
+                juce::Path cellPath;
+                cellPath.startNewSubPath(
+                    centre.x + cell.vertices[0].x * radius,
+                    centre.y + cell.vertices[0].y * radius);
+                for (size_t vi = 1; vi < cell.vertices.size(); ++vi)
+                    cellPath.lineTo(
+                        centre.x + cell.vertices[vi].x * radius,
+                        centre.y + cell.vertices[vi].y * radius);
+                cellPath.closeSubPath();
+
+                g.setColour(fillCol);
+                g.fillPath(cellPath);
+                g.setColour(edgeCol);
+                g.strokePath(cellPath, juce::PathStrokeType(1.0f));
+            }
+        }
+    }
+
+    // ── Waypoint path overlay (Phase 6) ─────────────────────────────────────
+    // Draw the waypoint path and current position when waypoints are enabled.
+    {
+        auto& wp = proc_.getWaypointEngine();
+        if (wp.getNumWaypoints() > 1)
+        {
+            const auto spos = InterpolationEngine::getClockPositions(0.85f);
+            // Map waypoint [0,1] coordinates to screen space same as clock layout
+            auto wpToScreen = [&](float x, float y) -> juce::Point<float>
+            {
+                // Waypoints use [0,1] normalized space like morphX/Y
+                float sx = centre.x + (x * 2.0f - 1.0f) * radius;
+                float sy = centre.y + (y * 2.0f - 1.0f) * radius;
+                return {sx, sy};
+            };
+
+            const int numWp = wp.getNumWaypoints();
+            // Draw the path connecting waypoints
+            juce::Path path;
+            auto first = wpToScreen(wp.getWaypoint(0).x, wp.getWaypoint(0).y);
+            path.startNewSubPath(first);
+            for (int i = 1; i < numWp; ++i)
+            {
+                auto pt = wpToScreen(wp.getWaypoint(i).x, wp.getWaypoint(i).y);
+                path.lineTo(pt);
+            }
+            // Close the loop
+            path.closeSubPath();
+
+            g.setColour(accent().withAlpha(0.20f));
+            g.strokePath(path, juce::PathStrokeType(1.5f));
+
+            // Draw waypoint dots
+            const float wpDotR = radius * 0.025f;
+            for (int i = 0; i < numWp; ++i)
+            {
+                auto pt = wpToScreen(wp.getWaypoint(i).x, wp.getWaypoint(i).y);
+                bool isCurrent = wp.isPlaying() && (i == wp.getCurrentIndex());
+                g.setColour(isCurrent ? cyanBright().withAlpha(0.7f) : accent().withAlpha(0.35f));
+                g.fillEllipse(pt.x - wpDotR, pt.y - wpDotR, wpDotR * 2, wpDotR * 2);
+            }
+
+            // Draw current waypoint cursor (if playing)
+            if (wp.isPlaying())
+            {
+                float cpx = wp.getPositionX();
+                float cpy = wp.getPositionY();
+                auto cp = wpToScreen(cpx, cpy);
+                float wpCurR = radius * 0.04f;
+                g.setColour(accent().withAlpha(0.50f));
+                g.fillEllipse(cp.x - wpCurR, cp.y - wpCurR, wpCurR * 2, wpCurR * 2);
+                g.setColour(amber());
+                g.drawEllipse(cp.x - wpCurR, cp.y - wpCurR, wpCurR * 2, wpCurR * 2, 1.5f);
+            }
+        }
+    }
+
     // Border
     g.setColour(padGrid());
     g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2, 1.5f);
@@ -256,7 +350,6 @@ void MorphPad::paint(juce::Graphics& g)
     // ── Cursor trail (from audio thread) ───────────────────────────────────────
     // C3 FIX: read each trail point via the atomic getTrailPoint() accessor so
     // the UI never sees a torn {x,y} pair written mid-store by the audio thread.
-    auto& morph = proc_.getMorphProcessor();
     int head = morph.getTrailHead();
     constexpr int trailLen = MorphProcessor::TRAIL_SIZE;
 
@@ -281,49 +374,106 @@ void MorphPad::paint(juce::Graphics& g)
     // ── Snapshot nodes (clock layout) ──────────────────────────────────────────
     // Mockup style: numbered ring-nodes around the clock. Filled slots glow cyan
     // with the number inside; empty slots are muted hairline circles.
+    // F-12: Active A/B pair (nearest two occupied slots to cursor) get a brighter glow.
     auto positions = InterpolationEngine::getClockPositions(0.85f);
     auto& bank = proc_.getSnapshotBank();
     float nodeR = juce::jmax(radius * 0.075f, 11.0f);
     float nodeFontSize = juce::jmax(radius * 0.06f, 9.0f);
+
+    // Determine A/B slot pair (two nearest occupied slots to morph position)
+    int slotA = -1, slotB = -1;
+    {
+        float bestDistA = std::numeric_limits<float>::max();
+        float bestDistB = std::numeric_limits<float>::max();
+        float mx = proc_.getMorphX() * 2.0f - 1.0f;
+        float my = proc_.getMorphY() * 2.0f - 1.0f;
+        for (int i = 0; i < 12; ++i)
+        {
+            if (!bank.isOccupied(i))
+                continue;
+            float dist = std::hypot(positions[i].x - mx, positions[i].y - my);
+            if (dist < bestDistA) { bestDistB = bestDistA; slotB = slotA; bestDistA = dist; slotA = i; }
+            else if (dist < bestDistB) { bestDistB = dist; slotB = i; }
+        }
+    }
     for (int i = 0; i < 12; ++i)
     {
         float dotX = centre.x + positions[i].x * radius;
         float dotY = centre.y + positions[i].y * radius;
         bool occupied = bank.isOccupied(i);
+        bool isActiveA = (i == slotA);
+        bool isActiveB = (i == slotB);
 
-        // Glow halo behind filled nodes
+        // Glow halo behind filled nodes — A/B slots get a brighter amber halo
         if (occupied)
         {
-            float haloR = nodeR * 1.8f;
-            g.setColour(cyan().withAlpha(0.18f));
+            float haloR = nodeR * (isActiveA || isActiveB ? 2.2f : 1.8f);
+            g.setColour(isActiveA || isActiveB
+                ? amber().withAlpha(0.30f)
+                : cyan().withAlpha(0.18f));
             g.fillEllipse(dotX - haloR, dotY - haloR, haloR * 2, haloR * 2);
         }
 
-        // Node body
-        g.setColour(occupied ? cyan().withAlpha(0.18f) : surfaceLit());
-        g.fillEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
-
-        // Node ring
-        g.setColour(occupied ? cyanBright() : border());
-        if (occupied)
-            g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
-        else
+        // Node body — A/B slots use amber tint; regular occupied use cyan
         {
-            // Dashed outline for empty slots — shape+colour distinction for accessibility
-            const float dashLen[] = { 2.0f, 2.5f };
-            juce::Path dashedCircle;
-            dashedCircle.addEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
-            juce::PathStrokeType stroke(1.0f);
-            stroke.createDashedStroke(dashedCircle, dashedCircle, dashLen, 2);
-            g.strokePath(dashedCircle, stroke);
+            auto bodyCol = occupied
+                ? (isActiveA || isActiveB
+                    ? amber().withAlpha(0.25f)
+                    : cyan().withAlpha(0.18f))
+                : surfaceLit();
+            g.setColour(bodyCol);
+            g.fillEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
         }
 
-        // Slot number centered inside the node
-        g.setColour(occupied ? cyanBright() : textSlot());
-        g.setFont(juce::Font(nodeFontSize, juce::Font::bold));
-        g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2),
-                   juce::Justification::centred);
+        // Node ring — A/B slots use amber
+        {
+            auto ringCol = occupied
+                ? (isActiveA || isActiveB ? amber() : cyanBright())
+                : border();
+            g.setColour(ringCol);
+            if (occupied)
+                g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+            else
+            {
+                const float dashLen[] = { 2.0f, 2.5f };
+                juce::Path dashedCircle;
+                dashedCircle.addEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+                juce::PathStrokeType stroke(1.0f);
+                stroke.createDashedStroke(dashedCircle, dashedCircle, dashLen, 2);
+                g.strokePath(dashedCircle, stroke);
+            }
+        }
+
+        // Slot number — A/B slots get amber text with bold weight; regular slots cyan
+        {
+            auto textCol = isActiveA || isActiveB
+                ? amber().withAlpha(0.9f)
+                : (occupied ? cyanBright() : textSlot());
+            g.setColour(textCol);
+            auto fontWeight = isActiveA || isActiveB ? juce::Font::bold : juce::Font::plain;
+            g.setFont(juce::Font(nodeFontSize, fontWeight));
+            g.drawText(juce::String(i + 1),
+                       juce::Rectangle<float>(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2),
+                       juce::Justification::centred);
+        }
+
+        // A/B label beneath slot number
+        if (isActiveA)
+        {
+            g.setColour(amber().withAlpha(0.8f));
+            g.setFont(juce::Font(nodeFontSize * 0.7f, juce::Font::bold));
+            g.drawText("A",
+                       juce::Rectangle<float>(dotX - nodeR, dotY + nodeR * 0.7f, nodeR * 2, nodeFontSize),
+                       juce::Justification::centred);
+        }
+        else if (isActiveB)
+        {
+            g.setColour(amber().withAlpha(0.8f));
+            g.setFont(juce::Font(nodeFontSize * 0.7f, juce::Font::bold));
+            g.drawText("B",
+                       juce::Rectangle<float>(dotX - nodeR, dotY + nodeR * 0.7f, nodeR * 2, nodeFontSize),
+                       juce::Justification::centred);
+        }
     }
 
     // ── Cursor position ────────────────────────────────────────────────────────
@@ -386,12 +536,40 @@ void MorphPad::paint(juce::Graphics& g)
         cx = centre.x + procX * radius;
         cy = centre.y + procY * radius;
 
-        // Also show raw input as faint guide dot
+        // Anchor (raw input) in screen space
         float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
         float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
-        float guideR = radius * 0.02f;
-        g.setColour(padGuide().withAlpha(0.4f));
-        g.fillEllipse(rawCx - guideR, rawCy - guideR, guideR * 2, guideR * 2);
+
+        if (physMode == 2)  // Drift
+        {
+            // Tension line — connects anchor to drifted cursor
+            g.setColour(accent().withAlpha(0.25f));
+            g.drawLine(rawCx, rawCy, cx, cy, 1.0f);
+
+            // Outer glow ring around the drifted cursor (larger, more visible)
+            float driftGlowR = radius * 0.12f;
+            float driftPulse = 0.7f + 0.3f * std::sin(static_cast<float>(
+                juce::Time::getMillisecondCounter() % 1600) / 1600.0f * 6.2832f);
+            g.setColour(accent().withAlpha(0.15f * driftPulse));
+            g.fillEllipse(cx - driftGlowR, cy - driftGlowR,
+                          driftGlowR * 2, driftGlowR * 2);
+
+            // Inner anchor dot — bright, small, representing the fixed anchor
+            float anchorR = radius * 0.025f;
+            g.setColour(accent().withAlpha(0.6f));
+            g.fillEllipse(rawCx - anchorR, rawCy - anchorR,
+                          anchorR * 2, anchorR * 2);
+            g.setColour(amber().withAlpha(0.4f));
+            g.drawEllipse(rawCx - anchorR, rawCy - anchorR,
+                          anchorR * 2, anchorR * 2, 1.0f);
+        }
+        else  // Elastic — simple guide dot
+        {
+            float guideR = radius * 0.02f;
+            g.setColour(padGuide().withAlpha(0.4f));
+            g.fillEllipse(rawCx - guideR, rawCy - guideR,
+                          guideR * 2, guideR * 2);
+        }
     }
     else
     {

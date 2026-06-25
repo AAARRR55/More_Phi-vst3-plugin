@@ -71,6 +71,9 @@ private:
     juce::TextButton paramToggleBtn_;
     bool paramPanelVisible_ = false;
 
+    // Bypass button in title bar
+    juce::TextButton bypassBtn_ { "Bypass" };
+
     // SonicMaster realtime neural mastering (preview) — toggle + live status.
     juce::ToggleButton sonicMasterToggle_ { "Neural Master (Preview)" };
     juce::Label        sonicMasterStatus_;
@@ -105,6 +108,7 @@ private:
 
     float lastDbLevel_ = -1.0f;     // RMS meter throttle state (per-instance)
     float smoothedDbLevel_ = 0.0f;  // Eased OUT-meter level for smooth glide animation
+    juce::Rectangle<int> sonicMasterRowBounds_;
 
     LicenseActivationOverlay licenseOverlay;
 

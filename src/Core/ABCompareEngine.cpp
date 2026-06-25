@@ -24,7 +24,7 @@ void ABCompareEngine::commitCandidate()
     stopTimer();
     comparing_.store(false, std::memory_order_relaxed);
     hasPending_.store(false, std::memory_order_relaxed);
-    juce::Logger::writeToLog("ABCompare: candidate committed.");
+    DBG("ABCompare: candidate committed.");
 }
 
 void ABCompareEngine::rollbackCandidate()
@@ -34,7 +34,7 @@ void ABCompareEngine::rollbackCandidate()
         restoreFunc_(kReservedSlot);
     comparing_.store(false, std::memory_order_relaxed);
     hasPending_.store(false, std::memory_order_relaxed);
-    juce::Logger::writeToLog("ABCompare: rolled back to checkpoint.");
+    DBG("ABCompare: rolled back to checkpoint.");
 }
 
 ABCompareEngine::Metrics ABCompareEngine::readCurrentMetrics() const noexcept
@@ -76,13 +76,13 @@ void ABCompareEngine::compareAndDecide()
 
     if (worseCount >= 2)
     {
-        juce::Logger::writeToLog("ABCompare: candidate worse on " +
+        DBG("ABCompare: candidate worse on " +
                                   juce::String(worseCount) + " metrics — rolling back.");
         rollbackCandidate();
     }
     else
     {
-        juce::Logger::writeToLog("ABCompare: candidate accepted.");
+        DBG("ABCompare: candidate accepted.");
         commitCandidate();
     }
 

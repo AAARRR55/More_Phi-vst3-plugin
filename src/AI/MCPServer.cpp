@@ -64,7 +64,10 @@ MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingS
     : Thread("MCP-Connection"), owner_(owner), socket_(socket)
 {
     startedSuccessfully_ = startThread();
-    owner_.connectedClients_++;
+    // M8: only count the connection when startThread() actually succeeded,
+    // preventing a negative connectedClients_ after destructor decrement.
+    if (startedSuccessfully_)
+        owner_.connectedClients_++;
 }
 
 MCPServer::ConnectionThread::~ConnectionThread()
@@ -74,7 +77,10 @@ MCPServer::ConnectionThread::~ConnectionThread()
     // variables are destroyed. Since signalExit() closes the socket, the thread
     // will unblock and exit immediately.
     stopThread(-1);
-    owner_.connectedClients_--;
+    // M8: mirror the conditional increment — only decrement if the thread was
+    // actually started (constructor only increments on success).
+    if (startedSuccessfully_)
+        owner_.connectedClients_--;
 }
 
 void MCPServer::ConnectionThread::signalExit()

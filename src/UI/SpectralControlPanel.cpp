@@ -48,26 +48,8 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     fftSizeLabel_.setColour(juce::Label::textColourId, textDim());
     fftSizeLabel_.setJustificationType(juce::Justification::centredLeft);
 
-    // ── Alpha knob ────────────────────────────────────────────────────────────
-    alphaKnob_.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-    alphaKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
-    alphaKnob_.setRange(0.0, 1.0, 0.001);
-    alphaKnob_.setValue(static_cast<double>(proc_.getMorphAlpha()),
-                         juce::dontSendNotification);
-    alphaKnob_.setColour(juce::Slider::rotarySliderFillColourId,
-                          accent());
-    alphaKnob_.setColour(juce::Slider::rotarySliderOutlineColourId,
-                          surfaceLit());
-    alphaKnob_.setColour(juce::Slider::textBoxTextColourId,
-                          textBright());
-    alphaKnob_.setColour(juce::Slider::textBoxOutlineColourId,
-                          juce::Colours::transparentBlack);
-    ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
-
-    alphaLabel_.setText("Alpha", juce::dontSendNotification);
-    alphaLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
-    alphaLabel_.setColour(juce::Label::textColourId, textDim());
-    alphaLabel_.setJustificationType(juce::Justification::centred);
+    // ── Alpha knob (REMOVED — duplicate; morphAlpha is controlled from
+    //      HybridBlendPanel to avoid confusion) ─────────────────────────────────
 
     // ── Transient toggle ──────────────────────────────────────────────────────
     setupToggleButton(transientToggle_, "Transient");
@@ -88,8 +70,6 @@ SpectralControlPanel::SpectralControlPanel(MorePhiProcessor& proc)
     addAndMakeVisible(activeToggle_);
     addAndMakeVisible(fftSizeCombo_);
     addAndMakeVisible(fftSizeLabel_);
-    addAndMakeVisible(alphaKnob_);
-    addAndMakeVisible(alphaLabel_);
     addAndMakeVisible(transientToggle_);
     addAndMakeVisible(formantToggle_);
 
@@ -101,8 +81,6 @@ void SpectralControlPanel::updateEnabledState()
     const bool on = activeToggle_.getToggleState();
     fftSizeCombo_.setEnabled(on);
     fftSizeLabel_.setEnabled(on);
-    alphaKnob_.setEnabled(on);
-    alphaLabel_.setEnabled(on);
     transientToggle_.setEnabled(on);
     formantToggle_.setEnabled(on);
 }
@@ -121,18 +99,17 @@ void SpectralControlPanel::paint(juce::Graphics& g)
 
     const float w  = static_cast<float>(getWidth());
     const float h  = static_cast<float>(getHeight());
-    const float sectionW = w / 3.0f;
+    const float sectionW = w / 2.0f;
 
-    // Vertical dividers between sections
+    // Vertical divider
     g.setColour(border());
-    g.drawLine(sectionW,     6.0f, sectionW,     h - 6.0f, 0.5f);
-    g.drawLine(sectionW * 2, 6.0f, sectionW * 2, h - 6.0f, 0.5f);
+    g.drawLine(sectionW, 6.0f, sectionW, h - 6.0f, 0.5f);
 
     // Section labels
     drawSectionLabel(g, "SPECTRAL",
                      juce::Rectangle<int>(0, 0, static_cast<int>(sectionW), 16));
     drawSectionLabel(g, "OPTIONS",
-                     juce::Rectangle<int>(static_cast<int>(sectionW * 2), 0,
+                     juce::Rectangle<int>(static_cast<int>(sectionW), 0,
                                           static_cast<int>(sectionW), 16));
 }
 
@@ -140,9 +117,9 @@ void SpectralControlPanel::resized()
 {
     const int w = getWidth();
     const int h = getHeight();
-    const int sectionW = w / 3;
+    const int sectionW = w / 2;
     const int pad = 8;
-    const int topOffset = 18; // space for section label
+    const int topOffset = 18;
 
     // ── Left section: active toggle + FFT size ────────────────────────────────
     {
@@ -158,25 +135,9 @@ void SpectralControlPanel::resized()
         leftCol.performLayout(leftArea);
     }
 
-    // ── Center section: Alpha knob ────────────────────────────────────────────
-    {
-        const int knobSize = 50;
-        const int labelH   = 14;
-        const int totalH   = knobSize + labelH + 4;
-        const int cx       = sectionW + sectionW / 2;
-        const int cy       = topOffset + (h - topOffset) / 2;
-
-        alphaKnob_.setBounds(cx - knobSize / 2,
-                              cy - totalH / 2,
-                              knobSize, knobSize);
-        alphaLabel_.setBounds(cx - knobSize / 2,
-                               cy - totalH / 2 + knobSize + 2,
-                               knobSize, labelH);
-    }
-
     // ── Right section: Transient + Formant toggles ────────────────────────────
     {
-        auto rightArea = juce::Rectangle<int>(sectionW * 2 + pad, topOffset,
+        auto rightArea = juce::Rectangle<int>(sectionW + pad, topOffset,
                                                sectionW - pad * 2,
                                                h - topOffset - pad);
         juce::FlexBox rightCol;

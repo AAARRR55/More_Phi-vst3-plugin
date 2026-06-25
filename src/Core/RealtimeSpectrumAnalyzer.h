@@ -24,6 +24,14 @@ public:
         float spectralRolloff = 0.0f;
         float spectralFlux = 0.0f;
         float crestFactor = 0.0f;
+        // AUDIT-FIX (A7): these two fields are RESERVED — processFrame() never
+        // assigns them, so they are always 0.0f. The plumbing (MeterWindowAccumulator,
+        // MCP telemetry, SonicMasterAnalysisEngine) and TestMeterWindowAccumulator
+        // depend on the fields existing, so they stay; implement the computation
+        // (THD = sqrt(Σ_{h=2..5} |bin(fund*h)|²)/|bin(fund)|; program crest = a
+        // slow window of per-frame crestFactor) only when a consumer needs real values.
+        float thdPercent = 0.0f;
+        float crestFactorProgram = 0.0f;
         float spectralTilt = 0.0f;
         uint64_t frameIndex = 0;
         double sampleRate = 0.0;

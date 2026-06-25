@@ -321,13 +321,30 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
     const int grainLengthSamples =
         static_cast<int>(grainSizeMs_ * 0.001f * static_cast<float>(sampleRate_));
 
+    // DEEP-DIVE FIX: save the fractional phase before the increment so we can
+    // compute each grain's output start sample within the block. Without this,
+    // all grains emitted in one block start at sample 0, causing amplitude
+    // modulation at the block rate when blockSize > intervalSamples.
+    const float startFraction = schedulerAccum_;
+
     // Increment accumulator by blockSize / interval.
     schedulerAccum_ += static_cast<float>(blockSize) / intervalSamples;
 
     // Emit one grain for every time the accumulator crosses 1.0.
+    int grainIndex = 0;
     while (schedulerAccum_ >= 1.0f)
     {
         schedulerAccum_ -= 1.0f;
+
+        // DEEP-DIVE FIX: compute the sample offset within this block where this
+        // grain should start. The Nth grain fires when the total elapsed
+        // intervals from block start reaches (1 - startFraction + N).
+        // Samples = intervals * intervalSamples.
+        const float offsetF = (1.0f - startFraction + static_cast<float>(grainIndex))
+                            * intervalSamples;
+        const int outputStartSample = std::max(0, std::min(blockSize - 1,
+                                               static_cast<int>(offsetF)));
+        ++grainIndex;
 
         // Choose source: random < alpha → source B, otherwise source A.
         const float r0 = nextRandom();
@@ -373,7 +390,8 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
                        + pitchLUT_[static_cast<size_t>(lo + 1)] * frac;
         }
 
-        (void)pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples, pitchRatio);
+        (void)pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples,
+                             pitchRatio, outputStartSample);
     }
 }
 
@@ -389,6 +407,11 @@ void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
 
         for (int s = 0; s < numSamples; ++s)
         {
+            // DEEP-DIVE FIX: skip output samples before this grain's start offset
+            // so multiple grains emitted within a block are staggered in time.
+            if (s < g.outputStartSample)
+                continue;
+
             // Check if this grain has finished.
             if (g.currentPos >= g.grainLength)
             {

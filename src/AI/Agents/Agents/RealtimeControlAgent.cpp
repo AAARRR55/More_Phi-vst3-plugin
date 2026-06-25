@@ -113,26 +113,37 @@ void RealtimeControlAgent::onEvent(const juce::String& type,
     }
 
     // C3: set the More-Phi output gain by PARAMETER ID (absolute normalized value).
-    // more_phi.set_parameter resolves via APVTS by parameter_id on the message
-    // thread — never touches the hosted plugin by fragile index, and the value is
-    // absolute (not a -delta, which the previous code passed incorrectly). We use
-    // parameter_id rather than name because the resolver matches `name` against
-    // the human-readable display string ("Output Gain"), not the id.
+    // more_phi.set_parameter resolves by parameter_id; the value is ABSOLUTE
+    // (not a -delta). Synchronous on the blackboard pump thread.
+    //
+    // M5 NOTE: invoked synchronously here, NOT via MessageManager::callAsync.
+    // The pump thread is joined in AgentRuntime::stop() BEFORE the registry
+    // destroys agents, so there is no deferred callback to outlive `this` —
+    // the original use-after-free window only existed with callAsync. Keeping
+    // it synchronous also matches the contract the unit tests assert and avoids
+    // a MessageManager dependency in the agent layer. `alive_` is still checked
+    // defensively in case a future caller ever defers this path.
+    if (! alive_->load(std::memory_order_acquire))
+        return;
+    if (! ctx_->tools)
+        return;
+
+    const juce::String paramName = config_.outputGainParamName;
     auto result = ctx_->tools->invoke("more_phi.set_parameter",
-        { { "parameter_id", config_.outputGainParamName.toStdString() },
+        { { "parameter_id", paramName.toStdString() },
           { "value", targetNormalized } }, id());
 
     const bool applied = (! result.contains("error"));
 
+    if (applied)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (applied)
-            currentOutputGainDb_ = newGainDb;   // commit our tracked estimate
+        currentOutputGainDb_ = newGainDb;   // commit our tracked estimate
     }
 
     if (ctx_->blackboard)
         ctx_->blackboard->publish(id(), "realtime.correction_applied",
-            { { "param", config_.outputGainParamName.toStdString() },
+            { { "param", paramName.toStdString() },
               { "target_db", newGainDb },
               { "applied", applied },
               { "type", type.toStdString() },

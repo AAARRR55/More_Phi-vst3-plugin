@@ -21,8 +21,6 @@
 #define MORE_PHI_HAS_ONNX 0
 #endif
 
-    bool inferenceSucceeded = false;
-
 #if MORE_PHI_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
 #endif
@@ -585,6 +583,8 @@ OnnxNeuralMasteringRunner::proposePlan(const NeuralMasteringFeatureFrame& frame)
     // allocation is permitted here — proposePlan() must be allocation-free so
     // it is safe to invoke from the message-thread timer at 1-5 Hz indefinitely.
     serializeFeatureFrame(frame, inputBuffer_.data(), inputBuffer_.size());
+
+    bool inferenceSucceeded = false;
 
 #if MORE_PHI_HAS_ONNX
     // Inference: build a tensor view over the pre-allocated input buffer, run,

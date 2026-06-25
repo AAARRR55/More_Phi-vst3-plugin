@@ -1,6 +1,8 @@
 // src/AI/Agents/AgentRegistry.cpp
 #include "AI/Agents/AgentRegistry.h"
 
+#include <cassert>
+
 namespace more_phi::agents {
 
 AgentRegistry::~AgentRegistry()
@@ -10,6 +12,15 @@ AgentRegistry::~AgentRegistry()
 
 bool AgentRegistry::registerAgent(std::unique_ptr<IAgent> agent)
 {
+    // M3 FIX: debug-only contract guard. find()/registeredRoles() are read
+    // concurrently from scheduler workers + MCP threads once the runtime has
+    // started; a registerAgent() after seal() would be a data race. Fail loud
+    // in debug so the mistake is caught before it ships as a latent race.
+    // (In release we still reject via the role-duplicate check or accept the
+    // pre-seal-only usage; the contract is documented in the header.)
+    assert(! sealed_.load(std::memory_order_acquire)
+           && "AgentRegistry::registerAgent called after seal() — register before start()");
+
     if (! agent)
         return false;
     const auto role = agent->role();

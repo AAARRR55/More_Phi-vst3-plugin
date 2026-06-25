@@ -126,8 +126,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     linkToggle_.setColour(juce::TextButton::buttonOnColourId,
                           juce::Colour(0xffffb74d));
     linkToggle_.setTooltip(
-        "Link Mode: couples snapshot A/B selection for synchronized paired morphing "
-        "across two plugin instances.");
+        "Link Mode: couples snapshot A/B selection across two plugin instances. "
+        "Load More-Phi on two tracks, enable Link on both, then set the same Link ID "
+        "in the Host parameters to pair them.");
 
     if (auto* param = processor.getAPVTS().getParameter("linkMode"))
     {
@@ -221,7 +222,8 @@ void BottomControlStrip::paint(juce::Graphics& g)
         g.drawText("SAFETY", 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("RECALL", midX + 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("OUTPUT", 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
-        g.drawText("SC", midX + 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
+        // M11: "Side" reads in the narrow compact layout (was cryptic "SC").
+        g.drawText("Side", midX + 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
         return;
     }
 
@@ -241,7 +243,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
     g.drawText("SAFETY", 10, 3, divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 12, juce::Justification::centredLeft);
-    g.drawText("SC", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
+    g.drawText("SIDE", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
 }
 
 void BottomControlStrip::resized()

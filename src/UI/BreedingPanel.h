@@ -28,6 +28,8 @@ private:
     juce::TextButton breedButton_ { "Breed" };
     juce::TextButton mutateButton_ { "Mutate" };
     juce::TextButton randomizeButton_ { "Randomize" };
+    juce::TextButton waypointStartStop_ { "Waypoints" };
+    juce::TextButton clearWaypoints_ { "Clear WP" };
     juce::Label statusLabel_;
     juce::Random random_;
 

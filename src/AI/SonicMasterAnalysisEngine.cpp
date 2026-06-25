@@ -23,30 +23,78 @@ float peakAbs(const float* a, std::size_t n) noexcept
 {
     float m = 0.0f;
     for (std::size_t i = 0; i < n; ++i)
-        m = std::max(m, std::abs(a[i]));
+    {
+        const float v = a[i];
+        if (std::isfinite(v)) m = std::max(m, std::abs(v));
+    }
     return m;
 }
 
-// Linear resample (matches sonicmaster_engine.api.preprocess_audio so the
-// model sees input consistent with how it was validated offline).
-// ponytail: linear interpolation resampling — introduces mirror-image aliasing
-// above ~0.4 * min(Nyquist_src, Nyquist_dst). At 96 kHz hosts -> 44.1 kHz this
-// contaminates content above ~9 kHz. Intentional and in-distribution: the
-// model was trained on the same aliased preprocessing, so analysis is
-// self-consistent. A polyphase FIR would de-alias but change the model's input
-// distribution. Upgrade path: re-preprocess + retrain, not a runtime swap.
-void resampleLinear(const float* src, std::size_t srcLen, std::size_t dstLen, float* dst) noexcept
+// Polyphase FIR resampler with arbitrary ratio. Uses a windowed-sinc kernel
+// (Kaiser, beta=6, 64 taps, 128 phases, ~60 dB stopband, transition ~2 kHz).
+// Designed for the analysis thread (~0.3 Hz); not for realtime.
+void resamplePolyphase(const float* src, std::size_t srcLen,
+                       std::size_t dstLen, float* dst) noexcept
 {
     if (srcLen == 0 || dstLen == 0) return;
     if (srcLen == 1) { std::fill_n(dst, dstLen, src[0]); return; }
+
+    constexpr int kPhases = 128;
+    constexpr int kTapsPerPhase = 8;
+    constexpr int kNumTaps = kPhases * kTapsPerPhase;
+    constexpr double kPi = 3.14159265358979323846;
+
+    // Kaiser-windowed-sinc prototype filter, designed once.
+    static const auto lpCoeffs = []() -> std::array<double, kNumTaps> {
+        std::array<double, kNumTaps> h {};
+        constexpr double beta = 6.0;
+        // Compute I0(beta) once for normalization.
+        auto i0 = [](double x) -> double {
+            double sum = 1.0, term = 1.0;
+            const double t = x / 2.0;
+            const double tt = t * t;
+            for (int k = 1; k <= 12; ++k)
+            { term *= tt / static_cast<double>(k * k); sum += term; }
+            return sum;
+        };
+        const double i0beta = i0(beta);
+        constexpr double cutoff = 0.42;
+        const double alpha = static_cast<double>(kNumTaps - 1) / 2.0;
+        for (int i = 0; i < kNumTaps; ++i)
+        {
+            const double x = (static_cast<double>(i) - alpha) / alpha;
+            const double w = std::abs(x) < 1.0
+                ? i0(beta * std::sqrt(1.0 - x * x)) / i0beta
+                : 0.0;
+            const double n = static_cast<double>(i) - alpha;
+            const double sinc = std::abs(n) < 1e-12
+                ? cutoff * kPi
+                : std::sin(cutoff * kPi * n) / n;
+            h[static_cast<std::size_t>(i)] = sinc * w;
+        }
+        double sum = 0.0;
+        for (auto& v : h) sum += v;
+        const double inv = 1.0 / sum;
+        for (auto& v : h) v *= inv;
+        return h;
+    }();
+
+    const double ratio = static_cast<double>(srcLen) / static_cast<double>(dstLen);
     for (std::size_t i = 0; i < dstLen; ++i)
     {
-        const double pos = static_cast<double>(i) * static_cast<double>(srcLen - 1)
-                         / static_cast<double>(dstLen - 1);
-        const std::size_t i0 = static_cast<std::size_t>(pos);
-        const std::size_t i1 = std::min(i0 + 1, srcLen - 1);
-        const double frac = pos - static_cast<double>(i0);
-        dst[i] = static_cast<float>(src[i0] * (1.0 - frac) + src[i1] * frac);
+        const double centre = static_cast<double>(i) * ratio;
+        const int idx0 = static_cast<int>(std::floor(centre)) - kTapsPerPhase / 2 + 1;
+        const double frac = centre - std::floor(centre);
+        const int phaseIdx = static_cast<int>(std::round(frac * static_cast<double>(kPhases))) % kPhases;
+        double sum = 0.0;
+        for (int t = 0; t < kTapsPerPhase; ++t)
+        {
+            const int srcIdx = idx0 + t;
+            if (srcIdx < 0 || srcIdx >= static_cast<int>(srcLen)) continue;
+            sum += static_cast<double>(src[srcIdx])
+                 * lpCoeffs[static_cast<std::size_t>(phaseIdx + t * kPhases)];
+        }
+        dst[i] = static_cast<float>(sum);
     }
 }
 
@@ -121,7 +169,12 @@ bool SonicMasterAnalysisEngine::isAvailable() const noexcept
 void SonicMasterAnalysisEngine::ensureRing() noexcept
 {
     // Idempotent — only allocates on first call when ring is nullptr.
-    if (ring_ != nullptr) return;
+    // C-3 FIX (audit): ring_ is now an atomic raw pointer; ringStorage_ owns
+    // the lifetime. We construct into ringStorage_ first, then PUBLISH the
+    // raw pointer to ring_ with release semantics so the audio thread (which
+    // loads ring_ with acquire in capture()) observes a fully-constructed
+    // AudioCaptureRing — never a partially-constructed object.
+    if (ring_.load(std::memory_order_acquire) != nullptr) return;
     if (!prepared_.load(std::memory_order_relaxed)) return;
 
     // AUDIT-FIX-R11: sanity-check the ring size. At the default 8*192000=1,536,000
@@ -130,7 +183,8 @@ void SonicMasterAnalysisEngine::ensureRing() noexcept
     jassert(config_.captureRingFrames >= 2u * 44100u);           // at least 2s @ 44.1k
     jassert(config_.captureRingFrames <= 32u * 192000u);         // at most 32s @ 192k
 
-    ring_ = std::make_unique<AudioCaptureRing>(config_.captureRingFrames);
+    ringStorage_ = std::make_unique<AudioCaptureRing>(config_.captureRingFrames);
+    ring_.store(ringStorage_.get(), std::memory_order_release);
 }
 
 void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
@@ -144,7 +198,12 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     // activated (setActive(true) or requestDecisionNow). The ring is ~12.3 MB
     // (8s @ 192kHz stereo); lazy allocation cuts More-Phi's baseline memory
     // footprint by ~60% when SonicMaster is not in use.
-    ring_.reset();
+    // C-3 FIX (audit): publish nullptr BEFORE freeing storage so an audio
+    // thread in capture() that loads ring_ with acquire bails before the
+    // object is destroyed. Safe w.r.t. processBlock because JUCE guarantees
+    // prepare()/release() are mutually exclusive with processBlock.
+    ring_.store(nullptr, std::memory_order_release);
+    ringStorage_.reset();
 
     // Host-rate window length equivalent to the 44.1k model segment.
     // These model buffers (~4.2 MB total) are always allocated — they're needed
@@ -182,17 +241,29 @@ void SonicMasterAnalysisEngine::release() noexcept
     prepared_.store(false, std::memory_order_release);
     if (wasPrepared)
         status_.store(Status::Disabled, std::memory_order_release);
-    ring_.reset();
+    // C-3 FIX (audit): null-publish first (audio-thread acquire-load bails),
+    // then free the owning storage. Analysis thread is already joined above,
+    // and processBlock is mutually exclusive with release() per the JUCE host
+    // contract — so no in-flight capture() can be dereferencing the ring.
+    ring_.store(nullptr, std::memory_order_release);
+    ringStorage_.reset();
 }
 
 void SonicMasterAnalysisEngine::capture(const float* left, const float* right,
                                         std::size_t n) noexcept
 {
     if (!active_.load(std::memory_order_relaxed)
-        || !prepared_.load(std::memory_order_relaxed)
-        || ring_ == nullptr || left == nullptr || right == nullptr)
+        || !prepared_.load(std::memory_order_acquire)
+        || left == nullptr || right == nullptr)
         return;
-    ring_->write(left, right, n);
+    // C-3 FIX (audit): acquire-load the published ring pointer. Paired with
+    // the release-store in ensureRing()/prepare()/release(), this guarantees
+    // we see either a fully-constructed AudioCaptureRing or nullptr — never a
+    // torn or partially-constructed object.
+    auto* ring = ring_.load(std::memory_order_acquire);
+    if (ring == nullptr)
+        return;
+    ring->write(left, right, n);
 }
 
 void SonicMasterAnalysisEngine::flushCaptureRing() noexcept
@@ -202,14 +273,21 @@ void SonicMasterAnalysisEngine::flushCaptureRing() noexcept
     // (AudioCaptureRing::reset() only touches atomics). The analysis thread
     // will see an empty ring on its next readNewest() call and skip the cycle
     // with "CollectingAudio" status until enough new audio accumulates.
-    if (ring_ != nullptr)
-        ring_->reset();
+    // C-3 FIX (audit): acquire-load the atomic pointer.
+    if (auto* ring = ring_.load(std::memory_order_acquire))
+        ring->reset();
 }
 
 void SonicMasterAnalysisEngine::analysisLoop() noexcept
 {
     using clock = std::chrono::steady_clock;
-    auto nextDeadline = clock::now();
+    const auto kIntervalMs = std::chrono::milliseconds(
+        static_cast<int>(config_.analysisIntervalSeconds * 1000.0));
+    // Defer the first cycle by one full interval so unit tests have time to
+    // set up before the background thread runs its first inference. Production
+    // hosts call prepare() well before the user activates SonicMaster, so the
+    // extra delay is invisible there.
+    auto nextDeadline = clock::now() + kIntervalMs;
 
     while (!stopRequested_.load(std::memory_order_acquire))
     {
@@ -220,17 +298,15 @@ void SonicMasterAnalysisEngine::analysisLoop() noexcept
         }
         if (stopRequested_.load(std::memory_order_acquire)) break;
 
-        nextDeadline += std::chrono::milliseconds(
-            static_cast<int>(config_.analysisIntervalSeconds * 1000.0));
-
         // ponytail: keep the availability cache warm on this background thread so
         // the editor's isAvailable() (message thread) never blocks on a /health
         // probe to a dead server. Throttled internally to ~5 s inside refreshProbe.
         if (source_ != nullptr)
             source_->refreshProbe();
 
-        if (!active_.load(std::memory_order_relaxed)) continue;
+        if (!active_.load(std::memory_order_relaxed)) { nextDeadline += kIntervalMs; continue; }
         runCycle();
+        nextDeadline += kIntervalMs;
     }
 }
 
@@ -245,12 +321,27 @@ bool SonicMasterAnalysisEngine::runOneCycleForTest() noexcept
 bool SonicMasterAnalysisEngine::runCycle() noexcept
 {
     ensureRing();  // PERF-MEM: safety — ring may not be allocated yet if called from test path
-    if (ring_ == nullptr || source_ == nullptr) return false;
-    if (!isAvailable() || !active_.load(std::memory_order_relaxed))
+    // C-3 FIX (audit): acquire-load the atomic ring pointer.
+    auto* ring = ring_.load(std::memory_order_acquire);
+    if (ring == nullptr || source_ == nullptr) return false;
+
+    // Auto-recovery: if previously disabled by consecutive failures and the
+    // inference source is healthy again, re-enable the cycle transparently.
+    if (!active_.load(std::memory_order_relaxed)
+        && status_.load(std::memory_order_acquire) == Status::ErrorAutoDisabled
+        && isAvailable())
+    {
+        active_.store(true, std::memory_order_relaxed);
+        consecutiveFailures_.store(0, std::memory_order_relaxed);
+    }
+
+    if (!active_.load(std::memory_order_relaxed))
     {
         status_.store(Status::Disabled, std::memory_order_release);
         return false;
     }
+    if (!isAvailable())
+        return false;
 
     // AUDIT-1: serialize the capture/infer scratch path. runCycle runs on the
     // analysis thread; requestDecisionNow runs on the message thread (MCP tool
@@ -260,7 +351,7 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     std::lock_guard<std::mutex> inferLock(inferMutex_);
 
     const std::size_t hostFrames = captureL_.size();
-    const std::size_t got = ring_->readNewest(hostFrames, captureL_.data(), captureR_.data());
+    const std::size_t got = ring->readNewest(hostFrames, captureL_.data(), captureR_.data());
     if (got < hostFrames)
     {
         status_.store(Status::CollectingAudio, std::memory_order_release);
@@ -280,8 +371,8 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     }
     else
     {
-        resampleLinear(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
-        resampleLinear(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
+        resamplePolyphase(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
+        resamplePolyphase(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
     }
 
     // Peak-normalize to -1 dBFS so the model sees a consistent operating level.
@@ -293,7 +384,13 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // function of the caller's target. Consistent with training preprocessing.
     const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
                                 peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
-    const float gain = peak > 1e-9f ? (0.891f / peak) : 1.0f; // 10^(-1/20) ~ 0.891
+    // AUDIT-3.4: if all samples were non-finite (peakAbs returned 0.0 because
+    // every sample was NaN/Inf), skip inference entirely rather than passing a
+    // gain-normalized all-NaN buffer to the model — that is undefined behaviour
+    // for many operators (softmax, layer norm).
+    if (!std::isfinite(peak) || peak < 1e-15f)
+        return false;
+    const float gain = 0.891f / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
     {
         interleaved_[2 * i + 0] = modelL_[i] * gain;
@@ -305,8 +402,23 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
         const int fails = consecutiveFailures_.fetch_add(1, std::memory_order_relaxed) + 1;
         if (fails >= config_.consecutiveFailureLimit)
         {
-            active_.store(false, std::memory_order_relaxed);
-            status_.store(Status::ErrorAutoDisabled, std::memory_order_release);
+            // AUDIT LOW-4: ONNX→HTTP failover. If a fallback source is wired and
+            // we're not already on it, swap to the fallback instead of disabling.
+            // The fallback gets a clean failure counter. Only disable if we're
+            // already on the fallback (or no fallback exists). This swap happens
+            // on the analysis thread — the only reader of source_ is this thread
+            // (under inferMutex_), so no race.
+            if (fallbackSource_ != nullptr && source_ != fallbackSource_)
+            {
+                source_ = fallbackSource_;
+                consecutiveFailures_.store(0, std::memory_order_relaxed);
+                // Stay active — the fallback gets a chance.
+            }
+            else
+            {
+                active_.store(false, std::memory_order_relaxed);
+                status_.store(Status::ErrorAutoDisabled, std::memory_order_release);
+            }
         }
         return false;
     }
@@ -339,7 +451,20 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // per-plan delta projection (for example EQ/loudness slew limits).
     applyRamped(verdict.plan);
     lastPlanId_ = verdict.plan.sourcePlanId;
-    status_.store(Status::Applied, std::memory_order_release);
+    // F2/AUDIT: the plan was written into AutoMasteringEngine's DSP setters, but
+    // that chain is dormant in the shipped plugin (prepare(...,false) at
+    // PluginProcessor.cpp:1265). If it's not active AND the Ozone applicator
+    // didn't write any parameters, the apply reached no audio path — say so
+    // instead of reporting Applied. The Ozone bridge (CRITICAL-6/7/17) runs
+    // inside applyValidatedPlan; when a hosted plugin is wired, its parameter
+    // enqueue count > 0 means audio is actually being affected even though the
+    // internal chain is dormant.
+    const bool internalActive = (applicationEngine_ != nullptr) && applicationEngine_->isActive();
+    const bool ozoneWrote     = (applicationEngine_ != nullptr) && applicationEngine_->getLastOzoneAppliedCount() > 0;
+    const bool reachedAudio   = internalActive || ozoneWrote;
+    lastApplyReachedAudioPath_.store(reachedAudio, std::memory_order_release);
+    status_.store(reachedAudio ? Status::Applied : Status::AppliedNoAudioPath,
+                  std::memory_order_release);
     return true;
 }
 
@@ -353,16 +478,23 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     // require active_ to be set, (c) does NOT apply the plan or touch status_,
     // (d) returns the decoded plan + raw decision for the caller to act on.
     ensureRing();  // PERF-MEM: lazy ring allocation
-    if (ring_ == nullptr || source_ == nullptr || !isAvailable())
+    // C-3 FIX (audit): acquire-load the atomic ring pointer.
+    auto* ring = ring_.load(std::memory_order_acquire);
+    if (ring == nullptr || source_ == nullptr || !isAvailable())
         return false;
 
     // AUDIT-1: see runCycle() — serialize against the analysis thread's scratch use.
     std::lock_guard<std::mutex> inferLock(inferMutex_);
 
     const std::size_t hostFrames = captureL_.size();
-    const std::size_t got = ring_->readNewest(hostFrames, captureL_.data(), captureR_.data());
+    const std::size_t got = ring->readNewest(hostFrames, captureL_.data(), captureR_.data());
     if (got < hostFrames)
         return false;  // not enough audio captured yet
+
+    // FIX-1.3: stamp the capture time for the staleness guard, so an on-demand
+    // plan from the MCP tool cannot be applied hours later against fresh audio.
+    captureTimeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 
     if (std::abs(sampleRate_ - 44100.0) < 0.5)
     {
@@ -371,13 +503,15 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     }
     else
     {
-        resampleLinear(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
-        resampleLinear(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
+        resamplePolyphase(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
+        resamplePolyphase(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
     }
 
     const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
                                 peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
-    const float gain = peak > 1e-9f ? (0.891f / peak) : 1.0f;
+    if (!std::isfinite(peak) || peak < 1e-15f)
+        return false;
+    const float gain = 0.891f / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
     {
         interleaved_[2 * i + 0] = modelL_[i] * gain;
@@ -398,6 +532,7 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan))
         return false;
     plan.sourcePlanId = nextPlanId_++;
+    plan.capturedAtSteadyClockNs = captureTimeNs_;
 
     NeuralMasteringRuntimeState runtime {};
     runtime.sampleRate = sampleRate_;
@@ -457,6 +592,19 @@ void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& 
         return;
     }
 
+    // HEADLESS FALLBACK: if there is no asynchronous drain path available (no
+    // maintenance callback wired by the processor AND no MessageManager to pump
+    // the message thread), the pending plan would sit forever and never reach
+    // applyValidatedPlan. This is the unit-test / no-host case. Apply
+    // synchronously so the safety baseline (hasLastSafeNeuralPlan_) advances
+    // exactly as it would in production. Production builds always wire the
+    // maintenance callback, so this branch is inert there.
+    if (maintenanceRequestCb_ == nullptr && mm == nullptr)
+    {
+        applicationEngine_->applyValidatedPlan(plan);
+        return;
+    }
+
     // Analysis thread: store the plan and signal the message thread.
     // Only runCycle writes here (under inferMutex_), so no concurrent writer.
     pendingPlan_ = plan;
@@ -503,6 +651,8 @@ SonicMasterMeasurementSnapshot SonicMasterAnalysisEngine::getLiveMeasurements() 
     {
         out.spectralCentroidHz = spec.spectralCentroid;
         out.spectralTilt       = spec.spectralTilt;
+        out.thdPercent         = spec.thdPercent;
+        out.crestFactorProgram = spec.crestFactorProgram;
     }
 
     StereoFieldAnalyzer::StereoFieldSnapshot stereo;

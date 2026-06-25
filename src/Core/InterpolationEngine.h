@@ -12,6 +12,7 @@
 #pragma once
 
 #include "SnapshotBank.h"
+#include "VoronoiMorphEngine.h"
 #include <juce_graphics/juce_graphics.h>
 #include <vector>
 #include <array>
@@ -43,6 +44,15 @@ public:
                           const SnapshotBank& bank,
                           std::vector<float>& output) noexcept;
 
+    // 2D Voronoi/NNI: Natural Neighbor Interpolation via Delaunay triangulation.
+    // Only the snapshots whose Voronoi cells are adjacent to the cursor contribute.
+    // Falls back to compute2D (IDW) when <3 occupied slots or cursor outside hull.
+    // noexcept: No allocations; pure arithmetic on pre-allocated vectors.
+    static void compute2D_Voronoi(float cursorX, float cursorY,
+                                  const SnapshotBank& bank,
+                                  const VoronoiMorphEngine& engine,
+                                  std::vector<float>& output) noexcept;
+
     // SIMD batch interpolation - processes 8 floats at once (AVX) or 4 (SSE)
     // noexcept: Pure pointer arithmetic, no allocations
     static void interpolateBatch_SIMD(
@@ -59,7 +69,10 @@ public:
 
 private:
     static constexpr float kEpsilon = 1e-6f;
-    static constexpr float kIDWPower = 2.0f;
+    static constexpr float kEpsilonSq = kEpsilon * kEpsilon;  // AUDIT-FIX (C7): single source for IDW divide-guard
+    // AUDIT-FIX (C7): removed dead `kIDWPower` constant — IDW uses a hardcoded
+    // 1/dist² form (no pow()), and no code referenced this. Re-add as a real
+    // knob only if product surfaces a configurable-power need.
 
     // Scalar fallback
     // noexcept: Pure pointer arithmetic, no allocations

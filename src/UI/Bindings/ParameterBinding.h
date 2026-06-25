@@ -46,6 +46,7 @@ public:
 
     void bind(Component& component, std::unique_ptr<Attachment> attachment)
     {
+        const juce::SpinLock::ScopedLockType lock(lock_);
         const auto key = static_cast<void*>(&component);
         attachments_[key] = std::move(attachment);
         component.addComponentListener(this);
@@ -54,9 +55,11 @@ public:
 private:
     void componentBeingDeleted(juce::Component& component) override
     {
+        const juce::SpinLock::ScopedLockType lock(lock_);
         attachments_.erase(static_cast<void*>(&component));
     }
 
+    juce::SpinLock lock_;
     std::unordered_map<void*, std::unique_ptr<Attachment>> attachments_;
 };
 

@@ -179,7 +179,7 @@ void SecurityValidator::logSecurityEvent(const juce::String& eventType,
     const juce::String msg = "[SECURITY] " + eventType
                            + " | client=" + clientId
                            + " | " + details;
-    juce::Logger::writeToLog(msg);
+    DBG(msg);
     totalEventsLogged_.fetch_add(1, std::memory_order_relaxed);
 }
 

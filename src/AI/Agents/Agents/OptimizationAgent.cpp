@@ -66,9 +66,13 @@ AgentResult OptimizationAgent::execute(const AgentTask& task)
         r.proposedActions.push_back(action);
     }
 
+    nlohmann::json actionsJson = nlohmann::json::array();
+    for (const auto& a : r.proposedActions)
+        actionsJson.push_back(a);
     r.emitEvents.push_back({ "optimization.proposal", {
         { "bestCandidateId", bestIdx }, { "bestError", bestError },
-        { "proposedActionCount", static_cast<int>(r.proposedActions.size()) }
+        { "proposedActionCount", static_cast<int>(r.proposedActions.size()) },
+        { "actions", actionsJson }
     }});
 
     r.success = true;

@@ -113,8 +113,10 @@ private:
 
     // ── Gain smoother ─────────────────────────────────────────────────────────
     float gainSmoothed_    = 1.0f;  // linear gain currently applied
-    // AUDIT-FIX: releaseCoeff_ removed — computed per-block from atomic
-    // releaseMs_ in processBlock() to eliminate cross-thread race.
+    // DEEP-DIVE FIX: releaseCoeffPerSample_ is pre-computed in setRelease()
+    // and prepare() so processBlock() reads an atomic instead of calling
+    // std::exp on the audio thread.
+    std::atomic<float> releaseCoeffPerSample_{ 0.0f };
     double sampleRate_     = 48000.0;
 
     // ── Atomic parameters ─────────────────────────────────────────────────────

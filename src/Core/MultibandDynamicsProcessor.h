@@ -3,9 +3,12 @@
  *
  * Per-band feedforward VCA compressor for the 4-band mastering chain.
  *
- * Each band uses the existing EnvelopeFollower for RMS detection, then
- * applies a soft-knee compressor gain computation.  Gain is applied via
- * juce::FloatVectorOperations for SIMD efficiency.
+ * Each band uses stereo-linked peak detection (MULTIBAND-2/3: the stereo-linked
+ * envelope is computed per sample and stored in BandState::envLinked). Despite
+ * the EnvelopeFollower members in BandState::followers[], they are prepared but
+ * currently bypassed in favour of a shared stereo-linked detector path.
+ *
+ * Gain is applied via juce::FloatVectorOperations for SIMD efficiency.
  *
  * Heuristic defaults (used when NeuralCompressor is not loaded):
  *   Band 0 (Sub):  ratio 1.5:1, attack 50ms,  release 200ms, thresh -18 dBFS

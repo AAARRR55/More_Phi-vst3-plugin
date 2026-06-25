@@ -1,8 +1,8 @@
 # More-Phi - Architecture Document
 
-**Date:** 2026-06-21
+**Date:** 2026-07-16
 **Version:** 3.3.0
-_Updated 2026-06-21 to reflect AgentOrchestrator layer and research artifact relocation._
+**Audit Score:** 7.9/10 — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)
 **Type:** Desktop Audio Plugin (VST3/AU)
 **Pattern:** Layered plugin architecture with strict thread-domain separation
 

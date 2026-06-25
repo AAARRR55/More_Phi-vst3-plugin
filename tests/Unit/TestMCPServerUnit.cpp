@@ -955,6 +955,7 @@ TEST_CASE("sonicmaster_decision separates raw model telemetry from projected eng
     auto& sonicMaster = processor.getSonicMasterEngine();
     sonicMaster.setInferenceSource(&source);
     sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);  // PERF-MEM: lazy ring allocation on first activation
     feedSonicMasterWindow(sonicMaster, 48000.0);
 
     more_phi::InstanceIdentity identity;

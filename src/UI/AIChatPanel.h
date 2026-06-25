@@ -93,7 +93,8 @@ private:
     juce::Label       workflowDetailLabel_;
     juce::TextButton  workflowAcceptedButton_{"Accepted"};
     juce::TextButton  workflowRejectedButton_{"Rejected"};
-    juce::TextButton  workflowBetterButton_{"Better"};
+    // M8: "Sounded Better" pairs with "Too Much" (both two-word) for consistent voice.
+    juce::TextButton  workflowBetterButton_{"Sounded Better"};
     juce::TextButton  workflowTooMuchButton_{"Too Much"};
     juce::TextButton  workflowUndoButton_{"Undo"};
     juce::TextEditor  prompt_;

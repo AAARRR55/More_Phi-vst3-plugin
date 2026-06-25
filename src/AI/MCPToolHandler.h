@@ -53,6 +53,15 @@ private:
     static juce::String getParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String setParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p);
+    /** Tool: sweep_parameter — iterate ONE hosted-plugin parameter across a
+     *  normalized range, capturing live measurements (LUFS-I/S/M, LRA, dBTP,
+     *  spectral centroid/tilt, stereo width/correlation, THD%, program crest)
+     *  after each step. This is the only tool that performs an autonomous
+     *  value-space sweep on the LIVE hosted plugin via the verified write path
+     *  (resolve → command queue → drain → ParameterBridge → readback).
+     *  Params: parameter (stableId|index|name), from (0..1), to (0..1),
+     *  steps (int, default 5), capture_ms (int, default 250). */
+    static juce::String sweepParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String captureSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String recallSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String setMorphPosition(const juce::var& params, MorePhiProcessor& p);

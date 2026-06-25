@@ -82,9 +82,15 @@ void PhysicsEngine::updateElastic(ElasticState& s,
     // juce::ScopedNoDenormals, so IEEE-754 denormals are already flushed to
     // zero at the CPU level.  This threshold (1e-6) is coarser than the
     // denormal range (~1e-38) and intentionally stops perceptibly-silent motion.
-    constexpr float kRestThreshold = 1e-6f;
-    if (std::abs(s.vx) < kRestThreshold) s.vx = 0.0f;
-    if (std::abs(s.vy) < kRestThreshold) s.vy = 0.0f;
+    //
+    // DEEP-DIVE FIX: also check that position is near target before killing
+    // velocity. Previously the velocity-only kill stopped the spring mid-air
+    // when it was still far from target but moving very slowly, causing a
+    // re-energize on the next block and a subtle stutter.
+    constexpr float kRestThreshVel = 1e-6f;
+    constexpr float kRestThreshPos = 1e-4f;
+    if (std::abs(s.vx) < kRestThreshVel && std::abs(s.x - targetX) < kRestThreshPos) s.vx = 0.0f;
+    if (std::abs(s.vy) < kRestThreshVel && std::abs(s.y - targetY) < kRestThreshPos) s.vy = 0.0f;
 }
 
 // ── Perlin Noise ─────────────────────────────────────────────────────────────
@@ -125,10 +131,13 @@ float PhysicsEngine::grad(int hash, float x, float y) noexcept
     // C8 FIX: Use 8 gradient directions (classic 2D Perlin) instead of only 4
     // diagonal vectors.  The old hash & 3 produced only 4 gradients, creating
     // visible directional bias in the drift noise.
+    // C2-AUDIT-FIX: Scale raw gradient to [-1,1] because the 8-direction vectors
+    // have magnitudes up to 3.0, which broke perlinOctaves() normalization.
     const int h = hash & 7;
     const float u = h < 4 ? x : y;
     const float v = h < 4 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
+    float raw = ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
+    return raw / 3.0f;
 }
 
 float PhysicsEngine::perlin(float x, float y) noexcept

@@ -14,6 +14,7 @@
 #include "Core/SnapshotBank.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
+#include "Core/WaypointEngine.h"
 #include "Core/GeneticEngine.h"
 #include "Core/LockFreeQueue.h"
 #include "Core/ParameterClassifier.h"
@@ -101,7 +102,13 @@ public:
     int getCurrentProgram() override;
     void setCurrentProgram(int index) override;
     const juce::String getProgramName(int index) override;
-    void changeProgramName(int, const juce::String&) override         {}
+    void changeProgramName(int /*index*/, const juce::String& /*newName*/) override
+    {
+        // Not yet supported — snapshot names are auto-generated from slot numbers
+        // (see getProgramName). A future implementation would store custom names
+        // in a parallel std::array<juce::String, SnapshotBank::NUM_SLOTS> and
+        // update getProgramName to return them when non-empty.
+    }
 
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
@@ -112,6 +119,7 @@ public:
     ParameterBridge&   getParameterBridge()               { return paramBridge; }
     SnapshotBank&      getSnapshotBank()                  { return snapshotBank; }
     MorphProcessor&    getMorphProcessor()                 { return morphProcessor; }
+    WaypointEngine&    getWaypointEngine()                 { return waypointEngine_; }
     MCPServer&         getMCPServer()                      { return mcpServer; }
     const MCPServer&   getMCPServer() const                { return mcpServer; }
     VST3IPCBridge*     getVST3IPCBridge() noexcept         { return vst3IpcBridge_.get(); }
@@ -462,6 +470,7 @@ private:
     ParameterBridge    paramBridge;
     SnapshotBank       snapshotBank;
     MorphProcessor     morphProcessor;
+    WaypointEngine     waypointEngine_;
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
     std::unique_ptr<VST3IPCBridge> vst3IpcBridge_;
@@ -587,6 +596,7 @@ private:
     // Audio thread only; written under touchStateLock_ alongside lastApplied_.
     std::vector<float> drainScratch_;      // last-write-wins value per param index
     std::vector<uint8_t> drainTouched_;    // 1 = index written this drain
+    std::vector<float> recallScratch_;     // M4: pre-allocated scratch for recallSnapshotQueued
     static constexpr float TOUCH_THRESHOLD = 0.005f;   // Min delta to detect manual touch
     static constexpr float MORPH_POS_THRESHOLD = 0.01f; // Min morph position change to resume
     // M-6 FIX: Dynamic cooldown — computed in prepareToPlay from sample rate & block size.
@@ -697,6 +707,9 @@ private:
     void reconfigureAudioDomainProcessing();
     void updateReportedLatency();
     void applyPendingFullStateRecall();
+    // H3 FIX: Apply forward migration when loading state from an older version.
+    // Returns false if the data is from an unsupported version that cannot be migrated.
+    bool applyStateMigration(juce::XmlElement& stateXml, const juce::String& version);
 
     struct RawParameters
     {
@@ -738,6 +751,11 @@ private:
         std::atomic<float>* disableTouchDetection = nullptr;
         std::atomic<float>* throttleParamCommits = nullptr;
         std::atomic<float>* cpuSaver = nullptr;
+        std::atomic<float>* dawWrite = nullptr;
+        std::atomic<float>* sonicMasterEnabled = nullptr;
+        std::atomic<float>* waypointEnable = nullptr;
+        std::atomic<float>* waypointPlay = nullptr;
+        std::atomic<float>* waypointBPM = nullptr;
     };
     RawParameters rawParams_{};
 
@@ -755,6 +773,9 @@ private:
     // setMorphPositionExternal sets this flag; timerCallback picks it up on the
     // message thread (where the timer reliably fires even with editor closed).
     std::atomic<bool> morphPositionNotifyPending_{false};
+
+    // M3: Gate syncStateFromAPVTS — skip per-block sync when APVTS state is unchanged
+    std::atomic<bool> apvtsStateDirty_{true};
 
     std::atomic<bool> audioDomainConfigDirty_{false};
     std::atomic<bool> latencyConfigDirty_{false};
@@ -807,8 +828,10 @@ private:
     // MCP/AI decision chain, which only acts every 30s — running full analysis on
     // every audio block (750x/s at 64-sample/48k) was the idle-CPU cause of the
     // host-wide lag. LUFS integrates over time, so ~8-block resolution is fine.
+    // H-8(b): Increased from 8 to 32 to reduce DSP overhead on audio thread since
+    // the downstream decision chain only acts every ~30s.
     int analysisSkipCounter_ = 0;
-    static constexpr int ANALYSIS_THROTTLE_BLOCKS = 8;
+    static constexpr int ANALYSIS_THROTTLE_BLOCKS = 32;
 
     // M9 FIX: Output gain smoothing state (audio thread only)
     std::atomic<float> smoothedGain_{1.0f};
@@ -844,6 +867,20 @@ private:
 
     // C-5 FIX: Track currently selected program for DAW preset browser
     std::atomic<int> currentProgram_{0};
+
+    // H-5: Heap-allocated weak reference used by MIDI callbacks so they can
+    // detect if the processor has been destroyed. Allocated in constructor,
+    // deleted in destructor.
+    juce::WeakReference<MorePhiProcessor>* midiCallbackWeakRef_ = nullptr;
+
+    // C-2 FIX: Cached state for getStateInformation when called from the
+    // audio thread (e.g. offline render / export in some DAWs). The cache is
+    // updated by the message thread under cachedSavedStateMutex_ and returned
+    // directly to audio-thread callers to avoid heap allocation (XML + Base64
+    // encoding) on the real-time path. See getStateInformation() in
+    // PluginProcessor.cpp for the consumer logic.
+    mutable juce::MemoryBlock cachedSavedState_;
+    mutable juce::SpinLock cachedSavedStateMutex_;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(MorePhiProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiProcessor)

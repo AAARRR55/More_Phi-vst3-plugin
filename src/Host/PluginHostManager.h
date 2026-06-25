@@ -80,7 +80,13 @@ public:
     int getExceptionCount() const { return exceptionCount_.load(std::memory_order_relaxed); }
 
     juce::AudioPluginFormatManager& getFormatManager() override { return formatManager; }
-    juce::KnownPluginList& getKnownPlugins() override { return knownPlugins; }
+    juce::KnownPluginList& getKnownPlugins() override
+    {
+        // Lock so reader (UI browser) does not race with scanner (background thread).
+        // The scanner path takes the same lock inside scanPluginFolders.
+        const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+        return knownPlugins;
+    }
     void scanPluginFolders() override;
 
     /** Get the last loaded plugin description — available even after unload for recovery.

@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -45,6 +46,9 @@ public:
                    const std::vector<juce::String>& eventTypes,
                    Callback callback);
 
+    void unsubscribe(const juce::String& agentId);
+    void unsubscribeAll();
+
     // Cheap non-pulling probe: returns true if the bus has published any event
     // past our cursor since the last poll(). Lets the pump sleep idly (M3).
     bool hasNewEvents() const;
@@ -62,7 +66,12 @@ private:
     IntegrationEventBus& bus_;
     std::mutex subscribersMutex_;
     std::unordered_map<std::string, std::vector<std::pair<std::string, Callback>>> subscribers_;
-    uint64_t lastSeenSequence_ = 0;   // monotonic cursor into IntegrationEventBus sequences
+    // M2 FIX: written by the blackboard pump thread in poll() and read by MCP
+    // connection threads via recentAgentEvents()/hasNewEvents(). A plain
+    // uint64_t was a data race (and a torn read on 32-bit). relaxed ops: the
+    // contract is eventual consistency — a racing reader at worst re-delivers
+    // an already-seen event or skips one the next poll catches.
+    std::atomic<uint64_t> lastSeenSequence_{0};   // monotonic cursor into IntegrationEventBus sequences
 };
 
 } // namespace more_phi::agents

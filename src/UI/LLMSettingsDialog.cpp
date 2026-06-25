@@ -74,6 +74,17 @@ void LLMSettingsDialog::configureControls()
     saveButton_.onClick            = [this]() { saveAndClose(); };
     cancelButton_.onClick          = [this]() { cancelAndClose(); };
 
+    // B3: tooltips on every control (none existed). Plain-language guidance.
+    providerCombo_.setTooltip("Pick the LLM backend; API key and base URL are stored per-provider.");
+    apiKeyEditor_.setTooltip("Stored locally and only sent to the chosen provider — never anywhere else.");
+    baseUrlEditor_.setTooltip("Override the API endpoint. Read-only for providers that don't allow custom endpoints.");
+    fetchModelsButton_.setTooltip("Query the provider for its available models. Requires API key and base URL.");
+    modelCombo_.setTooltip("Choose a model. Click Fetch Models to populate this list from the provider.");
+    testConnectionButton_.setTooltip("Send a minimal request to verify the API key, base URL and model work together.");
+    saveButton_.setTooltip("Save these settings, activate the provider and close.");
+    cancelButton_.setTooltip("Close without saving changes.");
+    statusLabel_.setTooltip("Live status of the last fetch / connection attempt.");
+
     for (juce::Component* component : std::initializer_list<juce::Component*>{
              &titleLabel_, &providerLabel_, &providerCombo_,
              &apiKeyLabel_, &apiKeyEditor_, &baseUrlLabel_, &baseUrlEditor_,
@@ -143,6 +154,12 @@ void LLMSettingsDialog::refreshBaseUrlEditability()
     baseUrlEditor_.setReadOnly(!editable);
     baseUrlEditor_.setColour(juce::TextEditor::backgroundColourId,
                              editable ? juce::Colours::black : juce::Colour(0xff202020));
+    // L7: when locked, dim the text and explain why (was a bare greyed field).
+    baseUrlEditor_.setColour(juce::TextEditor::textColourId,
+                             editable ? juce::Colour(0xffeeeef2) : juce::Colour(0xff8e8f95));
+    baseUrlEditor_.setTooltip(editable
+        ? "Override the API endpoint. Read-only for providers that don't allow custom endpoints."
+        : "Base URL is fixed for this provider — custom endpoints are not supported.");
 }
 
 void LLMSettingsDialog::refreshButtonStates()

@@ -7,9 +7,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <juce_core/juce_core.h>
+#include <nlohmann/json.hpp>
 
 namespace more_phi {
+
+using json = nlohmann::json;
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -26,57 +30,32 @@ void buildInferRequestBody(const float* left,
     }
 }
 
-namespace {
-
-// Locate the "decision" array in a /infer JSON response and parse its float
-// members. Hand-rolled because the response is a fixed, tiny shape and we want
-// the parser to be pure (testable) and dependency-light.
-bool extractDecisionArray(std::string_view body, float* out, std::size_t cap) noexcept
-{
-    const auto key = body.find("\"decision\"");
-    if (key == std::string_view::npos) return false;
-    const auto open = body.find('[', key);
-    if (open == std::string_view::npos) return false;
-    const auto close = body.find(']', open);
-    if (close == std::string_view::npos) return false;
-
-    std::size_t count = 0;
-    std::size_t i = open + 1;
-    while (i < close && count < cap)
-    {
-        // Skip separators / whitespace.
-        while (i < close && (body[i] == ',' || body[i] == ' ' || body[i] == '\n'
-                             || body[i] == '\r' || body[i] == '\t'))
-            ++i;
-        if (i >= close) break;
-
-        char* endptr = nullptr;
-        // std::from_chars would be ideal but MSVC float support is uneven;
-        // strtod on a null-terminated scratch buffer is portable and fine here.
-        const std::size_t tokLen = std::min(close - i, std::size_t { 63 });
-        char buf[64];
-        std::memcpy(buf, body.data() + i, tokLen);
-        buf[tokLen] = '\0';
-        const double v = std::strtod(buf, &endptr);
-        if (endptr == buf)
-            return false;  // no parse progress -> malformed
-        out[count++] = static_cast<float>(v);
-        i += static_cast<std::size_t>(endptr - buf);
-    }
-    return count == cap;
-}
-
-} // namespace
-
 bool parseInferResponse(std::string_view jsonBody,
                         float* outDecision,
                         std::size_t outCapacity) noexcept
 {
     if (outDecision == nullptr || outCapacity == 0) return false;
-    // Clamp to the model's fixed decision width so a larger/malformed response
-    // can't overrun the caller's buffer.
     const std::size_t want = std::min(outCapacity, kSonicMasterDecisionWidth);
-    return extractDecisionArray(jsonBody, outDecision, want);
+    // P2.1: use the project's existing nlohmann/json (already linked to MorePhi)
+    // instead of the hand-rolled strtod parser — json.org-adherent, locale-safe,
+    // and handles all edge cases (scientific notation, NaN, inf, accidental
+    // whitespace inside the array).
+    try
+    {
+        const auto parsed = json::parse(jsonBody);
+        const auto it = parsed.find("decision");
+        if (it == parsed.end() || !it->is_array())
+            return false;
+        if (it->size() < want)
+            return false;
+        for (std::size_t i = 0; i < want; ++i)
+            outDecision[i] = (*it)[i].get<float>();
+        return true;
+    }
+    catch (const json::parse_error&)
+    {
+        return false;
+    }
 }
 
 // ── HTTP source ──────────────────────────────────────────────────────────────
@@ -138,27 +117,53 @@ bool SonicMasterHttpInferenceSource::infer(const float* stereoInterleaved,
         || outCapacity < kSonicMasterDecisionWidth)
         return false;
 
-    // The body is the raw little-endian float32 interleaved stereo window
-    // (2 * kSonicMasterSegmentFrames * 4 bytes). Copy into a MemoryBlock.
-    juce::MemoryBlock body(stereoInterleaved, 2 * kSonicMasterSegmentFrames * sizeof(float));
+    // FIX-1.2: hierarchical timeouts — connection 2s, read 5s. The old
+    // single 10s timeout meant a slow connect and a hanging read shared the
+    // same budget, stalling the analysis loop for the full 10s on either.
 
-    juce::URL url(baseUrl_ + ":" + std::to_string(port_)
-                  + "/infer?target_lufs=" + juce::String(targetLufs_.load(std::memory_order_relaxed), 3).toStdString());
-    const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
-                          .withConnectionTimeoutMs(10000);
+    // A3 FIX (UAF): the std::async thread below previously captured url/body/opts
+    // by REFERENCE. On the 5s-timeout path (wait_for != ready), infer() returns
+    // and destroys those locals while the detached async thread keeps running and
+    // dereferences them (url.withPOSTData(body)) — a classic dangling-reference
+    // use-after-free triggered whenever the server accepts the connection but
+    // never responds within 5s. Build the request objects INSIDE the async thread
+    // so they live exactly as long as the thread does. The locals here are now
+    // plain values copied in (cheap: baseUrl_/port_/targetLufs_ are small scalars).
+    const std::string baseUrlCopy = baseUrl_;
+    const int portCopy = port_;
+    const float targetLufsCopy = targetLufs_.load(std::memory_order_relaxed);
+    // Copy the request body into a heap-owned block the async thread owns.
+    auto bodyHolder = std::make_shared<juce::MemoryBlock>(
+        stereoInterleaved, 2 * kSonicMasterSegmentFrames * sizeof(float));
+
+    // Use an async read with a 5-second deadline so a hanging server (accepts
+    // POST but never responds) stalls the analysis loop for at most ~5s,
+    // not the old 10s (which was the connect timeout only, plus unbounded read).
+    auto future = std::async(std::launch::async, [baseUrlCopy, portCopy, targetLufsCopy, bodyHolder]() -> std::string {
+        try
+        {
+            juce::URL url(baseUrlCopy + ":" + std::to_string(portCopy)
+                          + "/infer?target_lufs=" + juce::String(targetLufsCopy, 3).toStdString());
+            const auto opts = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                                  .withConnectionTimeoutMs(2000);
+            auto stream = url.withPOSTData(*bodyHolder).createInputStream(opts);
+            if (stream == nullptr)
+                return {};
+            return stream->readEntireStreamAsString().toStdString();
+        }
+        catch (...)
+        {
+            return {};
+        }
+    });
+
+    if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+        return false;   // A3: safe now — bodyHolder + locals are owned by the async thread, not this frame
 
     std::string resp;
-    try
-    {
-        auto stream = url.withPOSTData(body).createInputStream(opts);
-        if (stream == nullptr)
-            return false;
-        resp = stream->readEntireStreamAsString().toStdString();
-    }
-    catch (...)
-    {
+    try { resp = future.get(); } catch (...) { return false; }
+    if (resp.empty())
         return false;
-    }
 
     return parseInferResponse(resp, outDecision, outCapacity);
 }

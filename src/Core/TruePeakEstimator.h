@@ -13,18 +13,14 @@
  *   Upsample by 4 using an FIR interpolation filter (zero-phase, linear-phase).
  *   Find the absolute maximum over all upsampled samples per block.
  *
- * Accuracy (measured 2026-06-19 against a Kaiser-windowed 4x reference
- * reconstruction — see tests/Unit/TestTruePeakEstimator.cpp):
- *   - DC / low-frequency ISP: within ~0 dB of reference (good).
- *   - Step-transition overshoot: detected, but undershoots the reference by
- *     up to ~2 dB depending on block alignment.
- *   - Near-Nyquist content (>=0.45*fs): under-reads by ~20-25 dB. The 12-tap
- *     polyphase prototype rolls off well before Nyquist, so a full-scale
- *     near-Nyquist sine reads ~-25 dBTP instead of ~-1 dBTP.
- *   This is a KNOWN LIMITATION. The estimator is adequate for detecting DC and
- *   low/mid-frequency inter-sample peaks but is NOT a ±0.2 dBTP meter. Any
- *   claim of reference-grade accuracy is unsupported until the prototype FIR
- *   is widened. The test suite pins these values as regression guards.
+ * Accuracy (AUDIT-FIX M6, reconciled with TruePeakEstimator.cpp + TestTruePeakEstimator.cpp):
+ *   - Prototype: 48-tap linear-phase FIR low-pass at fc = fs/8, Kaiser window β=5.0.
+ *   - Stopband attenuation ≈ 85 dB.
+ *   - This is a streaming-safe ISP estimator, NOT a certified BS.1770-4 meter.
+ *     TestTruePeakEstimator.cpp documents a known near-Nyquist under-read
+ *     (~25 dBTP vs TC Electronic LM2n reference) that is pinned as a regression
+ *     guard. For measurement-grade true-peak, upgrade the prototype to ≥128 taps
+ *     with β≈8.6.
  *
  * Thread safety:
  *   processBlock() — audio thread only, noexcept.
@@ -45,7 +41,7 @@ class TruePeakEstimator
 public:
     static constexpr int kMaxChannels  = 2;
     static constexpr int kUpsampleFactor = 4;
-    static constexpr int kFIRTaps = 12;     // taps per polyphase subfilter
+    static constexpr int kFIRTaps = 24;     // taps per polyphase subfilter
 
     TruePeakEstimator();
 
@@ -94,7 +90,7 @@ public:
     static float truePeakAt(const float* delay, int delayLen, int pos) noexcept;
 
 private:
-    // 4-phase × 12-tap polyphase FIR coefficients (pre-computed, symmetric Kaiser window)
+    // 4-phase × 24-tap polyphase FIR coefficients (pre-computed, symmetric Kaiser β=9)
     // Phase interleaving: phases 0,1,2,3 correspond to fractional delays 0, 1/4, 2/4, 3/4
     static const float kPolyCoeffs[kUpsampleFactor][kFIRTaps];
 

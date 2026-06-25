@@ -9,6 +9,28 @@
 #include "PluginHostManager.h"
 #include <exception>
 
+#if defined(_MSC_VER)
+// Helper to call plugin processBlock with SEH guard (hardware exception safety).
+// Must be a separate function from the caller because MSVC prohibits mixing SEH
+// (__try/__except) with C++ EH (try/catch) or RAII destructors in the same function.
+// Returns true if processBlock completed normally, false on hardware exception.
+#include <windows.h>
+static inline bool safePluginProcessBlock(juce::AudioPluginInstance* plugin,
+                                           juce::AudioBuffer<float>& buffer,
+                                           juce::MidiBuffer& midi) noexcept
+{
+    __try
+    {
+        plugin->processBlock(buffer, midi);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+#endif
+
 namespace more_phi {
 
 PluginHostManager::PluginHostManager()
@@ -75,7 +97,23 @@ juce::AudioPluginInstance* PluginHostManager::acquirePluginForUse() noexcept
 
 void PluginHostManager::releasePluginFromUse() noexcept
 {
-    activePluginUsers_.fetch_sub(1, std::memory_order_acq_rel);
+    // A1a FIX: underflow guard. A double-release (or a release without a
+    // matching acquire) used to drive activePluginUsers_ negative, after which
+    // unloadPlugin()'s `while (activePluginUsers_ > 0)` spin would never exit —
+    // freezing teardown. Decrement only while the count is strictly positive.
+    // No current caller double-releases; this is defensive against future
+    // imbalance and converts a silent deadlock into a one-off leaked lease
+    // (unloadPlugin's bounded wait + deferredDoomedPlugins_ queue handles it).
+    // ponytail: CAS loop, O(1), no allocation.
+    uint32_t expected = activePluginUsers_.load(std::memory_order_acquire);
+    while (expected > 0)
+    {
+        if (activePluginUsers_.compare_exchange_weak(expected, expected - 1,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return;
+        // expected refreshed by compare_exchange_weak on failure; loop.
+    }
+    // expected == 0 : underflow — nothing to release. Intentionally a no-op.
 }
 
 juce::AudioPluginInstance* PluginHostManager::beginExclusivePluginUse(int timeoutMs) noexcept
@@ -496,27 +534,34 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         juce::AudioBuffer<float> subBuffer(wideBuffer_.getArrayOfWritePointers(),
                                            requiredChannels, safeSamples);
 
-        try
+        // H-4: Wrap hosted plugin processBlock in SEH/C++ handler to survive
+        // hardware exceptions (access violations, stack overflows) from
+        // buggy third-party plugins.
+#if defined(_MSC_VER)
+        if (!safePluginProcessBlock(plugin, subBuffer, midi))
         {
-            plugin->processBlock(subBuffer, midi);
-            exceptionCount_.store(0, std::memory_order_relaxed);
-            // m-5 FIX: Decrement grace period
-            int grace = recoveryGracePeriod_.load(std::memory_order_relaxed);
-            if (grace > 0)
-                recoveryGracePeriod_.store(grace - 1, std::memory_order_relaxed);
-        }
-        catch (const std::exception& e)
-        {
-            juce::ignoreUnused(e);
             currentGain_ = 0.0f;
             applyExceptionGracePeriod(buffer);
             return;
+        }
+#else
+        try
+        {
+            plugin->processBlock(subBuffer, midi);
         }
         catch (...)
         {
             currentGain_ = 0.0f;
             applyExceptionGracePeriod(buffer);
             return;
+        }
+#endif
+        {
+            exceptionCount_.store(0, std::memory_order_relaxed);
+            // m-5 FIX: Decrement grace period
+            int grace = recoveryGracePeriod_.load(std::memory_order_relaxed);
+            if (grace > 0)
+                recoveryGracePeriod_.store(grace - 1, std::memory_order_relaxed);
         }
 
         // Copy processed audio back to the caller's buffer (only up to safeSamples)
@@ -538,9 +583,28 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
             buffer.clear(ch, 0, buffer.getNumSamples());
     }
 
+    // H-4: Wrap hosted plugin processBlock in SEH/C++ handler to survive
+    // hardware exceptions from buggy third-party plugins.
+#if defined(_MSC_VER)
+    if (!safePluginProcessBlock(plugin, buffer, midi))
+    {
+        currentGain_ = 0.0f;
+        applyExceptionGracePeriod(buffer);
+        return;
+    }
+#else
     try
     {
         plugin->processBlock(buffer, midi);
+    }
+    catch (...)
+    {
+        currentGain_ = 0.0f;
+        applyExceptionGracePeriod(buffer);
+        return;
+    }
+#endif
+    {
         exceptionCount_.store(0, std::memory_order_relaxed);  // reset on success
         // m-5 FIX: Decrement grace period. If an exception occurs during grace,
         // re-suspend immediately rather than waiting for 20 more exceptions.
@@ -554,19 +618,6 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
             buffer.applyGainRamp(0, buffer.getNumSamples(), currentGain_, 1.0f);
             currentGain_ = 1.0f;
         }
-    }
-    catch (const std::exception& e)
-    {
-        juce::ignoreUnused(e);
-        currentGain_ = 0.0f;
-        if (applyExceptionGracePeriod(buffer))
-            return;
-    }
-    catch (...)
-    {
-        currentGain_ = 0.0f;
-        if (applyExceptionGracePeriod(buffer))
-            return;
     }
 }
 

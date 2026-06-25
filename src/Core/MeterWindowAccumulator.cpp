@@ -114,7 +114,9 @@ MeterWindowAccumulator::WindowStatistics MeterWindowAccumulator::computeWindow(f
             finiteOr(sample.spectralCentroidHz, 0.0f),
             finiteOr(sample.spectralTiltDBPerOctave, 0.0f),
             finiteOr(sample.stereoWidth, 0.0f),
-            finiteOr(sample.midBandCorrelation, 0.0f)
+            finiteOr(sample.midBandCorrelation, 0.0f),
+            finiteOr(sample.thdPercent, 0.0f),
+            finiteOr(sample.crestFactorProgram, 0.0f)
         };
 
         for (int metric = 0; metric < kMaxMetrics; ++metric)

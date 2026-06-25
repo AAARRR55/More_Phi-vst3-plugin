@@ -1,8 +1,8 @@
 # More-Phi Technical Documentation
 
-> Updated 2026-06-21.
+> Updated 2026-07-16. **Technical Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete audit.
 
-More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture now includes an **Agent Orchestration Layer** (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) that provides unified initialization, configuration, and security mediation between the processor, agent runtime, and MCP server.
+More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture includes a **Multi-Agent Orchestration Layer** (7 specialist agents: Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory), an `AgentOrchestrator` facade, embedded MCP server with 30+ tools, ONNX-based neural mastering (preview), and comprehensive licensing with Ed25519 signatures.
 
 > Screenshot placeholder: `[Screenshot: More-Phi main interface with MorphPad, plugin browser, tab bar, and AI status panel]`
 >

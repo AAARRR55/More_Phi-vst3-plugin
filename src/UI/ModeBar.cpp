@@ -72,7 +72,8 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     smoothSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 18);
     smoothSlider_.setTooltip(
         "Smoothing: blends morph output over time. 0 = instant jumps between positions, "
-        "higher values = gradual, gliding transitions.");
+        "higher values = gradual, gliding transitions. "
+        "Maximum is 0.999 (not 1.0) to prevent numerical instability in the filter.");
     smoothSlider_.onDragStart = [this]() {
         if (!smoothingGestureActive_)
         {

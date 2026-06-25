@@ -49,6 +49,10 @@ void AgentRuntime::start(unsigned numWorkers)
     sharedContext_.blackboard= &blackboard_;
     sharedContext_.logger    = &logger_;
     sharedContext_.llm       = llm_;
+    // M3: freeze the registry before workers start reading it. Any later
+    // registerAgent() would race find()/registeredRoles() on worker + MCP
+    // threads.
+    registry_.seal();
     registry_.prepareAll(sharedContext_);
 
     // Subscribe each agent's declared event types to the blackboard exactly once.
@@ -81,9 +85,16 @@ void AgentRuntime::start(unsigned numWorkers)
             // has published nothing since our cursor — a cheap counter compare
             // instead of a full window scan every 50ms.
             try {
-                if (blackboard_.hasNewEvents())
-                    blackboard_.poll();
-            } catch (...) {}
+                // M9: directly call poll() without the TOCTOU-prone hasNewEvents()
+                // gate — poll()'s internal listRecentSince() is cheap when nothing
+                // is new, and the old check risked event loss under burst eviction.
+                blackboard_.poll();
+            } catch (const std::exception& e) {
+                logger_.log("runtime", "error", "blackboard pump threw",
+                            { { "exception", e.what() } });
+            } catch (...) {
+                logger_.log("runtime", "error", "blackboard pump threw unknown exception");
+            }
             juce::Thread::sleep(static_cast<int>(blackboardPumpIntervalMs_));
         }
     });

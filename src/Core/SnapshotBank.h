@@ -86,10 +86,50 @@ public:
     void setRecallMode(RecallMode m)  { recallMode_.store(m, std::memory_order_release); }
     RecallMode getRecallMode() const  { return recallMode_.load(std::memory_order_acquire); }
 
+    // ── Smart Preset Caching: plugin UID per slot (Phase 7) ──────────────────
+    /** Set the cached plugin UID for a slot. Used during Full-mode capture to
+     *  record which hosted plugin the state chunk came from. */
+    void setCachedPluginUID(int slot, const juce::String& uid)
+    {
+        if (slot >= 0 && slot < NUM_SLOTS)
+        {
+            const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+            cachedPluginUID_[slot] = uid;
+        }
+    }
+
+    /** Get the cached plugin UID for a slot. Returns empty string if none. */
+    juce::String getCachedPluginUID(int slot) const
+    {
+        if (slot < 0 || slot >= NUM_SLOTS) return {};
+        const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+        return cachedPluginUID_[slot];
+    }
+
+    /** Returns true if the cached UID for @a slot matches @a uid.
+     *  Used during recall to skip state-chunk application when the hosted
+     *  plugin has changed since capture. */
+    bool pluginUIDMatches(int slot, const juce::String& uid) const
+    {
+        if (slot < 0 || slot >= NUM_SLOTS) return false;
+        const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
+        return cachedPluginUID_[slot] == uid;
+    }
+
     bool isOccupied(int slot) const noexcept;
     bool hasAnyOccupied() const noexcept;
     int  getOccupiedSlots(std::array<int, NUM_SLOTS>& occupiedSlots) const;
+    uint32_t getSeqlockExhaustionCount() const noexcept { return seqlockExhaustionCount_.load(std::memory_order_relaxed); }
     bool getSlotValuesCopy(int slot, std::vector<float>& outValues) const;
+
+    // ── Gravity Wells: per-snapshot mass weight ───────────────────────────
+    /** Set the mass weight for a slot. Clamped to [0.1, 3.0].
+     *  Thread-safe: uses WriteScope (seqlock + writeLock). */
+    void setMass(int slot, float mass);
+    /** Get the mass weight for a slot. Thread-safe: uses seqlock read. */
+    float getMass(int slot) const noexcept;
+    /** Bulk read all 12 masses. Thread-safe: uses seqlock read. */
+    void getMasses(std::array<float, NUM_SLOTS>& masses) const noexcept;
 
     void clearSlot(int slot);
     void clearAll();
@@ -133,9 +173,11 @@ public:
                 namesBuf = paramNames_[i];
             }
             juce::MemoryBlock chunkBuf;
+            juce::String uidBuf;
             {
                 const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
                 chunkBuf = stateChunks_[i];   // copy unconditionally; sized check below
+                uidBuf = cachedPluginUID_[i];
             }
 
             // Read slot data into local buffers under seqlock, then construct XML outside.
@@ -143,6 +185,7 @@ public:
             int count = 0;
             char nameBuf[64] = {};
             std::array<float, MAX_PARAMETERS> valuesBuf{};
+            float localMass = 1.0f;  // H-6: read INSIDE the seqlock window
             bool readOk = false;
 
             for (int retry = 0; retry < MAX_READ_RETRIES; ++retry)
@@ -157,6 +200,7 @@ public:
                               "SnapshotBank::toXml nameBuf must match ParameterState::name size");
                 if (occupied && count > 0)
                     std::copy_n((*slots_)[i].values.begin(), count, valuesBuf.begin());
+                localMass = (*slots_)[i].mass;  // H-6: read inside seqlock window
 
                 std::atomic_thread_fence(std::memory_order_acquire);
                 uint32_t seq2 = seqlock_.load(std::memory_order_acquire);
@@ -170,6 +214,9 @@ public:
                         slotXml->setAttribute("id", i);
                         slotXml->setAttribute("paramCount", count);
                         slotXml->setAttribute("name", juce::String(nameBuf));
+                        // Gravity Well mass (omit if default 1.0)
+                        if (std::abs(localMass - 1.0f) > 1e-6f)
+                            slotXml->setAttribute("mass", static_cast<double>(localMass));
 
                         if (count > 0) {
                             juce::MemoryBlock block(valuesBuf.data(),
@@ -184,6 +231,9 @@ public:
 
                         if (chunkBuf.getSize() > 0)
                             slotXml->setAttribute("stateChunk", chunkBuf.toBase64Encoding());
+
+                        if (uidBuf.isNotEmpty())
+                            slotXml->setAttribute("pluginUID", uidBuf);
 
                         xml->addChildElement(slotXml.release());
                     }
@@ -206,6 +256,7 @@ public:
         // Phase 1: Parse into temporary storage (no side effects on live data)
         auto tmpSlots = std::make_unique<std::array<ParameterState, NUM_SLOTS>>();
         std::array<juce::MemoryBlock, NUM_SLOTS> tmpChunks;
+        std::array<juce::String, NUM_SLOTS> tmpUIDs;
         std::array<juce::StringArray, NUM_SLOTS> tmpNames;
 
         for (auto* child : xml.getChildIterator())
@@ -220,6 +271,10 @@ public:
             juce::String name = child->getStringAttribute("name", "");
             juce::String base64 = child->getStringAttribute("values", "");
             juce::String stateBase64 = child->getStringAttribute("stateChunk", "");
+
+            // Gravity Well mass (default 1.0 for backward compat)
+            const float slotMass = static_cast<float>(
+                child->getDoubleAttribute("mass", 1.0));
 
             if (base64.isNotEmpty() && safeCount > 0)
             {
@@ -238,6 +293,7 @@ public:
                 (*tmpSlots)[slot].setName(name.toRawUTF8());
                 (*tmpSlots)[slot].occupied = false;
             }
+            (*tmpSlots)[slot].mass = std::clamp(slotMass, 0.1f, 3.0f);
 
             // Restore parameter names (VST3-H1)
             if (auto* namesEl = child->getChildByName("PARAM_NAMES"))
@@ -257,6 +313,9 @@ public:
                 if (chunkBlock.fromBase64Encoding(stateBase64))
                     tmpChunks[slot] = std::move(chunkBlock);
             }
+
+            // Smart Preset Caching (Phase 7): restore plugin UID
+            tmpUIDs[slot] = child->getStringAttribute("pluginUID", "");
         }
 
         // Phase 2: Swap parsed data into live slots under seqlock write
@@ -276,7 +335,10 @@ public:
 
             const juce::SpinLock::ScopedLockType chunkLock(chunksLock_);
             for (int i = 0; i < NUM_SLOTS; ++i)
+            {
                 stateChunks_[i] = std::move(tmpChunks[i]);
+                cachedPluginUID_[i] = std::move(tmpUIDs[i]);
+            }
         }
     }
 
@@ -324,6 +386,7 @@ public:
         }
 
         // Exhausted retries - extremely rare, indicates heavy write contention
+        seqlockExhaustionCount_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -344,6 +407,9 @@ private:
     // - Odd value: write in progress
     // - Incremented at write start and end, so readers can detect modification
     mutable std::atomic<uint32_t> seqlock_{0};
+    // Diagnostics: incremented each time tryReadLocked exhausts all retries.
+    // Read via getSeqlockExhaustionCount(); exposed in profiling report.
+    mutable std::atomic<uint32_t> seqlockExhaustionCount_{0};
     // Seqlock requires a single writer. Multiple non-audio writers (UI + MCP)
     // must serialize writes to keep sequence transitions valid.
     mutable juce::SpinLock writeLock_;
@@ -363,6 +429,11 @@ private:
 
     // State chunks for Full recall mode (one per slot)
     std::array<juce::MemoryBlock, NUM_SLOTS> stateChunks_;
+
+    // Smart Preset Caching (Phase 7): plugin UID per slot, recorded at capture
+    // time so recall can skip state-chunk apply when the hosted plugin changed.
+    // Protected alongside stateChunks_ by chunksLock_.
+    std::array<juce::String, NUM_SLOTS> cachedPluginUID_;
 
     // Parameter names per slot — populated during capture(), used for forward
     // compatibility when hosted plugin parameter order changes between versions.
