@@ -1042,8 +1042,28 @@ void LLMChatClient::chat(const LLMSettings& settings,
         else if (std::regex_match(userMsgStr, match, kGetParameter))
         {
             const auto paramName = juce::String(match[1].str()).trim();
-            if (!paramName.containsIgnoreCase("morph") && !paramName.containsIgnoreCase("parameter")
-                && paramName.length() >= 2)
+            // AUDIT (2026-06-26): this regex catches ANY "what is X" / "get X" /
+            // "show X" sentence, so it must be narrowed before dispatching to
+            // get_parameter — otherwise natural-language questions like "what
+            // is the hosted plugin" get routed to get_parameter(name=...) and
+            // surface as "Failed: invalid_param_id". Only treat it as a
+            // parameter lookup when the captured token looks like an actual
+            // parameter name: short, single concept, no articles / question
+            // words / domain nouns that belong to other tools.
+            const auto lower = paramName.toLowerCase();
+            const bool looksLikeQuestion = lower.contains("the ")
+                || lower.contains(" a ") || lower.contains(" an ")
+                || lower.contains("plugin") || lower.contains("hosted")
+                || lower.contains("snapshot") || lower.contains("morph")
+                || lower.contains("bypass") || lower.contains("parameter")
+                || lower.contains("analysis") || lower.contains("mastering")
+                || lower.contains("sonicmaster") || lower.contains("state")
+                || lower.contains("available") || lower.contains("version")
+                || lower.contains("current") || lower.contains("status")
+                || lower.contains("preset") || lower.contains("dataset");
+            if (!looksLikeQuestion && paramName.length() >= 2
+                && paramName.length() <= 32
+                && !paramName.containsChar(' '))
             {
                 toolName = "get_parameter";
                 toolArgs = "{\"name\":\"" + paramName.replaceCharacter(' ', '_') + "\"}";

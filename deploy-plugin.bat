@@ -7,7 +7,7 @@ set "SRC=G:\More_Phi-vst3-plugin\build-ninja\MorePhi_artefacts\Release\VST3\More
 set "DST=C:\Program Files\Common Files\VST3\MorePhi.vst3\Contents\x86_64-win"
 
 echo Checking FL Studio is not running...
-tasklist /FI "IMAGENAME eq FL64.exe" 2>NUL | find /I "FL64.exe" >NUL
+tasklist 2>NUL | findstr /I "FL64.exe FL32.exe" >NUL
 if %ERRORLEVEL% == 0 (
     echo.
     echo [ERROR] FL Studio is still running and holding the plugin locked.
