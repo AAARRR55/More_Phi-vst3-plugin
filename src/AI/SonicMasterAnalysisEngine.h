@@ -217,6 +217,29 @@ public:
     };
     [[nodiscard]] Status getStatus() const noexcept { return status_.load(std::memory_order_acquire); }
     [[nodiscard]] std::uint64_t getLastPlanId() const noexcept { return lastPlanId_; }
+
+    // Stage D (2026-06-26): closed LUFS feedback loop readback for the assistant.
+    // feedbackActive = the loop has seen at least one apply and is correcting.
+    // lastLufsError = target - measured (positive = signal is too quiet vs target).
+    // Constants are public (compile-time safety contract, like recallRampBlocks)
+    // so tests can pin the deadband + per-cycle cap that prevent runaway/oscillation.
+    static constexpr float kFeedbackDeadbandLu      = 0.5f;   // don't correct < 0.5 LU off
+    static constexpr float kFeedbackMaxCorrectionLu = 1.0f;   // cap per-cycle nudge
+    static constexpr float kFeedbackMinTargetLu     = -23.0f; // engine clamp floor
+    static constexpr float kFeedbackMaxTargetLu     = -8.0f;  // engine clamp ceil
+    struct ClosedLoopState
+    {
+        bool  feedbackActive = false;
+        float lastAppliedTargetLufs = -14.0f;
+        float lastMeasuredLufs = 0.0f;
+        float lastLufsError = 0.0f;
+        float nextTargetLufs = -14.0f;
+    };
+    [[nodiscard]] ClosedLoopState getClosedLoopState() const noexcept
+    {
+        return { feedbackActive_, lastAppliedTargetLufs_, lastMeasuredLufs_,
+                 lastLufsError_, feedbackActive_ ? feedbackTargetLufs_ : -14.0f };
+    }
     // F2/AUDIT: true when the last apply actually reached an active audio path.
     // Mirrors the Applied vs AppliedNoAudioPath split for clients that read a
     // boolean rather than the enum.
@@ -316,6 +339,18 @@ private:
     std::uint64_t lastPlanId_ = 0;
     std::uint64_t nextPlanId_ = 1;
     double sampleRate_ = 48000.0;
+
+    // Stage D (2026-06-26): closed LUFS feedback loop state. After each apply,
+    // runCycle measures the achieved LUFS on the captured (post-hosted-plugin)
+    // signal, computes the error vs the target that was just applied, and folds a
+    // bounded correction into feedbackTargetLufs_ for the NEXT cycle's decode.
+    // feedbackActive_ gates it (off until the first apply lands; reset on
+    // prepare/release). Bounded by the public kFeedback* constants above.
+    bool  feedbackActive_   = false;
+    float feedbackTargetLufs_ = -14.0f;   // next cycle's target override
+    float lastAppliedTargetLufs_ = -14.0f; // what the last apply targeted (for error)
+    float lastMeasuredLufs_      = 0.0f;   // last achieved LUFS readback
+    float lastLufsError_         = 0.0f;   // target - measured (positive = too quiet)
     // AUDIT-IX-8: steady-clock ns of the most recent capture window end. Stamped
     // into each plan so applyRamped can drop stale plans (analysisInterval +
     // inference latency past). Written on the analysis thread under inferMutex_,

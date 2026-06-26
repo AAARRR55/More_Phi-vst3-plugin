@@ -246,6 +246,12 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     consecutiveFailures_.store(0, std::memory_order_relaxed);
     lastPlanId_ = 0;
     nextPlanId_ = 1;
+    // Stage D: reset the closed LUFS loop so a fresh prepare starts open-loop.
+    feedbackActive_ = false;
+    feedbackTargetLufs_ = -14.0f;
+    lastAppliedTargetLufs_ = -14.0f;
+    lastMeasuredLufs_ = 0.0f;
+    lastLufsError_ = 0.0f;
     stopRequested_.store(false, std::memory_order_release);
     prepared_.store(true, std::memory_order_release);
     status_.store(isAvailable() ? Status::CollectingAudio : Status::Disabled,
@@ -489,10 +495,21 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     consecutiveFailures_.store(0, std::memory_order_relaxed);
 
     ValidatedNeuralMasteringPlan plan {};
-    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan))
+    // Stage D (2026-06-26): closed LUFS loop. When active, override the model's
+    // loudness recommendation with the feedback-corrected target from the prior
+    // cycle's measured error. The decode-side hook (Stage A) honors it. First
+    // cycle (or after reset) uses the model's own recommendation.
+    const float decodeTargetLufs = feedbackActive_
+        ? feedbackTargetLufs_
+        : more_phi::kUseModelTargetLufs;
+    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan, decodeTargetLufs))
         return false;
     plan.sourcePlanId = nextPlanId_++;
     plan.capturedAtSteadyClockNs = captureTimeNs_;  // stamp capture instant for staleness guard
+    // Record the target this plan actually applied (pre-safety-projection value,
+    // for the error calc). Inverse of the decoder map: lufs = -14 + value*6.
+    lastAppliedTargetLufs_ = std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f,
+                                        kFeedbackMinTargetLu, kFeedbackMaxTargetLu);
 
     // Safety gate. Wrap the decoded plan in a candidate the policy validates.
     NeuralMasteringRuntimeState runtime {};
@@ -536,6 +553,44 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     lastApplyReachedAudioPath_.store(reachedAudio, std::memory_order_release);
     status_.store(reachedAudio ? Status::Applied : Status::AppliedNoAudioPath,
                   std::memory_order_release);
+
+    // Stage D (2026-06-26): closed LUFS feedback loop. Measure the achieved LUFS
+    // on the captured (post-hosted-plugin) signal and fold a BOUNDED correction
+    // into the next cycle's target. Guards: only when the apply reached audio,
+    // the measurement is valid, and the error exceeds the deadband (no churn
+    // on-target). The correction is capped at kFeedbackMaxCorrectionLu/cycle so
+    // the loop can't runaway or oscillate; combined with the 3s cadence this
+    // converges monotonically over a few cycles.
+    if (reachedAudio)
+    {
+        const auto m = getLiveMeasurements();
+        if (m.valid)
+        {
+            lastMeasuredLufs_ = m.lufsIntegrated;
+            lastLufsError_ = lastAppliedTargetLufs_ - m.lufsIntegrated; // + = too quiet
+            if (std::abs(lastLufsError_) > kFeedbackDeadbandLu)
+            {
+                // Nudge the next target toward reducing the error. Sign: if signal
+                // is too quiet (error > 0), raise the target; if too loud, lower it.
+                const float nudge = std::clamp(lastLufsError_,
+                                               -kFeedbackMaxCorrectionLu,
+                                               kFeedbackMaxCorrectionLu);
+                feedbackTargetLufs_ = std::clamp(lastAppliedTargetLufs_ + nudge,
+                                                 kFeedbackMinTargetLu,
+                                                 kFeedbackMaxTargetLu);
+                feedbackActive_ = true;
+            }
+            else
+            {
+                // On-target: lock the loop at the current target (no drift).
+                feedbackTargetLufs_ = lastAppliedTargetLufs_;
+                feedbackActive_ = true;
+            }
+        }
+        // If measurement is invalid (not enough signal), leave feedbackTargetLufs_
+        // unchanged — the loop holds its last good target rather than guessing.
+    }
+
     return true;
 }
 

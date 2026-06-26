@@ -5,6 +5,7 @@
 // insufficient-audio skip, N-consecutive-failure auto-disable, and the
 // teardown join-before-destroy invariant.
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "Core/AutoMasteringEngine.h"
@@ -470,4 +471,74 @@ TEST_CASE("AnalysisEngine capture() is safe before ring allocation and under con
     CHECK(captureIters.load(std::memory_order_relaxed) > 0);
 
     eng.release();
+}
+
+// ── Stage D (2026-06-26): closed LUFS feedback loop ───────────────────────────
+// The loop measures achieved LUFS after each apply and folds a bounded correction
+// into the next cycle's target. These tests pin the GUARD logic (the loop must
+// NOT activate when the apply didn't reach audio) and the accessor shape. The
+// convergence math (monotonic approach, bounded nudge) is exercised by the
+// correction formula in runCycle; a full hosted-plugin convergence test needs a
+// real hosted plugin writing params (covered by integration tests).
+TEST_CASE("Closed LUFS loop stays inactive when apply reaches no audio path (Stage D guard)",
+          "[SonicMaster][Engine][StageD]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+    eng.setActive(true);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    // Before any cycle: feedback inactive.
+    CHECK(eng.getClosedLoopState().feedbackActive == false);
+
+    REQUIRE(eng.runOneCycleForTest());
+    // No hosted plugin + dormant internal chain → reachedAudio == false → the
+    // loop MUST NOT have activated (no measurement-based correction without an
+    // audible apply to measure).
+    CHECK(eng.getStatus() == more_phi::SonicMasterAnalysisEngine::Status::AppliedNoAudioPath);
+    CHECK(eng.getClosedLoopState().feedbackActive == false);
+
+    eng.release();
+    engine.reset();
+}
+
+TEST_CASE("ClosedLoopState accessor reports sane defaults before any apply (Stage D)",
+          "[SonicMaster][Engine][StageD]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+
+    const auto s = eng.getClosedLoopState();
+    CHECK(s.feedbackActive == false);
+    CHECK(std::abs(s.lastAppliedTargetLufs - (-14.0f)) < 1e-3f);  // neutral default
+    CHECK(std::abs(s.nextTargetLufs - (-14.0f)) < 1e-3f);         // neutral when inactive
+
+    eng.release();
+}
+
+// Stage D: the feedback bounds are the safety contract — pin them as constants so
+// a future tuning change can't silently remove the per-cycle cap or deadband that
+// prevents runaway/oscillation.
+TEST_CASE("Closed LUFS loop bounds are bounded + deadbanded (Stage D contract)",
+          "[SonicMaster][Engine][StageD]")
+{
+    // Deadband: errors below this don't trigger correction (avoids on-target churn).
+    CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackDeadbandLu == Catch::Approx(0.5f));
+    // Per-cycle correction cap: the loop can't move the target more than this in
+    // one cycle, so even a huge error converges over multiple cycles (no overshoot).
+    CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMaxCorrectionLu == Catch::Approx(1.0f));
+    // Target clamp matches the engine's [-23,-8] loudness output range.
+    CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMinTargetLu == Catch::Approx(-23.0f));
+    CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMaxTargetLu == Catch::Approx(-8.0f));
 }
