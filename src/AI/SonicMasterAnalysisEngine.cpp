@@ -220,16 +220,27 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
         config_.captureRingFrames = frames;
     }
 
-    // PERF-MEM: Defer AudioCaptureRing allocation until the feature is actually
-    // activated (setActive(true) or requestDecisionNow). The ring is rate-proportional
-    // (~4 MiB at 48 kHz, ~16 MiB at 192 kHz, pow2-rounded); lazy allocation cuts
-    // More-Phi's baseline memory footprint substantially when SonicMaster is off.
-    // C-3 FIX (audit): publish nullptr BEFORE freeing storage so an audio
-    // thread in capture() that loads ring_ with acquire bails before the
-    // object is destroyed. Safe w.r.t. processBlock because JUCE guarantees
-    // prepare()/release() are mutually exclusive with processBlock.
-    ring_.store(nullptr, std::memory_order_release);
-    ringStorage_.reset();
+    // CAPTURE-DECOUPLE (2026-06-26): the capture ring is now allocated EAGERLY
+    // in prepare() rather than lazily on first setActive(true)/requestDecisionNow.
+    // The prior lazy scheme saved ~4 MiB when SonicMaster was off, but it made
+    // on-demand capture impossible: capture() bails on a null ring (line ~296),
+    // and the ring only materialized when the assistant called requestDecisionNow —
+    // by which point the window was empty (no audio had been captured during
+    // playback). The assistant then reported "no fresh audio captured yet" even
+    // though the user had been playing for well over 6 s. Eager allocation makes
+    // capture work from the very first audio block, so on-demand inference
+    // always has a full window ready. The ~4 MiB cost (~16 MiB at 192 kHz) is
+    // consistent with the other always-allocated model buffers below and is a
+    // reasonable trade for a working on-demand path. ensureRing() remains as a
+    // defensive idempotent allocator for tests that skip prepare().
+    //
+    // Allocate inline (not via ensureRing()) because ensureRing() gates on
+    // prepared_, which isn't set until the end of prepare(). The ring pointer
+    // is published with release semantics AFTER construction completes, so the
+    // audio thread's acquire-load in capture() sees either nullptr or a fully
+    // constructed AudioCaptureRing — never a torn object (C-3 FIX).
+    ringStorage_ = std::make_unique<AudioCaptureRing>(config_.captureRingFrames);
+    ring_.store(ringStorage_.get(), std::memory_order_release);
 
     // Host-rate window length equivalent to the 44.1k model segment.
     // These model buffers (~4.2 MB total) are always allocated — they're needed
