@@ -133,8 +133,8 @@ validated `applyValidatedPlan()` handoff.
 ### 4.2 Ownership boundaries
 
 **`SonicMasterDecisionRunner`** owns: the ONNX session, input/output tensor
-names, the fixed 262138-sample input buffer (pre-allocated in `loadModel`,
-reused — zero per-inference allocation). It does *not* own threading, capture,
+names, the fixed 262138-sample input buffer (pre-allocated in `loadModel` via
+embedded BinaryData, reused — zero per-inference allocation). It does *not* own threading, capture,
 or resampling. Synchronous `(waveform → 44 floats)` call. Trivially testable
 with a stub.
 
@@ -165,7 +165,8 @@ safety policy even sees it.
 
 **`SonicMasterAnalysisEngine`** owns: the capture ring, the analysis
 `std::thread`, the runner, the resample step, the safety-policy instance, and a
-`juce::MessageManager::callAsync` handoff to the message thread. It does *not*
+pending-plan atomic-flag + timer-callback handoff to the message thread (R5 fix;
+replaces old `callAsync` which could drop in headless hosts). It does *not*
 own the `AutoMasteringEngine` — it holds a non-owning pointer (set via
 `setApplicationEngine()`, mirroring `NeuralMasteringController`).
 
@@ -254,22 +255,18 @@ locks, `noexcept`.
    `safetyPolicy_.validate(candidate, runtimeState_)`. If `accepted`, proceed; if
    `fallbackSelected`, hold the last safe plan and skip the apply (do not push a
    rejected plan downstream).
-7. **Hand off**: `juce::MessageManager::callAsync([this, plan]() { applyRamped(plan); })`.
-   The plan is copied by value into the lambda capture (small struct); the
-   analysis thread is immediately free for the next cycle.
+7. **Hand off**: store plan in `pendingPlan_`, set `pendingApplication_` atomic
+   flag (R5 fix — replaces `callAsync`). The processor's timer callback polls
+   `hasPendingApplication()` and calls `processPendingApplication()` on the
+   message thread, which invokes `applyRamped(plan)`. The analysis thread is
+   immediately free for the next cycle.
 
 **Message thread — `applyRamped(plan)`:**
 
 8. Call `autoMasteringEngine_->applyValidatedPlan(plan)` once — this is the single
    apply surface. It updates the engine's `lastSafeNeuralPlan_` bookkeeping and
-   records the target parameters. (The engine's `applyValidatedPlan` itself
-   delegates to the per-module setters; it does not ramp.)
-9. For 200 ms, every ~20 ms, advance a `juce::SmoothedValue` per target from
-   current DSP value → plan value, writing each step into the DSP modules' atomic
-   setters (`eq_.setBandGain(i, …)`, `dynamics_.setBandParams(j, …)`, etc.). The
-   ramp is the *only* thing that moves the live DSP parameters; the engine
-   bookkeeping call in step 8 is metadata only. There is one source of truth for
-   live parameter motion (the ramp), not two competing writers.
+   sets all target parameters. Parameters apply instantaneously (the dead
+   `rampDurationSeconds` config field was removed in R8).
 
 ### 5.2 Cadence & timing constants
 
@@ -311,7 +308,7 @@ User toggles OFF:
   (message thread) *after* joining the analysis thread. No other thread ever
   touches it.
 - **Message-thread handoff is the only analysis→message crossing**: via
-  `callAsync`, which is inherently thread-safe.
+  pending-plan atomic flag + timer callback (R5 fix — replaces `callAsync`).
 - **`active_` is atomic**: audio thread reads it relaxed on every block; message
   thread sets it. A toggle takes effect within one block.
 
@@ -327,8 +324,8 @@ running untouched.**
 | Failure | Detection | Response | DSP/audio impact |
 |---|---|---|---|
 | ONNX not linked (`MORE_PHI_ENABLE_ONNX=OFF`) | `runner_.isAvailable()==false` at construction | UI toggle disabled + greyed, status "Model unavailable (build without ONNX)". Engine never spawns analysis thread. | None |
-| ONNX linked but no model file / bad path | `loadModel()` returns false | Same as above; logged once. `active_` cannot be set true. | None |
-| Model I/O shape mismatch at load | `loadModel()` validates input `[?,2,262138]` + output `[?,44]` against `contract.json`; rejects on mismatch | Load fails → unavailable. Guards against silently swapping in an incompatible checkpoint. | None |
+| ONNX linked but model load fails | `loadModel()` returns false (model embedded via BinaryData; load validates I/O shapes) | Same as above; logged once. `active_` cannot be set true. | None |
+| Model I/O shape mismatch at load | `loadModel()` validates input `[?,2,262138]` + output `[?,44]`; rejects on mismatch | Load fails → unavailable. Guards against silently swapping in an incompatible checkpoint. | None |
 | Insufficient audio captured | `capturedFrames < 262138` at cycle start | Skip cycle, status "Collecting audio…" | None — DSP holds current params |
 | Inference throws / returns error | try/catch around `session.Run()` | Log, skip cycle, keep last safe plan. After 3 consecutive failures, auto-disable the feature and surface "Analysis error — see log". | None — last safe params held |
 | Model outputs NaN/Inf | Decoder coerces to 0 before building the plan; `sanitizePlanCandidate()` is the second line | Treated as all-zero deltas → effectively "no change" | None |

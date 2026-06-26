@@ -226,7 +226,7 @@ std::vector<uint8_t> createFakeIpcMemory()
         bytes[i] = static_cast<uint8_t>(i & 0xffu);
 
     constexpr size_t frameOffset = 32;
-    writeU32LE(bytes, frameOffset + 0, 0x495A4F54u);
+    writeU32LE(bytes, frameOffset + 0, 0x4D4F5250u);
     writeU16LE(bytes, frameOffset + 4, 3);
     writeU16LE(bytes, frameOffset + 6, 0x0021);
     writeU32LE(bytes, frameOffset + 8, 0x12345678u);
@@ -269,7 +269,7 @@ std::vector<uint8_t> createFakeAssistantMemory()
     writeU32LE(bytes, ringWriteOffset, 170u);
 
     const size_t frameOffset = ringDataOffset + resultRingOffset;
-    writeU32LE(bytes, frameOffset + 0, 0x495A4F54u);
+    writeU32LE(bytes, frameOffset + 0, 0x4D4F5250u);
     writeU16LE(bytes, frameOffset + 4, 3);
     writeU16LE(bytes, frameOffset + 6, 0x0021);
     writeU32LE(bytes, frameOffset + 8, instanceIdValue);
@@ -366,7 +366,7 @@ void appendIpcFrameAtCurrentRingWrite(std::vector<uint8_t>& bytes,
                                       size_t ringSize = 512)
 {
     std::vector<uint8_t> frame(28 + payload.size(), 0);
-    writeU32LE(frame, 0, 0x495A4F54u);
+    writeU32LE(frame, 0, 0x4D4F5250u);
     writeU16LE(frame, 4, 3);
     writeU16LE(frame, 6, messageType);
     writeU32LE(frame, 8, senderId);
@@ -969,7 +969,7 @@ TEST_CASE("Standalone MCP IPC assistant writes request frame and parses fake res
     REQUIRE(memoryPtr != nullptr);
     const auto& memory = *memoryPtr;
     REQUIRE(readU32LEFromVector(memory, 260) == 240u);
-    REQUIRE(readU32LEFromVector(memory, 512 + 170) == 0x495A4F54u);
+    REQUIRE(readU32LEFromVector(memory, 512 + 170) == 0x4D4F5250u);
     REQUIRE(readU16LEFromVector(memory, 512 + 176) == 0x0020);
     REQUIRE(readU32LEFromVector(memory, 512 + 178) == 0xDEADBEEFu);
     REQUIRE(readU32LEFromVector(memory, 512 + 182) == 0x01020304u);
@@ -1059,7 +1059,7 @@ std::vector<uint8_t> createFakeAssistantMemoryForWrapTest()
     writeU32LE(bytes, 256, 19u);  // readPtr=19: after request write (writePtr=18<readPtr), available=512-19+18=511
 
     const size_t frameOffset = ringDataOffset + resultRingOffset;
-    writeU32LE(bytes, frameOffset + 0,  0x495A4F54u);
+    writeU32LE(bytes, frameOffset + 0,  0x4D4F5250u);
     writeU16LE(bytes, frameOffset + 4,  3);
     writeU16LE(bytes, frameOffset + 6,  0x0021);
     writeU32LE(bytes, frameOffset + 8,  instanceIdValue);
@@ -1092,7 +1092,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
 
     // SpectralData frame (0x0010) at ring position 0, payload = 12 bytes → total 40 bytes
     constexpr size_t preamble0 = ringDataOffset;
-    writeU32LE(bytes, preamble0 + 0,  0x495A4F54u);
+    writeU32LE(bytes, preamble0 + 0,  0x4D4F5250u);
     writeU16LE(bytes, preamble0 + 4,  3);
     writeU16LE(bytes, preamble0 + 6,  0x0010);
     writeU32LE(bytes, preamble0 + 8,  instanceIdValue);
@@ -1102,7 +1102,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
 
     // LoudnessData frame (0x0011) at ring position 40, payload = 8 bytes → total 36 bytes
     constexpr size_t preamble1 = ringDataOffset + 40;
-    writeU32LE(bytes, preamble1 + 0,  0x495A4F54u);
+    writeU32LE(bytes, preamble1 + 0,  0x4D4F5250u);
     writeU16LE(bytes, preamble1 + 4,  3);
     writeU16LE(bytes, preamble1 + 6,  0x0011);
     writeU32LE(bytes, preamble1 + 8,  instanceIdValue);
@@ -1112,7 +1112,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithPreambleFrames()
 
     // AssistantResult (0x0021) at ring position 76, payload = 8 bytes → 1 param
     constexpr size_t resultFrame = ringDataOffset + 76;
-    writeU32LE(bytes, resultFrame + 0,  0x495A4F54u);
+    writeU32LE(bytes, resultFrame + 0,  0x4D4F5250u);
     writeU16LE(bytes, resultFrame + 4,  3);
     writeU16LE(bytes, resultFrame + 6,  0x0021);
     writeU32LE(bytes, resultFrame + 8,  instanceIdValue);
@@ -1189,16 +1189,16 @@ TEST_CASE("Standalone MCP IPC assistant handles ring wrap-around write", "[mcp][
     REQUIRE(body["parameters"][0]["index"].get<int>() == 0);
     REQUIRE(body["parameters"][0]["value"].get<float>() == Approx(0.75f));
 
-    // Verify wrap-around: request frame magic bytes 0-3 = 0x495A4F54 LE = [0x54, 0x4F, 0x5A, 0x49]
+    // Verify wrap-around: request frame magic bytes 0-3 = 0x4D4F5250 ("MORP") LE = [0x50, 0x52, 0x4F, 0x4D]
     // With initial write ptr = 502 and ring data at offset 512:
     //   frame byte 0 → memory[512 + 502], frame bytes 10-27 → memory[512 + 0..17]
     const auto* memPtr = assistantPtr->getFakeSegmentForTests("fake_morephi_assistant_1234");
     REQUIRE(memPtr != nullptr);
     const auto& memory = *memPtr;
-    REQUIRE(memory[512 + 502] == 0x54u);  // 'T' — low byte of magic LE
-    REQUIRE(memory[512 + 503] == 0x4Fu);  // 'O'
-    REQUIRE(memory[512 + 504] == 0x5Au);  // 'Z'
-    REQUIRE(memory[512 + 505] == 0x49u);  // 'I'
+    REQUIRE(memory[512 + 502] == 0x50u);  // 'P' — low byte of magic LE (MORP = 0x4D4F5250)
+    REQUIRE(memory[512 + 503] == 0x52u);  // 'R'
+    REQUIRE(memory[512 + 504] == 0x4Fu);  // 'O'
+    REQUIRE(memory[512 + 505] == 0x4Du);  // 'M'
     // Write pointer should include the wrapped request and delayed result.
     REQUIRE(readU32LEFromVector(memory, 260) == 54u);
 
@@ -1409,7 +1409,7 @@ std::vector<uint8_t> createFakeAssistantMemoryWithValidIndices()
     writeU32LE(bytes, ringWriteOffset, 170u);
 
     const size_t frameOffset = ringDataOffset + resultRingOffset;
-    writeU32LE(bytes, frameOffset + 0, 0x495A4F54u);
+    writeU32LE(bytes, frameOffset + 0, 0x4D4F5250u);
     writeU16LE(bytes, frameOffset + 4, 3);
     writeU16LE(bytes, frameOffset + 6, 0x0021);
     writeU32LE(bytes, frameOffset + 8, instanceIdValue);

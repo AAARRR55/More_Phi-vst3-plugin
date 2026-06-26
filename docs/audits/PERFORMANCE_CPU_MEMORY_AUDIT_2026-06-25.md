@@ -14,7 +14,7 @@
 **Headline findings (static + architectural, high confidence):**
 
 1. **The dominant per-block CPU cost is the 2048-parameter write loop** (`parameter_application`), and within it the strided `getValue()` batch read is the single most expensive sub-operation. This was already mitigated by PERF-IA (interleaved touch sampling, ~75% reduction) and PERF-C3 (static-morph early-exit). This audit adds the first **sub-attribution** (`param_getvalue_read` isolated) so future work can target it precisely.
-2. **Memory is dominated by two lazy allocations**: the SonicMaster `AudioCaptureRing` (**16.0 MiB**, not the 12.3 MiB widely quoted in docs — see §10.2) and the ORT model (**3.36 MiB weights + 2.0 MiB input buffer**). Both are already lazy-allocated, so the idle footprint is low. The "12.3 MB" figure is a stale-doc defect corrected in source by this audit.
+2. **Memory is dominated by two lazy allocations**: the SonicMaster `AudioCaptureRing` (**~4.0 MiB @ 48 kHz; ~16 MiB @ 192 kHz** — now rate-proportional via PERF-MEM-RATE, see §5.2; was a fixed 16.0 MiB) and the ORT model (**3.36 MiB weights + 2.0 MiB input buffer**). Both are already lazy-allocated, so the idle footprint is low. (The earlier "12.3 MB" figure was a stale underestimate from a prior smaller ring config, long since corrected in source.)
 3. **The AI assistant layer is near-zero CPU cost** in production: the "LLM client" is `DeterministicFallbackLlmClient` (a keyword heuristic, no network), the blackboard pump is a 50 ms sleep loop, and 2 scheduler-worker threads sit idle unless a goal is submitted. Do not optimize this layer for CPU until a real LLM transport is wired.
 4. **Neural inference runs off the audio thread** (SonicMaster background thread, 3 s cycle) and is never per-sample — its cost is a ~hundreds-of-ms spike every 3 s, isolated from the realtime path. The on-demand `sonicmaster_decision` MCP tool blocks an MCP connection thread, serialized by `inferMutex_`, never the audio thread.
 5. **The in-tree profiler lacked percentiles** (mean/min/max only). This audit implements the documented M4 ring-buffer upgrade (`PerformanceProfiler.h`) so per-section p50/p95/p99 are now available, with the audio-thread no-alloc/no-block contract (C-2/C-16) preserved and unit-tested.
@@ -344,10 +344,16 @@ build-audit/Release/MorePhiAuditBenchmark.exe --passes 5 --buffers 256,512,1024
 **Replacement:** nothing (it's dead) OR wire it as a third benchmark target if its per-component memory breakdown is wanted. Given §5 already covers static memory, **delete is the lean choice.** Saves ~950 lines of unmaintained code.
 **Path:** `tests/Performance/ComprehensiveProfilingHarness.cpp`
 
-### 10.2 `shrink:` Stale "12.3 MB" capture-ring documentation (corrected in source)
-**What:** The `AudioCaptureRing` is **16.0 MiB** (2,097,152 × 2 × 4 = 16,777,216 B), but comments/docs widely say "12.3 MB" — a stale figure from a prior smaller config. **This audit corrected the in-source comments** (`SonicMasterAnalysisEngine.{h,cpp}`) to the canonical "16.0 MiB (~16.8 MB decimal)."
-**Remaining (doc-level, not source):** `AGENTS.md:137`, `CLAUDE.md:171`, `CHANGELOG.md:37-39`, `docs/PERFORMANCE_AUDIT_REPORT.md` (7 occurrences), `docs/audit/sonicmaster-neural-mastering-audit-2026.md:212`. Recommend a doc sweep to avoid the figure re-entering decisions.
-**Replacement:** `16.0 MiB` / `~16.8 MB decimal`. Net: factual accuracy, ~0 lines.
+### 10.2 `shrink:` Stale capture-ring documentation (corrected, then made rate-proportional)
+**What (original):** The `AudioCaptureRing` was documented as "12.3 MB" — a stale underestimate from a prior smaller config. Corrected to the actual fixed size of **16.0 MiB** (2,097,152 × 2 × 4 = 16,777,216 B).
+**What (now):** PERF-MEM-RATE (2026-07-16) made the ring **rate-proportional** — `prepare()` sizes it to 8 s at the *actual* host sample rate, so it is ~4.0 MiB at 44.1/48 kHz and only reaches ~16 MiB at 192 kHz. The fixed "16.0 MiB" figure is correct only for 192 kHz hosts.
+**Remaining (doc-level, not source):** the §0 headline above now cites the rate-proportional range; older standalone docs (`docs/PERFORMANCE_AUDIT_REPORT.md`, `CHANGELOG.md:37-39`, `CLAUDE.md:171`) may still quote the fixed figure.
+
+> **Post-audit update (PERF-MEM, 2026-07-16):** The ring size is now **rate-proportional**
+> (`round(8.0 × sampleRate)`, clamped `[2×44100, 32×192000]`, pow2-rounded by
+> `AudioCaptureRing`). At 44.1/48 kHz this yields ~4 MiB; at 192 kHz ~16 MiB. The
+> fixed 16.0 MiB figure above is correct for 192 kHz only. Ring is also lazily
+> allocated via `ensureRing()`. See `SonicMasterAnalysisEngine.cpp:214-222`.
 
 ### 10.3 `yagni:` Unwired `AllocationTracker.h`
 **What:** `src/Core/AllocationTracker.h` is `#include`d in `PluginProcessor.cpp:7` but **`beginAudioCallback()`/`endAudioCallback()`/`recordAllocation()`/`ScopedAudioCallback` are never called** anywhere in `src/`. It's scaffolding for audio-thread allocation tracking that was never turned on.

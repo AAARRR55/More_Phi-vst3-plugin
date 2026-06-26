@@ -200,6 +200,17 @@ int SpectralMorphEngine::getLatencyInSamples() const noexcept
     return latencySamples_;
 }
 
+double SpectralMorphEngine::getTailLengthSeconds() const noexcept
+{
+    // AUDIT-FIX: the overlap-add output buffer holds up to (fftSize + hopSize)
+    // samples of residual windowed energy after input stops — i.e. exactly the
+    // same quantity reported as latency. Guard the divide; sampleRate_ is set in
+    // prepare() and is 48000 by default (never 0 after construction).
+    if (! isActive() || sampleRate_ <= 0.0)
+        return 0.0;
+    return static_cast<double>(latencySamples_) / sampleRate_;
+}
+
 bool SpectralMorphEngine::isActive() const noexcept
 {
     return active_.load(std::memory_order_relaxed);

@@ -33,6 +33,41 @@ void V2TabBar::resized()
 
 // ── Painting ──────────────────────────────────────────────────────────────────
 
+namespace {
+
+int countVisibleTabs(int mask) noexcept
+{
+    int n = 0;
+    for (int i = 0; i < more_phi::V2TabBar::NumTabs; ++i)
+        if (mask & (1 << i))
+            ++n;
+    return n;
+}
+
+int visibleIndexOfTab(int mask, int tab) noexcept
+{
+    int idx = 0;
+    for (int i = 0; i < tab; ++i)
+        if (mask & (1 << i))
+            ++idx;
+    return idx;
+}
+
+int tabAtVisibleIndex(int mask, int visIdx) noexcept
+{
+    int seen = -1;
+    for (int i = 0; i < more_phi::V2TabBar::NumTabs; ++i)
+    {
+        if (mask & (1 << i))
+            ++seen;
+        if (seen == visIdx)
+            return i;
+    }
+    return -1;
+}
+
+} // namespace
+
 void V2TabBar::paint(juce::Graphics& g)
 {
     const auto bounds = getLocalBounds();
@@ -50,8 +85,16 @@ void V2TabBar::paint(juce::Graphics& g)
     auto tabFont = MorePhiLookAndFeel::bodyFont(11.0f);
     auto selectedFont = MorePhiLookAndFeel::bodyFont(11.0f, juce::Font::bold);
 
+    const int visibleCount = countVisibleTabs(visibleMask_);
+    if (visibleCount <= 0)
+        return;
+
+    int drawn = 0;
     for (int i = 0; i < NumTabs; ++i)
     {
+        if (!isTabVisible(i))
+            continue;
+
         const auto tabBounds = getTabBounds(i);
         const bool selected = i == selected_;
         const bool hovered = i == hovered_;
@@ -67,7 +110,7 @@ void V2TabBar::paint(juce::Graphics& g)
             g.fillRect(tabBounds.reduced(1, 0));
         }
 
-        if (i > 0)
+        if (drawn > 0)
         {
             g.setColour(border().withAlpha(0.65f));
             g.drawLine(static_cast<float>(tabBounds.getX()), 5.0f,
@@ -79,16 +122,20 @@ void V2TabBar::paint(juce::Graphics& g)
         g.setColour(selected ? textBright() : textDim());
         g.drawFittedText(tabNames[i], tabBounds.reduced(6, 0),
                          juce::Justification::centred, 1, 0.86f);
+        ++drawn;
     }
 
     // 3. Coral accent under the selected tab (subtle rounded bar)
-    const auto selBounds = getTabBounds(selected_);
-    g.setColour(accent());
-    g.fillRoundedRectangle(static_cast<float>(selBounds.getX() + 8),
-                           static_cast<float>(bounds.getHeight() - kAccentH),
-                           static_cast<float>(selBounds.getWidth() - 16),
-                           static_cast<float>(kAccentH),
-                           1.5f);
+    if (isTabVisible(selected_))
+    {
+        const auto selBounds = getTabBounds(selected_);
+        g.setColour(accent());
+        g.fillRoundedRectangle(static_cast<float>(selBounds.getX() + 8),
+                               static_cast<float>(bounds.getHeight() - kAccentH),
+                               static_cast<float>(selBounds.getWidth() - 16),
+                               static_cast<float>(kAccentH),
+                               1.5f);
+    }
 }
 
 void V2TabBar::mouseDown(const juce::MouseEvent& event)
@@ -131,11 +178,27 @@ void V2TabBar::setSelectedTab(int tab)
     repaint();
 }
 
+void V2TabBar::setVisibleTabs(int visibleMask) noexcept
+{
+    if (visibleMask_ == visibleMask)
+        return;
+
+    visibleMask_ = visibleMask;
+    if (!isTabVisible(selected_))
+        selected_ = Classic;
+    repaint();
+}
+
+bool V2TabBar::isTabVisible(int tab) const noexcept
+{
+    return tab >= 0 && tab < NumTabs && (visibleMask_ & (1 << tab)) != 0;
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 void V2TabBar::selectTab(int index)
 {
-    if (index < 0 || index >= NumTabs || index == selected_)
+    if (index < 0 || index >= NumTabs || index == selected_ || !isTabVisible(index))
         return;
 
     selected_ = index;
@@ -150,11 +213,16 @@ void V2TabBar::selectTab(int index)
 juce::Rectangle<int> V2TabBar::getTabBounds(int index) const
 {
     const auto bounds = getLocalBounds();
-    if (index < 0 || index >= NumTabs || bounds.isEmpty())
+    if (index < 0 || index >= NumTabs || bounds.isEmpty() || !isTabVisible(index))
         return {};
 
-    const int left = bounds.getX() + bounds.getWidth() * index / NumTabs;
-    const int right = bounds.getX() + bounds.getWidth() * (index + 1) / NumTabs;
+    const int visibleCount = countVisibleTabs(visibleMask_);
+    if (visibleCount <= 0)
+        return {};
+
+    const int visIdx = visibleIndexOfTab(visibleMask_, index);
+    const int left  = bounds.getX() + bounds.getWidth() * visIdx / visibleCount;
+    const int right = bounds.getX() + bounds.getWidth() * (visIdx + 1) / visibleCount;
     return { left, bounds.getY(), right - left, bounds.getHeight() };
 }
 
@@ -164,7 +232,12 @@ int V2TabBar::getTabIndexAt(juce::Point<int> point) const
     if (! bounds.contains(point) || bounds.getWidth() <= 0)
         return -1;
 
-    return juce::jlimit(0, NumTabs - 1, point.x * NumTabs / bounds.getWidth());
+    const int visibleCount = countVisibleTabs(visibleMask_);
+    if (visibleCount <= 0)
+        return -1;
+
+    const int visIdx = juce::jlimit(0, visibleCount - 1, point.x * visibleCount / bounds.getWidth());
+    return tabAtVisibleIndex(visibleMask_, visIdx);
 }
 
 } // namespace more_phi

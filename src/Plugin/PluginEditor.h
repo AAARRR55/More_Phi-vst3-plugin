@@ -22,6 +22,7 @@
 #include "UI/V2TabBar.h"
 #include "UI/AIChatPanel.h"
 #include "UI/LicenseActivationOverlay.h"
+#include "UI/OnboardingOverlay.h"
 
 namespace more_phi {
 
@@ -81,6 +82,13 @@ private:
     // Bypass button in title bar
     juce::TextButton bypassBtn_ { "Bypass" };
 
+    // A/B compare toggle in title bar
+    juce::TextButton abCompareBtn_ { "A/B" };
+
+    // AUDIT-2026-06-25: Expert mode toggle in title bar
+    juce::TextButton expertBtn_ { "Expert" };
+    void updateExpertModeUI();
+
     // SonicMaster realtime neural mastering (preview) — toggle + live status.
     juce::ToggleButton sonicMasterToggle_ { "Neural Master (Preview)" };
     juce::Label        sonicMasterStatus_;
@@ -118,6 +126,7 @@ private:
     juce::Rectangle<int> sonicMasterRowBounds_;
 
     LicenseActivationOverlay licenseOverlay;
+    OnboardingOverlay onboardingOverlay;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiEditor)
 };

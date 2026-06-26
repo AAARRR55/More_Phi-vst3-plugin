@@ -2,7 +2,7 @@
 
 > **Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete 39 KB technical audit with 26 verifiable claims.
 
-This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically. More-Phi exposes **30+ MCP tools** across 8 categories including hosted plugin control, snapshot/morph management, analysis/metering, mastering workflow, More-Phi parameter control, AI/Learn Mode, agent orchestration, and dataset generation.
+This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically. More-Phi exposes **30+ MCP tools** across 9 categories including hosted plugin control, snapshot/morph management, analysis/metering, mastering workflow, More-Phi parameter control, AI/Learn Mode, agent orchestration (7 agent tools), dataset generation, and neural mastering.
 
 ---
 
@@ -25,8 +25,9 @@ More-Phi exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool ca
 |----------|-------|
 | Protocol | JSON-RPC 2.0 |
 | Host | localhost (127.0.0.1) |
-| Port | 30001 |
+| Port | Per-instance (default 30001, displayed in UI) |
 | Transport | TCP |
+| Auth | Bearer token (shown in UI, constant-time comparison) |
 
 ### Connection Example (Python)
 
@@ -639,6 +640,48 @@ Submits a high-level natural-language goal to the Conductor agent. The Conductor
 }
 ```
 
+### Agent Tools
+
+The multi-agent layer exposes 7 dedicated tools dispatched via `MCPToolHandler::handle` and classified in `PermissionKernel::classifyTool`. These tools use the `agents.*` naming prefix:
+
+| Tool | Method | Purpose | Key Arguments |
+|---|---|---|---|
+| `agents.list` | `tools/call` | Lists all registered agents with status and capabilities | None |
+| `agents.run_goal` | `tools/call` | Submits a high-level goal to Conductor for decomposition | `goal` (string) |
+| `agents.run_task` | `tools/call` | Submits a single task to a specific agent | `agent`, `task` |
+| `agents.run_status` | `tools/call` | Queries status of a running goal/task | `goal_id` or `task_id` |
+| `agents.run_cancel` | `tools/call` | Cancels a running goal/task | `goal_id` or `task_id` |
+| `agents.blackboard.recent` | `tools/call` | Returns recent blackboard events | `agent`, `limit` |
+| `agents.set_autonomy` | `tools/call` | Adjusts agent autonomy level | `level` (`manual`/`assisted`/`autonomous`) |
+
+**Example — list agents:**
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "agents.list",
+        "arguments": {}
+    },
+    "id": 10
+}
+```
+
+**Example — run a goal:**
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "agents.run_goal",
+        "arguments": {
+            "goal": "make this track louder and brighter"
+        }
+    },
+    "id": 11
+}
+```
+
 ### AgentOrchestrator Lifecycle
 
 The `AgentOrchestrator` is the C++ class that manages the multi-agent system. Its lifecycle is:
@@ -736,14 +779,26 @@ The MCP server does not implement explicit rate limiting. However:
 - Rapid changes may be coalesced
 - Recommended: max 100 commands per second
 
+## Neural Mastering Pipeline
+
+The `mastering.render_batch` dry-run path populates a real `lufs_error` per candidate (`|targetLUFS − measuredLUFS|`), enabling `OptimizationAgent` scoring. Neural mastering edits are applied through the same `LockFreeQueue` → audio-thread drain → `ParameterBridge` path as MCP `set_parameter`, with:
+- `holdAgainstMorph=true` on all neural edits
+- Read-back verification via `getLastApplyVerification()` / `lastApplyWasPartial()`
+- Plan boundary markers (`enqueuePlanBoundary()` + `lastDrainedPlanId_` atomic)
+- Transition guard (discards capture windows straddling parameter changes)
+- Action ledger cap raised to 4096 entries
+
 ---
 
 ## Security Considerations
 
 - Server only accepts localhost connections
-- No authentication (designed for local use only)
+- Bearer token authentication (displayed in UI AI status panel, constant-time comparison to prevent timing attacks)
 - No encryption (not needed for localhost)
-- Don't expose port 30001 to external networks
+- Don't expose the MCP port to external networks
+- 30-second idle timeout on connections
+- Instance-scoped `AutomationRuntime` (no global static); cache keys prefixed with `instanceId + ":"`
+- TTL-based zombie eviction in `InstanceRegistry`
 
 ---
 

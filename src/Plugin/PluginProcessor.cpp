@@ -329,12 +329,25 @@ void MorePhiProcessor::initializeSonicMaster()
         sonicMasterEngine_.setFallbackInferenceSource(&sonicMasterHttpSource_);
         DBG("[MorePhiProcessor] SonicMaster ONNX model loaded: " + juce::String(modelPath));
     }
+#if defined(MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK) && MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK
     else
     {
         sonicMasterEngine_.setInferenceSource(&sonicMasterHttpSource_);
         DBG("[MorePhiProcessor] SonicMaster ONNX model not found, "
             "using HTTP inference server (127.0.0.1:8765)");
     }
+#else
+    else
+    {
+        // AUDIT-2026-06-25: HTTP fallback is opt-in. Without it, leave the
+        // inference source unset so isAvailable() returns false and the UI
+        // reports the feature as unavailable rather than silently depending on
+        // an external server process.
+        sonicMasterEngine_.setInferenceSource(nullptr);
+        DBG("[MorePhiProcessor] SonicMaster ONNX model not found; "
+            "HTTP fallback disabled. Neural Master unavailable.");
+    }
+#endif
 }
 
 MorePhiProcessor::~MorePhiProcessor()
@@ -426,6 +439,7 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.cpuSaver = apvts.getRawParameterValue("cpuSaver");
     rawParams_.dawWrite = apvts.getRawParameterValue("dawWrite");
     rawParams_.sonicMasterEnabled = apvts.getRawParameterValue("SonicMasterAnalysisEnabled");
+    rawParams_.expertMode = apvts.getRawParameterValue("expertMode");
     rawParams_.waypointEnable = apvts.getRawParameterValue("waypointEnable");
     rawParams_.waypointPlay = apvts.getRawParameterValue("waypointPlay");
     rawParams_.waypointBPM = apvts.getRawParameterValue("waypointBPM");
@@ -527,6 +541,41 @@ int MorePhiProcessor::enqueueParameterState(const std::vector<float>& normalized
     return queued;
 }
 
+void MorePhiProcessor::captureABCompareRef()
+{
+    abCompareState_ = paramBridge.captureParameterState();
+    abCompareHasRef_.store(true, std::memory_order_release);
+}
+
+bool MorePhiProcessor::toggleABCompare()
+{
+    const bool hasRef = abCompareHasRef_.load(std::memory_order_acquire);
+
+    if (!hasRef)
+    {
+        captureABCompareRef();
+        abCompareActive_.store(true, std::memory_order_release);
+        return true;  // captured → now in B mode
+    }
+
+    const bool wasActive = abCompareActive_.load(std::memory_order_acquire);
+    if (!wasActive)
+    {
+        // Switching from A (live) to B (captured reference)
+        captureABCompareRef();  // re-capture so B is current
+        abCompareActive_.store(true, std::memory_order_release);
+        if (!abCompareState_.empty())
+            enqueueParameterState(abCompareState_, ParameterEditSource::UI, true);
+        return true;
+    }
+    else
+    {
+        // Switching from B (captured) back to A (live morph)
+        abCompareActive_.store(false, std::memory_order_release);
+        return false;
+    }
+}
+
 bool MorePhiProcessor::recallSnapshotQueued(int slot)
 {
     if (!snapshotBank.getSlotValuesCopy(slot, recallScratch_))
@@ -567,6 +616,19 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
     {
         jassertfalse;
         return false;
+    }
+
+    // Push undo record before overwriting the slot
+    {
+        std::vector<float> beforeVals;
+        if (snapshotBank.getSlotValuesCopy(slot, beforeVals))
+        {
+            ParameterState beforeState;
+            beforeState.capture(beforeVals.data(), static_cast<int>(beforeVals.size()));
+            beforeState.occupied = snapshotBank.isOccupied(slot);
+            undoRedoManager_.pushSnapshotState(slot, beforeState,
+                                               "Capture slot " + juce::String(slot + 1));
+        }
     }
 
     // Retry exclusive lock up to 3 times to handle transient contention from
@@ -1428,6 +1490,15 @@ MorePhiProcessor::createParameterLayout()
         "Neural Master (Preview)",
         false));
 
+    // AUDIT-2026-06-25: Expert mode toggles visibility of advanced tabs
+    // (Engine, Modulation, AI) and the SonicMaster row. Default OFF so first-run
+    // users see only Classic + Presets. Not exposed to host automation.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"expertMode", 1},
+        "Expert Mode",
+        false,
+        juce::AudioParameterBoolAttributes().withAutomatable(false)));
+
     return { params.begin(), params.end() };
 }
 
@@ -1466,6 +1537,9 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     drainScratch_.assign(MAX_PARAMETERS, 0.0f);
     drainTouched_.assign(MAX_PARAMETERS, uint8_t{0});
     recallScratch_.resize(MAX_PARAMETERS, 0.0f);
+    abCompareState_.resize(MAX_PARAMETERS, 0.0f);
+    abCompareActive_.store(false, std::memory_order_relaxed);
+    abCompareHasRef_.store(false, std::memory_order_relaxed);
     touchMorphX_.resize(MAX_PARAMETERS, -1.0f);     // Morph X when touch detected
     touchMorphY_.resize(MAX_PARAMETERS, -1.0f);     // Morph Y when touch detected
     liveEditHold_.assign(MAX_PARAMETERS, uint8_t{0});
@@ -2117,6 +2191,22 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
             // Apply interpolated values to hosted plugin
             {
                 MORE_PHI_PROFILE(profiler_, "parameter_application");
+
+                // A/B Compare override: if active, substitute the stored state
+                // for the morph output so the plugin sees the captured reference
+                // values instead of the live morph position.
+                const bool abOverride = abCompareActive_.load(std::memory_order_relaxed);
+                if (abOverride && !abCompareState_.empty() && paramCount > 0)
+                {
+                    const int copyCount = juce::jmin(paramCount,
+                                                     static_cast<int>(abCompareState_.size()));
+                    for (int i = 0; i < copyCount; ++i)
+                    {
+                        const float val = abCompareState_[static_cast<size_t>(i)];
+                        if (val >= 0.0f)
+                            finalOutput_[static_cast<size_t>(i)] = val;
+                    }
+                }
 
                 // PERF-C3: When morph is static in Direct mode and output has
                 // stabilized, skip parameter writes entirely. Still tick down
@@ -2841,7 +2931,10 @@ void MorePhiProcessor::getStateInformation(juce::MemoryBlock& destData)
     xml->setAttribute("faderPos", static_cast<double>(faderPos_.load(std::memory_order_relaxed)));
     xml->setAttribute("morphSource", morphSource_.load(std::memory_order_relaxed));
 
-    // 8) Persist MCP identity for port reuse across export cycles
+    // 8) Persist UI expert mode (AUDIT-2026-06-25)
+    xml->setAttribute("expertMode", isExpertMode() ? 1 : 0);
+
+    // 9) Persist MCP identity for port reuse across export cycles
     auto mcpXml = std::make_unique<juce::XmlElement>("MCP_IDENTITY");
     mcpXml->setAttribute("port", instanceIdentity_.port);
     mcpXml->setAttribute("instanceId", instanceIdentity_.instanceId);
@@ -2978,7 +3071,17 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
     if (xml->hasAttribute("morphSource"))
         setMorphSource(xml->getIntAttribute("morphSource", 0));
 
-    // 7) Restore MCP identity (port reuse)
+    // 7) Restore UI expert mode (AUDIT-2026-06-25)
+    if (xml->hasAttribute("expertMode"))
+    {
+        if (auto* p = apvts.getParameter("expertMode"))
+        {
+            const bool expert = xml->getIntAttribute("expertMode", 0) != 0;
+            p->setValueNotifyingHost(expert ? 1.0f : 0.0f);
+        }
+    }
+
+    // 8) Restore MCP identity (port reuse)
     if (auto* mcpXml = xml->getChildByName("MCP_IDENTITY"))
     {
         pendingIdentity_.port = mcpXml->getIntAttribute("port", 0);
@@ -3299,6 +3402,15 @@ void MorePhiProcessor::startMCPServerIfNeeded()
 {
     if (!mcpStartPending_.exchange(false, std::memory_order_acq_rel) || mcpServer.isRunning())
         return;
+
+    // AUDIT-2026-06-25: the MCP server / IPC bridge are opt-in for Release
+    // builds. The test suite still forces startup via startPendingMCPServerForTesting().
+#if !defined(MORE_PHI_ENABLE_MCP_SERVER) || !MORE_PHI_ENABLE_MCP_SERVER
+#  if !defined(MORE_PHI_TEST_MODE) || !MORE_PHI_TEST_MODE
+    mcpStartPending_.store(false, std::memory_order_release);
+    return;
+#  endif
+#endif
 
     if (pendingIdentity_.port > 0)
     {

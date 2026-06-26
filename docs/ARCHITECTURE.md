@@ -1,6 +1,6 @@
 # More-Phi - Architecture Document
 
-**Date:** 2026-07-16
+**Date:** 2026-06-25
 **Version:** 3.3.0
 **Audit Score:** 7.9/10 — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)
 **Type:** Desktop Audio Plugin (VST3/AU)
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server), MIDI (routing), Preset (persistence), and UI (visual components). The AI module includes a dedicated Orchestrator sub-layer (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) that wires the processor to the agent runtime and MCP server. The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
+More-Phi is a JUCE 8 C++20 audio plugin that hosts other VST3/AU plugins and provides a rich morphing engine to interpolate between captured parameter snapshots. The architecture is organized into 7 clearly separated modules: Plugin (entry), Core (DSP), Host (plugin management), AI (MCP server + multi-agent orchestration + neural mastering), MIDI (routing), Preset (persistence), and UI (visual components). The AI module includes a dedicated Orchestrator sub-layer (`AgentOrchestrator`, `EcosystemConfig`, `SecurityValidator`, `McpProtocol`) that wires the processor to the agent runtime and MCP server, and a SonicMaster neural mastering subsystem (ONNX model embedded in binary via `BinaryData`, rate-proportional capture ring, polyphase resampling, pending-plan application pattern). The design prioritizes real-time safety through lock-free data structures, strict thread-domain boundaries, and zero-allocation audio paths.
 
 ## Technology Stack
 
@@ -45,7 +45,7 @@ More-Phi follows a **layered plugin architecture** where:
 │          │          │           │                  │
 │ Morph    │ PlugHost │ MCPServer │ MorphPad         │
 │ Physics  │ ParamBr. │ ToolHndlr│ SnapFader        │
-│ Genetic  │ Scanner  │ TokenOpt │ SnapshotRing     │
+│ Genetic  │          │ TokenOpt │ SnapshotRing     │
 │ Spectral │          │ InstReg  │ V2TabBar         │
 │ Granular │          │ LinkBcst │ ModMatrixPanel   │
 │ ModEng   │          │ Dataset  │ PresetBrowser    │
@@ -173,6 +173,30 @@ vs-inter-sample-peaks test #24 and bounded/mono-compatible plan transitions #217
 See `validation/2026-06-16_headless_validation_findings.md` §6a. Only subjective
 sonic voicing and plan-context latency remain unverified (neither is a defect).
 
+### Neural Mastering Edit Path
+
+The neural mastering subsystem (`SonicMasterAnalysisEngine` → `AutoMasteringEngine::applyValidatedPlan` → `OzonePlanApplicator`) provides a second edit entry point alongside the MCP/agent `setParameter` path. Both paths funnel through `MorePhiProcessor::enqueueParameterSet` → `LockFreeQueue` → audio-thread drain → `ParameterBridge`, with aligned safety properties:
+
+| Property | MCP/agent path | Neural path (`OzonePlanApplicator`) |
+|----------|----------------|--------------------------------------|
+| ParamID resolution | Live re-query via `resolveParameter` | Positional indices, re-validated by name (`enqueueIfMapped`) |
+| Hold against morph | `holdAgainstMorph=true` | `holdAgainstMorph=true` |
+| Read-back verification | `classifyVerification` | `getLastApplyVerification()` / `lastApplyWasPartial()` |
+| Action-ledger record | Standard MCP ledger | Ledger cap 4096 (`kLedgerMaxTransactions`) |
+| Plan atomicity | N/A | `enqueuePlanBoundary()` + `lastDrainedPlanId_` atomic |
+| Transition guard | N/A | `notifyHostedParameterChanged()` + ring flush |
+
+**SonicMaster key implementation details:**
+- ONNX model embedded in binary via JUCE `BinaryData::getNamedResource()` — no runtime file I/O
+- Capture ring is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and lazily allocated
+- Resampling uses `resamplePolyphase` (not linear interpolation)
+- Mono capture supported (`channelCount == 1`)
+- Plan application uses pending-plan atomic-flag pattern (stores in `pendingPlan_`, applies in `runCycle`) — no `callAsync`
+
+### Agent MCP Surface
+
+The multi-agent layer exposes 7 MCP tools dispatched via `MCPToolHandler::handle` and classified in `PermissionKernel::classifyTool`: `agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy`.
+
 ## State Persistence
 
 `getStateInformation()` / `setStateInformation()` serialize:
@@ -224,7 +248,7 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 
 ## Testing Strategy
 
-- **Unit tests** (Catch2): Core engines, physics, genetics, sidechain, SIMD, spectral, granular, modulation
+- **Unit tests** (Catch2): Core engines, physics, genetics, sidechain, SIMD, spectral, granular, modulation, true-peak, adaptive EQ, neural plan verification, ONNX inference, SonicMaster analysis/decoder, mastering meters, agent layer (unit + E2E + RT-isolation), LLM client, MCP server/protocol, licensing, security
 - **Integration tests**: Plugin lifecycle (load/unload/state), MCP server tool invocations
 - **Legacy tests**: incompatible Morphy-era tests are documented in `tests/LEGACY_TESTS.md` and excluded from active targets
 - **Performance benchmarks**: CPU usage, audio processing throughput. `PerformanceProfiler` uses a pre-allocated circular buffer (`std::array<Sample, 1024>`) with atomic write index — no heap allocation on the audio thread

@@ -108,6 +108,11 @@ cmake --build build --config RelWithDebInfo
 | `MORE_PHI_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
 | `MORE_PHI_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
 | `MORE_PHI_ENABLE_ORCHESTRATOR` | ON (implicit) | AgentOrchestrator layer sources in `src/AI/Orchestrator/` are always compiled into the shared-code target |
+| `MORE_PHI_ENABLE_SANITIZERS` | OFF | Enables ASAN + UBSAN (Clang/GCC only) |
+| `MORE_PHI_MSVC_MP` | Host core count | MSVC `/MP` process count; `0` disables; ignored under Ninja |
+| `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` | OFF | Copies plugin to system plugin folder after build |
+| `MORE_PHI_ENABLE_ONNX` | ON | Enables ONNX runtime for neural mastering inference |
+| `MORE_PHI_ENABLE_LTO` | OFF | Enables release LTO for CI/release use |
 
 ```bash
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON
@@ -154,14 +159,21 @@ morephi/
 │   │   └── AllocationTracker.h
 │   ├── Host/               # Plugin hosting
 │   │   ├── PluginHostManager.h/cpp
-│   │   ├── ParameterBridge.h/cpp
-│   │   └── PluginScanner.h/cpp
+│   │   └── ParameterBridge.h/cpp
 │   ├── AI/                 # Embedded MCP Server & Core AI Integrations
 │   │   ├── MCPServer.h/cpp
 │   │   ├── MCPToolHandler.h/cpp
 │   │   ├── StandaloneMcp/    # Isolated STDIO workflows bridging headless contexts
+│   │   ├── Agents/           # Multi-agent orchestration layer
+│   │   │   ├── AgentRuntime.h/cpp, AgentRegistry.h/cpp, PriorityScheduler.h/cpp
+│   │   │   ├── Conductor/     # ConductorAgent
+│   │   │   ├── Agents/       # 6 specialist agents (Analysis, Optimization, Creative, etc.)
+│   │   │   ├── Blackboard/   # BlackboardBridge (typed pub/sub)
+│   │   │   ├── Tooling/      # DefaultToolInvoker
+│   │   │   ├── Logging/      # StructuredAgentLogger, NullAgentLogger
+│   │   │   └── Llm/          # ILlmClient, RestLlmClient, DeterministicFallbackLlmClient
 │   │   ├── Dataset/          # Machine learning pipeline tools
-│   │   └── Orchestrator/     # Agent orchestration layer
+│   │   └── Orchestrator/     # Agent orchestration facade
 │   │       ├── AgentOrchestrator.h/cpp
 │   │       ├── EcosystemConfig.h/cpp
 │   │       ├── SecurityValidator.h/cpp
@@ -213,6 +225,18 @@ More-Phi follows strict real-time audio guidelines:
 │  Sliders     │    Atomics         │              │
 │  MCP Server  │ ◄───────────────► │ MorphProcessor│
 └──────────────┘                    └──────────────┘
+       │                                    │
+  Timer callbacks                      LockFreeQueue
+       │                                    │
+┌──────────────┐                    ┌──────────────┐
+│BlackboardPump│                    │ ParameterBr. │
+│  (50ms poll) │                    │ (hosted plug)│
+└──────┬───────┘                    └──────────────┘
+       │
+┌──────────────┐
+│Agent Workers │  2 scheduler threads (PriorityScheduler)
+│  (agents)    │  Never on audio thread
+└──────────────┘
 ```
 
 ### Component Interaction
@@ -570,7 +594,26 @@ The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/
 
 **Project structure changes:**
 - New directory: `src/AI/Orchestrator/` containing the four component pairs listed above.
+- New directory: `src/AI/Agents/` containing the multi-agent orchestration runtime, 7 specialist agents (Conductor + 6 specialists), blackboard bridge, tooling, logging, and LLM client seam.
 - Experimental Ozone/iZotope research artifacts relocated to `research/` to keep the main source tree focused on production code.
+
+**Neural mastering improvements (SonicMaster):**
+- ONNX model embedded in binary via JUCE `BinaryData` — no runtime file I/O
+- Capture ring now rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and lazily allocated
+- Resampling changed from `resampleLinear` to `resamplePolyphase`
+- Mono capture support (`channelCount == 1`)
+- Plan application uses pending-plan atomic-flag pattern (no `callAsync`)
+- Neural path verification via `OzonePlanApplicator` read-back + plan boundary markers
+- Analysis transition guard (`notifyHostedParameterChanged()` + ring flush)
+- EQ gain normalization capped at ±12 dB
+- Action ledger cap raised to 4096 (`kLedgerMaxTransactions`)
+- `mastering.render_batch` dry-run populates real `lufs_error` per candidate
+- `flushCaptureRing()` on hosted plugin load
+
+**Agent layer improvements:**
+- 7 MCP tools: `agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy`
+- `RestLlmClient` as production LLM transport for ConductorAgent when API key configured
+- PriorityScheduler 4-level multi-queue with O(1) operations and starvation guard
 
 **Build impact:**
 - Orchestrator sources are compiled into the `MorePhi` shared-code target by default (no new CMake option required).
@@ -587,4 +630,4 @@ The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/
 
 ---
 
-*Updated 2026-06-21.*
+*Updated 2026-06-25.*

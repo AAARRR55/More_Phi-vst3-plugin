@@ -137,7 +137,7 @@ The CLI usage string is `morephi-dataset --plugin <path.vst3> --input <dry.wav> 
 |-------|------------------------|------|
 | `src/Plugin/` | `MorePhiProcessor`, `MorePhiEditor` | JUCE plugin entry point, APVTS parameter layout, audio lifecycle, state persistence, subsystem ownership |
 | `src/Core/` | `MorphProcessor`, `InterpolationEngine`, `PhysicsEngine`, `GeneticEngine`, `SnapshotBank`, modulation/audio-domain/mastering classes | Real-time-safe morphing, DSP, analysis, modulation, spectral/granular/formant engines, mastering processors |
-| `src/Host/` | `PluginHostManager`, `ParameterBridge`, `PluginScanner`, `IPluginHostManager` | Hosted VST3/AU lifecycle, parameter reads/writes, test seams |
+| `src/Host/` | `PluginHostManager`, `ParameterBridge`, `IPluginHostManager` | Hosted VST3/AU lifecycle, parameter reads/writes, test seams |
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `MCPToolsExtended`, `AIAssistant`, `TokenOptimizer`, Ozone/LLM/dataset classes | Embedded TCP MCP server, AI tools, LLM settings, Ozone Track Assistant integration, dataset generation |
 | `src/AI/StandaloneMcp/` | `StandaloneMcpServer`, `OzonePluginBackend`, `IZotopeIPCDiscovery`, `JsonRpc` | Stdio MCP executable for standalone Ozone/iZotope workflows |
 | `src/MIDI/` | `MIDIRouter` | Snapshot note triggers and CC morph routing |
@@ -168,7 +168,7 @@ Core real-time constraints: do not allocate, lock, block, perform I/O, or throw 
 **PERF optimizations applied (2026-07-16):**
 - **PERF-IA (interleaved touch sampling):** `kTouchSamplingStride=4` — only 1/4 params call `getValue()` per block, rotating `touchSamplingPhase_`. Reduces dominant virtual-call cost ~75%.
 - **PERF-CPU (cpuSaver):** New APVTS param halves audio-domain FFT (min 512) + caps oversampling at ×2. Reduces audio-domain CPU ~40-60%.
-- **PERF-MEM (SonicMaster lazy ring):** `ensureRing()` defers 12.3 MB `AudioCaptureRing` to first `setActive(true)`. Saves ~60% baseline memory when feature off.
+- **PERF-MEM (SonicMaster lazy ring):** `ensureRing()` defers `AudioCaptureRing` to first `setActive(true)`. Ring is rate-proportional (`8.0 × sampleRate`, ~4 MiB @ 44.1k, ~16 MiB @ 192k). Saves up to ~60% baseline memory when feature off.
 - **PERF-MEM (throttleStates_):** Reduced from 8192→4096 entries (~64 KB saved).
 - **PERF-PROFILE:** 13 profiling sections registered in `prepareToPlay()` (was 0 — the profiler was silently broken). Sections: `processBlock_total`, `command_queue_drain`, `midi_processing`, `morph_computation`, `modulation_engine`, `parameter_application`, `hosted_plugin_process`, `sonicmaster_capture`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`.
 

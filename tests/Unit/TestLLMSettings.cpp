@@ -85,9 +85,17 @@ TEST_CASE("Provider activation requires a successful validation status", "[unit]
 
 TEST_CASE("Status labels match toolbar and modal vocabulary", "[unit][ai][llm]")
 {
-    CHECK(toDisplayString(LLMValidationStatus::NoProviderConfigured) == "No provider configured");
-    CHECK(toDisplayString(LLMValidationStatus::Untested) == "Untested");
-    CHECK(toDisplayString(LLMValidationStatus::Testing) == "Testing");
-    CHECK(toDisplayString(LLMValidationStatus::Active) == "Active");
-    CHECK(toDisplayString(LLMValidationStatus::Failed) == "Failed");
+    // statusLabel() is the plain vocabulary (no colorblind-safety glyph prefix);
+    // toDisplayString() prepends a glyph for the UI. Both must agree on the label.
+    CHECK(statusLabel(LLMValidationStatus::NoProviderConfigured) == "No provider configured");
+    CHECK(statusLabel(LLMValidationStatus::Untested) == "Untested");
+    CHECK(statusLabel(LLMValidationStatus::Testing) == "Testing");
+    CHECK(statusLabel(LLMValidationStatus::Active) == "Active");
+    CHECK(statusLabel(LLMValidationStatus::Failed) == "Failed");
+
+    // The glyph-prefixed display string must END WITH the plain label.
+    using V = LLMValidationStatus;
+    CHECK(toDisplayString(V::Active).endsWith(statusLabel(V::Active)));
+    CHECK(toDisplayString(V::Failed).endsWith(statusLabel(V::Failed)));
+    CHECK(toDisplayString(V::Untested).endsWith(statusLabel(V::Untested)));
 }

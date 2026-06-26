@@ -19,6 +19,7 @@
 #include "Core/LockFreeQueue.h"
 #include "Core/ParameterClassifier.h"
 #include "Core/DiscreteParameterHandler.h"
+#include "Core/UndoRedoManager.h"
 #include "Host/PluginHostManager.h"
 #include "Host/ParameterBridge.h"
 #include "MIDI/MIDIRouter.h"
@@ -262,6 +263,16 @@ public:
     bool captureSnapshotToSlot(int slot, bool includeStateChunk = true);
     bool recallSnapshot(int slot, SnapshotRecallMode mode);
 
+    // ── A/B Compare (snapshot-based, uses internal buffer, not SnapshotBank) ──
+    /** Capture current hosted-plugin state as the "A" reference. */
+    void captureABCompareRef();
+    /** Toggle between live ("A") and captured ("B") state. Returns the new active state. */
+    bool toggleABCompare();
+    /** Returns true if the captured "B" state is currently active. */
+    bool isABCompareActive() const noexcept { return abCompareActive_.load(std::memory_order_relaxed); }
+    /** Returns true if a reference has been captured at least once. */
+    bool hasABCompareRef() const noexcept { return abCompareHasRef_.load(std::memory_order_relaxed); }
+
     void setMorphPositionExternal(float x, bool hasX,
                                   float y, bool hasY,
                                   float fader, bool hasFader,
@@ -302,6 +313,9 @@ public:
     void resetProfiler() { profiler_.reset(); }
     juce::String getProfilingReport() const;  // Get formatted profiling report
     void dumpProfilingReportToConsole() const; // Log profiling report to DBG output
+
+    // ── Undo/Redo ────────────────────────────────────────────────────────────
+    UndoRedoManager& getUndoRedoManager() noexcept { return undoRedoManager_; }
 
     // ── Morph state: UI/MCP writes, audio thread reads ───────────────────────
     void  setMorphX(float v)
@@ -390,6 +404,13 @@ public:
     // ── Recall Toggle: full state vs params-only during MIDI triggers ─────────
     void setRecallToggle(bool full)  { recallToggle_.store(full ? 1 : 0, std::memory_order_relaxed); }
     bool getRecallToggle() const     { return recallToggle_.load(std::memory_order_relaxed) != 0; }
+
+    // AUDIT-2026-06-25: Expert mode (UI only — not automatable, persisted in state)
+    bool isExpertMode() const noexcept
+    {
+        return rawParams_.expertMode != nullptr
+            && rawParams_.expertMode->load(std::memory_order_relaxed) >= 0.5f;
+    }
 
     // Refresh discrete parameter map (call after plugin load/change)
     void refreshDiscreteMap();
@@ -613,6 +634,9 @@ private:
     PerformanceProfiler profiler_;
     MorePhiDiagnostics diagnostics_;
 
+    // Undo/redo for snapshot operations
+    UndoRedoManager undoRedoManager_;
+
 public:
     /** Diagnostic accessor (profiling builds only; otherwise the object is inert). */
     MorePhiDiagnostics& getDiagnostics() noexcept { return diagnostics_; }
@@ -706,6 +730,11 @@ private:
     std::vector<float> liveEditX_;
     std::vector<float> liveEditY_;
     std::vector<float> liveEditFader_;
+
+    // ── A/B Compare state ──────────────────────────────────────────────────
+    std::vector<float> abCompareState_;
+    std::atomic<bool>  abCompareActive_ { false };
+    std::atomic<bool>  abCompareHasRef_ { false };
 
     void clearLiveEditHoldsAudioThread() noexcept;
     bool shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept;
@@ -841,6 +870,7 @@ private:
         std::atomic<float>* cpuSaver = nullptr;
         std::atomic<float>* dawWrite = nullptr;
         std::atomic<float>* sonicMasterEnabled = nullptr;
+        std::atomic<float>* expertMode = nullptr;
         std::atomic<float>* waypointEnable = nullptr;
         std::atomic<float>* waypointPlay = nullptr;
         std::atomic<float>* waypointBPM = nullptr;

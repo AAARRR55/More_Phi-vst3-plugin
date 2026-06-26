@@ -1,8 +1,8 @@
 # More-Phi Technical Documentation
 
-> Updated 2026-07-16. **Technical Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete audit.
+> Updated 2026-06-25. **Technical Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete audit.
 
-More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture includes a **Multi-Agent Orchestration Layer** (7 specialist agents: Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory), an `AgentOrchestrator` facade, embedded MCP server with 30+ tools, ONNX-based neural mastering (preview), and comprehensive licensing with Ed25519 signatures.
+More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture includes a **Multi-Agent Orchestration Layer** (7 specialist agents: Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory), an `AgentOrchestrator` facade, embedded MCP server with 30+ tools, ONNX-based neural mastering (preview — model embedded in binary via JUCE `BinaryData`, rate-proportional capture ring, polyphase resampling, pending-plan application pattern, mono capture support), and comprehensive licensing with Ed25519 signatures.
 
 > Screenshot placeholder: `[Screenshot: More-Phi main interface with MorphPad, plugin browser, tab bar, and AI status panel]`
 >
@@ -222,6 +222,8 @@ Common CMake options:
 | `MORE_PHI_SAFE_BUILD_MODE` | `ON` | Uses conservative Windows linker/build settings. |
 | `MORE_PHI_ENABLE_LTO` | `OFF` | Enables release LTO for CI/release use. |
 | `MORE_PHI_ENABLE_DATASET_V3` | `OFF` (deprecated/no-op) | Dataset V3 sources are always compiled. |
+| `MORE_PHI_MSVC_MP` | Host core count (VS generator) | MSVC `/MP` process count; `0` disables. Ignored under Ninja. |
+| `MORE_PHI_ENABLE_ONNX` | `ON` | Enables ONNX runtime for neural mastering inference. |
 
 ## Codebase Structure
 
@@ -259,6 +261,7 @@ src/
   Host/                Hosted plugin lifecycle, scanning, parameter bridge
   AI/                  MCP server, tool handler, LLM settings, semantic profiles
   AI/Orchestrator/     AgentOrchestrator, EcosystemConfig, SecurityValidator, McpProtocol
+  AI/Agents/           Agent runtime, registry, scheduler, 7 specialist agents, blackboard, tooling, logging, LLM clients
   AI/StandaloneMcp/    Stdio MCP server for standalone workflows
   AI/Dataset/          Dataset generation, render pipeline, validation
   MIDI/                Snapshot note and CC routing
@@ -465,6 +468,33 @@ Possible guardrail errors:
 | `pending_parameter_edits` | A previous parameter queue has not drained yet. |
 | `snapshot_context_mismatch` | The hosted plugin layout changed before restore. |
 | `snapshot_not_found` | The rollback snapshot ID is unknown. |
+
+#### Agent Orchestration Tools
+
+The multi-agent layer exposes 7 tools for goal-driven agent orchestration, dispatched via `MCPToolHandler::handle` and classified in `PermissionKernel::classifyTool`:
+
+| Tool | Purpose |
+|---|---|
+| `agents.list` | Lists all registered agents with their status and capabilities. |
+| `agents.run_goal` | Submits a high-level goal to the Conductor agent for decomposition and multi-step execution. |
+| `agents.run_task` | Submits a single task to a specific agent for execution. |
+| `agents.run_status` | Queries the status of a running goal or task. |
+| `agents.run_cancel` | Cancels a running goal or task. |
+| `agents.blackboard.recent` | Returns recent blackboard events for an agent or domain. |
+| `agents.set_autonomy` | Adjusts agent autonomy level (manual/assisted/autonomous). |
+
+#### Neural Mastering Pipeline
+
+The neural mastering subsystem (`SonicMasterAnalysisEngine`) provides an alternative edit entry point alongside the MCP `set_parameter` path. Both funnel through `LockFreeQueue` → audio-thread drain → `ParameterBridge` with aligned safety properties:
+
+- **ONNX model** embedded in binary via `BinaryData::getNamedResource("masteringbrain_v2_decision_onnx")` — no runtime file I/O
+- **Capture ring** is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), lazily allocated
+- **Resampling** uses `resamplePolyphase` (not linear interpolation)
+- **Mono capture** supported (`channelCount == 1` downmix path)
+- **Plan application** uses pending-plan atomic-flag pattern — stores in `pendingPlan_`, applies in `runCycle` on the analysis thread (no `callAsync`)
+- **Plan boundary markers** — `enqueuePlanBoundary()` + `lastDrainedPlanId_` atomic for observability
+- **Transition guard** — `notifyHostedParameterChanged()` + ring flush prevents analyzing hybrid states during parameter changes
+- **Action ledger** cap raised to 4096 (`kLedgerMaxTransactions`)
 
 ## Developer Workflows
 

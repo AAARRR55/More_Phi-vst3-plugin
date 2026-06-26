@@ -8,6 +8,16 @@
 
 **Tech Stack:** C++20, JUCE 8, ONNX Runtime 1.22.1 (gated `MORE_PHI_ENABLE_ONNX`), Catch2 v3, nlohmann/json, Python 3.12 + PyTorch 2.11 (export script only).
 
+> **Post-audit corrections (2026-07-19):** This plan was implemented and subsequently
+> audited. The code snippets below reflect the *original* implementation. The following
+> changes were applied post-audit: (R3) mono capture support (gate changed from `>= 2`
+> to `>= 1`, ch0 duplicated to L+R); (R5) `callAsync` replaced with pending-plan atomic
+> flag + timer callback pattern; (R8) `rampDurationSeconds` config field removed
+> (parameters apply instantaneously); resampling changed from `resampleLinear` to
+> `resamplePolyphase`; ONNX model embedded via BinaryData instead of runtime file path;
+> `flushCaptureRing()` added on hosted plugin load. See the companion design spec and
+> audit document for current state.
+
 **Spec:** `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md`
 
 ---

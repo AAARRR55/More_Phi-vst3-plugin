@@ -7,6 +7,7 @@
 #include "UI/EngineTabPage.h"
 #include "UI/ModulationMatrixPanel.h"
 #include "UI/V2PresetBrowserPanel.h"
+#include "Version.h"  // AUDIT-FIX: VERSION_STRING (single source of truth for the painted version)
 
 namespace more_phi {
 
@@ -23,7 +24,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
       modeBar(p),
       paramPanel(p),
       controlStrip(p),
-      licenseOverlay(p)
+      licenseOverlay(p),
+      onboardingOverlay(p)
 {
     setLookAndFeel(&lnf);
     setSize(920, 760);
@@ -66,6 +68,41 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         };
     }
     addAndMakeVisible(bypassBtn_);
+
+    // AUDIT-2026-06-25: Expert mode toggle
+    expertBtn_.setClickingTogglesState(true);
+    expertBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    expertBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentGreen);
+    expertBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    expertBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    expertBtn_.setTooltip("Show advanced tabs (Engine, Modulation, AI) and Neural Master controls.");
+    if (auto* param = processor.getAPVTS().getParameter("expertMode"))
+    {
+        expertBtn_.onClick = [this, param]() {
+            param->setValueNotifyingHost(expertBtn_.getToggleState() ? 1.0f : 0.0f);
+            updateExpertModeUI();
+        };
+    }
+    addAndMakeVisible(expertBtn_);
+    updateExpertModeUI();
+
+    // ── A/B Compare toggle ─────────────────────────────────────────────────────
+    abCompareBtn_.setClickingTogglesState(true);
+    abCompareBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    abCompareBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentCoral);
+    abCompareBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    abCompareBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    abCompareBtn_.setTooltip(
+        "A/B Compare: captures the current parameter state as the 'B' reference, "
+        "then toggles between live tweaks ('A') and the captured reference ('B'). "
+        "Click once to capture, click again to toggle.");
+    abCompareBtn_.onClick = [this]()
+    {
+        const bool nowActive = processor.toggleABCompare();
+        abCompareBtn_.setToggleState(nowActive, juce::dontSendNotification);
+        abCompareBtn_.setButtonText(nowActive ? "B" : "A/B");
+    };
+    addAndMakeVisible(abCompareBtn_);
 
     // ── Always-visible components ──────────────────────────────────────────────
     addAndMakeVisible(morphPad);
@@ -242,6 +279,14 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     if (!isLicensed)
         licenseOverlay.toFront(false);
 
+    // Onboarding overlay — shown on first launch (no snapshot data present)
+    addChildComponent(onboardingOverlay);
+    if (!processor.getSnapshotBank().hasAnyOccupied())
+    {
+        onboardingOverlay.setVisible(true);
+        onboardingOverlay.toFront(false);
+    }
+
     // ponytail: FL Studio composites an unbuffered plugin window every frame,
     // re-running paint() (incl. a ColourGradient alloc) on the shared message
     // thread — that's the host-wide UI lag. Buffering the editor to an image
@@ -279,11 +324,23 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("More-Phi", titleTextArea.removeFromLeft(96),
                juce::Justification::centredLeft, false);
 
-    // Version
+    // Version — AUDIT-FIX: render from the single source of truth (Version.h)
+    // instead of a hardcoded literal. Previously this was "v3.3.0" while
+    // CMakeLists.txt said 3.4.0 and Version.h said 3.4.0 — four version
+    // strings, two values. Now the editor, CMake, CI, and Version.h all agree.
     g.setColour(lnf.textDim);
     g.setFont(lnf.makeScaledFont(10.0f));
-    g.drawText("v3.3.0", titleTextArea.removeFromLeft(72).translated(0, 1),
+    g.drawText("v" + juce::String(more_phi::VERSION_STRING),
+               titleTextArea.removeFromLeft(72).translated(0, 1),
                juce::Justification::centredLeft, false);
+
+    // A/B Compare button (right side of title bar, before expert/bypass)
+    auto abArea = titleArea.removeFromRight(56).reduced(6, 12);
+    abCompareBtn_.setBounds(abArea);
+
+    // Expert mode toggle (right side, before A/B)
+    auto expertArea = titleArea.removeFromRight(70).reduced(6, 12);
+    expertBtn_.setBounds(expertArea);
 
     // Bypass button (right side of title bar, before meter)
     auto bypassArea = titleArea.removeFromRight(80).reduced(6, 12);
@@ -355,7 +412,12 @@ void MorePhiEditor::resized()
     area.removeFromTop(48);
     {
         auto titleArea = getLocalBounds().removeFromTop(48);
-        bypassBtn_.setBounds(titleArea.removeFromRight(80).reduced(6, 12));
+        auto abArea = titleArea.removeFromRight(56).reduced(6, 12);
+        abCompareBtn_.setBounds(abArea);
+        auto expertArea = titleArea.removeFromRight(70).reduced(6, 12);
+        expertBtn_.setBounds(expertArea);
+        auto bypassArea = titleArea.removeFromRight(80).reduced(6, 12);
+        bypassBtn_.setBounds(bypassArea);
     }
 
     // Deactivate License — moved to bottom bar for less visual intrusion
@@ -466,8 +528,9 @@ void MorePhiEditor::resized()
     if (aiChatPage_)
         aiChatPage_->setBounds(tabContent);
 
-    // Cover the entire editor with licensing overlay if visible
+    // Cover the entire editor with licensing/onboarding overlay if visible
     licenseOverlay.setBounds(getLocalBounds());
+    onboardingOverlay.setBounds(getLocalBounds());
 }
 
 void MorePhiEditor::switchTab(int tabIndex)
@@ -518,12 +581,43 @@ void MorePhiEditor::setAITabVisible(bool visible)
         aiChatPage_->setVisible(visible);
 }
 
+// AUDIT-2026-06-25 (build unblock): updateExpertModeUI() was declared in the
+// header and called from the Expert toggle's onClick + ctor, but its body was
+// never written — an unresolved external at link time blocked the whole build.
+// Standard mode shows Classic + Presets; Expert mode additionally reveals the
+// Engine, Modulation and AI tabs (per V2TabBar's setVisibleTabs contract and
+// the Expert button tooltip: "Show advanced tabs (Engine, Modulation, AI)...").
+// We mirror the toggle's getToggleState() (kept in sync with the expertMode
+// APVTS param by the onClick handler) and force Classic as the active tab when
+// expert mode is switched off, so the editor never lands on a hidden tab.
+void MorePhiEditor::updateExpertModeUI()
+{
+    const bool expert = expertBtn_.getToggleState();
+    using Tab = V2TabBar;
+    const int visibleMask = (1 << Tab::Classic) | (1 << Tab::Presets)
+                          | (expert ? ((1 << Tab::Engine) | (1 << Tab::Modulation) | (1 << Tab::AI))
+                                    : 0);
+    tabBar_.setVisibleTabs(visibleMask);
+
+    // If the active tab is now hidden, fall back to Classic.
+    if (!tabBar_.isTabVisible(activeTab_))
+    {
+        switchTab(Tab::Classic);
+    }
+
+    resized();
+    repaint();
+}
+
 void MorePhiEditor::timerCallback()
 {
     MSG_TRACE(processor.getDiagnostics(), "Editor::timerCallback");
-    // Check license state changes
+    // Check license state changes. R4: honor a session dismiss ("Continue in
+    // Demo") so the overlay isn't re-spawned every tick after the user chose to
+    // use the plugin without a license this session.
     const bool isLicensed = processor.getLicenseRuntimeState().premiumFeaturesEnabled.load(std::memory_order_relaxed);
-    if (licenseOverlay.isVisible() == isLicensed)
+    if (! licenseOverlay.isDismissedForSession()
+        && licenseOverlay.isVisible() == isLicensed)
     {
         licenseOverlay.setVisible(!isLicensed);
         if (!isLicensed)
@@ -580,10 +674,17 @@ void MorePhiEditor::refreshSonicMasterStatus()
     juce::String text = "Neural Master: ";
     if (!engine.isAvailable())
     {
-        text += "model not installed";
+        text += "not available";
+#if MORE_PHI_HAS_ONNX
         sonicMasterStatus_.setTooltip(
-            "The ONNX neural model file was not found. Download the mastering model "
-            "from the More-Phi website to enable this feature.");
+            "The bundled ONNX neural model file was not found. Place masteringbrain_v2_"
+            "decision.onnx next to the plugin binary, or rebuild with the model staged in "
+            "models/sonicmaster/, to enable this feature.");
+#else
+        sonicMasterStatus_.setTooltip(
+            "Neural Master is not included in this build. Rebuild with "
+            "-DMORE_PHI_ENABLE_ONNX=ON to enable it.");
+#endif
     }
     else
     {

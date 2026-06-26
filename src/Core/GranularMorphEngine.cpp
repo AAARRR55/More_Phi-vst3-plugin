@@ -147,6 +147,16 @@ bool GranularMorphEngine::isActive() const noexcept
     return active_.load(std::memory_order_relaxed);
 }
 
+double GranularMorphEngine::getTailLengthSeconds() const noexcept
+{
+    // AUDIT-FIX: a grain already in flight continues to play out its full
+    // grainSizeMs_ envelope after input stops. Report that as the tail so the
+    // DAW compensates offline-bounce tails. Returns 0 when inactive.
+    if (! isActive())
+        return 0.0;
+    return static_cast<double>(grainSizeMs_) / 1000.0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio thread — main entry point
 // ─────────────────────────────────────────────────────────────────────────────

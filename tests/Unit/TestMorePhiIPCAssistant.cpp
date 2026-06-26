@@ -604,7 +604,9 @@ TEST_CASE("Structured string magic uses wire-byte order")
     args.schemaPath = schemaFile;
     args.timeoutMs = 500;
 
-    static constexpr uint32_t kAsciiWireMagic = 0x544F5A49u;
+    // MORP as a little-endian wire u32: M | O<<8 | R<<16 | P<<24 = 0x50524F4D
+    // (matches magicFromString("MORP") in MorePhiIPCAssistant.cpp).
+    static constexpr uint32_t kAsciiWireMagic = 0x50524F4Du;
     auto result = runWithDelayedIpcWriter(
         *assistant,
         "test_seg_wire_magic",
@@ -620,10 +622,10 @@ TEST_CASE("Structured string magic uses wire-byte order")
 
     const auto* final = assistant->getFakeSegmentForTests("test_seg_wire_magic");
     REQUIRE(final != nullptr);
-    REQUIRE((*final)[kRingOff + 0] == static_cast<uint8_t>('I'));
-    REQUIRE((*final)[kRingOff + 1] == static_cast<uint8_t>('Z'));
-    REQUIRE((*final)[kRingOff + 2] == static_cast<uint8_t>('O'));
-    REQUIRE((*final)[kRingOff + 3] == static_cast<uint8_t>('T'));
+    REQUIRE((*final)[kRingOff + 0] == static_cast<uint8_t>('M'));
+    REQUIRE((*final)[kRingOff + 1] == static_cast<uint8_t>('O'));
+    REQUIRE((*final)[kRingOff + 2] == static_cast<uint8_t>('R'));
+    REQUIRE((*final)[kRingOff + 3] == static_cast<uint8_t>('P'));
 
     std::remove(schemaFile.c_str());
 }
@@ -654,14 +656,14 @@ TEST_CASE("Debug IPC magic probe reports request frame bytes")
     REQUIRE(result.body.contains("ipc_magic_probe"));
 
     const auto& probe = result.body["ipc_magic_probe"];
-    REQUIRE(probe["expected_magic_hex"].get<std::string>() == "0x495A4F54");
+    REQUIRE(probe["expected_magic_hex"].get<std::string>() == "0x4D4F5250");
     REQUIRE(probe["request_start_index"].get<int>() == 0);
     REQUIRE(probe["request_watermark"].get<int>() == 28);
-    REQUIRE(probe["request_frame_magic"]["value_hex"].get<std::string>() == "0x495A4F54");
-    REQUIRE(probe["request_frame_magic"]["bytes"][0].get<int>() == 0x54);
-    REQUIRE(probe["request_frame_magic"]["bytes"][1].get<int>() == 0x4F);
-    REQUIRE(probe["request_frame_magic"]["bytes"][2].get<int>() == 0x5A);
-    REQUIRE(probe["request_frame_magic"]["bytes"][3].get<int>() == 0x49);
+    REQUIRE(probe["request_frame_magic"]["value_hex"].get<std::string>() == "0x4D4F5250");
+    REQUIRE(probe["request_frame_magic"]["bytes"][0].get<int>() == 0x50);
+    REQUIRE(probe["request_frame_magic"]["bytes"][1].get<int>() == 0x52);
+    REQUIRE(probe["request_frame_magic"]["bytes"][2].get<int>() == 0x4F);
+    REQUIRE(probe["request_frame_magic"]["bytes"][3].get<int>() == 0x4D);
 }
 
 // ── 13. Full ring is reported before overwriting unread data ───────────────
@@ -696,7 +698,7 @@ TEST_CASE("Observer deregistration failure is reported without failing Assistant
         std::ofstream f(schemaFile);
         f << R"({
             "mapped_size_bytes":4194304,
-            "frame":{"header_size":28,"magic":1230655316,"version":3},
+            "frame":{"header_size":28,"magic":1297044048,"version":3},
             "registry":{"offset":264,"entry_size":16,"max_entries":32,"id_offset":0,"name_offset":8,"name_size":8},
             "ring":{"read_index_offset":256,"write_index_offset":260,"data_offset":512,"capacity_bytes":65},
             "assistant_result":{"count_offset":0,"entry_offset":2,"entry_size":6,"param_index_offset":0,"value_offset":2},

@@ -2,7 +2,7 @@
 
 ## Context
 
-The AI assistant (via LLMChatClient or external MCP client) sends parameter changes to the hosted plugin through a multi-stage pipeline. When edits are "accepted" by the tool call but don't visibly change the hosted plugin, the break can occur at any of 7 stages. This guide walks through each stage with concrete diagnostic steps.
+The AI assistant (via LLMChatClient or external MCP client) sends parameter changes to the hosted plugin through a multi-stage pipeline. When edits are "accepted" by the tool call but don't visibly change the hosted plugin, the break can occur at any of 7 stages (MCP path) or at the neural mastering stages. This guide walks through each stage with concrete diagnostic steps.
 
 ## Pipeline Overview
 
@@ -131,6 +131,51 @@ This is where `params[index]->setValue(clamped)` is called on the hosted plugin.
 - If values persist briefly then revert: the morph pad was moved, releasing the liveEditHold.
 - To make edits stick permanently: recall a snapshot with the desired values, or move the morph cursor to a position where the interpolated output matches the desired values.
 - Use `diagnose_parameter_pipeline` to check `liveEditHoldsActive` and `snapshotsOccupied`.
+
+## Neural Path: SonicMaster / OzonePlanApplicator
+
+The neural mastering subsystem provides an **alternative edit entry point** alongside the MCP `set_parameter` path. It is used when SonicMaster is active and a neural mastering plan is applied.
+
+### Pipeline
+
+```
+SonicMasterAnalysisEngine::runCycle (background thread)
+  -> ONNX inference (embedded model via BinaryData)
+  -> SonicMasterDecisionDecoder decodes plan
+  -> AutoMasteringEngine::applyValidatedPlan
+    -> OzonePlanApplicator::apply
+      -> enqueueIfMapped (name-re-validates positional indices)
+      -> MorePhiProcessor::enqueueParameterSet (holdAgainstMorph=true)
+      -> enqueuePlanBoundary (isPlanBoundary=true, planId)
+    -> getLastApplyVerification() / lastApplyWasPartial()
+```
+
+### Key Safety Properties
+
+| Property | Detail |
+|----------|--------|
+| **holdAgainstMorph** | All neural edits set `holdAgainstMorph=true` — same protection as MCP path |
+| **Read-back verification** | `getLastApplyVerification()` returns `ApplyVerification` struct per edit; `lastApplyWasPartial()` indicates if some parameters failed |
+| **Plan boundary markers** | `enqueuePlanBoundary()` sends `isPlanBoundary=true` + `planId`; audio thread stamps `lastDrainedPlanId_` when drained |
+| **Transition guard** | `notifyHostedParameterChanged()` + `flushCaptureRing()` prevents analyzing hybrid states during parameter changes |
+| **Name re-validation** | `enqueueIfMapped` re-validates positional indices by parameter name — stale indices from a swapped plugin are skipped, not misrouted |
+| **EQ gain cap** | Gains normalized to ±12 dB via `AdaptiveEQ::kMaxGainDB` |
+| **Action ledger** | Records `neural_mastering.apply_validated_plan`; cap 4096 (`kLedgerMaxTransactions`) |
+| **Pending-plan pattern** | Plan stored in `pendingPlan_`, applied in `runCycle` on analysis thread — no `callAsync` |
+
+### Neural-Specific Failure Modes
+
+**Failure mode: Partial plan application**
+- `lastApplyWasPartial() == true` means some parameters in the plan were skipped (name mismatch after plugin swap, index out of range).
+- Diagnostic: Check `getLastApplyVerification()` for individual parameter results.
+
+**Failure mode: Plan not yet drained**
+- `getLastDrainedPlanId() != planId` means the plan boundary marker hasn't been consumed by the audio thread yet.
+- Diagnostic: Wait for next processBlock cycle, or check if audio is paused.
+
+**Failure mode: Transition guard discard**
+- If a hosted parameter changes during capture, `notifyHostedParameterChanged()` flushes the ring and the current analysis window is discarded.
+- Diagnostic: Check `diagnose_parameter_pipeline` for transition guard events; avoid parameter changes during capture windows.
 
 ## Quick Diagnostic Flowchart
 

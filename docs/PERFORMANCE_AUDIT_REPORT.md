@@ -17,7 +17,7 @@ All five priority fixes from this audit have been implemented:
 | # | Fix | Files Changed | Impact |
 |---|-----|--------------|--------|
 | 1 | **Interleaved touch sampling** — `kTouchSamplingStride=4`, only 1/4 params call `getValue()` per block | `PluginProcessor.{h,cpp}` | **~75% reduction** in getValue virtual-call cost |
-| 2 | **SonicMaster lazy ring allocation** — `ensureRing()` defers 12.3 MB ring to first `setActive(true)` | `SonicMasterAnalysisEngine.{h,cpp}` | **~12.3 MB saved** (~60% of More-Phi memory) when feature off |
+| 2 | **SonicMaster lazy ring allocation** — `ensureRing()` defers ring to first `setActive(true)`. Ring is rate-proportional: ~4 MiB at 44.1 kHz, ~16 MiB at 192 kHz. | `SonicMasterAnalysisEngine.{h,cpp}` | **~4–16 MiB saved** (rate-dependent) when feature off |
 | 3 | **Throttle states reduction** — `throttleStates_` from 8192→4096 entries | `ParameterBridge.cpp` | **~64 KB saved** |
 | 4 | **Profiling coverage gaps** — added 4 new sections (`midi_processing`, `hosted_plugin_process`, `sonicmaster_capture`, `modulation_engine`) | `PluginProcessor.cpp` | **Full pipeline visibility** (13 sections) |
 | 5 | **CPU Saver mode** — new `cpuSaver` APVTS param halves FFT size + caps oversampling at ×2 | `PluginProcessor.{h,cpp}` | **~40-60% audio-domain CPU reduction** when enabled |
@@ -34,7 +34,7 @@ More-Phi 3.3.0 is a JUCE 8 VST3/AU plugin that hosts other plugins and morphs be
 |--------|---------|----------|--------|
 | #1 CPU consumer | Parameter setValue loop (2,048 virtual calls/block) | HIGH | ✅ **FIXED** — interleaved touch sampling (stride=4) |
 | Profiler bug | `registerSection` never called — all profiling data lost | CRITICAL | ✅ **FIXED** — 13 sections registered in `prepareToPlay()` |
-| Neural model memory | SonicMaster capture ring = 12.3 MB (always allocated) | MEDIUM | ✅ **FIXED** — lazy allocation via `ensureRing()` |
+| Neural model memory | SonicMaster capture ring = up to ~16 MiB at 192 kHz (rate-proportional, lazy) | MEDIUM | ✅ **FIXED** — lazy allocation via `ensureRing()`; ring is now rate-proportional (`8.0 × sampleRate`, clamped `[2×44100, 32×192000]`) |
 | ParameterBridge memory | `throttleStates_` = 8192 entries (128 KB) | LOW | ✅ **FIXED** — reduced to 4096 (64 KB) |
 | Profiling gaps | 4 pipeline stages uninstrumented | LOW | ✅ **FIXED** — MIDI, hosted plugin, SonicMaster, modulation |
 | Audio-domain engines | Spectral/granular/formant FFT paths can dominate | CONDITIONAL | ✅ **MITIGATED** — `cpuSaver` halves FFT + caps OS |
@@ -289,7 +289,7 @@ Message thread ramp:    ~1-5 ms    (applyValidatedPlan parameter ramp)
 | **PluginHostManager** | `wideBuffer_` | **~32 KB** | 8 ch × 1024 samples × 4 bytes |
 | **Audio-domain scratch** | `bufferB_` + `paramOut_` + `spectralOut_` + `granularOut_` | **~128 KB** | 4 × stereo × 2048samples × 4 (with oversampling headroom) |
 | **NeuralMasteringController** | Controller + feature extractor | **~5 KB** | Small state machines |
-| **SonicMaster capture ring** | `AudioCaptureRing` (8s @ 192kHz stereo) | **~12.3 MB** | Always allocated when prepared |
+| **SonicMaster capture ring** | `AudioCaptureRing` (rate-proportional: `8.0 × sampleRate`, pow2-rounded) | **~4 MiB @ 44.1k, ~16 MiB @ 192k** | Lazy-allocated via `ensureRing()` |
 | **SonicMaster model buffers** | `modelL/R_` + `interleaved_` + `decision_` | **~4.2 MB** | 3 × 262138 floats × 2 ch |
 | **MCP Server** | `MCPServer` inline | **~2 KB** | Connection threads stack-allocated |
 | **Agent Runtime** | Agents + scheduler + blackboard | **~50-200 KB** | Lazily constructed |
@@ -300,7 +300,7 @@ Message thread ramp:    ~1-5 ms    (applyValidatedPlan parameter ramp)
 
 | Category | Size | % of Total |
 |----------|------|-----------|
-| SonicMaster capture ring | 12.3 MB | **60%** |
+| SonicMaster capture ring | ~4–16 MiB (rate-proportional, lazy) | **~25–60%** |
 | SonicMaster model buffers | 4.2 MB | **20%** |
 | Core engine buffers | ~0.3 MB | 1.5% |
 | Audio-domain scratch | ~0.13 MB | 0.6% |
@@ -311,7 +311,7 @@ Message thread ramp:    ~1-5 ms    (applyValidatedPlan parameter ramp)
 
 ### 3.3 Key Finding: SonicMaster Ring Buffer
 
-The **SonicMaster capture ring buffer (12.3 MB)** is the single largest memory allocation in More-Phi. It is allocated in `prepare()` regardless of whether the feature is active. This represents **~60% of More-Phi's owned memory**.
+The **SonicMaster capture ring buffer** (rate-proportional: `8.0 × sampleRate`, pow2-rounded — ~4 MiB at 44.1 kHz, ~16 MiB at 192 kHz) is the single largest memory allocation in More-Phi. It is **lazy-allocated** via `ensureRing()` on first `setActive(true)` / `requestDecisionNow()` / `runCycle()` (PERF-MEM fix), so the base footprint is minimal when SonicMaster is off.
 
 **Recommendation:** Consider lazy allocation of the capture ring on first `setActive(true)` call, and deallocation on `setActive(false)` + grace period. This would reduce the base memory footprint from ~17 MB to ~5 MB when SonicMaster is not in use.
 
@@ -341,7 +341,7 @@ The **SonicMaster capture ring buffer (12.3 MB)** is the single largest memory a
 |------|-----------|------------------------|---------------------------|--------|
 | **#1** | Parameter getValue batch (2,048 virtual calls/block) | **30-50%** of param_application | LOW | `disableTouchDetection_` exists but is opt-in |
 | **#2** | Audio-domain engines when all active | **20-40%** of total | MEDIUM | Already gated; FFT size configurable |
-| **#3** | SonicMaster ring buffer (12.3 MB always allocated) | 0% CPU, **60% memory** | LOW | Lazy allocation |
+| **#3** | SonicMaster ring buffer (rate-proportional, lazy-allocated) | 0% CPU, variable memory | ~~LOW~~ FIXED | Lazy allocation + rate-proportional sizing |
 | **#4** | Profiler initialization bug (sections never registered) | 0% CPU (tooling fix) | TRIVIAL | **FIXED** in this audit |
 | **#5** | Hosted plugin setPlayHead virtual call | < 1% | DONE | H9 FIX already applied |
 | **#6** | Scalar interpolation fallback on non-SIMD CPUs | 2-5× slower interp | N/A | SIMD detected at runtime |
@@ -417,7 +417,7 @@ Touch detection needs to know if the user manually moved a knob in the hosted pl
 
 | Action | Memory Saving | Status |
 |--------|-------------|--------|
-| Lazy-allocate capture ring via `ensureRing()` | 12.3 MB when inactive | ✅ **APPLIED** — `SonicMasterAnalysisEngine.{h,cpp}` |
+| Lazy-allocate capture ring via `ensureRing()` | Up to ~16 MiB when inactive (rate-proportional) | ✅ **APPLIED** — `SonicMasterAnalysisEngine.{h,cpp}` |
 | Ring created on `setActive(true)`, `requestDecisionNow`, `runCycle` | — | ✅ All entry points covered |
 
 ### Priority 3: Audio-Domain Engines (MEDIUM complexity) — ✅ APPLIED
@@ -483,7 +483,7 @@ More-Phi's audio pipeline is well-architected for real-time safety: zero allocat
 
 1. **Parameter application loop** — The 2,048 `getValue()` calls per block dominate CPU usage. The `disableTouchDetection_` flag already exists as an escape hatch but is opt-in. Making it default or implementing interleaved touch sampling would yield the largest CPU savings.
 
-2. **SonicMaster memory** — The 12.3 MB capture ring is always allocated even when the feature is off. Lazy allocation would cut More-Phi's base memory footprint by ~60%.
+2. **SonicMaster memory** — The capture ring was always allocated at ~12.3 MB even when the feature was off. Lazy allocation via `ensureRing()` plus rate-proportional sizing (`8.0 × sampleRate`) now eliminates this waste entirely when SonicMaster is off (~4 MiB at 44.1 kHz, ~16 MiB at 192 kHz only when active).
 
 3. **Profiling infrastructure** — Was silently broken (sections never registered). Now fixed, enabling data-driven optimization in future releases.
 

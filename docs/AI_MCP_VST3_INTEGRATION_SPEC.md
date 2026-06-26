@@ -387,6 +387,28 @@ If validation fails, the AI assistant should:
    to the user.
 3. Suggest a corrected request based on the error reason.
 
+### 4.4 Neural Path Verification (SonicMaster)
+
+The neural mastering subsystem (`OzonePlanApplicator`) provides a second edit entry point alongside MCP `set_parameter`. Both funnel through `enqueueParameterSet` → `LockFreeQueue` → audio-thread drain → `ParameterBridge`, with aligned safety properties:
+
+| Property | MCP/agent path | Neural path (`OzonePlanApplicator`) |
+|----------|----------------|--------------------------------------|
+| ParamID resolution | Live re-query via `resolveParameter` | Positional indices, re-validated by name in `enqueueIfMapped` |
+| Hold against morph | `holdAgainstMorph=true` | `holdAgainstMorph=true` |
+| Read-back verification | `classifyVerification` → 7 status codes | `getLastApplyVerification()` / `lastApplyWasPartial()` |
+| Action-ledger record | Standard MCP ledger entry | Ledger cap 4096 (`kLedgerMaxTransactions`) |
+| Plan atomicity | N/A | `enqueuePlanBoundary()` + `lastDrainedPlanId_` atomic marker |
+| Transition guard | N/A | `notifyHostedParameterChanged()` + ring flush |
+
+**Additional neural path details:**
+- ONNX model embedded in binary via `BinaryData::getNamedResource()` — no runtime file I/O
+- Capture ring rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), lazily allocated
+- Resampling uses `resamplePolyphase` (not linear interpolation)
+- Mono capture supported (`channelCount == 1`)
+- Plan application uses pending-plan atomic-flag pattern — stores in `pendingPlan_`, applies in `runCycle` on analysis thread (no `callAsync`)
+- EQ gain normalization capped at ±12 dB via `AdaptiveEQ::kMaxGainDB`
+- `mastering.render_batch` dry-run populates real `lufs_error` per candidate for `OptimizationAgent` scoring
+
 ---
 
 ## 5. Performance Optimization Strategies
@@ -441,7 +463,9 @@ std::vector<ParamCommand> commands;
 commands.reserve(updates.size());
 for (auto& u : updates) {
     commands.push_back({u.index, u.value, false, -1,
-                        ParameterEditSource::MCP, true});
+                        ParameterEditSource::MCP, true, false, 0});
+    //             {paramIndex, value, isSnapshotMarker, snapshotSlot,
+    //              source, holdAgainstMorph, isPlanBoundary, planId}
 }
 processor.enqueueParameterBatch(commands);
 auto flush = processor.flushPendingParameterCommandsForAssistant(
@@ -569,7 +593,7 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
         commands.push_back({resolution.index,
                             static_cast<float>(item["value"]),
                             false, -1,
-                            ParameterEditSource::MCP, true});
+                            ParameterEditSource::MCP, true, false, 0});
     }
 
     if (!p.enqueueParameterBatch(commands))
@@ -631,3 +655,4 @@ juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p) {
 | 1.0 | 2026-06-17 | Kimi Code CLI | Initial architecture, tool mapping, verification, and optimization spec |
 | 1.1 | 2026-06-20 | Kimi Code CLI | Added `AgentOrchestrator` to architecture diagram and component table; added §2.4 `EcosystemConfig` (unified configuration) and §2.5 `SecurityValidator` (security layer); added §3.4 `McpProtocol` explicit schemas; updated §6.2 pseudocode to use `McpProtocol` helpers; updated §8 references to include new Orchestrator headers. |
 | 1.2 | 2026-07-23 | Codex Audit | Updated §4.2 verification payload with per-edit verification schema and 7 status codes (success/queued/value_drift/value_drift_discrete/morph_overwrite_risk/parameter_index_out_of_range/failure); updated §4.3 AI-side validation with 8-point checklist covering discrete tolerance, morph overwrite detection, out-of-range detection, and verification-status-gated success; added flush.out_of_range_count field. |
+| 1.3 | 2026-06-25 | Doc sync | Added §4.4 neural path verification (SonicMaster/OzonePlanApplicator) with aligned safety properties table; updated §5.3 and §6.3 ParamCommand pseudocode to include `isPlanBoundary` and `planId` fields (P3.10); documented ONNX binary embedding, rate-proportional capture ring, polyphase resampling, pending-plan pattern, mono capture, EQ ±12 dB normalization, `lufs_error` scoring, plan boundary markers, action ledger cap 4096. |

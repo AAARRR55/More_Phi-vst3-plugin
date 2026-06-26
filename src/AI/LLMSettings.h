@@ -57,6 +57,10 @@ juce::String toStorageKey(LLMProviderId id);
 juce::String toStorageKey(LLMValidationStatus status);
 juce::String toDisplayString(LLMProviderId id);
 juce::String toDisplayString(LLMValidationStatus status);
+// Plain status label WITHOUT the colorblind-safety glyph prefix. Use this for
+// non-UI contexts (storage keys, logging, tests) where the glyph would be noise.
+// toDisplayString() == glyph + " " + statusLabel() for the UI.
+juce::String statusLabel(LLMValidationStatus status);
 std::optional<LLMValidationStatus> llmValidationStatusFromStorageKey(const juce::String& storageKey);
 
 class LLMSettings

@@ -34,10 +34,12 @@ identified 8 bottlenecks. All 5 priority fixes applied.
   Touch detection gated to sampled params; cooldowns + setValue still run for
   all. `src/Plugin/PluginProcessor.{h,cpp}`.
 
-### SonicMaster memory (MEM: ~12.3 MB saved when inactive)
-- **[MED] Lazy capture ring allocation (PERF-MEM)** — `ensureRing()` defers
-  `AudioCaptureRing` (12.3 MB) to first `setActive(true)`, `requestDecisionNow`,
-  or `runCycle()`. `prepare()` resets ring to nullptr. Saves ~60% of More-Phi's
+### SonicMaster memory (MEM: up to ~16 MiB saved when inactive)
+- **[MED] Lazy + rate-proportional capture ring (PERF-MEM)** — `ensureRing()` defers
+  `AudioCaptureRing` to first `setActive(true)`, `requestDecisionNow`,
+  or `runCycle()`. Ring size is rate-proportional: `round(8.0 × sampleRate)`,
+  clamped `[2×44100, 32×192000]`, pow2-rounded — ~4 MiB at 44.1 kHz, ~16 MiB at
+  192 kHz. `prepare()` resets ring to nullptr. Saves ~25–60% of More-Phi's
   baseline memory when the feature is off.
   `src/AI/SonicMasterAnalysisEngine.{h,cpp}`.
 

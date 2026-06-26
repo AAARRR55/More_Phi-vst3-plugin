@@ -16,8 +16,9 @@ LicenseImportDialog::LicenseImportDialog(MorePhiProcessor& processor)
     addAndMakeVisible(titleLabel_);
 
     descLabel_.setText(
-        "Paste the signed certificate JSON you obtained from your account or "
-        "support. It looks like: { \"payload\": \"...\", \"signature\": \"...\", \"keyId\": \"...\" }.",
+        "For machines that can't reach the activation server. From your account on "
+        "another device, generate an offline certificate for this machine, copy it, "
+        "and paste it below. It's a block of text starting with { and ending with }.",
         juce::dontSendNotification);
     descLabel_.setJustificationType(juce::Justification::centredLeft);
     descLabel_.setFont(juce::Font(juce::FontOptions(12.0f)));

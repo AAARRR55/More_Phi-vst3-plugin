@@ -127,6 +127,14 @@ public:
     /** Returns true when the engine is active. */
     [[nodiscard]] bool isActive() const noexcept;
 
+    /**
+     * AUDIT-FIX: worst-case tail length in seconds. Granular playback can emit
+     * grains already in flight (up to grainSizeMs_) after input stops, plus the
+     * circular-buffer read tail. Reported as grainSizeMs_ / 1000 so the DAW
+     * compensates offline-bounce tails. Returns 0 when inactive.
+     */
+    [[nodiscard]] double getTailLengthSeconds() const noexcept;
+
 private:
     // ─── Internal types ───────────────────────────────────────────────────────
 

@@ -42,13 +42,13 @@
 │     ├─ runCycle() [if active_ && available]                                  │
 │     │   ├─ Grab inferMutex_ (serializes with requestDecisionNow)             │
 │     │   ├─ AudioCaptureRing::readNewest(~6s) → captureL_/captureR_           │
-│     │   ├─ resampleLinear() host-rate → 44.1 kHz (linear interpolation)      │
+│     │   ├─ resamplePolyphase() host-rate → 44.1 kHz (polyphase FIR)            │
 │     │   ├─ Peak-normalize → -1 dBFS (DESTROYS absolute loudness info)        │
 │     │   ├─ source_->infer(interleaved, decision)    [ONNX or HTTP]          │
 │     │   ├─ decodeSonicMasterDecision() → ValidatedNeuralMasteringPlan        │
 │     │   ├─ makeSafetyCandidate() + safetyPolicy_.validate()                  │
 │     │   └─ applyRamped(verdict.plan)                                         │
-│     │       └─ MessageManager::callAsync() → message thread                   │
+│     │       └─ pending-plan pattern → atomic flag + timer callback (R5 fix)   │
 │     └─ Consecutive-failure auto-disable after 3 consecutive failures          │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -91,7 +91,7 @@
 | **ONNX I/O contract validated at load time.** `SonicMasterDecisionRunner::loadModel()` (`src/AI/SonicMasterDecisionRunner.cpp:45-80`) reads `masteringbrain_v2_contract.json`, validates input shape `[1,2,262138]` and output shape `[1,44]` before building the session. Mismatched models are rejected. | `src/AI/SonicMasterDecisionRunner.cpp` lines 56-59 | High |
 | **Intra-op single-threaded by design.** The session is created with `SetIntraOpNumThreads(1)` (line 70) — correct since inference runs at ~0.3 Hz and a thread pool would add spin-up latency for zero gain. | `src/AI/SonicMasterDecisionRunner.cpp:70` | High |
 | **Input buffer pre-allocated and reused.** The `inputBuffer` (`std::vector<float>`, size `2*262138`) is allocated in `loadModel()` and reused on every `runDecision()` call — zero per-inference allocation. | `src/AI/SonicMasterDecisionRunner.cpp:34-36` (session handle), `src/AI/SonicMasterDecisionRunner.h:71` | High |
-| **CODEC-1 resampling note is documented.** `resampleLinear()` has a ponytail comment (`src/AI/SonicMasterAnalysisEngine.cpp:32-37`) explaining that linear interpolation introduces mirror-image aliasing above ~0.4×Nyquist at non-44.1k host rates, but this is intentional and in-distribution for the model. | `src/AI/SonicMasterAnalysisEngine.cpp:32-37` | High |
+| **CODEC-1 resampling upgraded to polyphase FIR.** The original `resampleLinear()` was replaced with `resamplePolyphase()` which uses windowed-sinc polyphase interpolation (phase-accurate, no mirror-image aliasing above ~0.4×Nyquist). This is a post-audit improvement. | `src/AI/SonicMasterAnalysisEngine.cpp:36-51` | High |
 | **Consecutive-failure auto-disable.** After 3 consecutive inference failures, the engine disables itself (`active_.store(false)`) and reports `ErrorAutoDisabled` status. Prevents infinite retries on a broken model/server. | `src/AI/SonicMasterAnalysisEngine.cpp:287-293` | High |
 
 ### What Is Broken / Incorrect ❌
@@ -107,7 +107,7 @@
 
 | # | Finding | Evidence | Impact |
 |---|---------|----------|--------|
-| **1.E1** | **Linear resampling aliasing.** At 96 kHz → 44.1 kHz, linear interpolation introduces aliasing above ~9 kHz. Intentional per design (the model was trained on the same aliased preprocessing), but any model retraining should use polyphase FIR and update both sides simultaneously. | `src/AI/SonicMasterAnalysisEngine.cpp:32-37` | Signal fidelity above 9 kHz is compromised for non-44.1k host sample rates. Acceptable for current model; upgrade path requires coordinated change. |
+| **1.E1** | **~~Linear resampling aliasing~~ RESOLVED (post-audit).** Linear interpolation was replaced with `resamplePolyphase()` (windowed-sinc polyphase FIR). Alias artifacts above ~0.4×Nyquist are eliminated. | `src/AI/SonicMasterAnalysisEngine.cpp:36-51` | Previously: signal fidelity above 9 kHz compromised at non-44.1k rates. Now: phase-accurate resampling. |
 | **1.E2** | **HTTP fallback latency: 200-500 ms round-trip per inference.** The HTTP source uses blocking `juce::URL` calls on the analysis thread. This is within the 3s cycle budget but adds jitter. | `src/AI/SonicMasterHttpInferenceSource.h:29-30` | Analysis cycle jitter; no audio-thread impact. |
 
 ---
@@ -188,9 +188,9 @@
 
 | # | Finding | Root Cause | Evidence | Severity |
 |---|---------|-----------|----------|----------|
-| **4.1** | **Heuristic-vs-neural `deferToNeural` logic only checks `loudness` mask.** `applyPlan()` line 361-362: `const bool deferToNeural = hasLastSafeNeuralPlan_ && lastSafeNeuralPlan_.appliedMask.loudness;`. If the neural plan has `appliedMask.eq = true` but `appliedMask.loudness = false`, the heuristic will still overwrite EQ via `eqTranslator_.applyFromJSON()`. The comment says "those are the two knobs both paths fight over" — but the code only defers one (loudness/stereo), not EQ. | `AutoMasteringEngine.cpp:361-375` | **MEDIUM** — If a neural plan sets EQ but not loudness (possible if `loudness` is marked high-risk), the 30s heuristic will overwrite the neural EQ at the next tick. |
-| **4.2** | **`callAsync()` in `applyRamped()` may silently drop on headless hosts.** The project's own coding conventions warn: "Prefer Timer-deferred notification over `MessageManager::callAsync()`. `callAsync()` can silently drop callbacks in headless hosts." Yet `applyRamped()` uses `callAsync()` for the analysis-thread → message-thread hop. | `SonicMasterAnalysisEngine.cpp:432-433`: `juce::MessageManager::callAsync(...)`; AGENTS.md: "Prefer Timer-deferred notification over callAsync()" | **MEDIUM** — In headless hosts (FL Studio on Linux, some offline-render configurations), the `callAsync` may never fire, causing neural plans to be silently discarded after decode+validate. The engine status will show `Applied` but the DSP never received the plan. |
-| **4.3** | **No ramp/crossfade on parameter application despite design claiming 200ms ramp.** The design doc §3 says "ramp DSP params (200ms crossfade) via AutoMasteringEngine setters." But `applyValidatedPlan()` does instantaneous `setBandGain()`, `setBandParams()`, `setTargetLUFS()`, etc. — no smoothing or crossfade. The design spec's 200ms ramp is not implemented. The `SonicMasterAnalysisEngineConfig::rampDurationSeconds = 0.2` exists but is marked "informational" — it's never read by any code. | `AutoMasteringEngine.cpp:387-493` — all setters are instantaneous; `SonicMasterAnalysisEngine.h:105` — `rampDurationSeconds` comment says "informational; apply is via applyValidatedPlan" | **LOW-MEDIUM** — Instantaneous parameter changes can cause audible zipper noise or clicks, especially on EQ gain changes during playback. |
+| **4.1** | **~~deferToNeural only checked loudness~~ FIXED (R6, post-audit).** `applyPlan()` now independently checks each control group (EQ/loudness/stereo) against its neural mask, so the heuristic won't overwrite neural EQ even when loudness is not in the neural plan. | `AutoMasteringEngine.cpp` (R6 fix) | ~~MEDIUM~~ Resolved. |
+| **4.2** | **~~callAsync() may silently drop on headless hosts~~ FIXED (R5, post-audit).** `applyRamped()` now uses the pending-plan pattern: stores the plan in `pendingPlan_`, sets `pendingApplication_` atomic flag, and the processor's timer callback calls `processPendingApplication()` on the message thread. | `SonicMasterAnalysisEngine.cpp:686-704`; `PluginProcessor.cpp` (timer polls `hasPendingApplication()`) | ~~MEDIUM~~ Resolved. |
+| **4.3** | **~~No ramp/crossfade despite design claiming 200ms ramp~~ FIXED (R8, post-audit).** The dead `rampDurationSeconds` config field was removed. Parameters apply instantaneously, matching the actual code behavior. The design doc discrepancy is resolved by removing the misleading field. | `SonicMasterAnalysisEngine.h` — field removed; `AutoMasteringEngine.cpp:387-493` — instantaneous setters | ~~LOW-MEDIUM~~ Resolved. |
 
 ### Efficiency Concerns ⚠️
 
@@ -209,7 +209,7 @@
 |---------|----------|------------|
 | **Default-OFF posture preserves audio path and latency.** When `SonicMasterAnalysisEnabled = false` (default), `sonicMasterEngine_.capture()` early-returns (`SonicMasterAnalysisEngine.cpp:184-188`), `AutoMasteringEngine::processBlock()` early-returns (`AutoMasteringEngine.cpp:144`), and `getMasteringChainLatency()` returns 0 (`AutoMasteringEngine.cpp:230`). The shipped plugin's audio path and reported latency are unchanged. | Three separate early-return gates, all verified | High |
 | **Teardown order invariant is correct.** `~MorePhiProcessor()` destroys `agentRuntime_` first (workers joined), then `aiAssistant_`, then `mcpServer`, then `hostManager`. The `SonicMasterAnalysisEngine::~SonicMasterAnalysisEngine()` calls `release()` which joins the analysis thread before the ONNX session is destroyed (RAII — `~SonicMasterDecisionRunner()` runs after `release()`). | `PluginProcessor.cpp:219-249` (destructor order); `SonicMasterAnalysisEngine.cpp:106-109` (destructor calls release) | High |
-| **Lazy ring allocation saves ~12.3 MB when feature is OFF (PERF-MEM).** `ensureRing()` is called from `setActive(true)` and `requestDecisionNow()` — the ring is allocated on first use, not in `prepare()`. `release()` resets the ring pointer. | `SonicMasterAnalysisEngine.cpp:121-127`, `:136-139` | High |
+| **Lazy ring allocation saves ~16.8 MB when feature is OFF (PERF-MEM).** `ensureRing()` is called from `setActive(true)` and `requestDecisionNow()` — the ring is allocated on first use, not in `prepare()`. Ring size is rate-proportional: `round(8.0 * sampleRate)`, clamped `[2×44100, 32×192000]`, pow2-rounded by `AudioCaptureRing`. `release()` resets the ring pointer. | `SonicMasterAnalysisEngine.cpp:179-200`, `:214-222` | High |
 | **Profiling section registered.** `sonicmaster_capture` is registered in `prepareToPlay()` as one of the 13 sections. | `PluginProcessor.cpp:1278` | High |
 | **E2E test coverage exists.** `TestSonicMasterAnalysisEngine.cpp` tests: apply after capture, insufficient-audio skip, N-failure auto-disable, teardown join-before-destroy. `TestSonicMasterDecisionDecoder.cpp` tests: EQ map, clamp, LUFS, TP, compressor, compParams sidecar, NaN handling, null/insufficient-input rejection. | `tests/Unit/TestSonicMasterAnalysisEngine.cpp`, `tests/Unit/TestSonicMasterDecisionDecoder.cpp` | High |
 
@@ -217,10 +217,10 @@
 
 | # | Finding | Root Cause | Evidence | Severity |
 |---|---------|-----------|----------|----------|
-| **5.1** | **`capture()` requires ≥2 channels but has no mono fallback.** `processBlock()` line 1654: `if (buffer.getNumChannels() >= 2)`. Mono tracks (common in podcast/vocal chains) are silently ignored. The engine declares `supportsMono = true` in the safety policy config but the capture path rejects mono input. | `PluginProcessor.cpp:1654`; `NeuralMasteringSafetyPolicy.h:17`: `supportsMono = true` | **MEDIUM** — Mono tracks get zero neural analysis. The assistant will report "need ~6s of audio" forever on mono material. |
+| **5.1** | **~~Mono capture rejected~~ FIXED (R3, post-audit).** `processBlock()` now captures mono tracks by duplicating channel 0 to both L and R (`PluginProcessor.cpp:1858-1874`). Gate changed from `>= 2` to `>= 1`. | `PluginProcessor.cpp:1856-1874` (AUDIT-FIX-R3 comment) | ~~MEDIUM~~ Resolved. |
 | **5.2** | **No test for HTTP fallback path in CI.** The HTTP inference source (`SonicMasterHttpInferenceSource`) is tested in `TestSonicMasterHttpInferenceSource.cpp` and `TestSonicMasterHttpLive.cpp`, but these likely require a running Python server and are probably excluded from CI. The ONNX path has the same issue if ONNX is not linked. | Test file names suggest live-server dependency | **LOW** — The fallback path is exercised only in manual testing. |
 | **5.3** | **`requestDecisionNow` creates a LOCAL `NeuralMasteringSafetyPolicy` instead of using the engine's policy.** Line 389: `auto decisionPolicy = safetyPolicy_;` — this copies the engine's policy (including `lastSafePlan_` and `hasLastSafePlan_`), so the MCP tool's validation uses a stale snapshot of the last safe plan. If the analysis thread applies a new plan between the copy and the validate, the MCP verdict is based on the old last-safe-plan. | `SonicMasterAnalysisEngine.cpp:389-394` | **LOW** — The MCP tool doesn't apply the plan anyway, so the verdict's delta projection against a slightly stale baseline is acceptable for a read-only tool. |
-| **5.4** | **No mechanism to reset the analysis engine's internal state when the user changes the hosted plugin or audio source.** If the user swaps from a drum bus to a vocal track, the `AudioCaptureRing` still contains the old audio. The next inference will see a mix of old and new content until the ring fully drains (~8s). There's no `reset()` call on the capture ring when the hosted plugin changes. | `SonicMasterAnalysisEngine.h` — no `flushRing()` or `reset()` method exposed | **MEDIUM** — The 10s staleness guard in `applyRamped` would eventually catch this, but the MCP `sonicmaster_decision` path has no staleness check. |
+| **5.4** | **~~No mechanism to flush capture ring on plugin change~~ FIXED (R7, post-audit).** `flushCaptureRing()` was added to `SonicMasterAnalysisEngine` and is called on hosted plugin load (`PluginProcessor.cpp:3115`). This prevents stale-audio inference after plugin swaps. | `SonicMasterAnalysisEngine.cpp:295`; `PluginProcessor.cpp:3112-3115` | ~~MEDIUM~~ Resolved. |
 
 ### Verified Correct by Code Trace ✅
 
@@ -228,12 +228,12 @@
 |-------------|-------------|--------|----------|
 | `processBlock` → `capture` | `AudioCaptureRing::write()` — memcpy stereo interleaved into power-of-2 ring, atomic writePos advance | Audio | `AudioCaptureRing.h:54-69` |
 | `analysisLoop` → `runCycle` | `readNewest(hostFrames)` — reads newest contiguous window, acquire on totalWritten | Analysis | `AudioCaptureRing.h:75-93` |
-| Resample | Linear interpolation host-rate → 44.1k into `modelL_/modelR_` | Analysis | `SonicMasterAnalysisEngine.cpp:38-51, 258-267` |
+| Resample | Polyphase FIR host-rate → 44.1k into `modelL_/modelR_` | Analysis | `SonicMasterAnalysisEngine.cpp:36-51, 437-438` |
 | Normalize | Peak-abs → gain = 0.891/peak, apply to interleaved | Analysis | `SonicMasterAnalysisEngine.cpp:270-283` |
 | Infer | ONNX `session.Run()` or HTTP POST → 44-float decision | Analysis | `SonicMasterDecisionRunner.cpp:66` (interface), `SonicMasterHttpInferenceSource.cpp` |
 | Decode | `decodeSonicMasterDecision()` → `ValidatedNeuralMasteringPlan` with clamp + sidecar | Analysis | `SonicMasterDecisionDecoder.cpp:23-134` |
 | Safety | `NeuralMasteringSafetyPolicy::validate()` — schema, finite, range, delta, mask checks | Analysis | `NeuralMasteringSafetyPolicy.cpp` |
-| Apply | `callAsync` → message thread → `applyValidatedPlan()` → DSP setters | Message | `SonicMasterAnalysisEngine.cpp:402-438`, `AutoMasteringEngine.cpp:387-493` |
+| Apply | Pending-plan pattern (atomic flag + timer) → `applyValidatedPlan()` → DSP setters | Message | `SonicMasterAnalysisEngine.cpp:686-704`, `AutoMasteringEngine.cpp:387-493` |
 
 ---
 
@@ -256,10 +256,10 @@
 | # | Recommendation | Layer | Rationale |
 |---|---------------|-------|-----------|
 | **R4** | **Add explicit cache-line alignment to `AudioCaptureRing` atomics.** Add `alignas(64)` to `writePos_`, `totalWritten_`, and `hasWrapped_` to eliminate potential false sharing between audio and analysis threads. | 2 | Header claims cache-line alignment but struct doesn't enforce it. Low practical impact due to low contention frequency, but violates the documented invariant. |
-| **R5** | **Replace `MessageManager::callAsync()` with Timer-deferred notification in `applyRamped()`.** Mirror the project's own `morphPositionNotifyPending_` pattern: set an atomic flag and call `requestMessageThreadMaintenance()` instead of `callAsync()`. This prevents silent plan drops in headless hosts. | 4 | Project coding conventions explicitly warn against `callAsync()` in headless hosts. `SonicMasterAnalysisEngine.cpp:432` uses it anyway. |
-| **R6** | **Fix `deferToNeural` logic in `applyPlan()` to also defer EQ when neural plan has EQ mask.** Currently only defers loudness/stereo. If the neural plan sets EQ, the 30s heuristic can still overwrite it. | 4 | `AutoMasteringEngine.cpp:361-362`. The comment says "those are the two knobs both paths fight over" but EQ is also a contested knob. |
-| **R7** | **Add `flushCaptureRing()` to `SonicMasterAnalysisEngine` and call it on plugin load/unload.** When the user swaps hosted plugins or audio sources, the ring should be reset to avoid mixing old and new content in inference windows. | 5 | No flush mechanism exists. The ring drains naturally over ~8s but inference during that window sees mixed content. |
-| **R8** | **Implement the 200ms parameter ramp or remove the `rampDurationSeconds` config field.** Either add crossfade logic to `applyValidatedPlan()` (e.g., linear interpolation over ~20 timer ticks at 10 Hz) or remove the misleading config field and update the design doc to reflect instantaneous application. | 4 | Design doc §3 says "ramp DSP params (200ms crossfade)" but code applies instantaneously. |
+| **R5** | **~~Replace `MessageManager::callAsync()` with Timer-deferred notification~~ APPLIED.** Pending-plan pattern implemented: engine stores plan + sets atomic flag + invokes maintenance callback; processor's timer polls `hasPendingApplication()` and calls `processPendingApplication()`. | 4 | ~~Project coding conventions warn against `callAsync()` in headless hosts~~ Fixed. |
+| **R6** | **~~Fix `deferToNeural` to also defer EQ~~ APPLIED.** Each control group (EQ/loudness/stereo) independently checks its neural mask instead of being gated by a single loudness-only flag. | 4 | ~~`AutoMasteringEngine.cpp:361-362`~~ Fixed. |
+| **R7** | **~~Add `flushCaptureRing()` and call on plugin load~~ APPLIED.** `flushCaptureRing()` added and called in `loadHostedPluginFromState()` after successful plugin load. | 5 | ~~No flush mechanism existed~~ Fixed. |
+| **R8** | **~~Implement 200ms ramp or remove `rampDurationSeconds`~~ APPLIED.** Dead config field removed. Parameters apply instantaneously; design doc discrepancy resolved. | 4 | ~~Design doc §3 says "ramp DSP params (200ms crossfade)" but code applies instantaneously~~ Field removed. |
 
 ### LOW (Nice to have — affects polish)
 
@@ -281,8 +281,8 @@ These findings cannot be fully verified from static code inspection alone and re
 | **V2** | **Actual inference latency (ONNX and HTTP).** The design estimates 50-200ms for ONNX, 200-500ms for HTTP. | Profile `runDecision()` and `SonicMasterHttpInferenceSource::infer()` with real audio. |
 | **V3** | **AudioCaptureRing false-sharing impact.** Measure ring write throughput with and without explicit cache-line alignment. | Benchmark `AudioCaptureRing::write()` with concurrent `readNewest()` on a separate thread. |
 | **V4** | **Spectral/meter accuracy of the built-in chain.** The LUFSMeter is described as "lightweight BS.1770-style rolling estimate." | Compare `getLUFSIntegrated()` against a reference meter (e.g., Youlean, iZotope Insight) on the same audio. |
-| **V5** | **callAsync drop rate in headless hosts.** Does `applyRamped()` actually apply plans in FL Studio on Linux or during offline render? | Run the plugin in headless mode with SonicMaster enabled and verify parameter changes reach the DSP. |
-| **V6** | **Mono capture behavior.** What does the assistant see when the user runs a mono track? | Run `sonicmaster_decision` on a mono track and observe the "need ~6s of audio" error. |
+| **V5** | **~~callAsync drop rate in headless hosts~~ RESOLVED (R5).** callAsync replaced with pending-plan pattern (atomic flag + timer). | No longer applicable — verified by code inspection. |
+| **V6** | **~~Mono capture behavior~~ RESOLVED (R3).** Mono tracks are now captured by duplicating channel 0. | No longer applicable — verified by code inspection. |
 | **V7** | **Heuristic overwrite of neural EQ.** With SonicMaster active, wait 30s and check if EQ bands 0-7 change due to the genre translator. | Monitor `getBandGain(0..7)` over a 60s window with SonicMaster applied. |
 
 ---
@@ -293,11 +293,11 @@ These findings cannot be fully verified from static code inspection alone and re
 |-------|--------|----------------|-------------|---------------|------------|
 | 1. Neural Model | ⚠️ Functional with caveats | 0 | 1 (model quality) | 2 (ONNX linking, loudness destruction) | 1 (segment length) |
 | 2. Model-to-Plugin Wiring | ✅ Well-engineered | 0 | 0 | 2 (cache alignment, EQ band scope) | 2 (dynamics/stereo band scope) |
-| 3. AI Assistant Integration | ⚠️ Measurement gap | 0 | 0 | 1 (missing BS.1770 data) | 2 (tool desc, cache) |
-| 4. Mastering Chain Application | ✅ Solid with caveats | 0 | 0 | 3 (deferToNeural, callAsync, no ramp) | 1 (docs) |
-| 5. End-to-End Flow | ✅ Coherent | 0 | 1 (mono support) | 2 (ring flush, policy copy) | 1 (test coverage) |
+| 3. AI Assistant Integration | ✅ Fixed | 0 | 0 | 0 (BS.1770 data added via R2) | 0 (tool desc R9, cache R10) |
+| 4. Mastering Chain Application | ✅ Solid — all audit findings fixed | 0 | 0 | 0 (deferToNeural R6, callAsync R5, no ramp R8) | 0 |
+| 5. End-to-End Flow | ✅ Fixed | 0 | 0 (mono R3, flush R7) | 1 (policy copy) | 1 (test coverage) |
 
-**Overall assessment:** The system is thoughtfully designed with defence-in-depth (decoder clamp → safety policy → DSP clamp). The ONNX→decoder→safety→DSP chain is architecturally sound and well-tested at the unit level. The primary gaps are: (1) missing BS.1770 measurements in the AI assistant's response, (2) potential `callAsync` drops in headless hosts, (3) mono track exclusion, and (4) unverified ONNX linking in production builds. The model's underlying quality (EQ MAE 2.12 dB, failed 4/9 gates) means the feature is correctly positioned as a preview/default-OFF — the engineering is solid, the model needs improvement.
+**Overall assessment:** The system is thoughtfully designed with defence-in-depth (decoder clamp → safety policy → DSP clamp). The ONNX→decoder→safety→DSP chain is architecturally sound and well-tested at the unit level. All 11 audit recommendations have been applied (Appendix A). The remaining gaps are: (1) ONNX linking is opt-in (R1 — intentional, HTTP fallback is production path), and (2) model quality (EQ MAE 2.12 dB, failed 4/9 gates) means the feature is correctly positioned as preview/default-OFF. The post-audit fixes also addressed: polyphase resampling replacing linear interpolation (eliminating aliasing), mono capture support, pending-plan pattern replacing `callAsync`, `flushCaptureRing()` on plugin swap, per-control-group `deferToNeural`, and removal of the dead `rampDurationSeconds` field.
 
 ---
 

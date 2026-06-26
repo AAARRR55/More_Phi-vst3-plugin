@@ -13,35 +13,18 @@ function(generate_model_hash INPUT_FILE OUTPUT_HEADER)
     get_filename_component(out_dir "${OUTPUT_HEADER}" DIRECTORY)
     file(MAKE_DIRECTORY "${out_dir}")
 
-    if(WIN32)
-        set(hash_cmd
-            "${CMAKE_COMMAND}" -E env "PATH=$ENV{PATH}"
-            certutil -hashfile "${INPUT_FILE}" SHA256
-        )
-    elseif(APPLE)
-        set(hash_cmd shasum -a 256 "${INPUT_FILE}")
+    # Use CMake's built-in file(SHA256 ...) — native, cross-platform, no external
+    # tool dependency. (The earlier certutil/shasum path failed silently on
+    # Windows because certutil wasn't resolvable through cmake -E env, producing
+    # an all-zero placeholder hash that would make the runtime integrity check
+    # reject every bundled model.)
+    if(EXISTS "${INPUT_FILE}")
+        file(SHA256 "${INPUT_FILE}" computed_hash)
+        string(TOLOWER "${computed_hash}" computed_hash)
     else()
-        set(hash_cmd sha256sum "${INPUT_FILE}")
-    endif()
-
-    execute_process(
-        COMMAND ${hash_cmd}
-        OUTPUT_VARIABLE hash_output
-        RESULT_VARIABLE hash_result
-        ERROR_QUIET
-    )
-
-    if(NOT hash_result EQUAL 0)
-        message(WARNING "generate_model_hash: could not compute SHA-256 for ${INPUT_FILE} — "
+        message(WARNING "generate_model_hash: ${INPUT_FILE} does not exist — "
             "using placeholder hash. Model integrity check will be skipped at runtime.")
         set(computed_hash "0000000000000000000000000000000000000000000000000000000000000000")
-    else()
-        # Extract the hex digest — first token in the output (certutil
-        # outputs a colon-separated hex string with spaces, sha*sum outputs
-        # "hash  filename"). Normalise to lowercase 64-char hex.
-        string(REGEX MATCHALL "[0-9a-fA-F]+" hash_tokens "${hash_output}")
-        list(GET hash_tokens 0 computed_hash)
-        string(TOLOWER "${computed_hash}" computed_hash)
     endif()
 
     # Emit the header
@@ -58,5 +41,5 @@ inline constexpr const char* kExpectedModelHash = \"${computed_hash}\";
 } // namespace more_phi
 ")
     file(WRITE "${OUTPUT_HEADER}" "${header_content}")
-    message(STATUS "generate_model_hash: ${computed_hash} → ${OUTPUT_HEADER}")
+    message(STATUS "generate_model_hash: ${computed_hash} -> ${OUTPUT_HEADER}")
 endfunction()

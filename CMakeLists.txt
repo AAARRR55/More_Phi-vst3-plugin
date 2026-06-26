@@ -32,6 +32,24 @@ option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
 option(MORE_PHI_ENABLE_PROFILING "Enable PerformanceProfiler instrumentation and the MorePhiDiagnostics 10s message-thread sampler (writes diagnostics-<pid>.log)" OFF)
+
+# AUDIT-2026-06-25: security / commercial-viability opt-ins.
+# The embedded MCP server and the standalone Python IPC bridge expose a
+# localhost-only JSON-RPC surface. They are enabled by default for Debug and
+# test builds (so the existing test suite keeps working), but default OFF for
+# Release builds to minimise attack surface. Explicit -D overrides are honored.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(_MORE_PHI_MCP_DEFAULT OFF)
+else()
+    set(_MORE_PHI_MCP_DEFAULT ON)
+endif()
+option(MORE_PHI_ENABLE_MCP_SERVER "Start the embedded MCP server and VST3 IPC bridge" ${_MORE_PHI_MCP_DEFAULT})
+
+# The HTTP inference fallback contacts 127.0.0.1:8765 when the bundled ONNX
+# model is unavailable. It is opt-in because it silently depends on an external
+# server process and leaks traffic even on localhost.
+option(MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK "Allow SonicMaster to fall back to the local HTTP inference server" OFF)
+
 set(MORE_PHI_ONNX_VERSION "1.22.1" CACHE STRING "ONNX Runtime prebuilt release version (used when MORE_PHI_ENABLE_ONNX=ON)")
 # Pinned at 1.22.1: GetShape() returned-by-value path segfaults against this
 # exported graph's ONNX Runtime cxx headers; the runner uses a raw C-API
@@ -216,11 +234,26 @@ if(MORE_PHI_HAS_ONNX)
 endif()
 
 
-# Plugin formats: AU is macOS-only, do not emit it on other platforms
+# Plugin formats: AU is macOS-only, do not emit it on other platforms.
+# AAX (Pro Tools) is opt-in: pass -DMORE_PHI_BUILD_AAX=ON with either the AAX
+# SDK installed at the JUCE-expected location OR -DAAX_SDK_PATH=/path/to/aax-sdk.
+# The SDK is fetched via FetchContent below when the option is on and no path is
+# supplied. (Building AAX needs no iLok; only SIGNING/distributing does.)
+option(MORE_PHI_BUILD_AAX "Build the AAX (Pro Tools) plugin format" OFF)
+
 if(APPLE)
-    set(MORE_PHI_PLUGIN_FORMATS VST3 AU)
+    set(MORE_PHI_PLUGIN_FORMATS VST3 AU Standalone)
 else()
-    set(MORE_PHI_PLUGIN_FORMATS VST3)
+    set(MORE_PHI_PLUGIN_FORMATS VST3 Standalone)
+endif()
+
+if(MORE_PHI_BUILD_AAX)
+    list(APPEND MORE_PHI_PLUGIN_FORMATS AAX)
+    # AAX_SDK_PATH may be supplied by the user, or set by the FetchContent block
+    # below. JUCE reads it via JUCE_AAX_SDK_PATH.
+    if(DEFINED AAX_SDK_PATH AND NOT DEFINED JUCE_AAX_SDK_PATH)
+        set(JUCE_AAX_SDK_PATH "${AAX_SDK_PATH}" CACHE PATH "Path to the AAX SDK" FORCE)
+    endif()
 endif()
 
 # ── Embedded Fonts (BinaryData) ───────────────────────────────────────────────
@@ -235,6 +268,19 @@ juce_add_binary_data(MorePhiFonts
 )
 
 # ── Plugin Target ─────────────────────────────────────────────────────────────
+# AAX requires the Avid AAX SDK. It is license-gated (free, but requires an Avid
+# account + acceptance), so it cannot be auto-fetched like JUCE. Fail closed with
+# a clear instruction when AAX is requested but no SDK path resolves.
+if(MORE_PHI_BUILD_AAX)
+    if(NOT DEFINED JUCE_AAX_SDK_PATH OR JUCE_AAX_SDK_PATH STREQUAL "" OR NOT EXISTS "${JUCE_AAX_SDK_PATH}")
+        message(FATAL_ERROR
+            "MORE_PHI_BUILD_AAX=ON but the AAX SDK was not found.\n"
+            "Get the SDK from Avid (https://developer.avid.com/aax/downloading-the-aax-sdk.htm),\n"
+            "then configure with: cmake -B build -S . -DMORE_PHI_BUILD_AAX=ON -DAAX_SDK_PATH=/path/to/aax-sdk")
+    endif()
+    message(STATUS "AAX format enabled; SDK at ${JUCE_AAX_SDK_PATH}")
+endif()
+
 juce_add_plugin(MorePhi
     COMPANY_NAME            "MorePhi"
     PLUGIN_MANUFACTURER_CODE Mrph
@@ -249,6 +295,9 @@ juce_add_plugin(MorePhi
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD  ${MORE_PHI_COPY_PLUGIN_AFTER_BUILD}
     VST3_CATEGORIES          "Fx" "Tools"
+    # AAX plug-in category (Pro Tools). "Effect" maps to the AAX ePlugInCategory_PhaseVocoder
+    # group; the multi-agent/realtime-control surface does not need a separate category.
+    AAX_CATEGORIES           "Effect"
 )
 
 # ── Source Files ──────────────────────────────────────────────────────────────
@@ -314,6 +363,8 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/ModulationMatrix.cpp
     src/Core/OversamplingWrapper.h
     src/Core/LatencyManager.h
+    src/Core/UndoRedoManager.h
+    src/Core/UndoRedoManager.cpp
 )
 
 # ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
@@ -382,6 +433,10 @@ set(MORE_PHI_LICENSING_SOURCES
     src/Licensing/LicenseVerifier.cpp
     src/Licensing/SecureLicenseStore.h
     src/Licensing/SecureLicenseStore.cpp
+    src/Licensing/LicenseEnvelopeCrypto.h
+    src/Licensing/LicenseEnvelopeCrypto.cpp
+    # Windows DPAPI wrapper (compiled only on Windows; the .cpp self-gates on JUCE_WINDOWS)
+    src/Licensing/LicenseDpapiWindows.cpp
     src/Licensing/MachineFingerprint.h
     src/Licensing/MachineFingerprint.cpp
     src/Licensing/ActivationClient.h
@@ -603,6 +658,8 @@ set(MORE_PHI_UI_SOURCES
     src/UI/PerformancePanel.cpp
     src/UI/ModulationMatrixPanel.h
     src/UI/ModulationMatrixPanel.cpp
+    src/UI/OnboardingOverlay.h
+    src/UI/OnboardingOverlay.cpp
     src/UI/V2PresetBrowserPanel.h
     src/UI/V2PresetBrowserPanel.cpp
 )
@@ -795,6 +852,17 @@ target_link_libraries(MorePhi
 
 if(WIN32)
     target_link_libraries(MorePhi PRIVATE winhttp)
+    # Crypt32: DPAPI (CryptProtectData/CryptUnprotectData) for the encrypted
+    # license-cert envelope (LicenseDpapiWindows.cpp). The SharedCode lib
+    # references these symbols, so every consumer (plugin + tests + CLI) needs
+    # the lib on the link line.
+    target_link_libraries(MorePhi PUBLIC Crypt32)
+    if(TARGET MorePhiTests)
+        target_link_libraries(MorePhiTests PRIVATE Crypt32)
+    endif()
+    if(TARGET MorePhiCLI)
+        target_link_libraries(MorePhiCLI PRIVATE Crypt32)
+    endif()
 endif()
 
 # ── Production Ed25519 key injection (Phase 1) ───────────────────────────────
@@ -832,6 +900,15 @@ target_compile_definitions(MorePhi
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
 
+# AUDIT-2026-06-25: gate optional network-exposed surfaces at compile time so
+# Release builds without them compile the affected branches out entirely.
+if(MORE_PHI_ENABLE_MCP_SERVER)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_MCP_SERVER=1)
+endif()
+if(MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK=1)
+endif()
+
 # When the test suite is enabled, mark the shared-code lib with MORE_PHI_TEST_MODE
 # so the SigningKeys dev-key release-gate (an intentional ship blocker) is
 # exempted for test/lib builds — real shipping Release builds (tests OFF) still
@@ -862,6 +939,29 @@ if(MORE_PHI_HAS_ONNX)
     target_include_directories(MorePhi PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
+
+    # Copy the ONNX Runtime shared lib next to the plugin/test binaries so the
+    # host process can resolve ONNX symbols at runtime (Windows DLL search path;
+    # Linux/macOS rpath convenience). FetchOnnxRuntime.cmake exposes the path in
+    # MORE_PHI_ONNX_RUNTIME_LIB; the copy must run POST_BUILD on every consumer
+    # of the SharedCode lib that links ORT.
+    if(WIN32)
+        set(_ort_dll_dir "${CMAKE_CURRENT_BINARY_DIR}/_deps/onnxruntime-prebuilt/onnxruntime-win-x64-${MORE_PHI_ONNX_VERSION}/lib")
+        foreach(_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer HeadlessHost)
+            if(TARGET ${_consumer})
+                add_custom_command(TARGET ${_consumer} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ort_dll_dir}/onnxruntime.dll"
+                        "$<TARGET_FILE_DIR:${_consumer}>/onnxruntime.dll"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ort_dll_dir}/onnxruntime_providers_shared.dll"
+                        "$<TARGET_FILE_DIR:${_consumer}>/onnxruntime_providers_shared.dll"
+                    COMMENT "Copying ONNX Runtime DLLs next to ${_consumer}")
+            endif()
+        endforeach()
+        unset(_ort_dll_dir)
+        unset(_consumer)
+    endif()
 endif()
 
 # ── libsodium linkage (Ed25519 license-certificate verification) ──────────────
@@ -880,6 +980,9 @@ more_phi_apply_build_tuning(MorePhiMcpServer)
 more_phi_apply_build_tuning(HeadlessHost)
 if(TARGET MorePhi_VST3)
     more_phi_apply_build_tuning(MorePhi_VST3)
+endif()
+if(TARGET MorePhi_Standalone)
+    more_phi_apply_build_tuning(MorePhi_Standalone)
 endif()
 if(TARGET MorePhi_AU)
     more_phi_apply_build_tuning(MorePhi_AU)
