@@ -958,6 +958,47 @@ if(MORE_PHI_HAS_ONNX)
     target_include_directories(MorePhi PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
+
+    # ── DLL-shadowing fix (Windows only) ─────────────────────────────────────
+    # The plugin links onnxruntime.lib as a DIRECT import. The VST3 SDK host
+    # loads the module with plain LoadLibraryW (no altered search path), so
+    # Windows resolves onnxruntime.dll via the host search order — System32
+    # BEFORE the plugin directory. C:\Windows\System32\onnxruntime.dll is an
+    # OLD Microsoft "Windows AI Runtime" (v1.17.1, ORT API [1,17]) that shadows
+    # the bundled v1.22.1, breaking GetPluginFactory → "unknown reason" in FL.
+    #
+    # Convert ORT to a DELAY-load import and ship a notify hook
+    # (OnnxRuntimeDelayLoadHook.cpp) that loads the bundled DLL from the
+    # plugin's own directory with LOAD_WITH_ALTERED_SEARCH_PATH. See that TU's
+    # header comment for the full diagnosis.
+    #
+    # The hook TU compiles into the MorePhi SharedCode lib (so it's linked by
+    # every consumer), guarded by MOREPHI_DELAYLOAD_ORT. The /DELAYLOAD flag
+    # and delayimp.lib MUST go on the FINAL link target (MorePhi_VST3 etc.) —
+    # link options on a static lib do NOT propagate to its consumers, so doing
+    # it on MorePhi alone leaves the import direct (verified during the fix).
+    if(WIN32)
+        target_compile_definitions(MorePhi PRIVATE MOREPHI_DELAYLOAD_ORT=1)
+        target_sources(MorePhi PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/Plugin/OnnxRuntimeDelayLoadHook.cpp"
+        )
+        # Apply the delay-load link flag + delayimp.lib to every final binary
+        # that links ORT via the SharedCode lib. The foreach consumers list is
+        # kept in sync with the ORT-DLL copy loop below.
+        foreach(_dl_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer HeadlessHost)
+            if(TARGET ${_dl_consumer})
+                target_link_options(${_dl_consumer} PRIVATE
+                    /DELAYLOAD:onnxruntime.dll
+                    # Force-retain the delay-load notify hook symbol. Without
+                    # this, /OPT:REF strips OnnxRuntimeDelayLoadHook.cpp (the
+                    # hook function appears unreferenced) and ORT falls back to
+                    # the default loader path — which loses to System32's 1.17.1.
+                    /INCLUDE:__pfnDliNotifyHook2)
+                target_link_libraries(${_dl_consumer} PRIVATE delayimp)
+            endif()
+        endforeach()
+        unset(_dl_consumer)
+    endif()
     # AUDIT (2026-06-26): the model bytes share MorePhiFonts' BinaryData
     # namespace, which the UI references (fonts), so the lookup tables are
     # retained. But the model's DATA arrays could still be stripped if not
