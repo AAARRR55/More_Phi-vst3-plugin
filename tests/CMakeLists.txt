@@ -98,6 +98,13 @@ add_executable(MorePhiTests
     Unit/TestOzoneParameterMapDiscovery.cpp
     # Per-parameter write-source stamp + write-precedence conflict counter (E2).
     Unit/TestParameterBridgeWriteSource.cpp
+    # Hosted-parameter transition guard (C7): notifyHostedParameterChanged
+    # discards a straddling capture window + flushes the ring.
+    Unit/TestSonicMasterTransitionGuard.cpp
+    # C1 empirical proof: exercises the PRODUCTION loadModel(model, contract)
+    # path against the real staged ONNX model (the no-contract live test skips
+    # the parser, which is exactly how C1 hid). Opt-in: ONNX + staged model.
+    Unit/TestSonicMasterRunnerLiveContract.cpp
     Unit/TestAuditFixes.cpp
     Unit/TestAudioCaptureRing.cpp
     Unit/TestNeuralPlanVerification.cpp
