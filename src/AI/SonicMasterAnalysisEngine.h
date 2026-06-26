@@ -119,6 +119,24 @@ struct SonicMasterAnalysisEngineConfig
     std::size_t captureRingFrames = 8u * 48000u;
 };
 
+// DIAGNOSTIC (2026-06-26): structured failure reason for requestDecisionNow. The
+// on-demand path (sonicmaster_decision / mastering.neural_apply) previously got a
+// bare bool and the MCP handler collapsed every false into one opaque string,
+// forcing the assistant to confabulate a cause ("no audio captured", "inference
+// server down"). This enum lets the tool report the ACTUAL gate that tripped so
+// the assistant can relay a truthful, actionable reason to the user. Order mirrors
+// the order the gates are checked in requestDecisionNow.
+enum class DecisionFailure : std::uint8_t
+{
+    None,               // success (requestDecisionNow returned true)
+    NotPrepared,        // ring is null, source is null, or !isAvailable()
+    InsufficientAudio,  // ring captured < hostFrames (the ~6s window isn't full yet)
+    SilentInput,        // captured peak < 1e-15f (silence or all-NaN); model input undefined
+    InferenceRejected,  // source_->infer() returned false (ONNX Run threw or returned no output)
+    DecodeFailed,       // decodeSonicMasterDecision could not parse the model output
+    SafetyRejected      // NeuralMasteringSafetyPolicy verdict was not accepted
+};
+
 class SonicMasterAnalysisEngine
 {
 public:
@@ -245,6 +263,23 @@ public:
     // boolean rather than the enum.
     [[nodiscard]] bool lastApplyReachedAudioPath() const noexcept { return lastApplyReachedAudioPath_.load(std::memory_order_acquire); }
 
+    // CAPTURE-TELEMETRY (2026-06-26): live capture-ring state for diagnostics.
+    // Exposed so sonicmaster_decision can report WHY inference was skipped —
+    // "no audio captured" vs "ring not allocated" vs "prepared=false" — instead
+    // of the generic catch-all that left the assistant guessing. All reads are
+    // atomic acquire-loads (safe from any thread); the values are advisory and
+    // may change between read and use.
+    struct CaptureDiagnostics
+    {
+        bool          prepared       = false;  // prepare() called, release() not
+        bool          active         = false;  // preview toggle (gates background apply, NOT capture)
+        bool          ringAllocated  = false;  // the AudioCaptureRing exists
+        std::uint64_t capturedFrames = 0;      // frames currently in the ring (0..capacity)
+        std::size_t   requiredFrames = 0;      // host-rate window the engine needs (captureL_.size())
+        std::size_t   ringCapacity   = 0;      // ring capacity in frames
+    };
+    [[nodiscard]] CaptureDiagnostics getCaptureDiagnostics() const noexcept;
+
     // Test hook: run one analysis cycle synchronously on the calling thread
     // (does NOT spawn the background thread). Used by the unit tests to avoid
     // real thread timing. Forces active_=true for the call.
@@ -261,10 +296,17 @@ public:
     /// `targetLufs` is the mastering target fed to the model (default -14).
     /// On success, `outPlan` is the decoded, safety-clamped plan and
     /// `outRawDecision` is the model's raw 44-float vector (for telemetry).
+    ///
+    /// `outFailure` (DIAGNOSTIC, 2026-06-26): optional out-param receiving the
+    /// structured reason the call returned false (DecisionFailure::None on
+    /// success). Callers that surface the result to a user/LLM should pass this
+    /// so they can report the ACTUAL gate that tripped instead of guessing.
+    /// Defaults to nullptr for source compatibility with existing call sites.
     bool requestDecisionNow(float targetLufs,
                             ValidatedNeuralMasteringPlan& outPlan,
                             float* outRawDecision,
-                            std::size_t outRawCapacity) noexcept;
+                            std::size_t outRawCapacity,
+                            DecisionFailure* outFailure = nullptr) noexcept;
 
     /// AUDIT-FIX-1: genuine classical measurements of the live input, pulled
     /// from AutoMasteringEngine's already-running BS.1770-4 / true-peak /

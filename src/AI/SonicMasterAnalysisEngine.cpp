@@ -176,6 +176,27 @@ bool SonicMasterAnalysisEngine::isAvailable() const noexcept
     return source_ != nullptr && source_->isAvailable();
 }
 
+SonicMasterAnalysisEngine::CaptureDiagnostics
+SonicMasterAnalysisEngine::getCaptureDiagnostics() const noexcept
+{
+    // CAPTURE-TELEMETRY: all reads are atomic/const — safe from any thread.
+    // The ring pointer is acquire-loaded so we see a fully-constructed object
+    // or nullptr (never torn); capturedFrames() is itself an atomic acquire-load
+    // inside AudioCaptureRing.
+    CaptureDiagnostics d;
+    d.prepared = prepared_.load(std::memory_order_acquire);
+    d.active   = active_.load(std::memory_order_relaxed);
+    auto* ring = ring_.load(std::memory_order_acquire);
+    d.ringAllocated = (ring != nullptr);
+    if (ring != nullptr)
+    {
+        d.capturedFrames = ring->capturedFrames();
+        d.ringCapacity   = ring->capacity();
+    }
+    d.requiredFrames = captureL_.size();  // host-rate window sized in prepare()
+    return d;
+}
+
 void SonicMasterAnalysisEngine::ensureRing() noexcept
 {
     // Idempotent — only allocates on first call when ring is nullptr.
@@ -618,17 +639,28 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
 bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
                                                     ValidatedNeuralMasteringPlan& outPlan,
                                                     float* outRawDecision,
-                                                    std::size_t outRawCapacity) noexcept
+                                                    std::size_t outRawCapacity,
+                                                    DecisionFailure* outFailure) noexcept
 {
     // On-demand path for the AI assistant's sonicmaster_decision MCP tool.
     // Mirrors runCycle() but: (a) takes a target-LUFS argument, (b) does NOT
     // require active_ to be set, (c) does NOT apply the plan or touch status_,
     // (d) returns the decoded plan + raw decision for the caller to act on.
+    //
+    // DIAGNOSTIC (2026-06-26): every failure return now stamps *outFailure with
+    // the structured reason, so the MCP tool can surface the ACTUAL gate that
+    // tripped instead of the opaque "Inference failed or model unavailable" that
+    // forced the assistant to confabulate causes. See DecisionFailure enum.
+    if (outFailure != nullptr) *outFailure = DecisionFailure::None;
+
     ensureRing();  // PERF-MEM: lazy ring allocation
     // C-3 FIX (audit): acquire-load the atomic ring pointer.
     auto* ring = ring_.load(std::memory_order_acquire);
     if (ring == nullptr || source_ == nullptr || !isAvailable())
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::NotPrepared;
         return false;
+    }
 
     // AUDIT-1: see runCycle() — serialize against the analysis thread's scratch use.
     std::lock_guard<std::mutex> inferLock(inferMutex_);
@@ -636,7 +668,10 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     const std::size_t hostFrames = captureL_.size();
     const std::size_t got = ring->readNewest(hostFrames, captureL_.data(), captureR_.data());
     if (got < hostFrames)
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::InsufficientAudio;
         return false;  // not enough audio captured yet
+    }
 
     // FIX-1.3: stamp the capture time for the staleness guard, so an on-demand
     // plan from the MCP tool cannot be applied hours later against fresh audio.
@@ -657,7 +692,10 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
                                 peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
     if (!std::isfinite(peak) || peak < 1e-15f)
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::SilentInput;
         return false;
+    }
     // AUDIT-FIX (A2): use the named contract constant (was a bare 0.891f literal).
     const float gain = kSonicMasterPeakTargetLinear / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
@@ -671,7 +709,10 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     source_->setTargetLufs(targetLufs);
 
     if (!source_->infer(interleaved_.data(), decision_.data(), decision_.size()))
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::InferenceRejected;
         return false;
+    }
 
     if (outRawDecision != nullptr && outRawCapacity >= kSonicMasterDecisionWidth)
         std::copy_n(decision_.data(), kSonicMasterDecisionWidth, outRawDecision);
@@ -685,7 +726,10 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     // is nudged by the closed loop (Stage D).
     if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
                                    std::isfinite(targetLufs) ? targetLufs : kUseModelTargetLufs))
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::DecodeFailed;
         return false;
+    }
     plan.sourcePlanId = nextPlanId_++;
     plan.capturedAtSteadyClockNs = captureTimeNs_;
 
@@ -705,7 +749,10 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
                                                runtime.currentFrame);
     const auto verdict = decisionPolicy.validate(candidate, runtime);
     if (!verdict.accepted)
+    {
+        if (outFailure != nullptr) *outFailure = DecisionFailure::SafetyRejected;
         return false;
+    }
 
     outPlan = verdict.plan;
     return true;

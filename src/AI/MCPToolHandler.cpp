@@ -92,6 +92,129 @@ static json parseToolResponse(const juce::String& response)
     }
 }
 
+// DIAGNOSTIC (2026-06-26): helpers that turn the SonicMaster engine's structured
+// failure / status signals into JSON for the sonicmaster_decision and
+// mastering.neural_apply error paths. Previously every requestDecisionNow false
+// collapsed into one opaque string and the assistant had to confabulate a cause;
+// these let the tool report the ACTUAL gate that tripped. Used on both the
+// success path (echoed for parity) and the failure path of the decision tool.
+static const char* sonicmasterFailureState(more_phi::DecisionFailure f) noexcept
+{
+    switch (f)
+    {
+        case more_phi::DecisionFailure::None:               return "ok";
+        case more_phi::DecisionFailure::NotPrepared:        return "not_prepared";
+        case more_phi::DecisionFailure::InsufficientAudio:  return "insufficient_audio";
+        case more_phi::DecisionFailure::SilentInput:        return "silent_input";
+        case more_phi::DecisionFailure::InferenceRejected:  return "inference_rejected";
+        case more_phi::DecisionFailure::DecodeFailed:       return "decode_failed";
+        case more_phi::DecisionFailure::SafetyRejected:     return "safety_rejected";
+    }
+    return "unknown";
+}
+
+static const char* sonicmasterStatusString(more_phi::SonicMasterAnalysisEngine::Status s) noexcept
+{
+    using S = more_phi::SonicMasterAnalysisEngine::Status;
+    switch (s)
+    {
+        case S::Disabled:           return "disabled";
+        case S::CollectingAudio:    return "collecting_audio";
+        case S::Applied:            return "applied";
+        case S::AppliedNoAudioPath: return "applied_no_audio_path";
+        case S::AppliedPartial:     return "applied_partial";
+        case S::HeldLowConfidence:  return "held_low_confidence";
+        case S::ErrorAutoDisabled:  return "error_auto_disabled";
+    }
+    return "unknown";
+}
+
+// Build the live-measurements JSON block (genuine BS.1770-4 / true-peak / spectrum
+// telemetry). Factored so the FAILURE path can include it too — its
+// lufs_integrated / true_peak_dbtp immediately disambiguate "audio is playing and
+// is loud" from "no signal is reaching the plugin," which is exactly the
+// distinction the assistant was guessing at when it said "no fresh audio captured."
+static json sonicmasterMeasurementsJson(const more_phi::SonicMasterMeasurementSnapshot& m)
+{
+    json meas;
+    meas["valid"]            = m.valid;
+    meas["source"]           = "more_phi_auto_mastering_engine_live_meters";
+    meas["loudness_method"]  = "ITU-R_BS1770-4_gated_K_weighting";
+    meas["true_peak_method"] = "ITU-R_BS1770-4_4x_polyphase_oversampled";
+    if (m.valid)
+    {
+        meas["lufs_integrated"]      = m.lufsIntegrated;
+        meas["lufs_short_term"]      = m.lufsShortTerm;
+        meas["lufs_momentary"]       = m.lufsMomentary;
+        meas["lra"]                  = m.lra;
+        meas["true_peak_dbtp"]       = m.truePeakDbtp;
+        meas["spectral_centroid_hz"] = m.spectralCentroidHz;
+        meas["spectral_tilt"]        = m.spectralTilt;
+        meas["stereo_width"]         = m.stereoWidth;
+        meas["correlation_mid"]      = m.correlationMid;
+        meas["thd_percent"]          = m.thdPercent;
+        meas["crest_factor_program"] = m.crestFactorProgram;
+        meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
+    }
+    return meas;
+}
+
+static json sonicmasterClosedLoopJson(const more_phi::SonicMasterAnalysisEngine::ClosedLoopState& cl)
+{
+    json clj;
+    clj["feedback_active"]          = cl.feedbackActive;
+    clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
+    clj["last_measured_lufs"]       = cl.lastMeasuredLufs;
+    clj["last_lufs_error"]          = cl.lastLufsError;  // + = too quiet
+    clj["next_target_lufs"]         = cl.nextTargetLufs;
+    clj["semantics"] = "closed_loop_lufs_servo_on_background_cycle";
+    return clj;
+}
+
+// Human-readable, actionable error string for the failure path. Combines the
+// structured failure reason with the timeout flag and capture diagnostics so the
+// assistant can relay a truthful next step instead of inventing one. The capture
+// percentage is taken against requiredFrames (the ~6s window), not the ring
+// capacity (which is 8s and wraps) — that's the number the user cares about.
+static std::string sonicmasterFailureMessage(more_phi::DecisionFailure f, bool timedOut,
+                                             const more_phi::SonicMasterAnalysisEngine::CaptureDiagnostics& cd)
+{
+    if (timedOut)
+        return "Inference did not complete within 5.0 s. The analysis thread may "
+               "hold the inference lock (preview cycle running), or the model is "
+               "overloaded. Retry; if it persists, disable the Neural Master preview "
+               "toggle so the background cycle stops contending for the lock.";
+    const auto req = cd.requiredFrames > 0 ? cd.requiredFrames : std::size_t { 1 };
+    const int pct = static_cast<int>(
+        std::min<std::uint64_t>(cd.capturedFrames, req) * 100.0 / static_cast<double>(req) + 0.5);
+    switch (f)
+    {
+        case more_phi::DecisionFailure::NotPrepared:
+            return "The SonicMaster ONNX model is not loaded in-process (ring/source "
+                   "unavailable). Rebuild with MORE_PHI_ENABLE_ONNX=ON.";
+        case more_phi::DecisionFailure::InsufficientAudio:
+            return "Captured " + std::to_string(pct) + "% of the ~6 s window needed "
+                   "for inference. Keep playback running continuously and retry in a "
+                   "few seconds — do NOT restart playback.";
+        case more_phi::DecisionFailure::SilentInput:
+            return "The captured audio is effectively silent (peak < 1e-15). Play "
+                   "actual program material; the model cannot analyse silence.";
+        case more_phi::DecisionFailure::InferenceRejected:
+            return "The ONNX model rejected the input (Run threw or returned no "
+                   "output). See last_inference_ms and engine_status; retry, and if "
+                   "it persists the embedded model may be corrupt.";
+        case more_phi::DecisionFailure::DecodeFailed:
+            return "The model produced output but it could not be decoded into a "
+                   "valid mastering plan (shape/contract mismatch).";
+        case more_phi::DecisionFailure::SafetyRejected:
+            return "The decoded plan was rejected by the safety policy (confidence "
+                   "or sanity bounds). No plan was applied.";
+        case more_phi::DecisionFailure::None:
+            return "ok";
+    }
+    return "Unknown failure.";
+}
+
 static juce::var jsonToJuceVar(const json& value)
 {
     if (value.is_null())
@@ -6065,13 +6188,18 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         return toJString(err);
     }
 
-    ValidatedNeuralMasteringPlan plan {};
+    ValidatedNeuralMasterPlan plan {};
     std::array<float, more_phi::kSonicMasterDecisionWidth> raw {};
     bool inferenceOk = false;
     bool timedOut = false;
+    // DIAGNOSTIC (2026-06-26): capture the structured failure reason so the error
+    // path can report WHICH gate tripped (silent input vs inference rejected vs
+    // safety held vs insufficient audio) instead of the opaque catch-all that
+    // forced the assistant to confabulate "no audio captured" / "server down."
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
     {
         auto future = std::async(std::launch::async, [&]() {
-            return engine.requestDecisionNow(targetLufs, plan, raw.data(), raw.size());
+            return engine.requestDecisionNow(targetLufs, plan, raw.data(), raw.size(), &failure);
         });
         if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
             inferenceOk = future.get();
@@ -6080,13 +6208,52 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     }
     if (!inferenceOk)
     {
+        const auto cd = engine.getCaptureDiagnostics();
         json err;
         err["success"] = false;
         err["available"] = engine.isAvailable();
-        if (timedOut)
-            err["error"] = "Inference request timed out after 5.0 seconds. The model may be hung or overloaded; try again.";
+        // DIAGNOSTIC: machine-readable state + the actual failure reason. Clients
+        // (the assistant) should branch on `state`/`failure_reason`, not parse
+        // the `error` prose. `timed_out` is its own boolean because a timeout
+        // masks the failure reason (the async task was abandoned before returning).
+        err["timed_out"]      = timedOut;
+        err["state"]          = timedOut ? "timeout" : sonicmasterFailureState(failure);
+        err["failure_reason"] = sonicmasterFailureState(failure);
+        err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
+        err["error"]          = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
+                                                          timedOut, cd);
+        // last_inference_ms disambiguates "model hung" (large value) from "model
+        // fast but rejected" (small value, failure_reason=inference_rejected).
+        err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        // CAPTURE-TELEMETRY (2026-06-26): surface the live capture-ring state so
+        // the assistant can report WHY inference was skipped instead of guessing.
+        // The most common cause is capturedFrames < requiredFrames (the ring
+        // hasn't filled a full ~6 s window), but ringAllocated=false or
+        // prepared=false reveal infrastructure failures the generic error hid.
+        json cap;
+        cap["prepared"]         = cd.prepared;
+        cap["active"]           = cd.active;
+        cap["ring_allocated"]   = cd.ringAllocated;
+        cap["captured_frames"]  = cd.capturedFrames;
+        cap["required_frames"]  = cd.requiredFrames;
+        cap["ring_capacity"]    = cd.ringCapacity;
+        // Human-readable hint derived from the actual state.
+        if (!cd.prepared)
+            cap["hint"] = "engine not prepared (prepareToPlay did not run).";
+        else if (!cd.ringAllocated)
+            cap["hint"] = "capture ring is not allocated.";
+        else if (cd.requiredFrames > 0 && cd.capturedFrames < cd.requiredFrames)
+            cap["hint"] = "not enough audio captured yet — play continuous audio for ~"
+                        + std::to_string(static_cast<int>(cd.requiredFrames / 48000.0)) + " s.";
         else
-            err["error"] = "Inference failed or model unavailable.";
+            cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
+        err["capture_diagnostics"] = cap;
+        // Include live measurements on the FAILURE path too: a valid
+        // lufs_integrated/true_peak_dbtp here proves audio IS reaching the plugin
+        // (rules out the "no audio captured" confabulation), while invalid +
+        // silent capture confirms it. This is the signal the assistant was missing.
+        err["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+        err["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
         return toJString(err);
     }
 
