@@ -68,6 +68,12 @@ public:
     // Default impl is a no-op so existing stubs/test sources don't need to
     // override it.
     virtual void setTargetLufs(float /*lufs*/) noexcept {}
+    // DIAG (2026-06-26): the last error message from infer() (empty if the last
+    // run succeeded). Lets the MCP failure response report the real ORT error
+    // instead of swallowing it. Default returns empty (stubs/tests).
+    [[nodiscard]] virtual std::string lastInferenceError() const noexcept { return {}; }
+    [[nodiscard]] virtual std::uint64_t inferenceRunCount() const noexcept { return 0; }
+    [[nodiscard]] virtual std::uint64_t inferenceFailCount() const noexcept { return 0; }
 };
 
 // Adapter that turns SonicMasterDecisionRunner into an ISonicMasterInferenceSource.
@@ -80,6 +86,12 @@ public:
     bool infer(const float* stereoInterleaved, float* outDecision,
                std::size_t outCapacity) noexcept override
     { return runner_.runDecision(stereoInterleaved, outDecision, outCapacity); }
+    [[nodiscard]] std::string lastInferenceError() const noexcept override
+    { return runner_.getLastRunError(); }
+    [[nodiscard]] std::uint64_t inferenceRunCount() const noexcept override
+    { return runner_.getRunCount(); }
+    [[nodiscard]] std::uint64_t inferenceFailCount() const noexcept override
+    { return runner_.getFailCount(); }
 private:
     SonicMasterDecisionRunner& runner_;
 };
@@ -279,6 +291,21 @@ public:
         std::size_t   ringCapacity   = 0;      // ring capacity in frames
     };
     [[nodiscard]] CaptureDiagnostics getCaptureDiagnostics() const noexcept;
+
+    // DIAG (2026-06-26): pull the last inference error through the source
+    // interface so sonicmaster_decision can report the real ORT exception.
+    [[nodiscard]] std::string lastInferenceError() const noexcept
+    {
+        return source_ != nullptr ? source_->lastInferenceError() : std::string{};
+    }
+    [[nodiscard]] std::uint64_t inferenceRunCount() const noexcept
+    {
+        return source_ != nullptr ? source_->inferenceRunCount() : 0;
+    }
+    [[nodiscard]] std::uint64_t inferenceFailCount() const noexcept
+    {
+        return source_ != nullptr ? source_->inferenceFailCount() : 0;
+    }
 
     // Test hook: run one analysis cycle synchronously on the calling thread
     // (does NOT spawn the background thread). Used by the unit tests to avoid

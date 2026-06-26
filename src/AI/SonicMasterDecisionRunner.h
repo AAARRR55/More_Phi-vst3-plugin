@@ -25,6 +25,8 @@
 #include <string>
 #include <string_view>
 #include <atomic>
+#include <array>
+#include <cstdint>
 
 namespace more_phi {
 
@@ -137,12 +139,38 @@ public:
         maxInferenceMs_.store(0.0f, std::memory_order_relaxed);
     }
 
+    // DIAG (2026-06-26): the last exception message from session->Run() (empty
+    // if the last run succeeded). ORT failures are intermittent in production
+    // and the catch(...) in runDecision swallowed the reason entirely, leaving
+    // only a false return. This surfaces the real ORT error string so the MCP
+    // failure response can report it instead of "model unavailable." Capped at
+    // 256 chars (no heap — a fixed buffer) so the audio/analysis threads never
+    // allocate. Read from any thread (relaxed); advisory.
+    [[nodiscard]] std::string getLastRunError() const noexcept
+    {
+        return std::string { lastRunError_.data(), errorLen_.load(std::memory_order_relaxed) };
+    }
+    [[nodiscard]] std::uint64_t getRunCount() const noexcept { return runCount_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t getFailCount() const noexcept { return failCount_.load(std::memory_order_relaxed); }
+
 private:
     std::unique_ptr<SonicMasterSessionHandle> session_;
     bool available_ = false;
 
     std::atomic<float> lastInferenceMs_{ 0.0f };
     std::atomic<float> maxInferenceMs_{ 0.0f };
+
+    // DIAG: last ORT exception message (truncated). Fixed buffer so writes from
+    // the analysis thread never allocate.
+    static constexpr std::size_t kErrorBufLen = 256;
+    std::array<char, kErrorBufLen> lastRunError_ {};
+    std::atomic<std::size_t> errorLen_ { 0 };
+    std::atomic<std::uint64_t> runCount_  { 0 };
+    std::atomic<std::uint64_t> failCount_ { 0 };
+
+    // DIAG helper: copies msg into lastRunError_ (truncated, null-terminated).
+    // noexcept + fixed buffer — safe from the analysis thread.
+    void recordError(const char* msg) noexcept;
 };
 
 } // namespace more_phi

@@ -224,13 +224,44 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
 
         const float* outData = outputs[0].GetTensorData<float>();
         std::copy_n(outData, kSonicMasterDecisionWidth, outDecision);
+
+        // DIAG (2026-06-26): clear the error + bump counters on success so the
+        // caller can distinguish "never failed" from "last run failed."
+        errorLen_.store(0, std::memory_order_relaxed);
+        runCount_.fetch_add(1, std::memory_order_relaxed);
         return true;
+    }
+    catch (const Ort::Exception& e)
+    {
+        // DIAG: capture the real ORT error. Truncated to the fixed buffer so the
+        // analysis thread never allocates.
+        recordError(e.what());
+        failCount_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    catch (const std::exception& e)
+    {
+        recordError(e.what());
+        failCount_.fetch_add(1, std::memory_order_relaxed);
+        return false;
     }
     catch (...)
     {
+        recordError("unknown exception during ORT session->Run()");
+        failCount_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 #endif
+}
+
+void SonicMasterDecisionRunner::recordError(const char* msg) noexcept
+{
+    if (msg == nullptr) msg = "(null)";
+    std::size_t n = 0;
+    for (; n < kErrorBufLen - 1 && msg[n] != '\0'; ++n)
+        lastRunError_[n] = msg[n];
+    lastRunError_[n] = '\0';
+    errorLen_.store(n, std::memory_order_relaxed);
 }
 
 // ── AUDIT-FIX (A2): contract parsing ─────────────────────────────────────────

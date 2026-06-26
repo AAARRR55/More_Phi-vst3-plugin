@@ -6188,7 +6188,7 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         return toJString(err);
     }
 
-    ValidatedNeuralMasterPlan plan {};
+    ValidatedNeuralMasteringPlan plan {};
     std::array<float, more_phi::kSonicMasterDecisionWidth> raw {};
     bool inferenceOk = false;
     bool timedOut = false;
@@ -6248,6 +6248,14 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         else
             cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
         err["capture_diagnostics"] = cap;
+        // DIAG (2026-06-26): surface the real ORT exception + run/fail counters.
+        // The catch(...) in runDecision previously swallowed the reason entirely;
+        // these fields turn "inference failed" into an actionable message.
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        err["inference_diagnostics"] = infer;
         // Include live measurements on the FAILURE path too: a valid
         // lufs_integrated/true_peak_dbtp here proves audio IS reaching the plugin
         // (rules out the "no audio captured" confabulation), while invalid +
@@ -6480,47 +6488,15 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     // (K-weighting, gated integration, 4x polyphase ISP), distinct from the
     // model ESTIMATE which is peak-normalized and target-dependent. The assistant
     // should report both, clearly labeled, so it never presents the model's
-    // target_lufs as a measurement of the input audio.
-    {
-        const auto m = engine.getLiveMeasurements();
-        json meas;
-        meas["valid"]               = m.valid;
-        meas["source"]              = "more_phi_auto_mastering_engine_live_meters";
-        meas["loudness_method"]     = "ITU-R_BS1770-4_gated_K_weighting";
-        meas["true_peak_method"]    = "ITU-R_BS1770-4_4x_polyphase_oversampled";
-        if (m.valid)
-        {
-            meas["lufs_integrated"]     = m.lufsIntegrated;
-            meas["lufs_short_term"]     = m.lufsShortTerm;
-            meas["lufs_momentary"]      = m.lufsMomentary;
-            meas["lra"]                 = m.lra;
-            meas["true_peak_dbtp"]      = m.truePeakDbtp;
-            meas["spectral_centroid_hz"] = m.spectralCentroidHz;
-            meas["spectral_tilt"]       = m.spectralTilt;
-            meas["stereo_width"]        = m.stereoWidth;
-            meas["correlation_mid"]     = m.correlationMid;
-            // Metrics/AUDIT: previously-blind-spot metrics now computed live.
-            meas["thd_percent"]         = m.thdPercent;
-            meas["crest_factor_program"]= m.crestFactorProgram;
-            meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
-        }
-        result["live_measurements"] = meas;
-    }
+    // target_lufs as a measurement of the input audio. Factored into
+    // sonicmasterMeasurementsJson() so the failure path emits the same shape.
+    result["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
 
     // Stage E (2026-06-26): closed-loop state so the assistant can report
     // convergence ("applied -11.2 LUFS, measured -11.8, correcting...") and know
     // whether the always-on cycle is actively correcting toward the target.
-    {
-        const auto cl = engine.getClosedLoopState();
-        json clj;
-        clj["feedback_active"]        = cl.feedbackActive;
-        clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
-        clj["last_measured_lufs"]     = cl.lastMeasuredLufs;
-        clj["last_lufs_error"]        = cl.lastLufsError;  // + = too quiet
-        clj["next_target_lufs"]       = cl.nextTargetLufs;
-        clj["semantics"] = "closed_loop_lufs_servo_on_background_cycle";
-        result["closed_loop_state"] = clj;
-    }
+    // Factored into sonicmasterClosedLoopJson() so the failure path matches.
+    result["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
 
     result["warnings"] = json::array({
         "decision_contains_raw_model_telemetry_not_applied_parameters",
@@ -6614,9 +6590,13 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     ValidatedNeuralMasteringPlan plan {};
     bool inferenceOk = false;
     bool timedOut = false;
+    // DIAGNOSTIC (2026-06-26): same structured failure reason as sonicmaster_decision
+    // — the commit door was just as opaque ("Inference failed (model returned no
+    // decision)") and the assistant would confabulate identically here.
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
     {
         auto future = std::async(std::launch::async, [&]() {
-            return engine.requestDecisionNow(targetLufs, plan, nullptr, 0);
+            return engine.requestDecisionNow(targetLufs, plan, nullptr, 0, &failure);
         });
         if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
             inferenceOk = future.get();
@@ -6625,14 +6605,39 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     }
     if (!inferenceOk)
     {
+        const auto cd = engine.getCaptureDiagnostics();
         json err;
         err["success"] = false;
         err["available"] = true;
         err["applied"] = false;
-        err["state"] = timedOut ? "inference_timeout" : "inference_failed";
-        err["error"] = timedOut
-            ? "Inference request timed out after 5.0 seconds."
-            : "Inference failed (model returned no decision).";
+        err["timed_out"]      = timedOut;
+        err["state"]          = timedOut ? "timeout" : sonicmasterFailureState(failure);
+        err["failure_reason"] = sonicmasterFailureState(failure);
+        err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
+        err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        err["error"] = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
+                                                 timedOut, cd);
+        // Mirror sonicmaster_decision's failure-path diagnostics so callers of the
+        // commit door get the same capture + measurement context.
+        json cap;
+        cap["prepared"]         = cd.prepared;
+        cap["active"]           = cd.active;
+        cap["ring_allocated"]   = cd.ringAllocated;
+        cap["captured_frames"]  = cd.capturedFrames;
+        cap["required_frames"]  = cd.requiredFrames;
+        cap["ring_capacity"]    = cd.ringCapacity;
+        if (!cd.prepared)
+            cap["hint"] = "engine not prepared (prepareToPlay did not run).";
+        else if (!cd.ringAllocated)
+            cap["hint"] = "capture ring is not allocated.";
+        else if (cd.requiredFrames > 0 && cd.capturedFrames < cd.requiredFrames)
+            cap["hint"] = "not enough audio captured yet — play continuous audio for ~"
+                        + std::to_string(static_cast<int>(cd.requiredFrames / 48000.0)) + " s.";
+        else
+            cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
+        err["capture_diagnostics"] = cap;
+        err["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+        err["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
         return toJString(err);
     }
 
@@ -6669,33 +6674,13 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     }
 
     // Fold in the live measurements so the assistant can read achieved LUFS for
-    // the closed loop (Stage D) without a second call.
-    {
-        const auto m = engine.getLiveMeasurements();
-        json meas;
-        meas["valid"] = m.valid;
-        if (m.valid)
-        {
-            meas["lufs_integrated"] = m.lufsIntegrated;
-            meas["lufs_short_term"] = m.lufsShortTerm;
-            meas["true_peak_dbtp"] = m.truePeakDbtp;
-            meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
-        }
-        result["live_measurements"] = meas;
-    }
+    // the closed loop (Stage D) without a second call. Uses the shared helper so
+    // the shape matches sonicmaster_decision's success AND failure paths.
+    result["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
 
     // Stage E: closed-loop state (the one-click apply is a single shot, but the
     // background cycle's loop state is still useful context for the assistant).
-    {
-        const auto cl = engine.getClosedLoopState();
-        json clj;
-        clj["feedback_active"]          = cl.feedbackActive;
-        clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
-        clj["last_measured_lufs"]       = cl.lastMeasuredLufs;
-        clj["last_lufs_error"]          = cl.lastLufsError;
-        clj["next_target_lufs"]         = cl.nextTargetLufs;
-        result["closed_loop_state"] = clj;
-    }
+    result["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
 
     if (!applied)
         result["error"] = "The decision was decoded but applyValidatedPlan wrote zero "
