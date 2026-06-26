@@ -434,7 +434,9 @@ TEST_CASE("AnalysisEngine capture() is safe before ring allocation and under con
     eng.prepare(48000.0, 512);
 
     // Invariant 1: capture() with no ring allocated yet must be a safe no-op.
-    // (active_ is false and ring_ is nullptr; either gate is sufficient.)
+    // (ring_ is nullptr — the only gate now that capture is decoupled from
+    // active_ per CAPTURE-DECOUPLE 2026-06-26. active_ being false no longer
+    // blocks capture; the ring being null does.)
     std::vector<float> silence(512, 1e-4f);
     eng.capture(silence.data(), silence.data(), 512);  // must not crash
     CHECK(true);  // reaching here is the assertion

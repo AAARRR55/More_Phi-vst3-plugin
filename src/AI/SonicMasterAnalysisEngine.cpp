@@ -284,8 +284,18 @@ void SonicMasterAnalysisEngine::release() noexcept
 void SonicMasterAnalysisEngine::capture(const float* left, const float* right,
                                         std::size_t n) noexcept
 {
-    if (!active_.load(std::memory_order_relaxed)
-        || !prepared_.load(std::memory_order_acquire)
+    // CAPTURE-DECOUPLE (2026-06-26): capture is NO LONGER gated by active_.
+    // Previously capture() bailed when the SonicMaster preview toggle was off
+    // (its default), so the ring never filled and the on-demand path
+    // (requestDecisionNow, called by sonicmaster_decision / mastering.neural_apply)
+    // always failed with "not enough audio captured yet" — even though the model
+    // itself was loaded (isAvailable() == true). The assistant then surfaced this
+    // as "Inference failed or model unavailable" and the LLM hallucinated an
+    // inference-server story. active_ now gates ONLY the background auto-apply
+    // cycle; capture runs whenever the engine is prepared so on-demand inference
+    // works the moment the assistant calls it. write() is a tight lock-free
+    // interleaved memcpy (~2 stores/frame, no allocation) — negligible cost.
+    if (!prepared_.load(std::memory_order_acquire)
         || left == nullptr || right == nullptr)
         return;
     // C-3 FIX (audit): acquire-load the published ring pointer. Paired with
