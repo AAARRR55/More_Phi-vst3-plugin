@@ -1036,10 +1036,75 @@ TEST_CASE("sonicmaster_decision separates raw model telemetry from projected eng
     REQUIRE(response["closed_loop_state"].contains("next_target_lufs"));
 }
 
-// Stage B (2026-06-26): the one-click neural Master Assistant door. With a bare
-// processor (no hosted plugin), it must report state="no_hosted_plugin" and NOT
-// claim to apply. This pins the honest state machine so the assistant never
-// reports a phantom apply when the decision has nowhere to land.
+// REGRESSION (CAPTURE-DECOUPLE 2026-06-26): the production failure was that
+// sonicmaster_decision returned "Inference failed or model unavailable." every
+// time, even after the user played audio for well over 6 s. Root cause had two
+// compounding gates on capture(): (1) it bailed when active_ (the preview
+// toggle) was off — its default, and (2) the capture ring was lazily allocated
+// only on first setActive(true)/requestDecisionNow, so during playback the ring
+// was null and capture() was a no-op. The assistant then called
+// requestDecisionNow -> ensureRing() on an empty ring -> "no fresh audio."
+//
+// This test reproduces the EXACT production scenario via the full MCP path
+// (MCPToolHandler::handle, not the engine directly): preview OFF, the ring
+// filled only by feeding audio (no setActive), then sonicmaster_decision must
+// return success=true. Under the buggy code this returned success=false. It is
+// the headless equivalent of "play 6 s, then ask the assistant to analyze."
+TEST_CASE("sonicmaster_decision succeeds with preview OFF after playback (CAPTURE-DECOUPLE)",
+          "[mcp][sonicmaster][regression]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+
+    // PRODUCTION SCENARIO: do NOT call setActive(true). The preview toggle stays
+    // off (its default). Every other sonicmaster_decision test calls setActive,
+    // which masked this bug for the entire test history.
+    REQUIRE_FALSE(sonicMaster.isActive());
+
+    // Feed a full ~6 s window of audio (host-rate equivalent of the model
+    // segment), in real block sizes, WITHOUT enabling preview. This is what
+    // the user's playback does. Under the fix, capture() fills the ring.
+    {
+        const auto frames = static_cast<std::size_t>(
+            std::llround(more_phi::kSonicMasterSegmentFrames * 48000.0 / 44100.0)) + 1024;
+        std::vector<float> left(frames, 0.0001f);
+        std::vector<float> right(frames, 0.0001f);
+        constexpr std::size_t kBlock = 512;
+        for (std::size_t offset = 0; offset < frames; offset += kBlock)
+        {
+            const auto count = std::min(kBlock, frames - offset);
+            sonicMaster.capture(left.data() + offset, right.data() + offset, count);
+        }
+    }
+
+    more_phi::InstanceIdentity identity;
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle(
+            "sonicmaster_decision",
+            toVar(nlohmann::json{{"target_lufs", -14.0}}),
+            processor,
+            identity).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    // The headline assertion: the on-demand decision must succeed with preview
+    // off. Under the buggy code this was success=false with the generic
+    // "Inference failed or model unavailable." error that the assistant then
+    // mis-attributed to the inference server.
+    REQUIRE(response["success"].get<bool>());
+    REQUIRE(response["applied"].get<bool>() == false);  // decision-only, not apply
+    REQUIRE(response["raw_model_decision"].is_object());
+    // The stub emits target_lufs=-8.0; decode honors the caller's -14.0 override
+    // (Stage A), so the projected loudness band reflects the requested target.
+    REQUIRE(response["projected_plan"].is_object());
+}
+
 //
 // Calls masteringNeuralApply DIRECTLY (not via handle()) to test the method's
 // state logic in isolation — the dispatch wrapper's approval gate (Manual
