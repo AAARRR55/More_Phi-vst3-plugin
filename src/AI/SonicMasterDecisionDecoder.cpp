@@ -23,7 +23,8 @@ float clamp(float v, float lo, float hi) noexcept
 bool decodeSonicMasterDecision(const float* decision,
                                std::size_t decisionCount,
                                double sampleRate,
-                               ValidatedNeuralMasteringPlan& out) noexcept
+                               ValidatedNeuralMasteringPlan& out,
+                               float callerTargetLufs) noexcept
 {
     if (decision == nullptr
         || decisionCount < kSonicMasterDecisionWidth
@@ -49,7 +50,16 @@ bool decodeSonicMasterDecision(const float* decision,
     //    value=1.33 and the engine silently clamps it back to -8 — the model's
     //    expressed extreme is lost and the round-trip math lies to telemetry.
     {
-        const float targetLufs = clamp(decision[kSonicMasterTargetLufsIdx], -23.0f, -8.0f);
+        // Stage A (2026-06-26): a caller may override the model's loudness
+        // recommendation (e.g. a profile target like Streaming -14 LUFS, or a
+        // closed-loop correction from Stage D). The ONNX graph can't condition
+        // on a target during inference, so this is the decode-side hook that
+        // makes an explicit target actually reach the apply. Default
+        // (kUseModelTargetLufs) honors the model's own recommendation.
+        const bool useCaller = std::isfinite(callerTargetLufs)
+                               && callerTargetLufs != kUseModelTargetLufs;
+        const float modelLufs = clamp(decision[kSonicMasterTargetLufsIdx], -23.0f, -8.0f);
+        const float targetLufs = useCaller ? clamp(callerTargetLufs, -23.0f, -8.0f) : modelLufs;
         const float value = (targetLufs + 14.0f) / 6.0f;
         out.projectedTargets.loudness[0] = value;
         out.projectedTargets.loudness[1] = value;

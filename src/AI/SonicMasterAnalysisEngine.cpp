@@ -601,7 +601,14 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
         std::copy_n(decision_.data(), kSonicMasterDecisionWidth, outRawDecision);
 
     ValidatedNeuralMasteringPlan plan {};
-    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan))
+    // Stage A (2026-06-26): honor the caller's explicit target_lufs at decode
+    // time. The ONNX graph can't condition on a target during inference, so this
+    // decode-side override is what makes an explicit target (profile, manual, or
+    // closed-loop correction) actually reach the apply. requestDecisionNow is the
+    // explicit on-demand path; the background runCycle uses the model default and
+    // is nudged by the closed loop (Stage D).
+    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
+                                   std::isfinite(targetLufs) ? targetLufs : kUseModelTargetLufs))
         return false;
     plan.sourcePlanId = nextPlanId_++;
     plan.capturedAtSteadyClockNs = captureTimeNs_;

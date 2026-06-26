@@ -249,3 +249,46 @@ TEST_CASE("decodeSonicMasterDecision rejects null/bad args",
     CHECK_FALSE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 0.0, plan));
     CHECK_FALSE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth - 1, 48000.0, plan));
 }
+
+// ── Stage A (2026-06-26): caller target_lufs override ─────────────────────────
+// The ONNX graph takes only the waveform (1 input) and cannot condition on a
+// target during inference. So the model's loudness slot is a recommendation,
+// and a caller (profile / manual / closed-loop correction) must be able to
+// override it at decode time. The default (kUseModelTargetLufs) honors the
+// model's own value — "apply the recommendation" semantics.
+TEST_CASE("decodeSonicMasterDecision honors caller target_lufs override (Stage A)",
+          "[SonicMaster][Decoder][StageA]")
+{
+    // Model recommends -14 LUFS (value 0.0).
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[more_phi::kSonicMasterTargetLufsIdx] = -14.0f;
+
+    // Default: use the model's recommendation.
+    {
+        more_phi::ValidatedNeuralMasteringPlan plan {};
+        REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+        CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
+    }
+    // Explicit caller target -11 LUFS overrides: value = (-11+14)/6 = 0.5.
+    {
+        more_phi::ValidatedNeuralMasteringPlan plan {};
+        REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan, -11.0f));
+        REQUIRE(plan.appliedMask.loudness);
+        CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(0.5f, 1e-4f));
+        // Still a target, not a measurement.
+        CHECK(plan.loudnessIsMeasurement == false);
+    }
+    // Caller target is clamped to the engine's [-23,-8] range: -6 -> -8 (value 1.0).
+    {
+        more_phi::ValidatedNeuralMasteringPlan plan {};
+        REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan, -6.0f));
+        CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(1.0f, 1e-4f));
+    }
+    // Sentinel default == not passing it (honors model).
+    {
+        more_phi::ValidatedNeuralMasteringPlan a {}, b {};
+        REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, a));
+        REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, b, more_phi::kUseModelTargetLufs));
+        CHECK_THAT(a.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(b.projectedTargets.loudness[0], 1e-6f));
+    }
+}

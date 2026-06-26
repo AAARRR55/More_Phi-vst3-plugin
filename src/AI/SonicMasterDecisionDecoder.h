@@ -85,10 +85,23 @@ inline constexpr float kSonicMasterDefaultConfidence = 0.85f;
  *
  * On success returns true and fills `out`. Returns false only if `decision` is
  * null or `sampleRate <= 0` (the caller treats false as "skip this cycle").
+ *
+ * Stage A (2026-06-26, Ozone-like apply): an optional @p callerTargetLufs
+ * overrides the model's decoded loudness TARGET. The ONNX graph takes only the
+ * waveform (1 input) and cannot condition on a target during inference, so the
+ * model's loudness slot is a recommendation, not a measurement. When a caller
+ * passes a finite target_lufs (e.g. from a profile like Streaming/CD, or a
+ * closed-loop correction), the decoded loudness[0..2] is recomputed from that
+ * value (same clamp + inverse map as the model path) and the apply honors it.
+ * Pass kUseModelTargetLufs (the default) to use the model's own recommendation
+ * — "apply the recommendation" semantics.
  */
+inline constexpr float kUseModelTargetLufs = -1000.0f; // sentinel: outside any real LUFS range
+
 bool decodeSonicMasterDecision(const float* decision,
                                std::size_t decisionCount,
                                double sampleRate,
-                               ValidatedNeuralMasteringPlan& out) noexcept;
+                               ValidatedNeuralMasteringPlan& out,
+                               float callerTargetLufs = kUseModelTargetLufs) noexcept;
 
 } // namespace more_phi

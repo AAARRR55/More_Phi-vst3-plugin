@@ -192,8 +192,13 @@ TEST_CASE("AnalysisEngine decision-only requests do not advance safety baseline"
     CHECK(second.projected);
     CHECK(std::abs(first.projectedTargets.eq[0] - 0.15f) < 1.0e-5f);
     CHECK(std::abs(second.projectedTargets.eq[0] - 0.15f) < 1.0e-5f);
-    CHECK(std::abs(first.projectedTargets.loudness[0] - 0.10f) < 1.0e-5f);
-    CHECK(std::abs(second.projectedTargets.loudness[0] - 0.10f) < 1.0e-5f);
+    // Stage A (2026-06-26): requestDecisionNow now honors the explicit target_lufs
+    // (-14) at decode time, so loudness value = (-14+14)/6 = 0.0, projected from a
+    // zero baseline = 0.0 (was 0.10 when the target was ignored and the model's -8
+    // drove a +0.10 max-delta step). The safety projection cap (0.10/plan) still
+    // governs, but with a 0.0 delta there's nothing to step.
+    CHECK(std::abs(first.projectedTargets.loudness[0] - 0.0f) < 1.0e-5f);
+    CHECK(std::abs(second.projectedTargets.loudness[0] - 0.0f) < 1.0e-5f);
 
     eng.release();
 }
