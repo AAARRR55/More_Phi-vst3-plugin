@@ -5997,12 +5997,19 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
 
     if (!engine.isAvailable())
     {
+        // Stage C (2026-06-26): the in-process ONNX model is the PRIMARY inference
+        // path (no server needed once built with MORE_PHI_ENABLE_ONNX). The HTTP
+        // server is a fallback. The prior message framed this as a server problem,
+        // which was misleading — if you see this, the plugin build is not
+        // ONNX-enabled (rebuild) OR no source is wired, not 'go start a server.'
         json err;
         err["success"] = false;
         err["available"] = false;
-        err["error"] = "SonicMaster inference server is not reachable. Start it with "
-                       "`python tools/inference_server/server.py --package <package>` "
-                       "(see tools/inference_server/README.md).";
+        err["state"] = "model_unavailable";
+        err["error"] = "The SonicMaster ONNX model is not loaded in-process. Rebuild the "
+                       "plugin with MORE_PHI_ENABLE_ONNX=ON (the primary path; no server "
+                       "needed). The local Python HTTP inference server "
+                       "(tools/inference_server/server.py) is a fallback only.";
         return toJString(err);
     }
 
