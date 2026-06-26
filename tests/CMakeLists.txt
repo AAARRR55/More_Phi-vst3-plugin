@@ -216,22 +216,34 @@ if(MORE_PHI_HAS_ONNX)
 
     set(MOREPHI_SONICMASTER_MODEL    "masteringbrain_v2_decision.onnx")
     set(MOREPHI_SONICMASTER_CONTRACT "masteringbrain_v2_contract.json")
-    set(MOREPHI_SONICMASTER_SRC_DIR  "${CMAKE_SOURCE_DIR}/build/sonicmaster")
-    set(MOREPHI_SONICMASTER_DST_DIR  "$<TARGET_FILE_DIR:MorePhiTests>")
+    # AUDIT (C1, 2026-06-26): stage from the canonical models/sonicmaster/ dir
+    # (which carries the FIXED contract, masterbrain_v2_decision.contract.json),
+    # NOT build/sonicmaster/ (a stale export dir from 2026-06-23 that held the
+    # pre-C1 broken 283-byte schema). The build/sonicmaster copy_if_different
+    # was silently overwriting the fix on every build, making loadModel fail at
+    # the contract-parse step (parsed=0). The source contract filename differs
+    # (...decision.contract.json) from the staged name (..._contract.json), so
+    # copy under the renamed target.
+    set(MOREPHI_SONICMASTER_SRC_DIR        "${CMAKE_SOURCE_DIR}/models/sonicmaster")
+    set(MOREPHI_SONICMASTER_SRC_CONTRACT   "${MOREPHI_SONICMASTER_SRC_DIR}/masteringbrain_v2_decision.contract.json")
+    set(MOREPHI_SONICMASTER_DST_DIR        "$<TARGET_FILE_DIR:MorePhiTests>")
     if(EXISTS "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}")
         add_custom_command(TARGET MorePhiTests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}"
                     "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_MODEL}"
-            COMMENT "Staging ${MOREPHI_SONICMASTER_MODEL} next to test exe"
+            COMMENT "Staging ${MOREPHI_SONICMASTER_MODEL} next to test exe (from models/)"
             VERBATIM)
     endif()
-    if(EXISTS "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_CONTRACT}")
+    if(EXISTS "${MOREPHI_SONICMASTER_SRC_CONTRACT}")
         add_custom_command(TARGET MorePhiTests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_CONTRACT}"
+                    "${MOREPHI_SONICMASTER_SRC_CONTRACT}"
                     "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_CONTRACT}"
-            COMMENT "Staging ${MOREPHI_SONICMASTER_CONTRACT} next to test exe"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_CONTRACT}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/masteringbrain_v2_decision.contract.json"
+            COMMENT "Staging fixed ${MOREPHI_SONICMASTER_CONTRACT} next to test exe (from models/)"
             VERBATIM)
     endif()
 endif()

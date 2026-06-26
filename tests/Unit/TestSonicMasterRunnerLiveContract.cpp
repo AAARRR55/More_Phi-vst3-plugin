@@ -32,28 +32,33 @@ namespace {
 bool findStaged(std::string& modelOut, std::string& contractOut)
 {
     using namespace juce;
+    // Probe next to the test EXECUTABLE first (deterministic — the CMake staging
+    // step copies the model + contract to $<TARGET_FILE_DIR:MorePhiTests>), then
+    // fall back to cwd-relative for IDE/manual runs. Earlier this only probed
+    // cwd-relative, which made the test pass/fail depending on the shell's cwd.
+    const File exeDir = File::getSpecialLocation(File::currentApplicationFile).getParentDirectory();
     const File cwd = File::getCurrentWorkingDirectory();
-    const char* const modelCandidates[] = {
+    const char* const modelNames[] = {
         "masteringbrain_v2_decision.onnx",
-        "tests/masteringbrain_v2_decision.onnx",
-        "build/tests/Release/masteringbrain_v2_decision.onnx",
     };
-    const char* const contractCandidates[] = {
+    const char* const contractNames[] = {
         "masteringbrain_v2_contract.json",
-        "tests/masteringbrain_v2_contract.json",
-        "build/tests/Release/masteringbrain_v2_contract.json",
+        "masteringbrain_v2_decision.contract.json",
     };
-    bool gotModel = false, gotContract = false;
-    for (const char* c : modelCandidates)
-    {
-        const File f = File::isAbsolutePath(String(c)) ? File(c) : cwd.getChildFile(c);
-        if (f.existsAsFile()) { modelOut = f.getFullPathName().toStdString(); gotModel = true; break; }
-    }
-    for (const char* c : contractCandidates)
-    {
-        const File f = File::isAbsolutePath(String(c)) ? File(c) : cwd.getChildFile(c);
-        if (f.existsAsFile()) { contractOut = f.getFullPathName().toStdString(); gotContract = true; break; }
-    }
+    auto findIn = [&](const File& dir, const char* const* names, int count, std::string& out) -> bool {
+        for (int i = 0; i < count; ++i)
+        {
+            const File f = dir.getChildFile(String(names[i]));
+            if (f.existsAsFile()) { out = f.getFullPathName().toStdString(); return true; }
+        }
+        return false;
+    };
+    bool gotModel = findIn(exeDir, modelNames, 1, modelOut)
+                 || findIn(cwd, modelNames, 1, modelOut)
+                 || findIn(cwd.getChildFile("tests"), modelNames, 1, modelOut);
+    bool gotContract = findIn(exeDir, contractNames, 2, contractOut)
+                    || findIn(cwd, contractNames, 2, contractOut)
+                    || findIn(cwd.getChildFile("tests"), contractNames, 2, contractOut);
     return gotModel && gotContract;
 }
 } // namespace
