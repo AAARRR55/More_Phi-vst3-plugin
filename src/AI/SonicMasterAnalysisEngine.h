@@ -210,6 +210,37 @@ public:
     void setParamTransitionSettleSeconds(double seconds) noexcept
     { paramSettleSeconds_ = seconds > 0.0 ? seconds : 0.0; }
 
+    // GENRE PRIOR (Stage 1, 2026-06-26): set a genre-derived target LUFS that the
+    // background decode path folds in below the closed-loop feedback but above the
+    // model's own recommendation. Pass kUseModelTargetLufs (the sentinel) to clear.
+    // The ONNX graph can't condition on a target during inference, so this
+    // decode-side override is what makes a genre profile (Streaming/CD/etc.)
+    // actually reach the applied plan. Any thread (atomic); set from the message
+    // thread by AutoMasteringEngine's genre tick. See GenreMasteringProfile.h.
+    void setGenreTargetLufs(float lufs) noexcept
+    { genreTargetLufs_.store(lufs, std::memory_order_relaxed); }
+    [[nodiscard]] float getGenreTargetLufs() const noexcept
+    { return genreTargetLufs_.load(std::memory_order_relaxed); }
+
+    // GENRE PRIOR (Stage 2, Ozone §3.2 tonal-balance matching): select the
+    // MasteringTargetCurve index the decode path blends against the measured
+    // spectrum. Pass -1 to clear (no curve prior). residualBlend in [0,1] scales
+    // the per-band residual correction; 0 disables. The analysis thread reads the
+    // spectrum snapshot via the application engine's analyzer, extracts the 8-band
+    // tonal balance, and passes both to the decoder. Message thread setters.
+    void setGenreCurveIndex(int idx) noexcept
+    {
+        genreCurveIdx_.store(idx, std::memory_order_relaxed);
+    }
+    void setResidualBlend(float blend) noexcept
+    {
+        residualBlend_.store(blend, std::memory_order_relaxed);
+    }
+    [[nodiscard]] int getGenreCurveIndex() const noexcept
+    { return genreCurveIdx_.load(std::memory_order_relaxed); }
+    [[nodiscard]] float getResidualBlend() const noexcept
+    { return residualBlend_.load(std::memory_order_relaxed); }
+
     // Any thread (atomic). When true, capture + cycling run; when false, capture
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
     // PERF-MEM: First activation lazily allocates the rate-proportional capture
@@ -396,6 +427,13 @@ private:
     bool runCycle() noexcept; // returns true if a plan was applied
     void applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept;
 
+    // GENRE PRIOR (Stage 2): builds the EQ prior struct for the decoder from the
+    // current atomics + the live spectrum snapshot (via the application engine's
+    // analyzer). Returns a no-op prior (nullptrs/0) when no curve is selected or
+    // no spectrum is available, so callers can pass it unconditionally. Analysis
+    // thread (called inside runCycle / requestDecisionNow under inferMutex_).
+    GenreEqPrior buildEqPrior_() noexcept;
+
     // PERF-MEM: Lazily allocates the rate-proportional capture ring on first use.
     // Called from setActive(true), requestDecisionNow, and runOneCycleForTest.
     // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
@@ -467,6 +505,23 @@ private:
     float lastAppliedTargetLufs_ = -14.0f; // what the last apply targeted (for error)
     float lastMeasuredLufs_      = 0.0f;   // last achieved LUFS readback
     float lastLufsError_         = 0.0f;   // target - measured (positive = too quiet)
+
+    // GENRE PRIOR (Stage 1): genre-derived target LUFS pushed from the message
+    // thread (AutoMasteringEngine genre tick). kUseModelTargetLufs = no prior.
+    // Relaxed atomic: advisory input to a decode that re-clamps anyway.
+    std::atomic<float> genreTargetLufs_ { kUseModelTargetLufs };
+
+    // GENRE PRIOR (Stage 2): genre curve index into kMasteringTargetCurves (-1 =
+    // none) + residual blend strength [0,1]. Pushed from the message thread;
+    // consumed on the analysis thread during decode. Relaxed atomics.
+    std::atomic<int>   genreCurveIdx_ { -1 };
+    std::atomic<float> residualBlend_ { 0.0f };
+
+    // Measured 8-band tonal balance cache, refreshed each decode by
+    // buildEqPrior_() from the live spectrum snapshot. Owned here so the pointer
+    // handed to the decoder remains valid for the duration of the synchronous
+    // decode call. Analysis thread only (runCycle / requestDecisionNow).
+    std::array<float, kSonicMasterEqGainCount> genreMeasuredBands_ {};
     // AUDIT-IX-8: steady-clock ns of the most recent capture window end. Stamped
     // into each plan so applyRamped can drop stale plans (analysisInterval +
     // inference latency past). Written on the analysis thread under inferMutex_,

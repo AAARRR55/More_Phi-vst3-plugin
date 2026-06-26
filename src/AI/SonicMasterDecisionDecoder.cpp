@@ -1,5 +1,6 @@
 // src/AI/SonicMasterDecisionDecoder.cpp
 #include "AI/SonicMasterDecisionDecoder.h"
+#include "AI/MasteringTargetCurves.h"   // MasteringTargetCurve full def + gainAt
 
 #include <algorithm>
 #include <cmath>
@@ -24,7 +25,8 @@ bool decodeSonicMasterDecision(const float* decision,
                                std::size_t decisionCount,
                                double sampleRate,
                                ValidatedNeuralMasteringPlan& out,
-                               float callerTargetLufs) noexcept
+                               float callerTargetLufs,
+                               GenreEqPrior eqPrior) noexcept
 {
     if (decision == nullptr
         || decisionCount < kSonicMasterDecisionWidth
@@ -34,10 +36,29 @@ bool decodeSonicMasterDecision(const float* decision,
     out = {}; // start neutral
 
     // ── EQ: gains (dB) -> eq[i] = gain / kMaxGainDB, clamped to [-1, 1] ───────
+    // GENRE PRIOR (Stage 2): when a target curve + measured tonal balance are
+    // supplied, blend a bounded residual correction into each band before the
+    // ±12 dB clamp. residual = (targetGainAtFreq − measuredBandDb), pre-clamped
+    // to ±6 dB so one band can't dominate, scaled by residualBlend. Level-
+    // invariant because measuredBandDb is already mean-subtracted (see
+    // TonalBalanceExtractor) and the curve is relative to 1 kHz neutral.
+    const bool useEqPrior = eqPrior.curve != nullptr
+                            && eqPrior.measuredBandDb != nullptr
+                            && eqPrior.residualBlend > 0.0f;
+    const float blend = useEqPrior ? std::clamp(eqPrior.residualBlend, 0.0f, 1.0f) : 0.0f;
     for (std::size_t i = 0; i < kSonicMasterEqGainCount; ++i)
     {
-        const float gainDb = clamp(decision[kSonicMasterEqGainOffset + i],
-                                   -kAdaptiveEqMaxGainDb, kAdaptiveEqMaxGainDb);
+        float gainDb = clamp(decision[kSonicMasterEqGainOffset + i],
+                             -kAdaptiveEqMaxGainDb, kAdaptiveEqMaxGainDb);
+        if (useEqPrior)
+        {
+            const float targetDb = eqPrior.curve->gainsDb[i]
+                                 + eqPrior.curve->gainAt(kSonicMasterEqFrequenciesHz[i]);
+            const float measuredDb = finiteOr(eqPrior.measuredBandDb[i], 0.0f);
+            const float residual = std::clamp(targetDb - measuredDb, -6.0f, 6.0f) * blend;
+            gainDb = std::clamp(gainDb + residual,
+                                -kAdaptiveEqMaxGainDb, kAdaptiveEqMaxGainDb);
+        }
         out.projectedTargets.eq[i] = gainDb / kAdaptiveEqMaxGainDb;
     }
     out.appliedMask.eq = true;

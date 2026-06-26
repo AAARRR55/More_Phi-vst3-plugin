@@ -28,6 +28,9 @@ $dll = Join-Path $dst 'Contents\x86_64-win\MorePhi.vst3'
 if (Test-Path $dll) {
     $mtime = (Get-Item $dll).LastWriteTime
     "Installed DLL mtime: $($mtime.ToString('yyyy-MM-dd HH:mm:ss'))" | Out-File $log -Append
+    # Verify ONNX model + runtime DLLs came along for the ride.
+    $onnx = Join-Path $dst 'Contents\x86_64-win\onnxruntime.dll'
+    "ONNX runtime present: $(Test-Path $onnx)" | Out-File $log -Append
     "SUCCESS" | Out-File $log -Append
     exit 0
 } else {

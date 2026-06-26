@@ -7,7 +7,10 @@
 
 namespace more_phi {
 
-// Width of the masteringbrainv2 full-chain-v2 decision vector. Must match
+// Forward decl: MasteringTargetCurves.h includes this header (for the EQ freq
+// constants), so we can't include it back here. The decoder only needs a
+// pointer to the curve, so a forward declaration breaks the cycle.
+struct MasteringTargetCurve;
 // FULL_CHAIN_REGRESSION_WIDTH in mastering_decision_adapter.py (= num_eq_bands
 // + 2 + 1 + 18 + 1 + 4 + 1 + 4 + 1 + 1 + character_logits).
 inline constexpr std::size_t kSonicMasterDecisionWidth = 44;
@@ -98,10 +101,26 @@ inline constexpr float kSonicMasterDefaultConfidence = 0.85f;
  */
 inline constexpr float kUseModelTargetLufs = -1000.0f; // sentinel: outside any real LUFS range
 
+// GENRE PRIOR (Stage 2, Ozone §3.2 tonal-balance matching): the SonicMaster
+// model emits an EQ recommendation blind to a target curve. When a caller
+// supplies a MasteringTargetCurve AND the measured per-band tonal balance, the
+// decoder blends a bounded residual correction into each EQ band BEFORE the
+// existing ±12 dB clamp. The residual is the level-invariant shape gap
+// (target − measured), scaled by residualBlend in [0,1] and pre-clamped to ±6 dB
+// so a single band can never dominate. Default args (nullptr / 0) preserve the
+// original decode byte-for-byte — the residual is opt-in.
+struct GenreEqPrior
+{
+    const MasteringTargetCurve* curve = nullptr;   // nullptr → no curve prior
+    const float* measuredBandDb = nullptr;         // 8 bands, level-invariant; nullptr → no measurement
+    float residualBlend = 0.0f;                    // [0,1], 0 = no blend (default)
+};
+
 bool decodeSonicMasterDecision(const float* decision,
                                std::size_t decisionCount,
                                double sampleRate,
                                ValidatedNeuralMasteringPlan& out,
-                               float callerTargetLufs = kUseModelTargetLufs) noexcept;
+                               float callerTargetLufs = kUseModelTargetLufs,
+                               GenreEqPrior eqPrior = {}) noexcept;
 
 } // namespace more_phi

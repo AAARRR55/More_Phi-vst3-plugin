@@ -409,6 +409,8 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/StereoImager.cpp
     src/Core/HarmonicExciter.h
     src/Core/HarmonicExciter.cpp
+    src/Core/TransientShaper.h
+    src/Core/TransientShaper.cpp
     src/Core/TruePeakEstimator.h
     src/Core/TruePeakEstimator.cpp
     src/Core/BrickwallLimiter.h

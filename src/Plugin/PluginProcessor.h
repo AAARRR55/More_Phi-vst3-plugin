@@ -43,6 +43,7 @@
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "AI/SonicMasterDecisionRunner.h"
 #include "AI/SonicMasterHttpInferenceSource.h"
+#include "AI/GenreMasteringProfile.h"
 #if MORE_PHI_HAS_ONNX
 #include "SonicMasterModelHash.h"
 #include "BinaryData.h"

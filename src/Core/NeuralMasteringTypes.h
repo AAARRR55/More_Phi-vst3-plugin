@@ -208,10 +208,14 @@ struct MasteringControlMask
     bool harmonic = false;
     bool limiter = false;
     bool loudness = false;
+    // IMPACT (Phase 3, 2026-06-26): transient shaper. Off by default; a genre
+    // profile or future decode slot can raise it. Sits in the mask so the safety
+    // policy and applyValidatedPlan treat it uniformly with the other stages.
+    bool impact = false;
 
     [[nodiscard]] bool any() const noexcept
     {
-        return eq || dynamics || stereo || harmonic || limiter || loudness;
+        return eq || dynamics || stereo || harmonic || limiter || loudness || impact;
     }
 };
 

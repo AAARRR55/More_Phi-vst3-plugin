@@ -58,6 +58,7 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     // Prepare all DSP stages
     splitter_.prepare(sampleRate, maxBlockSize);
     dynamics_.prepare(sampleRate, maxBlockSize);
+    transient_.prepare(sampleRate, maxBlockSize);
     eq_.prepare(sampleRate, maxBlockSize);
     stereo_.prepare(sampleRate, maxBlockSize);
     exciter_.prepare(sampleRate, maxBlockSize);
@@ -122,6 +123,7 @@ void AutoMasteringEngine::reset() noexcept
 {
     splitter_.reset();
     dynamics_.reset();
+    transient_.reset();
     eq_.reset();
     stereo_.reset();
     exciter_.reset();
@@ -197,6 +199,12 @@ void AutoMasteringEngine::processBlock(juce::AudioBuffer<float>& buf) noexcept
 
     // ── Stage 4: Sum bands → M/S buffer ───────────────────────────────────
     sumBands(bandBuffers_, buf);
+
+    // ── Stage 4b: Transient/Impact shaper (Phase 3) ───────────────────────
+    // Full-band transient emphasis/reduction. Runs after the band sum so it
+    // shapes the recombined signal; before EQ so the spectral stage sees the
+    // post-impact envelope. Gated by its own enabled flag (off by default).
+    transient_.processBlock(buf);
 
     // ── Stage 5: Adaptive EQ ──────────────────────────────────────────────
     eq_.processBlock(buf);
@@ -583,6 +591,21 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
         exciter_.setEnabled(amount > 0.01f);
         exciter_.setDrive(std::clamp(6.0f + amount * 12.0f, 0.0f, 18.0f));
         exciter_.setDryWet(std::clamp(amount, 0.0f, 0.6f));
+    }
+
+    // IMPACT (Phase 3): transient shaper. The 44-float decision vector has no
+    // impact slot yet, so when a plan raises the mask we apply a moderate
+    // transient-emphasis default. A future decode slot would read amount from
+    // the vector; for now the mask is the on/off and the amount is conservative.
+    if (plan.appliedMask.impact)
+    {
+        transient_.setEnabled(true);
+        transient_.setAmount(0.4f);   // gentle transient lift
+        transient_.setOutputGainDb(0.0f);
+    }
+    else
+    {
+        transient_.setEnabled(false);
     }
 
     if (plan.appliedMask.limiter)

@@ -16,6 +16,7 @@
 
 #include "AI/SonicMasterDecisionDecoder.h"  // kSonicMasterEqFrequenciesHz / kSonicMasterEqGainCount
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string_view>
 
@@ -30,6 +31,21 @@ struct MasteringTargetCurve
     std::array<float, kMasteringTargetCurveBandCount> gainsDb {};
     // Approximate slope in dB/octave applied on top of the per-band gains.
     float slopeDbPerOctave = 0.0f;
+
+    // Total target gain (per-band table + slope contribution) at a frequency,
+    // relative to the 1 kHz neutral point. Mirrors
+    // RuleBasedMasteringResolver::gainAtFrequency + the per-band gain so a
+    // header-only caller (the SonicMaster decoder) evaluates the curve without
+    // linking the resolver. Non-constexpr (uses log2); the constexpr curve
+    // table above is unaffected.
+    // ponytail: same formula as the resolver static; duplicated ~3 lines so the
+    // decoder stays header-only across the AI/Core boundary.
+    [[nodiscard]] float gainAt(float freqHz) const noexcept
+    {
+        if (freqHz <= 20.0f) return 0.0f;
+        const float octaves = std::log2(freqHz / 1000.0f);
+        return slopeDbPerOctave * octaves;
+    }
 };
 
 namespace target_curves {

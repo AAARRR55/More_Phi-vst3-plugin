@@ -3,10 +3,12 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "AI/SonicMasterDecisionDecoder.h"
+#include "AI/MasteringTargetCurves.h"
 #include "Core/NeuralMasteringTypes.h"
 
 #include <cmath>
 #include <limits>
+#include <array>
 
 namespace {
 
@@ -291,4 +293,113 @@ TEST_CASE("decodeSonicMasterDecision honors caller target_lufs override (Stage A
         REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, b, more_phi::kUseModelTargetLufs));
         CHECK_THAT(a.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(b.projectedTargets.loudness[0], 1e-6f));
     }
+}
+
+// ── Stage 2 (Ozone §3.2): genre curve + measured tonal-balance residual blend ─
+// The model emits an EQ recommendation blind to a target curve. With a curve +
+// measured per-band shape supplied, the decoder adds a bounded residual
+// (target − measured), clamped to ±6 dB per band and scaled by residualBlend,
+// BEFORE the ±12 dB clamp. Default args preserve the original decode.
+TEST_CASE("decodeSonicMasterDecision default eqPrior leaves EQ unchanged",
+          "[SonicMaster][Decoder][Stage2]")
+{
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[0] = 3.0f;  // band 0 = +3 dB
+
+    more_phi::ValidatedNeuralMasteringPlan a {}, b {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, a));
+    // Default GenreEqPrior {} → no blend.
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, b,
+                                                more_phi::kUseModelTargetLufs, more_phi::GenreEqPrior{}));
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+        CHECK_THAT(a.projectedTargets.eq[i], Catch::Matchers::WithinAbs(b.projectedTargets.eq[i], 1e-6f));
+}
+
+TEST_CASE("decodeSonicMasterDecision blends residual toward the target curve",
+          "[SonicMaster][Decoder][Stage2]")
+{
+    // Model recommends 0 dB on band 0. Use the kHipHopRnB curve which boosts
+    // band 0 (+3 dB at 60 Hz) and measure a flat shape (0 dB). The residual at
+    // band 0 = (3 − 0) = +3 dB; at residualBlend=1.0 the band-0 gain moves from
+    // 0 → +3 dB. Without the prior it stays at 0.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[0] = 0.0f;
+
+    const auto* curve = more_phi::findTargetCurve("hip_hop_rnb");
+    REQUIRE(curve != nullptr);
+
+    std::array<float, more_phi::kSonicMasterEqGainCount> measured{};
+    measured.fill(0.0f);  // flat shape
+
+    more_phi::GenreEqPrior prior { curve, measured.data(), 1.0f };
+
+    more_phi::ValidatedNeuralMasteringPlan planWith {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0,
+                                                planWith, more_phi::kUseModelTargetLufs, prior));
+    // band 0 normalized gain: 0 dB model + 3 dB residual (blend 1.0) = +3 dB / 12.
+    const float expectedNorm = 3.0f / more_phi::kAdaptiveEqMaxGainDb;
+    CHECK_THAT(planWith.projectedTargets.eq[0], Catch::Matchers::WithinAbs(expectedNorm, 1e-4f));
+
+    // Without the prior, band 0 stays at the model's 0 dB → normalized 0.0.
+    more_phi::ValidatedNeuralMasteringPlan planWithout {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, planWithout));
+    CHECK_THAT(planWithout.projectedTargets.eq[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision residual is clamped to +-6 dB per band",
+          "[SonicMaster][Decoder][Stage2]")
+{
+    // Curve boosts band 0 by a huge amount (simulate by measuring very negative)
+    // — residual must clamp at +6 dB even with blend 1.0, never exceeding the
+    // ±12 dB master clamp.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[0] = 0.0f;
+
+    const auto* curve = more_phi::findTargetCurve("hip_hop_rnb");  // band0 +3
+    std::array<float, more_phi::kSonicMasterEqGainCount> measured{};
+    measured[0] = -50.0f;  // measured far below → residual would be +53 dB unclamped
+    more_phi::GenreEqPrior prior { curve, measured.data(), 1.0f };
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0,
+                                                plan, more_phi::kUseModelTargetLufs, prior));
+    // Clamped residual = +6 dB → normalized 6/12 = 0.5.
+    CHECK_THAT(plan.projectedTargets.eq[0], Catch::Matchers::WithinAbs(0.5f, 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision residualBlend scales the correction",
+          "[SonicMaster][Decoder][Stage2]")
+{
+    // residual = +3 dB, blend 0.5 → +1.5 dB correction on top of model's 0 dB.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[0] = 0.0f;
+
+    const auto* curve = more_phi::findTargetCurve("hip_hop_rnb");
+    std::array<float, more_phi::kSonicMasterEqGainCount> measured{};
+    measured.fill(0.0f);
+    more_phi::GenreEqPrior prior { curve, measured.data(), 0.5f };
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0,
+                                                plan, more_phi::kUseModelTargetLufs, prior));
+    // 3 dB * 0.5 blend = 1.5 dB → normalized 1.5/12 = 0.125.
+    CHECK_THAT(plan.projectedTargets.eq[0], Catch::Matchers::WithinAbs(0.125f, 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision zero residualBlend disables blend",
+          "[SonicMaster][Decoder][Stage2]")
+{
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    decision[0] = 0.0f;
+
+    const auto* curve = more_phi::findTargetCurve("hip_hop_rnb");
+    std::array<float, more_phi::kSonicMasterEqGainCount> measured{};
+    measured.fill(0.0f);
+    more_phi::GenreEqPrior prior { curve, measured.data(), 0.0f };  // disabled
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0,
+                                                plan, more_phi::kUseModelTargetLufs, prior));
+    // blend 0 → no correction, band stays at model's 0 dB.
+    CHECK_THAT(plan.projectedTargets.eq[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
 }

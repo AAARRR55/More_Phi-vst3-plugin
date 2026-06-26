@@ -156,6 +156,21 @@ The AI mastering path has **two edit entry points with intentionally aligned saf
 - **Plan atomicity** (P3.10): `OzonePlanApplicator::apply` closes each plan with a `enqueuePlanBoundary` marker; the audio thread stamps `lastDrainedPlanId_` when it drains the boundary, so callers can detect a partial (not-yet-drained) plan via `getLastDrainedPlanId()`. True cross-block all-or-nothing buffering is intentionally NOT implemented (risk); the marker is an observability/commit signal.
 - **OptimizationAgent scoring** (P3.9): the dry-run `mastering.render_batch` path now populates a real `lufs_error` per candidate (`|targetLUFS − measuredLUFS|`), so `OptimizationAgent`'s `min(lufs_error)` selection is no longer a no-op (previously every candidate read infinity → zero proposed actions).
 
+### Genre-Conditioned Priors — Ozone §3.2 "Stage 1" (2026-06-26)
+
+The SonicMaster ONNX decision takes only the waveform as input — it cannot condition on genre. Two genre-derived priors are now folded into the decode path via the message-thread timer in `MorePhiProcessor::timerCallback` (the rendezvous that owns both `autoMasteringEngine_` and `sonicMasterEngine_`):
+
+- **Stage 1 — target LUFS prior**: `GenreMasteringProfile.h` maps each of the 12 `GenreClassifier` genre slots to a target LUFS (values mirror `ChainPlanExecutor::kGenreLUFS[12]`) and a `MasteringTargetCurve*`. The processor pushes the active genre's LUFS into `SonicMasterAnalysisEngine::setGenreTargetLufs`. Decode precedence on the background cycle is: **closed-loop feedback > genre prior > model default**; on the on-demand path, **explicit `targetLufs` > genre prior > model default**. The sentinel `kUseModelTargetLufs` clears the prior.
+- **Stage 2 — tonal-balance residual**: `TonalBalanceExtractor.h` integrates the spectrum snapshot into the 8 EQ band frequencies (level-invariant, mean-subtracted — same shape as `RuleBasedMasteringResolver`). `decodeSonicMasterDecision` takes an optional `GenreEqPrior{curve, measuredBandDb, residualBlend}`; when set, it blends `clamp(target − measured, ±6 dB) * residualBlend` into each EQ band *before* the ±12 dB clamp. The processor scales `residualBlend` by `getTopConfidence()` (capped 0.5×) and only asserts a curve when confidence ≥ 0.5.
+
+**No-model caveat:** `GenreClassifier` returns index 10 (Streaming) at confidence 1.0 when no genre ONNX is loaded, so the priors collapse to the Streaming profile until a model is wired — safe, non-destructive, and becomes meaningful the moment a genre model is loaded.
+
+Both priors feed `candidate.targets` (the decoded recommendation); the safety policy's per-cycle delta caps (`maxDeltaPerPlan.loudness ≈ 0.6 LU`) rate-limit the *applied* plan toward them over successive cycles (the same convergence the closed-loop Stage D uses).
+
+### Transient Shaper — Ozone "Impact" (Phase 3, 2026-06-26)
+
+`src/Core/TransientShaper.{h,cpp}` is a single-band transient/sustain shaper (fast 3 ms + slow 150 ms RMS envelope ratio → bounded gain) inserted into the `AutoMasteringEngine::processBlock` chain after dynamics, before EQ. `MasteringControlMask::impact` gates it; `applyValidatedPlan` enables it with a moderate default when the mask is raised (the 44-float decision vector has no impact slot yet — a future decode slot would read the amount from the vector). **Note:** the native chain is dormant today (`intelligenceActive_=false` in the shipped plugin; mastering drives hosted Ozone via `OzonePlanApplicator`), so this module only runs if/when intelligence is enabled. Per-band under `MultibandSplitter` is the noted upgrade path.
+
 ### Interfaces for Testability
 
 `IPluginHostManager`, `IParameterBridge`, `IMCPServer` (all in `Host/IPluginHostManager.h`) — abstract interfaces that enable mock injection in tests.

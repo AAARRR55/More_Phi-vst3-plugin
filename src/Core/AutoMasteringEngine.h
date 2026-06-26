@@ -74,6 +74,7 @@
 #include "MeterWindowAccumulator.h"
 #include "RealtimeSpectrumAnalyzer.h"
 #include "StereoFieldAnalyzer.h"
+#include "TransientShaper.h"
 #include "NeuralMasteringTypes.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
@@ -291,6 +292,7 @@ private:
     MSMatrix                    ms_;
     MultibandSplitter           splitter_;
     MultibandDynamicsProcessor  dynamics_;
+    TransientShaper             transient_;   // Phase 3: Impact module (after dynamics, before EQ)
     AdaptiveEQ                  eq_;
     StereoImager                stereo_;
     HarmonicExciter             exciter_;

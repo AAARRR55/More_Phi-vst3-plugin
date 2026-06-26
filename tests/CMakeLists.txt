@@ -38,6 +38,7 @@ add_executable(MorePhiTests
     Unit/SIMDAudioTests.cpp
     Unit/PerformanceProfilerTests.cpp
     Integration/TestPluginLifecycle.cpp
+    Integration/TestGenrePriorE2E.cpp
     Integration/TestMCPIntegration.cpp
     Integration/TestDatasetIntegration.cpp
     Integration/TestUserManualFeatureSurface.cpp
@@ -111,6 +112,9 @@ add_executable(MorePhiTests
     Unit/TestNeuralPlanVerification.cpp
     Unit/TestMasteringMeters.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
+    Unit/TestGenreLoudnessPrior.cpp
+    Unit/TestTonalBalanceExtractor.cpp
+    Unit/TestTransientShaper.cpp
     Unit/TestSonicMasterHttpInferenceSource.cpp
     Unit/TestSonicMasterHttpLive.cpp
     # Realtime mastering analysis

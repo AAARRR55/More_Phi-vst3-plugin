@@ -1328,3 +1328,115 @@ TEST_CASE("PermissionKernel classifies agents.* tools", "[agents][mcp][permissio
     REQUIRE(kernel.classifyTool("agents.blackboard.recent", {}) == R::ReadOnly);
     REQUIRE(kernel.classifyTool("agents.set_autonomy", {})      == R::HighImpact);
 }
+
+// ===========================================================================
+// FALLBACK (2026-06-27): sonicmaster_decision opt-in heuristic fallback.
+// When the neural model refuses (safety_rejected/low_confidence/target_out_of_range
+// — common on already-hot material the loudness-blind model can't handle) and the
+// caller passes fallback_to_heuristic=true, the tool falls through to the
+// measurement-driven RuleBasedMasteringResolver and applies its plan, returning a
+// success-shaped result with path="heuristic_fallback". These tests pin that
+// contract plus the provenance honesty (path field on both success and fallback)
+// and the default-off behavior (no fallback unless opted in).
+// ===========================================================================
+
+// Helper: invoke sonicmaster_decision with given params, return parsed JSON.
+static nlohmann::json callSonicmasterDecision(more_phi::MorePhiProcessor& processor,
+                                              const nlohmann::json& params)
+{
+    juce::DynamicObject::Ptr p = new juce::DynamicObject();
+    for (auto it = params.begin(); it != params.end(); ++it)
+    {
+        if (it.value().is_boolean())
+            p->setProperty(juce::String(it.key()), it.value().get<bool>());
+        else if (it.value().is_number_float())
+            p->setProperty(juce::String(it.key()), it.value().get<double>());
+        else if (it.value().is_number_integer())
+            p->setProperty(juce::String(it.key()), it.value().get<int>());
+        else
+            p->setProperty(juce::String(it.key()),
+                           juce::String(it.value().get<std::string>()));
+    }
+    more_phi::InstanceIdentity identity;
+    return nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("sonicmaster_decision", juce::var(p.get()),
+                                         processor, identity).toStdString());
+}
+
+TEST_CASE("sonicmaster_decision surfaces refusal WITHOUT fallback by default",
+          "[mcp][sonicmaster][fallback]")
+{
+    // Default (fallback_to_heuristic absent/false): a neural refusal is surfaced
+    // as a failure with the structured reason. This is the regression guard —
+    // existing callers see NO behavior change from the fallback feature.
+    more_phi::MorePhiProcessor processor;
+    const auto result = callSonicmasterDecision(processor, { {"target_lufs", -14.0} });
+
+    // Without ~6s of captured audio in a unit test, the engine will refuse with
+    // InsufficientAudio or NotPrepared (not a heuristic-eligible refusal). Either
+    // way: success must be false, and there must be NO heuristic_fallback path.
+    REQUIRE(result.contains("success"));
+    REQUIRE_FALSE(result["success"].get<bool>());
+    REQUIRE_FALSE(result.value("path", "") == "heuristic_fallback");
+    // The opaque refusal must carry the structured reason we built earlier.
+    REQUIRE(result.contains("failure_reason"));
+}
+
+TEST_CASE("sonicmaster_decision refusal is non-fatal when fallback_to_heuristic is set",
+          "[mcp][sonicmaster][fallback]")
+{
+    // With the flag on, even a non-refusal failure (insufficient audio here, since
+    // the unit-test processor has no captured audio) must NOT crash or hang, and
+    // must NOT apply a heuristic plan inappropriately (insufficient_audio is NOT a
+    // refusal — the heuristic would run on empty meters). Pins the isRefusal gate.
+    more_phi::MorePhiProcessor processor;
+    const auto result = callSonicmasterDecision(processor, {
+        {"target_lufs", -14.0},
+        {"fallback_to_heuristic", true}
+    });
+
+    REQUIRE(result.contains("success"));
+    // Insufficient audio → not a refusal → no fallback → still a failure.
+    REQUIRE_FALSE(result["success"].get<bool>());
+    REQUIRE_FALSE(result.value("path", "") == "heuristic_fallback");
+    REQUIRE(result.contains("failure_reason"));
+}
+
+TEST_CASE("sonicmaster_decision schema advertises the fallback parameters",
+          "[mcp][sonicmaster][fallback]")
+{
+    // Pin that the tool description + schema expose the new opt-in surface so the
+    // assistant knows it exists. This guards against a refactor that silently
+    // drops the params from the schema (which would make the flag unreachable).
+    const auto listed = nlohmann::json::parse(
+        more_phi::MCPToolHandler::getToolList().toStdString());
+    REQUIRE(listed.contains("tools"));
+    REQUIRE(listed["tools"].is_array());
+
+    // Find the sonicmaster_decision entry in the tools array.
+    nlohmann::json sm;
+    bool found = false;
+    for (const auto& t : listed["tools"])
+    {
+        if (t.value("name", std::string{}) == "sonicmaster_decision")
+        {
+            sm = t;
+            found = true;
+            break;
+        }
+    }
+    REQUIRE(found);
+
+    const std::string desc = sm.value("description", std::string{});
+    const std::string schema = sm.value("inputSchema", nlohmann::json::object()).dump();
+
+    // The description must mention the fallback semantics + the path field.
+    CHECK(desc.find("fallback_to_heuristic") != std::string::npos);
+    CHECK(desc.find("heuristic_fallback") != std::string::npos);
+    CHECK(desc.find("path") != std::string::npos);
+    // The JSON schema must declare both new params with correct defaults.
+    CHECK(schema.find("\"fallback_to_heuristic\"") != std::string::npos);
+    CHECK(schema.find("\"fallback_target_lufs\"") != std::string::npos);
+    CHECK(schema.find("\"default\":false") != std::string::npos);     // fallback default off
+    CHECK(schema.find("\"default\":-14.0") != std::string::npos);     // fallback target default
+}

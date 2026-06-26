@@ -4041,6 +4041,47 @@ void MorePhiProcessor::timerCallback()
     if (sonicMasterEngine_.hasPendingApplication())
         sonicMasterEngine_.processPendingApplication();
 
+    // GENRE PRIOR (Stage 1 + 2, Ozone §3.2): push the genre classifier's current
+    // top genre into the SonicMaster decode path. Stage 1 = target-LUFS prior
+    // (precedence: explicit on-demand > closed-loop feedback > genre prior >
+    // model default). Stage 2 = the genre's tonal-balance curve, blended against
+    // the measured spectrum with residualBlend scaled by confidence so an
+    // uncertain guess doesn't stamp a curve on the plan. Only assert a prior when
+    // the classifier is confident (≥0.5); below that, clear both so the model
+    // default stands. Cheap: atomic reads/writes per tick.
+    // No-model caveat: GenreClassifier returns index 10 (Streaming) at conf 1.0
+    // when no genre ONNX is loaded, so the prior collapses to the Streaming
+    // profile until a model is wired — safe, non-destructive.
+    {
+        auto& classifier = autoMasteringEngine_.getGenreClassifier();
+        const int topGenre = classifier.getTopGenre();
+        const float conf = classifier.getTopConfidence();
+        if (conf >= 0.5f)
+        {
+            const auto profile = more_phi::getGenreMasteringProfile(topGenre);
+            sonicMasterEngine_.setGenreTargetLufs(profile.targetLufs);
+            // Stage 2: curve index. Find the curve's position in the fixed table
+            // so the engine can look it up; -1 if the genre maps to no curve.
+            int curveIdx = -1;
+            if (profile.targetCurve != nullptr)
+            {
+                for (std::size_t i = 0; i < more_phi::kMasteringTargetCurves.size(); ++i)
+                    if (&more_phi::kMasteringTargetCurves[i] == profile.targetCurve)
+                    { curveIdx = static_cast<int>(i); break; }
+            }
+            sonicMasterEngine_.setGenreCurveIndex(curveIdx);
+            // Confidence-scaled blend: cap at 0.5 so the model's EQ still leads;
+            // the prior nudges, not overrides. 0 when no curve.
+            sonicMasterEngine_.setResidualBlend(curveIdx >= 0 ? 0.5f * conf : 0.0f);
+        }
+        else
+        {
+            sonicMasterEngine_.setGenreTargetLufs(more_phi::kUseModelTargetLufs);
+            sonicMasterEngine_.setGenreCurveIndex(-1);
+            sonicMasterEngine_.setResidualBlend(0.0f);
+        }
+    }
+
     // ── V2 feature→delta controller cycle (throttled ~2s) ────────────────────
     // Every tick: update the spectral-flux EMA for transient density tracking.
     RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrumSnap;

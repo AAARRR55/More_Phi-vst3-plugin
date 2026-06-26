@@ -7,6 +7,8 @@
 #include "AI/SonicMasterAnalysisEngine.h"
 
 #include "Core/AutoMasteringEngine.h"
+#include "Core/TonalBalanceExtractor.h"
+#include "AI/MasteringTargetCurves.h"
 
 #include <algorithm>
 #include <chrono>
@@ -451,6 +453,29 @@ bool SonicMasterAnalysisEngine::runOneCycleForTest() noexcept
     return runCycle();
 }
 
+GenreEqPrior SonicMasterAnalysisEngine::buildEqPrior_() noexcept
+{
+    GenreEqPrior prior {};  // defaults: no curve, no measurement, blend 0
+    const int curveIdx = genreCurveIdx_.load(std::memory_order_relaxed);
+    const float blend = residualBlend_.load(std::memory_order_relaxed);
+    if (curveIdx < 0 || blend <= 0.0f || applicationEngine_ == nullptr)
+        return prior;  // opt-out: no curve selected, blend disabled, or no analyzer
+
+    // Refresh the measured 8-band tonal balance from the live spectrum snapshot.
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot snap;
+    if (!applicationEngine_->getSpectrumAnalyzer().getSnapshot(snap) || snap.frameIndex == 0)
+        return prior;  // no valid spectrum yet
+    genreMeasuredBands_ = extractTonalBalanceDb(snap);
+
+    if (curveIdx >= 0 && curveIdx < static_cast<int>(kMasteringTargetCurves.size()))
+    {
+        prior.curve = &kMasteringTargetCurves[static_cast<std::size_t>(curveIdx)];
+        prior.measuredBandDb = genreMeasuredBands_.data();
+        prior.residualBlend = std::clamp(blend, 0.0f, 1.0f);
+    }
+    return prior;
+}
+
 bool SonicMasterAnalysisEngine::runCycle() noexcept
 {
     ensureRing();  // PERF-MEM: safety — ring may not be allocated yet if called from test path
@@ -596,14 +621,17 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     consecutiveFailures_.store(0, std::memory_order_relaxed);
 
     ValidatedNeuralMasteringPlan plan {};
-    // Stage D (2026-06-26): closed LUFS loop. When active, override the model's
-    // loudness recommendation with the feedback-corrected target from the prior
-    // cycle's measured error. The decode-side hook (Stage A) honors it. First
-    // cycle (or after reset) uses the model's own recommendation.
+    // Stage 1 (genre prior) + Stage D (closed LUFS loop). Precedence on the
+    // background path: closed-loop feedback (highest, it has measured evidence)
+    // → genre prior → model default (lowest). The closed loop only engages after
+    // the first apply; until then the genre prior shapes the recommendation. The
+    // decode-side hook (Stage A) honors whichever finite value wins here.
+    const float genrePrior = genreTargetLufs_.load(std::memory_order_relaxed);
     const float decodeTargetLufs = feedbackActive_
         ? feedbackTargetLufs_
-        : more_phi::kUseModelTargetLufs;
-    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan, decodeTargetLufs))
+        : (std::isfinite(genrePrior) ? genrePrior : more_phi::kUseModelTargetLufs);
+    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
+                                   decodeTargetLufs, buildEqPrior_()))
         return false;
     plan.sourcePlanId = nextPlanId_++;
     plan.capturedAtSteadyClockNs = captureTimeNs_;  // stamp capture instant for staleness guard
@@ -790,8 +818,19 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     // closed-loop correction) actually reach the apply. requestDecisionNow is the
     // explicit on-demand path; the background runCycle uses the model default and
     // is nudged by the closed loop (Stage D).
+    // Stage 1 (genre prior): when the caller passes no explicit target, fall back
+    // to the genre-derived prior before the model default — so an on-demand call
+    // with targetLufs=NaN still reflects the active genre profile.
+    float onDemandTarget = targetLufs;
+    if (!std::isfinite(onDemandTarget))
+    {
+        const float genrePrior = genreTargetLufs_.load(std::memory_order_relaxed);
+        if (std::isfinite(genrePrior))
+            onDemandTarget = genrePrior;
+    }
     if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
-                                   std::isfinite(targetLufs) ? targetLufs : kUseModelTargetLufs))
+                                   std::isfinite(onDemandTarget) ? onDemandTarget : kUseModelTargetLufs,
+                                   buildEqPrior_()))
     {
         if (outFailure != nullptr) *outFailure = DecisionFailure::DecodeFailed;
         return false;
