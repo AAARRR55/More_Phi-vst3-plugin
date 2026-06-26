@@ -805,7 +805,8 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
 
     if (method == "capture_snapshot" || method == "recall_snapshot"
         || method == "hosted_plugin.capture_state" || method == "apply_mastering_plan"
-        || method == "mastering.apply_plan" || method == "plugin_adapter.apply_action")
+        || method == "mastering.apply_plan" || method == "mastering.neural_apply"
+        || method == "plugin_adapter.apply_action")
         return RiskLevel::MediumWrite;
 
     if (method == "set_parameter" || method == "set_parameters_batch"

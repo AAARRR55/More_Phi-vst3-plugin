@@ -47,6 +47,13 @@ public:
     /** Access the async executor for long-running tools. */
     static AsyncToolExecutor& getAsyncToolExecutor();
 
+    // Stage B (2026-06-26): public so the state-machine (model_unavailable /
+    // no_hosted_plugin / unmapped / active_applying) can be unit-tested directly,
+    // bypassing the dispatch wrapper's approval gate (which is exercised by the
+    // approval-flow tests). sonicmaster_decision stays private because its tests
+    // run through handle() with read-only classification.
+    static juce::String masteringNeuralApply(const juce::var& params, MorePhiProcessor& p);
+
 private:
     static juce::String getPluginInfo(MorePhiProcessor& p);
     static juce::String listParameters(const juce::var& params, MorePhiProcessor& p);

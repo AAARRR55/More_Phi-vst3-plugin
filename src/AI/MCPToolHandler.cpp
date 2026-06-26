@@ -1997,7 +1997,8 @@ static const ToolDefinition kCoreTools[] = {
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-     {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses ONNX in-process inference when available; falls back to the local Python HTTP inference server at 127.0.0.1:8765 (see tools/inference_server/README.md). Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (echoing the caller-supplied target_lufs param), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use analyze_audio for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response now includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates) — use them to distinguish input loudness from the model's target_lufs. NOTE (application target, AUDIT-FIX-4): the neural mastering decision is applied to More-Phi's INTERNAL mastering chain (AutoMasteringEngine: 4-band comp, 32-band EQ, stereo imager, true-peak limiter), NOT to the hosted Ozone plugin. The hosted plugin is driven separately via ozone.audit_parameters + the heuristic apply_mastering_plan path. Do not tell the user the AI 'masters through Ozone' — it masters the internal chain in series ahead of whatever the user has loaded. NOTE (applied_to_audio_path, F2): the internal mastering chain is DORMANT in the shipped plugin (no audio flows through it, hosted plugin untouched); applied_to_audio_path reports the chain's active state so a silent apply is never mistaken for an audible one. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk).", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
+     {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk).", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
+    {"mastering.neural_apply", "One-click neural Master Assistant: run the ONNX decision on the last ~6s of captured audio AND apply it to the hosted plugin in a single call. Composes requestDecisionNow + applyValidatedPlan. Returns applied=true with the per-slot breakdown (enqueued/skipped/unmapped) via mapping_status. This is the COMMIT door — sonicmaster_decision stays decision-only for preview; this writes hosted-plugin parameters. Requires a hosted plugin whose parameters are mapped (check mapping_status.ozone_mapped); if no plugin is hosted or the map is all-stubs, the apply is a no-op and the response explains why. Params: target_lufs (float, default -14, overrides the model's loudness recommendation), apply_limiter_ceiling (bool, default false). The user should play audio for ~6s before calling.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
     {"morephi_ipc_attach", "Attach read-only to a named IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
     {"morephi_ipc_detach", "Detach from the currently mapped IPC segment.", R"({"type":"object","properties":{}})"},
     {"morephi_ipc_status", "Report IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
@@ -3208,6 +3209,9 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "get_mastering_state")  result = getMasteringState(p);
     else if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
     else if (method == "sonicmaster_decision")  result = sonicmasterDecision(params, p);
+    // Stage B (2026-06-26): one-click neural analyze+apply. Writes hosted params,
+    // so route through the automation transaction (MediumWrite) like apply_plan.
+    else if (method == "mastering.neural_apply") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return masteringNeuralApply(params, p); });
 
     // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
     else if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
@@ -6300,6 +6304,148 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
                           p.getProcessorGenerationToken(), result,
                           p.getInstanceIdentity().instanceId,
                           std::chrono::seconds(3));
+
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MorePhiProcessor& p)
+{
+    // Stage B (2026-06-26): one-click neural Master Assistant. Composes
+    // requestDecisionNow + applyValidatedPlan and returns the per-slot
+    // breakdown. This is the COMMIT door — sonicmaster_decision stays
+    // decision-only for preview.
+    using namespace nlohmann;
+
+    const float targetLufs = static_cast<float>(params.getProperty("target_lufs", -14.0));
+    const bool applyLimiterCeiling = params.hasProperty("apply_limiter_ceiling")
+        && static_cast<bool>(params.getProperty("apply_limiter_ceiling", false));
+
+    auto& engine = p.getSonicMasterEngine();
+
+    // State 1: model unavailable (in-process ONNX not loaded / no HTTP fallback).
+    if (!engine.isAvailable())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = false;
+        err["applied"] = false;
+        err["state"] = "model_unavailable";
+        err["error"] = "The SonicMaster ONNX model is not loaded (in-process). Rebuild the "
+                       "plugin with MORE_PHI_ENABLE_ONNX=ON, or start the HTTP fallback "
+                       "(python tools/inference_server/server.py).";
+        return toJString(err);
+    }
+
+    // State 2: no hosted plugin loaded → the decision has nowhere to land.
+    if (!p.hasOzonePlanApplicator())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["state"] = "no_hosted_plugin";
+        err["error"] = "No hosted plugin is loaded. Load a mastering plugin (e.g. an Ozone "
+                       "instance) into More-Phi first, then re-run.";
+        json ms;
+        ms["ozone_mapped"] = false;
+        ms["has_applicator"] = false;
+        ms["mapped_slot_count"] = 0;
+        err["mapping_status"] = ms;
+        return toJString(err);
+    }
+
+    // State 3: hosted plugin loaded but its parameters aren't mapped (all-stubs).
+    if (!p.ozoneMappingReady())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["state"] = "unmapped";
+        err["mapped_slot_count"] = p.ozoneMappedSlotCount();
+        err["error"] = "The hosted plugin's parameter names don't match the Ozone-shaped "
+                       "discovery, so the neural plan has nowhere to write. Check "
+                       "mapping_status for details, or host an iZotope Ozone instance.";
+        return toJString(err);
+    }
+
+    // Run the decision (5 s budget, matching sonicmaster_decision).
+    ValidatedNeuralMasteringPlan plan {};
+    bool inferenceOk = false;
+    bool timedOut = false;
+    {
+        auto future = std::async(std::launch::async, [&]() {
+            return engine.requestDecisionNow(targetLufs, plan, nullptr, 0);
+        });
+        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
+            inferenceOk = future.get();
+        else
+            timedOut = true;
+    }
+    if (!inferenceOk)
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["state"] = timedOut ? "inference_timeout" : "inference_failed";
+        err["error"] = timedOut
+            ? "Inference request timed out after 5.0 seconds."
+            : "Inference failed (model returned no decision).";
+        return toJString(err);
+    }
+
+    plan.applyLimiterCeiling = applyLimiterCeiling;
+
+    // Commit: apply to the hosted plugin via the existing applyValidatedPlan door.
+    const bool applied = p.getAutoMasteringEngine().applyValidatedPlan(plan);
+
+    json result;
+    result["success"] = applied;
+    result["available"] = true;
+    result["applied"] = applied;
+    result["state"] = applied ? "active_applying" : "apply_no_op";
+    result["target_lufs_requested"] = targetLufs;
+    result["loudness_slot_is_target_not_measurement"] = (plan.loudnessIsMeasurement == false);
+
+    // Per-slot breakdown (reuses the Stage-2 mapping_status surface).
+    {
+        const auto breakdown = p.getAutoMasteringEngine().getChainPlanner().getLastOzoneApplyBreakdown();
+        const auto verify = p.getAutoMasteringEngine().getLastApplyVerification();
+        json ms;
+        ms["ozone_mapped"] = p.ozoneMappingReady();
+        ms["has_applicator"] = p.hasOzonePlanApplicator();
+        ms["mapped_slot_count"] = p.ozoneMappedSlotCount();
+        ms["last_apply_enqueued"] = breakdown.enqueued;
+        ms["last_apply_skipped"] = breakdown.skipped;
+        ms["last_apply_unmapped"] = breakdown.unmapped;
+        ms["last_apply_ambiguous"] = breakdown.ambiguous;
+        ms["last_apply_verified"] = verify.verified;
+        ms["last_apply_mismatched"] = verify.mismatched;
+        ms["last_apply_was_partial"] = p.getAutoMasteringEngine().lastApplyWasPartial();
+        ms["last_apply_reached_audio_path"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+        result["mapping_status"] = ms;
+    }
+
+    // Fold in the live measurements so the assistant can read achieved LUFS for
+    // the closed loop (Stage D) without a second call.
+    {
+        const auto m = engine.getLiveMeasurements();
+        json meas;
+        meas["valid"] = m.valid;
+        if (m.valid)
+        {
+            meas["lufs_integrated"] = m.lufsIntegrated;
+            meas["lufs_short_term"] = m.lufsShortTerm;
+            meas["true_peak_dbtp"] = m.truePeakDbtp;
+            meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
+        }
+        result["live_measurements"] = meas;
+    }
+
+    if (!applied)
+        result["error"] = "The decision was decoded but applyValidatedPlan wrote zero "
+                          "parameters (see mapping_status for the per-slot breakdown).";
 
     return toJString(result);
 }

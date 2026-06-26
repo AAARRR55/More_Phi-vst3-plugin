@@ -1026,6 +1026,64 @@ TEST_CASE("sonicmaster_decision separates raw model telemetry from projected eng
     REQUIRE(response["mapping_status"]["last_apply_was_partial"].get<bool>() == false);
 }
 
+// Stage B (2026-06-26): the one-click neural Master Assistant door. With a bare
+// processor (no hosted plugin), it must report state="no_hosted_plugin" and NOT
+// claim to apply. This pins the honest state machine so the assistant never
+// reports a phantom apply when the decision has nowhere to land.
+//
+// Calls masteringNeuralApply DIRECTLY (not via handle()) to test the method's
+// state logic in isolation — the dispatch wrapper's approval gate (Manual
+// autonomy → approval_required for MediumWrite) is exercised by other tests.
+TEST_CASE("mastering.neural_apply reports no_hosted_plugin when nothing is hosted",
+          "[mcp][sonicmaster][StageB]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);
+    feedSonicMasterWindow(sonicMaster, 48000.0);
+
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::masteringNeuralApply(
+            toVar(nlohmann::json{{"target_lufs", -14.0}}), processor).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    REQUIRE(response["success"].get<bool>() == false);
+    REQUIRE(response["applied"].get<bool>() == false);
+    REQUIRE(response["state"].get<std::string>() == "no_hosted_plugin");
+    REQUIRE(response["available"].get<bool>() == true);  // model IS available; just nowhere to land
+    REQUIRE(response["mapping_status"].is_object());
+    REQUIRE(response["mapping_status"]["has_applicator"].get<bool>() == false);
+}
+
+// Stage B: even when the model is unavailable, the state must be "model_unavailable"
+// (NOT "server isn't running" — the in-process ONNX is the primary path post-C1).
+TEST_CASE("mastering.neural_apply reports model_unavailable when no source is wired",
+          "[mcp][sonicmaster][StageB]")
+{
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.prepare(48000.0, 512);
+    // Explicitly NO setInferenceSource → engine.isAvailable() == false regardless
+    // of any default the processor may wire.
+    sonicMaster.setInferenceSource(nullptr);
+
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::masteringNeuralApply(
+            toVar(nlohmann::json{{"target_lufs", -14.0}}), processor).toStdString());
+
+    REQUIRE(response["success"].get<bool>() == false);
+    REQUIRE(response["state"].get<std::string>() == "model_unavailable");
+    REQUIRE(response["available"].get<bool>() == false);
+}
+
 TEST_CASE("MCP capture window reports no samples before analysis tap has data", "[mcp][analysis][MeterWindow]")
 {
     more_phi::MorePhiProcessor processor;
