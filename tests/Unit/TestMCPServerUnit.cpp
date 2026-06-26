@@ -1024,6 +1024,16 @@ TEST_CASE("sonicmaster_decision separates raw model telemetry from projected eng
     // fields read their zero defaults.
     REQUIRE(response["mapping_status"]["last_apply_enqueued"].get<int>() == 0);
     REQUIRE(response["mapping_status"]["last_apply_was_partial"].get<bool>() == false);
+
+    // Stage E (2026-06-26): the closed-loop state is surfaced so the assistant
+    // can report convergence. On a fresh engine with no apply yet, the loop is
+    // inactive with neutral defaults.
+    REQUIRE(response["closed_loop_state"].is_object());
+    REQUIRE(response["closed_loop_state"]["feedback_active"].get<bool>() == false);
+    REQUIRE(response["closed_loop_state"]["semantics"].get<std::string>()
+            == "closed_loop_lufs_servo_on_background_cycle");
+    REQUIRE(response["closed_loop_state"].contains("last_lufs_error"));
+    REQUIRE(response["closed_loop_state"].contains("next_target_lufs"));
 }
 
 // Stage B (2026-06-26): the one-click neural Master Assistant door. With a bare

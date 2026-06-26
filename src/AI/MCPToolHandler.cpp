@@ -20,6 +20,7 @@
 #include "MIDI/MIDIRouter.h"
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"
+#include "RuleBasedMasteringResolver.h"
 #include "PluginProfileDB.h"
 #include "PluginSemanticMapper.h"
 #include "TrackAssistantStore.h"
@@ -2021,6 +2022,7 @@ static const ToolDefinition kCoreTools[] = {
     {"analysis.compare_render", "Compare two compact analysis summaries or compare a provided summary to current meters.", R"({"type":"object","properties":{"before":{"type":"object"},"after":{"type":"object"}}})"},
     {"mastering.plan_preview", "Generate a mastering plan without applying it.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
     {"mastering.apply_plan", "Alias for apply_mastering_plan.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.analyze_rule_based", "Generate a deterministic mastering plan from live audio measurements (no training data required).", R"({"type":"object","properties":{"intensity":{"type":"number","minimum":0,"maximum":1,"default":0.5},"target_lufs":{"type":"number","default":-14},"target_curve":{"type":"string","default":"streaming"},"apply":{"type":"boolean","default":false}}})"},
     {"mastering.render_batch", "Create dry-run mastering candidates or start an offline file-backed hosted-plugin render job.", R"({"type":"object","properties":{"candidate_count":{"type":"integer","default":3},"dry_run":{"type":"boolean","default":true},"input_path":{"type":"string"},"output_path":{"type":"string"},"plugin_path":{"type":"string"},"allow_passthrough":{"type":"boolean","default":false},"duration_seconds":{"type":"number"},"sample_rate":{"type":"number","default":48000},"block_size":{"type":"integer","default":512},"channels":{"type":"integer","default":2},"parallel_workers":{"type":"integer","default":1},"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
     {"mastering.render_status", "Poll an offline mastering render job started by mastering.render_batch.", R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"},
     {"mastering.select_candidate", "Select a candidate ID returned by mastering.render_batch.", R"({"type":"object","properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"]})"},
@@ -3123,6 +3125,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "analysis.capture_window")     result = captureAnalysisWindow(params, p);
     else if (method == "analysis.compare_render")     result = compareAnalysis(params, p);
     else if (method == "mastering.plan_preview")      result = previewMasteringPlan(params, p);
+    else if (method == "mastering.analyze_rule_based") result = analyzeRuleBasedMastering(params, p);
     else if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
     else if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return renderMasteringBatch(params, p, identity); });
     else if (method == "mastering.render_status")     result = getMasteringRenderStatus(params, identity.instanceId);
@@ -5226,6 +5229,55 @@ juce::String MCPToolHandler::previewMasteringPlan(const juce::var& params, MoreP
     return toJString(result);
 }
 
+juce::String MCPToolHandler::analyzeRuleBasedMastering(const juce::var& params, MorePhiProcessor& p)
+{
+    auto& ame = p.getAutoMasteringEngine();
+
+    RuleBasedMasteringInput input;
+    input.spectrum = [&]() {
+        RealtimeSpectrumAnalyzer::SpectrumSnapshot s;
+        std::ignore = ame.getSpectrumAnalyzer().getSnapshot(s);
+        return s;
+    }();
+    input.stereo = [&]() {
+        StereoFieldAnalyzer::StereoFieldSnapshot s;
+        std::ignore = ame.getStereoFieldAnalyzer().getSnapshot(s);
+        return s;
+    }();
+    input.lufsIntegrated = static_cast<float>(finiteOr(ame.getLUFSIntegrated(), -70.0));
+    input.lra            = static_cast<float>(finiteOr(ame.getLRA(), 0.0));
+    input.truePeakDbTp   = static_cast<float>(finiteOr(ame.getTruePeak_dBTP(), -6.0));
+    input.crestFactor    = static_cast<float>(finiteOr(
+        input.spectrum.frameIndex > 0 ? input.spectrum.crestFactorProgram : 0.0f, 0.0f));
+
+    input.intensity    = juce::jlimit(0.0f, 1.0f,
+                                      static_cast<float>(params.getProperty("intensity", 0.5f)));
+    input.targetLufs   = static_cast<float>(params.getProperty("target_lufs", -14.0f));
+    input.targetCurveName = params.getProperty("target_curve", "streaming").toString().toStdString();
+
+    const bool apply = params.getProperty("apply", false);
+
+    RuleBasedMasteringResolver resolver;
+    MultiEffectPlan plan = resolver.resolve(input);
+
+    if (apply && plan.valid)
+        ame.getChainPlanner().applyPlan(plan);
+
+    json result = planToJson(plan);
+    result["success"] = plan.valid;
+    result["applied"] = apply && plan.valid;
+    result["measured"] = json{
+        {"lufs_integrated", input.lufsIntegrated},
+        {"lra", input.lra},
+        {"true_peak_dbtp", input.truePeakDbTp},
+        {"crest_factor", input.crestFactor},
+        {"spectral_centroid_hz", input.spectrum.spectralCentroid},
+        {"spectral_tilt", input.spectrum.spectralTilt},
+        {"stereo_width", input.stereo.stereoWidth}
+    };
+    return toJString(result);
+}
+
 juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     const int candidateCount = juce::jlimit(1, 8, static_cast<int>(params.getProperty("candidate_count", 3)));
@@ -6288,6 +6340,21 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         result["live_measurements"] = meas;
     }
 
+    // Stage E (2026-06-26): closed-loop state so the assistant can report
+    // convergence ("applied -11.2 LUFS, measured -11.8, correcting...") and know
+    // whether the always-on cycle is actively correcting toward the target.
+    {
+        const auto cl = engine.getClosedLoopState();
+        json clj;
+        clj["feedback_active"]        = cl.feedbackActive;
+        clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
+        clj["last_measured_lufs"]     = cl.lastMeasuredLufs;
+        clj["last_lufs_error"]        = cl.lastLufsError;  // + = too quiet
+        clj["next_target_lufs"]       = cl.nextTargetLufs;
+        clj["semantics"] = "closed_loop_lufs_servo_on_background_cycle";
+        result["closed_loop_state"] = clj;
+    }
+
     result["warnings"] = json::array({
         "decision_contains_raw_model_telemetry_not_applied_parameters",
         "target_lufs_is_requested_target_not_input_loudness_measurement",
@@ -6448,6 +6515,19 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
             meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
         }
         result["live_measurements"] = meas;
+    }
+
+    // Stage E: closed-loop state (the one-click apply is a single shot, but the
+    // background cycle's loop state is still useful context for the assistant).
+    {
+        const auto cl = engine.getClosedLoopState();
+        json clj;
+        clj["feedback_active"]          = cl.feedbackActive;
+        clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
+        clj["last_measured_lufs"]       = cl.lastMeasuredLufs;
+        clj["last_lufs_error"]          = cl.lastLufsError;
+        clj["next_target_lufs"]         = cl.nextTargetLufs;
+        result["closed_loop_state"] = clj;
     }
 
     if (!applied)
