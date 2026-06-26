@@ -39,6 +39,7 @@
 #include "Core/MorePhiDiagnostics.h"
 #include "Core/AutoMasteringEngine.h"
 #include "AI/NeuralMasteringController.h"
+#include "AI/OnnxNeuralMasteringRunner.h"
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "AI/SonicMasterDecisionRunner.h"
 #include "AI/SonicMasterHttpInferenceSource.h"
@@ -603,11 +604,22 @@ private:
     // runtime is rebuilt. Defaults to Assist.
     AutonomyLevel pendingAgentAutonomy_;
 
-    // ── Ozone 11 mastering integration ───────────────────────────────────────
+    // ── Ozone 11 mastering integration & v2 feature→delta path ───────────────
     AutoMasteringEngine                  autoMasteringEngine_;
     NeuralMasteringController            neuralMasteringController_;
+    OnnxNeuralMasteringRunner            onnxNeuralRunner_;
     std::unique_ptr<OzoneParameterMap>   ozoneParamMap_;
     std::unique_ptr<OzonePlanApplicator> ozonePlanApplicator_;
+
+    // Timer-driven v2 controller cycle: fires ~30Hz (timer default). The cycle
+    // runs every kNeuralMasteringV2CycleTicks ticks (~2s).
+    static constexpr std::uint64_t      kNeuralMasteringV2CycleTicks = 60;
+    std::uint64_t                       neuralMasteringFeatureTick_ = 0;
+
+    // Running EMA state for transient density estimation (message thread only).
+    // Updated every timer tick from the current spectral flux reading.
+    static constexpr float              kFluxEmaAlpha = 0.05f;
+    float                               v2FluxMean_ = 0.0f;
 
     // ── SonicMaster realtime neural mastering (preview, default OFF) ──────────
     SonicMasterDecisionRunner            sonicMasterRunner_;
@@ -618,6 +630,17 @@ private:
     // ONNX-first fallback: tries to load the masteringbrainv2 ONNX model from
     // alongside the plugin binary; falls back to the HTTP inference server.
     void initializeSonicMaster();
+
+    // V2: wire the feature→delta ONNX path (63→72 model). Searches for a
+    // matching model alongside the plugin binary; falls through to the
+    // DeterministicBaseline runner if none is found.
+    void initializeNeuralMasteringV2();
+
+    // Derived feature helpers for the v2 snapshot (timer callback).
+    // All accept nullptr for unavailable meter data and return 0.0f gracefully.
+    static float computeMonoFoldDownDeltaDb(const StereoFieldAnalyzer::StereoFieldSnapshot* stereo) noexcept;
+    static float computeHarmonicRisk(const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept;
+    float        computeTransientDensity(const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept;
 
     // ── V2 components ──────────────────────────────────────────────────────
     PluginHostManager  hostManagerB_;
@@ -693,6 +716,12 @@ private:
     int prevMorphSource_ = -1;
     int morphStableBlocks_ = 0;
     static constexpr int MORPH_STABLE_THRESHOLD = 2; // Skip after N identical blocks
+
+    // TEMPORARY: morph-health diagnostic probe tick counter (JUCE_DEBUG only).
+    // See the probe block at the top of timerCallback(). Remove with the probe.
+#if JUCE_DEBUG
+    int morphHealthTick_ = 0;
+#endif
 
     // Touch detection: prevents morph from overwriting manual knob changes
     // CRITICAL: These vectors are accessed from both audio thread (read/write in processBlock)

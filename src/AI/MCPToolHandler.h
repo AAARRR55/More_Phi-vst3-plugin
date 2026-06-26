@@ -139,6 +139,7 @@ private:
     static juce::String captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p);
     static juce::String compareAnalysis(const juce::var& params, MorePhiProcessor& p);
     static juce::String previewMasteringPlan(const juce::var& params, MorePhiProcessor& p);
+    static juce::String analyzeRuleBasedMastering(const juce::var& params, MorePhiProcessor& p);
     static juce::String renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
     static juce::String getMasteringRenderStatus(const juce::var& params, const juce::String& instanceId);
     static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);

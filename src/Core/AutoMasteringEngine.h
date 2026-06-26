@@ -86,6 +86,10 @@ namespace more_phi {
 // Full definition pulled in the .cpp only.
 class ActionLedger;
 
+// Forward-declared so AutoMasteringEngine can expose an aggregated analysis
+// snapshot without pulling NeuralMasteringFeatureExtractor.h into this header.
+struct NeuralMasteringAnalysisSnapshot;
+
 // ── ApplyVerification (P1.2 / AUDIT-FIX Fix 2) ──────────────────────────────
 // Readback verification of the last mastering-plan apply. Populated by the
 // chain planner / OzonePlanApplicator after enqueueing a plan: it counts how
@@ -211,6 +215,9 @@ public:
     }
     [[nodiscard]] bool isGenreClassifierModelLoaded() const noexcept { return genreClassifier_.isModelLoaded(); }
 
+    /** Aggregated analysis snapshot for the neural feature extractor. */
+    [[nodiscard]] NeuralMasteringAnalysisSnapshot getSnapshot() const noexcept;
+
     // ── Chain access (message thread — for ABCompareEngine etc.) ─────────────
 
     LUFSMeter&                    getLUFSMeter()        noexcept { return lufs_; }
@@ -220,6 +227,7 @@ public:
     MultibandDynamicsProcessor&   getDynamics()         noexcept { return dynamics_; }
     GenreClassifier&              getGenreClassifier()  noexcept { return genreClassifier_; }
     ChainPlanExecutor&            getChainPlanner()     noexcept { return chainPlanner_; }
+    TruePeakEstimator&            getTruePeakEstimator()noexcept { return analysisTruePeak_; }
     RealtimeSpectrumAnalyzer&     getSpectrumAnalyzer() noexcept { return spectrumAnalyzer_; }
     StereoFieldAnalyzer&          getStereoFieldAnalyzer() noexcept { return stereoFieldAnalyzer_; }
     const RealtimeSpectrumAnalyzer& getSpectrumAnalyzer() const noexcept { return spectrumAnalyzer_; }

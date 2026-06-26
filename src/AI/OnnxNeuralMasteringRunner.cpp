@@ -17,10 +17,6 @@
 #include <memory>
 #include <numeric>   // std::accumulate (I/O shape validation in the ONNX path)
 
-#ifndef MORE_PHI_HAS_ONNX
-#define MORE_PHI_HAS_ONNX 0
-#endif
-
 #if MORE_PHI_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
 #endif

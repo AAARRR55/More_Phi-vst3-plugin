@@ -688,6 +688,16 @@ void MorphPad::updatePosition(juce::Point<float> pos)
     if (auto* py = proc_.getAPVTS().getParameter("morphY"))
         py->setValueNotifyingHost(y);
 
+    // FIX: write the morphX_/morphY_ atomics directly. The APVTS→atomic bridge
+    // (syncStateFromAPVTS, gated by apvtsStateDirty_) only runs once at startup
+    // — nothing re-marks it dirty — so setValueNotifyingHost alone never reached
+    // the atomics, leaving the cursor frozen and the audio-thread morph reading
+    // stale values. Mirrors the setMorphSource call below and the BreedingPanel
+    // precedent (proc_.setMorphX/Y). The cursor paint and morph paths now see
+    // the drag in real time.
+    proc_.setMorphX(x);
+    proc_.setMorphY(y);
+
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 0, 2);
     proc_.setMorphSource(0);  // XY mode
     needsRepaint_ = true;
@@ -725,6 +735,11 @@ bool MorphPad::keyPressed(const juce::KeyPress& key)
     py->beginChangeGesture();
     py->setValueNotifyingHost(newY);
     py->endChangeGesture();
+
+    // FIX: mirror the APVTS write into the atomics — see updatePosition() for
+    // why setValueNotifyingHost alone doesn't reach morphX_/morphY_.
+    proc_.setMorphX(newX);
+    proc_.setMorphY(newY);
 
     proc_.setMorphSource(0);  // XY mode
     needsRepaint_ = true;

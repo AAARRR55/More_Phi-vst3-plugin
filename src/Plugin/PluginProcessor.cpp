@@ -35,6 +35,7 @@
 #include "AI/Agents/Agents/QualitySafetyAgent.h"
 #include "AI/Agents/Agents/MemoryAgent.h"
 #include "AI/MCPToolHandler.h"
+#include "AI/Dataset/NeuralMasteringFeatureExtractor.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -161,6 +162,11 @@ MorePhiProcessor::MorePhiProcessor()
     // tools/export_onnx/export_patched.py.
     initializeSonicMaster();
 
+    // V2: wire the feature→delta ONNX path (63→72 model). Searches alongside
+    // the plugin binary for a matching ONNX model; gracefully falls through to
+    // DeterministicBaseline if none is found (current behaviour unchanged).
+    initializeNeuralMasteringV2();
+
     // Wire MIDI router callbacks (plain C function pointers + void* context)
     // H-5: Store a WeakReference on the heap so the callback can detect if the
     // processor is destroyed before the callback fires. The weak ref member is
@@ -212,6 +218,7 @@ MorePhiProcessor::MorePhiProcessor()
     linkBroadcaster_.attach(0);  // Default link group
 
     neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
+    neuralMasteringController_.setModelRunner(&onnxNeuralRunner_);
 }
 
 // ── SonicMaster initialization: ONNX-first with HTTP fallback ─────────────────
@@ -348,6 +355,76 @@ void MorePhiProcessor::initializeSonicMaster()
             "HTTP fallback disabled. Neural Master unavailable.");
     }
 #endif
+}
+
+// ── V2 feature→delta ONNX path initialization ─────────────────────────────
+
+void MorePhiProcessor::initializeNeuralMasteringV2()
+{
+    // Model name: the 63→72 feature-delta ONNX model.
+    // Searched alongside the plugin binary or in known dev paths.
+    constexpr const char* v2ModelName = "neural_mastering_v2.onnx";
+
+    const auto pluginDir = juce::File::getSpecialLocation(
+        juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
+
+    const juce::File searchDirs[] = {
+        pluginDir,
+        pluginDir.getChildFile("models"),
+        juce::File::getCurrentWorkingDirectory().getChildFile("models/sonicmaster"),
+        juce::File::getCurrentWorkingDirectory().getChildFile("scripts/neural-mastering/control"),
+    };
+
+    std::string modelPath;
+    for (auto& dir : searchDirs)
+    {
+        auto f = dir.getChildFile(v2ModelName);
+        if (f.existsAsFile()) { modelPath = f.getFullPathName().toStdString(); break; }
+    }
+
+    if (!modelPath.empty() && onnxNeuralRunner_.loadModel(modelPath, "neural_mastering_v2", ""))
+    {
+        neuralMasteringController_.setModelRunner(&onnxNeuralRunner_);
+        DBG("[MorePhiProcessor] V2 feature→delta ONNX model loaded: " + juce::String(modelPath));
+    }
+    else
+    {
+        // No model found — runner stays !available, controller falls through to
+        // DeterministicBaseline transparently. This is the current behaviour.
+        DBG("[MorePhiProcessor] V2 feature→delta ONNX model not found at '" + juce::String(v2ModelName)
+            + "'; using DeterministicBaseline fallback.");
+    }
+}
+
+// ── V2 derived-feature helpers ───────────────────────────────────────────
+
+float MorePhiProcessor::computeMonoFoldDownDeltaDb(
+    const StereoFieldAnalyzer::StereoFieldSnapshot* stereo) noexcept
+{
+    if (stereo == nullptr || stereo->frameIndex == 0) return 0.0f;
+    float avgCorr = 0.0f;
+    for (int i = 0; i < StereoFieldAnalyzer::kNumBands; ++i)
+        avgCorr += stereo->correlation[i];
+    avgCorr /= static_cast<float>(StereoFieldAnalyzer::kNumBands);
+    avgCorr = std::clamp(avgCorr, -1.0f, 1.0f);
+    return 10.0f * std::log10((1.0f + avgCorr) / 2.0f + 1e-12f);
+}
+
+float MorePhiProcessor::computeHarmonicRisk(
+    const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept
+{
+    if (spectrum == nullptr || spectrum->frameIndex == 0) return 0.0f;
+    const float thd = std::max(0.0f, spectrum->thdPercent);
+    return std::min(thd / 10.0f, 1.0f);
+}
+
+float MorePhiProcessor::computeTransientDensity(
+    const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept
+{
+    if (spectrum == nullptr || spectrum->frameIndex == 0) return 0.0f;
+    if (v2FluxMean_ < 1e-6f) return 0.0f;
+    const float ratio = spectrum->spectralFlux / v2FluxMean_;
+    return std::min(ratio / 5.0f, 1.0f);
 }
 
 MorePhiProcessor::~MorePhiProcessor()
@@ -3851,6 +3928,63 @@ void MorePhiProcessor::timerCallback()
         startTimer(50);
     }
 
+    // ── MORPH DIAGNOSTIC PROBE (temporary) ───────────────────────────────────
+    // Reports the state of every gate that can silently block the morph-apply
+    // loop, ~once per second from the MESSAGE thread (never audio thread, per
+    // AGENTS.md logging rules). Wrapped in JUCE_DEBUG so Release emits nothing.
+    // Goal: identify which of the 6 short-circuit gates is freezing "knobs
+    // don't move at all". Remove after the root cause is fixed.
+#if JUCE_DEBUG
+    {
+        constexpr int kMorphHealthReportIntervalTicks = 20;  // 20 × 50ms = ~1s
+        morphHealthTick_++;
+        if (morphHealthTick_ >= kMorphHealthReportIntervalTicks)
+        {
+            morphHealthTick_ = 0;
+
+            const int   paramCount       = paramBridge.getParameterCount();           // gate A: ==0 blocks at line ~2054
+            const bool  hasOccupied      = snapshotBank.hasAnyOccupied();              // gate B: false blocks entirely
+            std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlotsArr{};
+            const int   occupiedCount    = snapshotBank.getOccupiedSlots(occupiedSlotsArr);
+            const bool  hasPlugin        = hostManager.hasPlugin();                    // gate C prerequisite
+            const bool  exclusiveFlag    = hostManager.isExclusivePluginUseRequested(); // gate C: stuck true → acquire returns null
+            const int   morphStable      = morphStableBlocks_;                          // gate D: >threshold + static → process() skipped
+            const float mx               = morphX_.load(std::memory_order_relaxed);    // cursor should move when dragging
+            const float my               = morphY_.load(std::memory_order_relaxed);
+            const float fp               = faderPos_.load(std::memory_order_relaxed);
+            const int   source           = morphSource_.load(std::memory_order_relaxed); // 0=XY,1=Fader
+            const int   mode             = physicsMode_.load(std::memory_order_relaxed);  // 0=Direct,1=Elastic,2=Drift
+
+            // Gates E/F: count blocked params under the touch lock.
+            int touchBlocked = 0, holdBlocked = 0;
+            {
+                const juce::SpinLock::ScopedTryLockType tl(touchStateLock_);
+                if (tl.isLocked())
+                {
+                    const int n = juce::jmin(touchCooldown_.size(), liveEditHold_.size());
+                    for (int i = 0; i < n; ++i)
+                    {
+                        if (touchCooldown_[static_cast<size_t>(i)] > 0) ++touchBlocked;  // gate E
+                        if (liveEditHold_[static_cast<size_t>(i)] != 0)  ++holdBlocked;  // gate F
+                    }
+                }
+            }
+
+            DBG("[MorphHealth] paramCount=" + juce::String(paramCount)
+                + "  hasOccupied=" + (hasOccupied ? "Y" : "N")
+                + "  occupiedSlots=" + juce::String(occupiedCount)
+                + "  hasPlugin=" + (hasPlugin ? "Y" : "N")
+                + "  exclusiveFlag=" + (exclusiveFlag ? "STUCK" : "clear")
+                + "  morphStableBlocks=" + juce::String(morphStable)
+                + "  cursor[XY=(" + juce::String(mx, 3) + "," + juce::String(my, 3)
+                + ") fader=" + juce::String(fp, 3) + " src=" + juce::String(source)
+                + " mode=" + juce::String(mode) + ")]"
+                + "  touchBlocked=" + juce::String(touchBlocked)
+                + "  liveEditHoldBlocked=" + juce::String(holdBlocked));
+        }
+    }
+#endif
+
     { MSG_TRACE(diagnostics_, "loadCachedLicenseIfNeeded"); loadCachedLicenseIfNeeded(); }
     { MSG_TRACE(diagnostics_, "refreshLicenseIfNeeded");   refreshLicenseIfNeeded(); }
     { MSG_TRACE(diagnostics_, "startMCPServerIfNeeded");   startMCPServerIfNeeded(); }
@@ -3906,6 +4040,55 @@ void MorePhiProcessor::timerCallback()
     // sets a flag; the processor's timer applies it here.
     if (sonicMasterEngine_.hasPendingApplication())
         sonicMasterEngine_.processPendingApplication();
+
+    // ── V2 feature→delta controller cycle (throttled ~2s) ────────────────────
+    // Every tick: update the spectral-flux EMA for transient density tracking.
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrumSnap;
+    const bool hasSpectrum = autoMasteringEngine_.getSpectrumAnalyzer().getSnapshot(spectrumSnap);
+    if (hasSpectrum && spectrumSnap.frameIndex > 0)
+        v2FluxMean_ = (1.0f - kFluxEmaAlpha) * v2FluxMean_ + kFluxEmaAlpha * spectrumSnap.spectralFlux;
+
+    // Every kNeuralMasteringV2CycleTicks: build a feature frame and feed the controller.
+    if (neuralMasteringFeatureTick_ % kNeuralMasteringV2CycleTicks == 0)
+    {
+        const auto& lufs = autoMasteringEngine_.getLUFSMeter();
+        StereoFieldAnalyzer::StereoFieldSnapshot   stereoSnap;
+        const bool hasStereo   = autoMasteringEngine_.getStereoFieldAnalyzer().getSnapshot(stereoSnap);
+
+        NeuralMasteringAnalysisSnapshot snap {};
+        snap.integratedLUFS    = lufs.getIntegrated();
+        snap.shortTermLUFS     = lufs.getShortTerm();
+        snap.momentaryLUFS     = lufs.getMomentary();
+        snap.loudnessRange     = lufs.getLRA();
+        snap.truePeakDbTp      = autoMasteringEngine_.getTruePeakEstimator().getTruePeak_dBTP();
+        snap.crestFactorDb     = hasSpectrum ? spectrumSnap.crestFactor : 0.0f;
+        snap.spectralTilt      = hasSpectrum ? spectrumSnap.spectralTilt : 0.0f;
+        snap.monoFoldDownDeltaDb = computeMonoFoldDownDeltaDb(hasStereo ? &stereoSnap : nullptr);
+        snap.transientDensity  = computeTransientDensity(hasSpectrum ? &spectrumSnap : nullptr);
+        snap.harmonicRisk      = computeHarmonicRisk(hasSpectrum ? &spectrumSnap : nullptr);
+        snap.sourceQualityScore = 1.0f;
+        snap.spectralBands     = hasSpectrum ? spectrumSnap.magnitudeDB.data() : nullptr;
+        snap.stereoCorrelation = hasStereo ? stereoSnap.correlation.data() : nullptr;
+        snap.midSideRatio      = hasStereo ? stereoSnap.msEnergyRatio.data() : nullptr;
+
+        NeuralMasteringFeatureExtractor extractor;
+        const auto result = extractor.extractFromAnalysis(
+            getSampleRate(), getTotalNumInputChannels(),
+            getBlockSize(), neuralMasteringFeatureTick_, snap);
+
+        if (result.status == NeuralMasteringFeatureExtractionStatus::Success)
+        {
+            NeuralMasteringRuntimeState runtimeState;
+            runtimeState.currentFrame = static_cast<std::uint64_t>(neuralMasteringFeatureTick_);
+            runtimeState.sampleRate = getSampleRate();
+            runtimeState.channelCount = getTotalNumInputChannels();
+            runtimeState.layout = runtimeState.channelCount == 1
+                ? NeuralMasteringLayout::Mono
+                : NeuralMasteringLayout::Stereo;
+            (void)neuralMasteringController_.processFeatureFrame(result.frame, runtimeState, true);
+        }
+    }
+    ++neuralMasteringFeatureTick_;
 
     // ── Waypoint morph path (Phase 6) ────────────────────────────────────────
     // When waypoints are enabled, the waypoint engine drives the morph position

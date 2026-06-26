@@ -122,6 +122,10 @@ bool SnapFader::keyPressed(const juce::KeyPress& key)
     p->setValueNotifyingHost(clamped);
     p->endChangeGesture();
 
+    // FIX: mirror the APVTS write into the faderPos_ atomic — see updateValue()
+    // for why setValueNotifyingHost alone doesn't reach faderPos_.
+    proc_.setFaderPos(clamped);
+
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
     proc_.setMorphSource(1);  // fader mode
     return true;
@@ -180,6 +184,15 @@ void SnapFader::updateValue(float yPos)
     // Route through APVTS so DAW automation captures the change.
     if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
         p->setValueNotifyingHost(normalised);
+
+    // FIX: write the faderPos_ atomic directly. The APVTS→atomic bridge
+    // (syncStateFromAPVTS, gated by apvtsStateDirty_) only runs once at startup
+    // — nothing re-marks it dirty — so setValueNotifyingHost alone never reached
+    // faderPos_, leaving the thumb frozen and the audio-thread morph reading a
+    // stale value. Mirrors the setMorphSource call below and the BreedingPanel
+    // precedent (proc_.setMorphX/Y). getFaderPos() and the paint/morph paths now
+    // see the drag in real time.
+    proc_.setFaderPos(normalised);
 
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
     proc_.setMorphSource(1);  // Switch to fader mode

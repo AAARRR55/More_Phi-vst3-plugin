@@ -29,8 +29,9 @@
 #include <vector>   // AUDIT-FIX (Fix 6): OzoneApplyBreakdown::applied
 #include <juce_core/juce_core.h>
 
-// Forward declaration — avoids header dependency loop
+// Forward declarations — avoids header dependency loops
 namespace more_phi { class OzonePlanApplicatorBase; }
+namespace more_phi { struct RuleBasedMasteringInput; }
 
 namespace more_phi {
 
@@ -126,13 +127,16 @@ public:
     }
 
     /**
-     * Execute the 5-step deterministic rule chain on the calling thread.
-     * Call from a background ThreadPool job.
-     *
-     * @param genreIndex    Current genre index (0–11) from GenreClassifier.
-     * @param dynamicRange  Measured dynamic range in LU.
-     * @param spectralTilt  Measured spectral tilt in dB/octave.
-     * @param correlationMS Measured M/S correlation [-1, 1].
+     * Execute the rule-based resolver on the calling thread.
+     * This is the rich path: it uses live spectrum/stereo/LUFS measurements.
+     */
+    MultiEffectPlan executePlan(const RuleBasedMasteringInput& input);
+
+    /**
+     * Legacy compatibility overload.
+     * Builds a minimal input from the provided summary values and resolves it.
+     * The spectrum/stereo snapshots will be empty, so the resolver falls back to
+     * the static target curve.
      */
     MultiEffectPlan executePlan(int    genreIndex,
                                 float  dynamicRange,
@@ -141,7 +145,12 @@ public:
 
     /**
      * Build the same plan as executePlan() without mutating lastPlan_, invoking
-     * callbacks, or applying it to any hosted plugin.
+     * callbacks, or applying it to any hosted plugin. Rich path.
+     */
+    MultiEffectPlan previewPlan(const RuleBasedMasteringInput& input);
+
+    /**
+     * Legacy compatibility overload.
      */
     MultiEffectPlan previewPlan(int    genreIndex,
                                 float  dynamicRange,
@@ -168,24 +177,23 @@ public:
     [[nodiscard]] MultiEffectPlan getLastPlan() const noexcept { return lastPlan_; }
 
 private:
-    MultiEffectPlan buildPlan(int genreIndex,
-                              float dynamicRange,
-                              float spectralTilt,
-                              float correlationMS);
+    MultiEffectPlan buildPlan(const RuleBasedMasteringInput& input) const;
 
-    // Step implementations
-    MultiEffectPlan stepDynamicsAssessment(float dynamicRange);
-    void stepSpectralAssessment(MultiEffectPlan& plan, int genreIndex, float spectralTilt);
-    void stepStereoAssessment(MultiEffectPlan& plan, float correlationMS);
-    void stepLoudnessTarget(MultiEffectPlan& plan, int genreIndex);
-    void stepStageControl(MultiEffectPlan& plan);
+    // Legacy helper: construct a minimal RuleBasedMasteringInput from the old
+    // summary-style arguments.  The spectrum/stereo snapshots are left empty so
+    // the resolver falls back to the static target curve.
+    [[nodiscard]] RuleBasedMasteringInput makeInputFromLegacy(int    genreIndex,
+                                                               float  dynamicRange,
+                                                               float  /*spectralTilt*/,
+                                                               float  correlationMS) const noexcept;
 
     PlanCallback  callback_;
     MultiEffectPlan lastPlan_;
     mutable juce::SpinLock ozoneApplicatorLock_;
     OzonePlanApplicatorBase* ozoneApplicator_ = nullptr;
 
-    // Genre LUFS targets (matching mastering_profiles.json)
+    // Genre LUFS targets (matching mastering_profiles.json).  Kept for legacy
+    // path mapping when no user target is supplied.
     static constexpr float kGenreLUFS[12] = {
         -9.f, -9.f, -11.f, -13.f, -12.f, -16.f,
         -17.f, -20.f, -18.f, -10.f, -14.f, -23.f

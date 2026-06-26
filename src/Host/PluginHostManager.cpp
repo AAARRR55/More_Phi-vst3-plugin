@@ -667,7 +667,39 @@ bool PluginHostManager::applyExceptionGracePeriod(juce::AudioBuffer<float>& buff
 
 void PluginHostManager::scanPluginFolders()
 {
+    // VST3-SPEC FIX: scanning a VST3 plugin instantiates its module, and many
+    // plugins' entry points assume the host's message-thread context (they touch
+    // COM / the message pump / UI APIs during init). Running PluginDirectoryScanner
+    // on a bare background thread — as PluginBrowserPanel does via juce::Thread::launch
+    // — crashes FL Studio (and other strict hosts) the moment a plugin with such an
+    // entry point is scanned. This is the same class of bug documented in
+    // juce-framework/JUCE#997 and lsp-plugins#576.
+    //
+    // The fix matches the guard already applied by discoverPlugin() and loadPlugin()
+    // in this file: acquire MessageManagerLock on the scanning thread so each
+    // plugin's instantiation sees a message-thread-safe context. The lock is held on
+    // THIS (worker) thread; it briefly blocks the DAW message thread only during
+    // each plugin's instantiation, identical to loadPlugin's behavior. Scan is only
+    // ever invoked from a worker thread by the browser, so this never deadlocks the
+    // message thread against itself.
+    //
+    // LOCK ORDER: MessageManagerLock is acquired BEFORE knownPluginsLock_, matching
+    // loadPlugin() (MMLock at the top, then the data lock). This prevents an
+    // AB-BA inversion: if a future message-thread caller held knownPluginsLock_ and
+    // then needed the message pump, it would not deadlock against this scan.
+    std::unique_ptr<juce::MessageManagerLock> mmLock;
+    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
+    {
+        mmLock = std::make_unique<juce::MessageManagerLock>(juce::Thread::getCurrentThread());
+        if (!mmLock->lockWasGained())
+        {
+            DBG("PluginHostManager::scanPluginFolders — MessageManagerLock not gained; aborting scan");
+            return;
+        }
+    }
+
     const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+
     // Scan default VST3 and AU locations
     for (auto* format : formatManager.getFormats())
     {

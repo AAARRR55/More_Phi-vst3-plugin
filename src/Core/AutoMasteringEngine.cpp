@@ -3,6 +3,8 @@
  */
 #include "AutoMasteringEngine.h"
 #include "AI/SonicMasterDecisionDecoder.h"   // AUDIT-2/3: model band counts + dynamics slot layout
+#include "AI/RuleBasedMasteringResolver.h"    // Deterministic parameter resolver
+#include "AI/Dataset/NeuralMasteringFeatureExtractor.h" // NeuralMasteringAnalysisSnapshot
 #include "AI/AutomationControlPlane.h"        // P2.5: ActionLedger for neural-write auditing
 #include <algorithm>
 #include <cmath>
@@ -270,6 +272,49 @@ int AutoMasteringEngine::getMasteringChainLatency() const noexcept
     return latency;
 }
 
+NeuralMasteringAnalysisSnapshot AutoMasteringEngine::getSnapshot() const noexcept
+{
+    NeuralMasteringAnalysisSnapshot snapshot;
+    snapshot.integratedLUFS = getLUFSIntegrated();
+    snapshot.shortTermLUFS  = getLUFSShortTerm();
+    snapshot.momentaryLUFS  = getLUFSMomentary();
+    snapshot.loudnessRange  = getLRA();
+    snapshot.truePeakDbTp   = getTruePeak_dBTP();
+    snapshot.spectralTilt   = smoothedSpectralTilt_;
+
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot spectrum;
+    if (spectrumAnalyzer_.getSnapshot(spectrum) && spectrum.frameIndex > 0)
+    {
+        const auto binsToCopy = std::min(static_cast<std::size_t>(spectrum.binCount),
+                                          kNeuralMasteringSpectralBandCount);
+        static thread_local std::array<float, kNeuralMasteringSpectralBandCount> sSpectralBands {};
+        std::fill(sSpectralBands.begin(), sSpectralBands.end(), 0.0f);
+        for (std::size_t i = 0; i < binsToCopy; ++i)
+            sSpectralBands[i] = spectrum.magnitudeDB[i];
+        snapshot.spectralBands = sSpectralBands.data();
+    }
+
+    StereoFieldAnalyzer::StereoFieldSnapshot stereo;
+    if (stereoFieldAnalyzer_.getSnapshot(stereo) && stereo.frameIndex > 0)
+    {
+        static thread_local std::array<float, kNeuralMasteringStereoBandCount> sCorrelation {};
+        static thread_local std::array<float, kNeuralMasteringStereoBandCount> sMidSideRatio {};
+        std::fill(sCorrelation.begin(), sCorrelation.end(), 0.0f);
+        std::fill(sMidSideRatio.begin(), sMidSideRatio.end(), 0.0f);
+        const auto bandsToCopy = std::min(static_cast<std::size_t>(StereoFieldAnalyzer::kNumBands),
+                                           kNeuralMasteringStereoBandCount);
+        for (std::size_t i = 0; i < bandsToCopy; ++i)
+        {
+            sCorrelation[i] = stereo.correlation[i];
+            sMidSideRatio[i] = stereo.msEnergyRatio[i];
+        }
+        snapshot.stereoCorrelation = sCorrelation.data();
+        snapshot.midSideRatio = sMidSideRatio.data();
+    }
+
+    return snapshot;
+}
+
 void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept
 {
     const int ns  = buf.getNumSamples();
@@ -382,14 +427,22 @@ void AutoMasteringEngine::timerCallback()
             : std::clamp(1.0f - stereoSnapshot.stereoWidth, 0.0f, 1.0f);
     }
 
-    // Every 300 ticks (30s): run chain planner
+    // Every 300 ticks (30s): run chain planner via the rule-based resolver.
     if (tickCount_ % plannerUpdateInterval_ == 0)
     {
-        const float lra  = lufs_.getLRA();
-        const int   genre = genreClassifier_.getTopGenre();
+        RuleBasedMasteringInput input;
+        input.spectrum   = spectrumSnapshot;
+        input.stereo     = stereoSnapshot;
+        input.lufsIntegrated = lufs_.getIntegrated();
+        input.lra        = lufs_.getLRA();
+        input.truePeakDbTp = getTruePeak_dBTP();
+        input.crestFactor = spectrumSnapshot.crestFactorProgram;
+        input.intensity  = 0.5f;          // default gentle/aggressive balance
+        input.targetLufs = normalizer_.getTargetLUFS(); // respect current target
+        input.targetCurveName = "streaming";
 
         // Run on this timer callback (message thread) — non-blocking heuristic
-        chainPlanner_.executePlan(genre, lra, smoothedSpectralTilt_, correlationMS);
+        chainPlanner_.executePlan(input);
     }
 }
 

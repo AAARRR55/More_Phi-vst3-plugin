@@ -1,24 +1,45 @@
 /*
  * More-Phi — AI/ChainPlanExecutor.cpp
+ *
+ * Heuristic multi-effect chain planner, now backed by RuleBasedMasteringResolver.
  */
 #include "ChainPlanExecutor.h"
 #include "OzonePlanApplicator.h"
+#include "RuleBasedMasteringResolver.h"
 #include "Core/AutoMasteringEngine.h"   // P1.2: ApplyVerification complete type
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 namespace more_phi {
 
 constexpr float ChainPlanExecutor::kGenreLUFS[12];
+
+MultiEffectPlan ChainPlanExecutor::executePlan(const RuleBasedMasteringInput& input)
+{
+    MultiEffectPlan plan = buildPlan(input);
+    applyPlan(plan);
+    return plan;
+}
 
 MultiEffectPlan ChainPlanExecutor::executePlan(int   genreIndex,
                                                float dynamicRange,
                                                float spectralTilt,
                                                float correlationMS)
 {
-    MultiEffectPlan plan = buildPlan(genreIndex, dynamicRange, spectralTilt, correlationMS);
-    applyPlan(plan);
-    return plan;
+    return executePlan(makeInputFromLegacy(genreIndex, dynamicRange, spectralTilt, correlationMS));
+}
+
+MultiEffectPlan ChainPlanExecutor::previewPlan(const RuleBasedMasteringInput& input)
+{
+    return buildPlan(input);
+}
+
+MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,
+                                               float dynamicRange,
+                                               float spectralTilt,
+                                               float correlationMS)
+{
+    return previewPlan(makeInputFromLegacy(genreIndex, dynamicRange, spectralTilt, correlationMS));
 }
 
 int ChainPlanExecutor::applyPlan(const MultiEffectPlan& plan)
@@ -36,8 +57,6 @@ int ChainPlanExecutor::applyPlan(const MultiEffectPlan& plan)
 
 OzoneApplyBreakdown ChainPlanExecutor::getLastOzoneApplyBreakdown() const noexcept
 {
-    // AUDIT-FIX (Fix 6): forward to the applicator under the same lock that guards
-    // applyPlan(), so the breakdown read pairs with the apply that produced it.
     const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
     if (ozoneApplicator_ != nullptr)
         return ozoneApplicator_->getLastApplyBreakdown();
@@ -46,146 +65,48 @@ OzoneApplyBreakdown ChainPlanExecutor::getLastOzoneApplyBreakdown() const noexce
 
 ApplyVerification ChainPlanExecutor::getLastOzoneVerification() const noexcept
 {
-    // P1.2 (AUDIT): forward the applicator's readback verification under the same
-    // lock that guards applyPlan(). AutoMasteringEngine::applyValidatedPlan calls
-    // this AFTER flushing the command queue so the hosted plugin's normalized
-    // values reflect the writes, then stores the result into
-    // lastApplyVerification_ / lastApplyWasPartial_. Without this forwarder the
-    // engine had no way to reach the applicator's verification, so the entire
-    // read-back path (Fix 2) was built but never consulted.
     const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
     if (ozoneApplicator_ != nullptr)
         return ozoneApplicator_->getLastVerification();
     return {};
 }
 
-MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,
-                                               float dynamicRange,
-                                               float spectralTilt,
-                                               float correlationMS)
+MultiEffectPlan ChainPlanExecutor::buildPlan(const RuleBasedMasteringInput& input) const
 {
-    return buildPlan(genreIndex, dynamicRange, spectralTilt, correlationMS);
-}
+    RuleBasedMasteringResolver resolver;
+    MultiEffectPlan plan = resolver.resolve(input);
 
-MultiEffectPlan ChainPlanExecutor::buildPlan(int   genreIndex,
-                                             float dynamicRange,
-                                             float spectralTilt,
-                                             float correlationMS)
-{
-    MultiEffectPlan plan;
+    // If the caller did not supply a target LUFS (legacy path leaves it at the
+    // default -14), map the genre index onto the legacy target table for
+    // backward compatibility.
+    if (std::abs(input.targetLufs - -14.0f) < 0.01f && input.targetCurveName.empty())
+    {
+        // No-op: the resolver already clamps to [-23, -8].  Legacy callers that
+        // want genre-specific targets should set targetLufs explicitly before
+        // calling executePlan(const RuleBasedMasteringInput&).
+    }
 
-    // Step 1: Dynamics
-    plan = stepDynamicsAssessment(dynamicRange);
-
-    // Step 2: Spectral (EQ)
-    stepSpectralAssessment(plan, genreIndex, spectralTilt);
-
-    // Step 3: Stereo
-    stepStereoAssessment(plan, correlationMS);
-
-    // Step 4: Loudness target
-    stepLoudnessTarget(plan, genreIndex);
-
-    // Step 5: Stage enable/disable
-    stepStageControl(plan);
-
-    plan.valid = true;
     return plan;
 }
 
-MultiEffectPlan ChainPlanExecutor::stepDynamicsAssessment(float dynamicRange)
+RuleBasedMasteringInput ChainPlanExecutor::makeInputFromLegacy(int    genreIndex,
+                                                                float  dynamicRange,
+                                                                float  /*spectralTilt*/,
+                                                                float  correlationMS) const noexcept
 {
-    MultiEffectPlan plan;
+    RuleBasedMasteringInput input;
+    input.lra = dynamicRange;
+    input.targetLufs = kGenreLUFS[std::clamp(genreIndex, 0, 11)];
+    input.intensity = 0.5f;
 
-    // Dynamic range heuristic:
-    //   LRA < 4 LU  → already very compressed, use gentle compression
-    //   LRA 4–9 LU  → moderate compression
-    //   LRA > 9 LU  → aggressive compression beneficial
-    if (dynamicRange < 4.f)
-        plan.compressionNeed = 0.2f;
-    else if (dynamicRange < 9.f)
-        plan.compressionNeed = 0.5f;
-    else
-        plan.compressionNeed = 0.8f;
+    // Correlation is not in the rich input, but we can encode it into the stereo
+    // snapshot so the width-curve resolver still behaves like the old heuristic.
+    input.stereo.sampleRate = 48000.0;
+    input.stereo.stereoWidth = 1.0f - std::clamp(correlationMS, 0.0f, 1.0f);
+    for (auto& c : input.stereo.correlation)
+        c = correlationMS;
 
-    // Keep the public field for API compatibility, but do not claim a neural
-    // compressor is active while the ONNX backend is still a stub.
-    plan.useNeuralComp = false;
-    return plan;
-}
-
-void ChainPlanExecutor::stepSpectralAssessment(MultiEffectPlan& plan,
-                                               int genreIndex,
-                                               float spectralTilt)
-{
-    // Build simple EQ prescription based on genre + spectral tilt
-    // Negative tilt = too dark (boost highs), positive = too bright (cut highs)
-    const float highGain = std::clamp(-spectralTilt * 0.5f, -3.f, 3.f);
-
-    // Construct JSON EQ prescription for bands 0-7
-    juce::String json = "{ \"bands\": [";
-    json += "{ \"freq\": 80, \"gain\": " +
-            juce::String(genreIndex <= 2 ? 1.5f : 0.5f, 1) +
-            ", \"Q\": 0.7, \"type\": \"lowshelf\" }";
-    json += ", { \"freq\": 250, \"gain\": -0.5, \"Q\": 1.2, \"type\": \"peak\" }";
-    json += ", { \"freq\": 800, \"gain\": 0.0, \"Q\": 1.0, \"type\": \"peak\" }";
-    json += ", { \"freq\": 2000, \"gain\": 0.5, \"Q\": 1.0, \"type\": \"peak\" }";
-    json += ", { \"freq\": 5000, \"gain\": " + juce::String(highGain * 0.5f, 1) +
-            ", \"Q\": 1.0, \"type\": \"peak\" }";
-    json += ", { \"freq\": 8000, \"gain\": " + juce::String(highGain * 0.7f, 1) +
-            ", \"Q\": 0.9, \"type\": \"peak\" }";
-    json += ", { \"freq\": 12000, \"gain\": " + juce::String(highGain, 1) +
-            ", \"Q\": 0.7, \"type\": \"highshelf\" }";
-    json += ", { \"freq\": 18000, \"gain\": " + juce::String(highGain * 0.5f, 1) +
-            ", \"Q\": 0.7, \"type\": \"highshelf\" }";
-    json += "] }";
-
-    plan.eqPrescriptionJSON = json;
-}
-
-void ChainPlanExecutor::stepStereoAssessment(MultiEffectPlan& plan, float correlationMS)
-{
-    // correlationMS close to 1.0 = very mono → widen
-    // correlationMS close to 0.0 = moderate stereo → standard curve
-    // correlationMS < 0 = problematic phase → narrow
-
-    if (correlationMS > 0.8f)
-    {
-        // Narrow mix — open it up
-        plan.widthCurve[0] = 0.0f;
-        plan.widthCurve[1] = 0.6f;
-        plan.widthCurve[2] = 1.2f;
-        plan.widthCurve[3] = 1.6f;
-    }
-    else if (correlationMS < 0.2f)
-    {
-        // Wide / phasey — tighten
-        plan.widthCurve[0] = 0.0f;
-        plan.widthCurve[1] = 0.5f;
-        plan.widthCurve[2] = 0.8f;
-        plan.widthCurve[3] = 1.0f;
-    }
-    else
-    {
-        // Standard
-        plan.widthCurve[0] = 0.0f;
-        plan.widthCurve[1] = 0.6f;
-        plan.widthCurve[2] = 1.0f;
-        plan.widthCurve[3] = 1.4f;
-    }
-}
-
-void ChainPlanExecutor::stepLoudnessTarget(MultiEffectPlan& plan, int genreIndex)
-{
-    const int clampedIdx = std::clamp(genreIndex, 0, 11);
-    plan.targetLUFS  = kGenreLUFS[clampedIdx];
-    plan.ceilingDBTP = -1.0f;
-}
-
-void ChainPlanExecutor::stepStageControl(MultiEffectPlan& plan)
-{
-    // Enable exciter for brighter/harder genres
-    plan.exciterEnabled = (plan.compressionNeed > 0.6f);
+    return input;
 }
 
 } // namespace more_phi
