@@ -89,4 +89,58 @@ TEST_CASE("SonicMasterDecisionRunner loads and infers the real ONNX model",
     CHECK(dt < 500);
 }
 
+// AUDIT (C1 verify, 2026-06-25): the production load path
+// (PluginProcessor.cpp:269-273) calls loadModel(modelPath, contractPath) WITH the
+// contract, unconditionally. The sibling test above calls loadModel(modelPath)
+// with NO contract — which skipped the contract block and hid the C1 defect
+// (the shipped contract's schema didn't match parseSonicMasterContract, so the
+// parser fail-closed and loadModel returned false, silently forcing HTTP-only
+// in every production build). This test reproduces the EXACT production path:
+// it stages both files and asserts the model loads WITH the contract. If the
+// contract schema ever drifts from the parser again, this fails where the
+// sibling test would still pass.
+TEST_CASE("SonicMasterDecisionRunner loads with the contract (production path, C1 guard)",
+          "[SonicMaster][Live]")
+{
+    const char* modelCandidates[] = {
+        "masteringbrain_v2_decision.onnx",
+        "build/sonicmaster/masteringbrain_v2_decision.onnx",
+    };
+    const char* contractCandidates[] = {
+        "masteringbrain_v2_decision.contract.json",
+        "build/sonicmaster/masteringbrain_v2_contract.json",
+    };
+    std::string modelPath;
+    std::string contractPath;
+    if (!findFile(modelCandidates, 2, modelPath))
+    {
+        WARN("masteringbrain_v2_decision.onnx not staged — skipping live C1 guard");
+        return;
+    }
+    if (!findFile(contractCandidates, 2, contractPath))
+    {
+        WARN("masteringbrain_v2_decision.contract.json not staged — skipping live C1 guard");
+        return;
+    }
+
+    more_phi::SonicMasterDecisionRunner runner;
+    // This is the line that returned false before the C1 fix (commit c91ad2e).
+    REQUIRE(runner.loadModel(modelPath, contractPath));
+    REQUIRE(runner.isAvailable());
+
+    // And inference must still succeed end-to-end on the contract-validated model.
+    std::vector<float> interleaved(2 * more_phi::kSonicMasterSegmentFrames, 0.0f);
+    for (std::size_t i = 0; i < more_phi::kSonicMasterSegmentFrames; ++i)
+    {
+        const double t = static_cast<double>(i) / 44100.0;
+        const float v = 0.2f * static_cast<float>(std::sin(2.0 * 3.14159265358979 * 220.0 * t));
+        interleaved[2 * i + 0] = v;
+        interleaved[2 * i + 1] = v;
+    }
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    REQUIRE(runner.runDecision(interleaved.data(), decision, more_phi::kSonicMasterDecisionWidth));
+    for (std::size_t i = 0; i < more_phi::kSonicMasterDecisionWidth; ++i)
+        REQUIRE(std::isfinite(decision[i]));
+}
+
 #endif // MORE_PHI_HAS_ONNX
