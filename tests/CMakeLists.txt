@@ -85,6 +85,7 @@ add_executable(MorePhiTests
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
     Unit/TestNeuralMasteringController.cpp
+    Unit/TestRuleBasedMasteringResolver.cpp
     Unit/TestNeuralMasteringFeatureExtractor.cpp
     Unit/TestOnnxNeuralMasteringRunner.cpp
     Unit/TestOnnxRunnerInference.cpp
@@ -195,9 +196,12 @@ if(MORE_PHI_HAS_ONNX)
     # under the MORE_PHI_HAS_ONNX guard. The MorePhi (plugin) target gets these
     # as PRIVATE includes; MorePhiTests links the SharedCode lib directly so it
     # must add them itself or the test TUs fail with C1083.
+    # AUDIT (2026-06-26): the model is now embedded in the MorePhiFonts BinaryData
+    # (one namespace — separate targets collide on namedResourceList), so the
+    # BinaryData.h include dir is the fonts target's JuceLibraryCode.
     target_include_directories(MorePhiTests PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
-        "${CMAKE_BINARY_DIR}/juce_binarydata_MorePhiSonicMasterModel/JuceLibraryCode"
+        "${CMAKE_BINARY_DIR}/juce_binarydata_MorePhiFonts/JuceLibraryCode"
     )
 
     if(WIN32 AND MORE_PHI_ONNX_RUNTIME_LIB)
@@ -246,9 +250,25 @@ if(MORE_PHI_HAS_ONNX)
             COMMENT "Staging fixed ${MOREPHI_SONICMASTER_CONTRACT} next to test exe (from models/)"
             VERBATIM)
     endif()
+    # ── V2 feature→delta ONNX model staging (optional) ────────────────────────
+    # The 63→72 model is staged alongside the test exe so
+    # TestOnnxNeuralMasteringRunner and friends can exercise it. Conditional — if
+    # no model file exists, the runner stays !available (graceful degradation).
+    set(MOREPHI_V2_MODEL "neural_mastering_v2.onnx")
+    set(MOREPHI_V2_MODEL_SRC "${CMAKE_SOURCE_DIR}/models/sonicmaster/${MOREPHI_V2_MODEL}")
+    if(EXISTS "${MOREPHI_V2_MODEL_SRC}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MOREPHI_V2_MODEL_SRC}"
+                "$<TARGET_FILE_DIR:MorePhiTests>/${MOREPHI_V2_MODEL}"
+            COMMENT "Staging ${MOREPHI_V2_MODEL} next to test exe (from models/)"
+            VERBATIM)
+    endif()
+    unset(MOREPHI_V2_MODEL)
+    unset(MOREPHI_V2_MODEL_SRC)
 endif()
 if(COMMAND more_phi_apply_build_tuning)
-    more_phi_apply_build_tuning(MorePhiTests)
+    more_phi_apply_build_tuning(MorePhiTests)    
 endif()
 
 # ── Stack size (MSVC: 4 MB, matches plugin build for V2 engine overhead) ─────

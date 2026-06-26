@@ -220,11 +220,18 @@ if(MORE_PHI_HAS_ONNX)
             "Place masteringbrain_v2_decision.contract.json in models/sonicmaster/ or set MORE_PHI_ENABLE_ONNX=OFF.")
     endif()
 
-    juce_add_binary_data(MorePhiSonicMasterModel
-        SOURCES
-            "${MOREPHI_SONICMASTER_MODEL}"
-            "${MOREPHI_SONICMASTER_CONTRACT}"
-    )
+    # AUDIT (2026-06-26, embedding fix): do NOT create a separate
+    # MorePhiSonicMasterModel BinaryData target. Two juce_add_binary_data targets
+    # in one link both define BinaryData::namedResourceList / originalFilenames
+    # (JUCE uses one shared BinaryData namespace per consumer), causing LNK2005
+    # multiply-defined symbols when both are linked into the .vst3. Instead,
+    # collect the model+contract sources here and append them to the single
+    # MorePhiFonts BinaryData below — one namespace, one set of lookup tables,
+    # and the model bytes ride along with the fonts (which are referenced by the
+    # UI and so never stripped).
+    set(MOREPHI_SONICMASTER_EMBED_SOURCES
+        "${MOREPHI_SONICMASTER_MODEL}"
+        "${MOREPHI_SONICMASTER_CONTRACT}")
 
     # Generate a hash header at configure time so the runtime can verify
     # the extracted model file matches the embedded source.
@@ -259,12 +266,18 @@ endif()
 # ── Embedded Fonts (BinaryData) ───────────────────────────────────────────────
 # Bundle the landing-page brand typefaces so the GUI renders identically on every
 # machine (Syncopate = wordmark/section labels, Outfit = body/value text).
+# AUDIT (2026-06-26): when ONNX is enabled, ALSO embed the SonicMaster model +
+# contract into this same BinaryData target (one namespace — see the note above
+# on why two separate BinaryData targets collide). The fonts are referenced by
+# the UI so they're never linker-stripped, which transitively retains the model
+# bytes that share the namespace.
 juce_add_binary_data(MorePhiFonts
     SOURCES
         assets/fonts/Syncopate-Bold.ttf
         assets/fonts/Syncopate-Regular.ttf
         assets/fonts/Outfit-Regular.ttf
         assets/fonts/Outfit-SemiBold.ttf
+        ${MOREPHI_SONICMASTER_EMBED_SOURCES}
 )
 
 # ── Plugin Target ─────────────────────────────────────────────────────────────
@@ -548,6 +561,9 @@ set(MORE_PHI_AI_SOURCES
     src/AI/GenreClassifier.cpp
     src/AI/ChainPlanExecutor.h
     src/AI/ChainPlanExecutor.cpp
+    src/AI/RuleBasedMasteringResolver.h
+    src/AI/RuleBasedMasteringResolver.cpp
+    src/AI/MasteringTargetCurves.h
     src/AI/MasteringCandidateScoring.h
     src/AI/NeuralMasteringModelMetadata.h
     src/AI/NeuralMasteringModelRunner.h
@@ -932,13 +948,26 @@ endif()
 # default; flipping MORE_PHI_ENABLE_ONNX=ON is the single activation switch.
 if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAS_ONNX=1)
+    # ONNX Runtime linked PRIVATE (symbols don't leak into the plugin's public ABI).
+    # The model+contract are embedded via MorePhiFonts BinaryData (not a separate
+    # target — see the embedding note at the MorePhiFonts definition), so they're
+    # already linked via the unconditional MorePhiFonts link at line ~845.
     target_link_libraries(MorePhi PRIVATE
         more_phi::onnxruntime
-        MorePhiSonicMasterModel
     )
     target_include_directories(MorePhi PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
+    # AUDIT (2026-06-26): the model bytes share MorePhiFonts' BinaryData
+    # namespace, which the UI references (fonts), so the lookup tables are
+    # retained. But the model's DATA arrays could still be stripped if not
+    # referenced — keep the anchor TU (takes the address of the named-resource
+    # pointers) as belt-and-suspenders. Its include dir is the fonts BinaryData
+    # header, which (when ONNX on) also declares the model symbols.
+    set(_sm_anchor_src "${CMAKE_CURRENT_SOURCE_DIR}/src/Plugin/SonicMasterEmbeddedAnchor.cpp")
+    target_sources(MorePhi PRIVATE "${_sm_anchor_src}")
+    set_source_files_properties("${_sm_anchor_src}" PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src;${CMAKE_BINARY_DIR}/juce_binarydata_MorePhiFonts/JuceLibraryCode")
 
     # Copy the ONNX Runtime shared lib next to the plugin/test binaries so the
     # host process can resolve ONNX symbols at runtime (Windows DLL search path;
@@ -962,6 +991,26 @@ if(MORE_PHI_HAS_ONNX)
         unset(_ort_dll_dir)
         unset(_consumer)
     endif()
+
+    # ── V2 feature→delta ONNX model staging (optional) ────────────────────
+    # The 63→72 feature-delta model is staged alongside the VST3 binary
+    # (and standalone etc.) so OnnxNeuralMasteringRunner::initialize() can
+    # load it via a file-path search. The copy is conditional — if no model
+    # file exists, the runner gracefully falls through to DeterministicBaseline.
+    set(MOREPHI_V2_MODEL_SRC "${CMAKE_CURRENT_SOURCE_DIR}/models/sonicmaster/neural_mastering_v2.onnx")
+    if(EXISTS "${MOREPHI_V2_MODEL_SRC}")
+        foreach(_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer)
+            if(TARGET ${_consumer})
+                add_custom_command(TARGET ${_consumer} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${MOREPHI_V2_MODEL_SRC}"
+                        "$<TARGET_FILE_DIR:${_consumer}>/neural_mastering_v2.onnx"
+                    COMMENT "Staging neural_mastering_v2.onnx next to ${_consumer}")
+            endif()
+        endforeach()
+        unset(_consumer)
+    endif()
+    unset(MOREPHI_V2_MODEL_SRC)
 endif()
 
 # ── libsodium linkage (Ed25519 license-certificate verification) ──────────────
