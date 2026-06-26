@@ -126,6 +126,70 @@ enum class NeuralMasteringValidationIssue : std::uint8_t
     MaxDeltaProjected
 };
 
+// DIAGNOSTIC (2026-06-26): enum→string mapper for NeuralMasteringValidationIssue.
+// Until now no stringification existed anywhere, so a safety-policy rejection
+// surfaced only as a coarse "safety_rejected" with the specific issue discarded
+// (SonicMasterAnalysisEngine.cpp requestDecisionNow dropped verdict.issues[]).
+// This mapper lets the on-demand path report WHICH gate tripped — e.g.
+// LowConfidence (model out-of-distribution on a -7 LUFS input) vs TargetOutOfRange
+// (decoded EQ/loudness outside sanity bounds) vs NonFiniteValue (NaN from the
+// model) — so the assistant stops confabulating "transient, try again" and can
+// give an honest next step. snake_case keys for JSON; keep in sync with the enum.
+inline const char* neuralMasteringIssueKey(NeuralMasteringValidationIssue issue) noexcept
+{
+    switch (issue)
+    {
+        case NeuralMasteringValidationIssue::None:                  return "none";
+        case NeuralMasteringValidationIssue::SchemaVersionMismatch: return "schema_version_mismatch";
+        case NeuralMasteringValidationIssue::AudioCallbackRuntime:  return "audio_callback_runtime";
+        case NeuralMasteringValidationIssue::InvalidTimestamp:      return "invalid_timestamp";
+        case NeuralMasteringValidationIssue::StalePlan:             return "stale_plan";
+        case NeuralMasteringValidationIssue::LowConfidence:         return "low_confidence";
+        case NeuralMasteringValidationIssue::Abstain:               return "abstain";
+        case NeuralMasteringValidationIssue::ReviewOnly:            return "review_only";
+        case NeuralMasteringValidationIssue::UnsupportedLayout:     return "unsupported_layout";
+        case NeuralMasteringValidationIssue::NonFiniteValue:        return "non_finite_value";
+        case NeuralMasteringValidationIssue::TargetOutOfRange:      return "target_out_of_range";
+        case NeuralMasteringValidationIssue::DeltaOutOfRange:       return "delta_out_of_range";
+        case NeuralMasteringValidationIssue::IllegalMask:           return "illegal_mask";
+        case NeuralMasteringValidationIssue::HighRiskMask:          return "high_risk_mask";
+        case NeuralMasteringValidationIssue::MaxDeltaProjected:     return "max_delta_projected";
+    }
+    return "unknown";
+}
+
+// DIAGNOSTIC (2026-06-26): is this issue a HARD reject? Mirrors the file-static
+// isHardRejectIssue() in NeuralMasteringSafetyPolicy.cpp, exposed publicly so
+// the on-demand path can tell the assistant "this is a hard reject (retrying
+// won't help until the audio/plan changes)" vs "soft hold (retryable)." The
+// authoritative list lives in the policy .cpp; this public mirror must stay in
+// sync with it. Soft issues: StalePlan, LowConfidence, Abstain, ReviewOnly,
+// MaxDeltaProjected (informational). Everything else is hard.
+inline bool isHardRejectNeuralMasteringIssue(NeuralMasteringValidationIssue issue) noexcept
+{
+    switch (issue)
+    {
+        case NeuralMasteringValidationIssue::None:
+        case NeuralMasteringValidationIssue::StalePlan:
+        case NeuralMasteringValidationIssue::LowConfidence:
+        case NeuralMasteringValidationIssue::Abstain:
+        case NeuralMasteringValidationIssue::ReviewOnly:
+        case NeuralMasteringValidationIssue::MaxDeltaProjected:
+            return false;
+        case NeuralMasteringValidationIssue::SchemaVersionMismatch:
+        case NeuralMasteringValidationIssue::AudioCallbackRuntime:
+        case NeuralMasteringValidationIssue::InvalidTimestamp:
+        case NeuralMasteringValidationIssue::UnsupportedLayout:
+        case NeuralMasteringValidationIssue::NonFiniteValue:
+        case NeuralMasteringValidationIssue::TargetOutOfRange:
+        case NeuralMasteringValidationIssue::DeltaOutOfRange:
+        case NeuralMasteringValidationIssue::IllegalMask:
+        case NeuralMasteringValidationIssue::HighRiskMask:
+            return true;
+    }
+    return true;  // unknown enum value → treat as hard (fail-closed)
+}
+
 struct MasteringTargetVector
 {
     std::array<float, kNeuralMasteringEqTargetCount> eq {};

@@ -197,6 +197,61 @@ SonicMasterAnalysisEngine::getCaptureDiagnostics() const noexcept
     return d;
 }
 
+SonicMasterAnalysisEngine::LastSafetyRejection
+SonicMasterAnalysisEngine::getLastSafetyRejection() const noexcept
+{
+    // DIAGNOSTIC (2026-06-26): the snapshot is written under inferMutex_ (both
+    // runCycle and requestDecisionNow hold it across their validate() calls), so
+    // we take it here too for a torn-free read. Cheap and uncontended in practice
+    // — the only writers are the two inference paths, serialized by the same lock.
+    std::lock_guard<std::mutex> lock(inferMutex_);
+    LastSafetyRejection out = lastSafetyRejection_;
+    out.candidateConfidence = lastRejectedCandidateConfidence_;
+    return out;
+}
+
+void SonicMasterAnalysisEngine::recordSafetyRejection_(
+    const NeuralMasteringValidationResult& verdict, float candidateConfidence) noexcept
+{
+    // DIAGNOSTIC (2026-06-26): caller (runCycle or requestDecisionNow) already
+    // holds inferMutex_ across validate(), so this write is serialized with the
+    // getLastSafetyRejection() reader. Copy up to kNeuralMasteringIssueCapacity
+    // issues, pick the first non-None as primaryIssue, and flag hardReject if any
+    // issue is a hard reject (per isHardRejectNeuralMasteringIssue). MaxDeltaProjected
+    // is informational-only and never the reason for a reject, so we skip it when
+    // choosing primaryIssue (it can still appear in the issues array for context).
+    lastSafetyRejection_ = {};
+    lastSafetyRejection_.valid = true;
+    lastRejectedCandidateConfidence_ = std::isfinite(candidateConfidence) ? candidateConfidence : 0.0f;
+    std::size_t n = verdict.issueCount < lastSafetyRejection_.issues.size()
+        ? verdict.issueCount : lastSafetyRejection_.issues.size();
+    lastSafetyRejection_.issueCount = n;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const auto issue = verdict.issues[i];
+        lastSafetyRejection_.issues[i] = issue;
+        if (isHardRejectNeuralMasteringIssue(issue))
+            lastSafetyRejection_.hardReject = true;
+        if (lastSafetyRejection_.primaryIssue == NeuralMasteringValidationIssue::None
+            && issue != NeuralMasteringValidationIssue::None
+            && issue != NeuralMasteringValidationIssue::MaxDeltaProjected)
+        {
+            lastSafetyRejection_.primaryIssue = issue;
+        }
+    }
+    // If only MaxDeltaProjected (shouldn't reject, but be defensive) or None made
+    // it through, fall back to the first issue verbatim so the field is never None
+    // on a recorded rejection.
+    if (lastSafetyRejection_.primaryIssue == NeuralMasteringValidationIssue::None && n > 0)
+        lastSafetyRejection_.primaryIssue = verdict.issues[0];
+}
+
+void SonicMasterAnalysisEngine::clearSafetyRejection_() noexcept
+{
+    lastSafetyRejection_ = {};
+    lastRejectedCandidateConfidence_ = 0.0f;
+}
+
 void SonicMasterAnalysisEngine::ensureRing() noexcept
 {
     // Idempotent — only allocates on first call when ring is nullptr.
@@ -278,6 +333,10 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     consecutiveFailures_.store(0, std::memory_order_relaxed);
     lastPlanId_ = 0;
     nextPlanId_ = 1;
+    // DIAGNOSTIC (2026-06-26): clear any rejection detail from a prior session so a
+    // stale snapshot can't be misread after re-prepare. Safe to touch here — the
+    // analysis thread is joined (release() was called at the top of prepare).
+    clearSafetyRejection_();
     // Stage D: reset the closed LUFS loop so a fresh prepare starts open-loop.
     feedbackActive_ = false;
     feedbackTargetLufs_ = -14.0f;
@@ -573,9 +632,16 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     const auto verdict = safetyPolicy_.validate(candidate, runtime);
     if (!verdict.accepted)
     {
+        // DIAGNOSTIC (2026-06-26): record the specific issue(s) on the background
+        // path too, so an on-demand sonicmaster_decision call immediately afterward
+        // can report why the last background cycle held (e.g. low_confidence). The
+        // on-demand path uses its own decisionPolicy copy but reads the same
+        // lastSafetyRejection_ snapshot.
+        recordSafetyRejection_(verdict, candidate.confidence);
         status_.store(Status::HeldLowConfidence, std::memory_order_release);
         return false;
     }
+    clearSafetyRejection_();
 
     // Apply the policy verdict, not the raw decoded plan. The verdict carries
     // per-plan delta projection (for example EQ/loudness slew limits).
@@ -750,10 +816,18 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
     const auto verdict = decisionPolicy.validate(candidate, runtime);
     if (!verdict.accepted)
     {
+        // DIAGNOSTIC (2026-06-26): record the SPECIFIC issue(s) so the failure JSON
+        // can say "low_confidence (model confidence 0.4, floor 0.75)" vs
+        // "target_out_of_range" vs "non_finite_value" — instead of the coarse
+        // "safety_rejected" that left the assistant guessing whether to retry.
+        recordSafetyRejection_(verdict, candidate.confidence);
         if (outFailure != nullptr) *outFailure = DecisionFailure::SafetyRejected;
         return false;
     }
 
+    // Accepted: clear any prior rejection detail so a stale snapshot from an
+    // earlier call can't be misread after a success.
+    clearSafetyRejection_();
     outPlan = verdict.plan;
     return true;
 }

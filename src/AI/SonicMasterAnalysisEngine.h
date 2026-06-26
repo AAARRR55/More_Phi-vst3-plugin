@@ -292,6 +292,34 @@ public:
     };
     [[nodiscard]] CaptureDiagnostics getCaptureDiagnostics() const noexcept;
 
+    // DIAGNOSTIC (2026-06-26): structured detail from the most recent safety-policy
+    // rejection. Until now a reject surfaced only as the coarse DecisionFailure::
+    // SafetyRejected and the specific NeuralMasteringValidationIssue(s) were discarded
+    // — so the assistant could only say "rejected" and had to confabulate whether it
+    // was LowConfidence (model out-of-distribution, retry-with-different-audio) vs
+    // TargetOutOfRange (decoded plan outside sanity bounds, hard reject) vs
+    // NonFiniteValue (model emitted NaN). This snapshot carries the specific issues
+    // from the last validate() call on either path (on-demand or background), so the
+    // tool can report the actual gate. Cleared on prepare()/release() and on any
+    // successful accept. `primaryIssue` is the first non-None issue (the most
+    // actionable one); `hardReject` is true if any issue is a hard reject (retrying
+    // the same audio will not help). Thread-safe via the release/acquire flag.
+    struct LastSafetyRejection
+    {
+        bool          valid        = false;   // a rejection has been recorded
+        bool          hardReject   = false;   // any issue is a hard reject
+        std::size_t   issueCount   = 0;       // number of issues (<= kNeuralMasteringIssueCapacity)
+        NeuralMasteringValidationIssue primaryIssue = NeuralMasteringValidationIssue::None;
+        std::array<NeuralMasteringValidationIssue, kNeuralMasteringIssueCapacity> issues {};
+        // The candidate confidence at the moment of rejection, when finite. The
+        // LowConfidence gate compares this against minConfidence; surfacing it lets
+        // the assistant say "model confidence was 0.4, floor is 0.75" instead of
+        // just "low confidence." NaN/inf → 0 here (the NonFiniteValue issue is the
+        // signal in that case).
+        float         candidateConfidence = 0.0f;
+    };
+    [[nodiscard]] LastSafetyRejection getLastSafetyRejection() const noexcept;
+
     // DIAG (2026-06-26): pull the last inference error through the source
     // interface so sonicmaster_decision can report the real ORT exception.
     [[nodiscard]] std::string lastInferenceError() const noexcept
@@ -373,6 +401,14 @@ private:
     // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
     void ensureRing() noexcept;
 
+    // DIAGNOSTIC (2026-06-26): copy the specific rejection issues from a validate()
+    // verdict into lastSafetyRejection_ so getLastSafetyRejection() can surface
+    // them. Must be called under inferMutex_ (the caller — runCycle or
+    // requestDecisionNow — already holds it across validate()). Clears on accept.
+    void recordSafetyRejection_(const NeuralMasteringValidationResult& verdict,
+                                float candidateConfidence) noexcept;
+    void clearSafetyRejection_() noexcept;
+
     SonicMasterAnalysisEngineConfig config_ {};
     AutoMasteringEngine* applicationEngine_ = nullptr;
     ISonicMasterInferenceSource* source_ = nullptr;
@@ -394,9 +430,20 @@ private:
 
     NeuralMasteringSafetyPolicy safetyPolicy_ {};
 
+    // DIAGNOSTIC (2026-06-26): last safety-policy rejection detail. Populated on
+    // the analysis thread (runCycle) and the message thread (requestDecisionNow)
+    // — both under inferMutex_ during the validate() call — and read on the
+    // message thread by the MCP tool's failure path. Guarded by inferMutex_ for
+    // writes (already held); reads from getLastSafetyRejection() also take
+    // inferMutex_ so they never see a half-written snapshot.
+    LastSafetyRejection lastSafetyRejection_ {};
+    float lastRejectedCandidateConfidence_ = 0.0f;
+
     std::thread thread_;
     std::mutex mutex_;          // guards the cv wait below
-    std::mutex inferMutex_;     // AUDIT-1: serializes runCycle vs requestDecisionNow scratch use
+    // mutable: getLastSafetyRejection() is const (diagnostic read) but must lock
+    // for a torn-free snapshot — same logical-const pattern as hostManager.
+    mutable std::mutex inferMutex_;     // AUDIT-1: serializes runCycle vs requestDecisionNow scratch use
     std::condition_variable cv_;
     std::atomic<bool> active_ { false };
     std::atomic<bool> stopRequested_ { false };

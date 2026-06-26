@@ -176,8 +176,83 @@ static json sonicmasterClosedLoopJson(const more_phi::SonicMasterAnalysisEngine:
 // assistant can relay a truthful next step instead of inventing one. The capture
 // percentage is taken against requiredFrames (the ~6s window), not the ring
 // capacity (which is 8s and wraps) — that's the number the user cares about.
+// Build the safety_rejection JSON block from the engine's last-rejection
+// snapshot. Surfaces the SPECIFIC NeuralMasteringValidationIssue(s) so the
+// assistant can give an honest, actionable next step instead of "rejected, try
+// again." Includes the candidate confidence + hard/soft classification so a
+// client can tell "retryable soft hold (low_confidence)" from "hard reject
+// (target_out_of_range — retrying the same audio won't help)."
+static json sonicmasterSafetyRejectionJson(
+    const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
+{
+    json r;
+    r["valid"]             = sr.valid;
+    r["primary_issue"]     = more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+    r["hard_reject"]       = sr.hardReject;
+    r["retryable"]         = sr.valid && !sr.hardReject;  // soft hold: audio/target change can flip it
+    r["candidate_confidence"] = sr.candidateConfidence;
+    json issuesArr = json::array();
+    for (std::size_t i = 0; i < sr.issueCount; ++i)
+        issuesArr.push_back(more_phi::neuralMasteringIssueKey(sr.issues[i]));
+    r["issues"] = issuesArr;
+    return r;
+}
+
+// Human-readable explanation of a specific safety issue, for the `error` prose.
+// Falls back to the generic message when no specific issue was recorded.
+static std::string sonicmasterSafetyIssueMessage(
+    const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
+{
+    if (!sr.valid) return "The decoded plan was rejected by the safety policy.";
+    const char* issue = more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+    const std::string conf = std::isfinite(sr.candidateConfidence)
+        ? " (model confidence " + std::to_string(sr.candidateConfidence) + ")" : "";
+    // Hand-written guidance per issue so the assistant doesn't have to infer it.
+    using I = more_phi::NeuralMasteringValidationIssue;
+    switch (sr.primaryIssue)
+    {
+        case I::LowConfidence:
+            return std::string("The model's confidence was below the safety floor") + conf +
+                   ". This is usually an out-of-distribution input (e.g. signal far "
+                   "from the training distribution). Retrying on DIFFERENT audio may "
+                   "help; retrying the same audio will not.";
+        case I::TargetOutOfRange:
+            return "The decoded EQ/loudness/stereo targets fell outside the sanity "
+                   "bounds. This is a hard reject — the model produced an unreasonable "
+                   "plan for this input. Try different audio or a different target_lufs.";
+        case I::DeltaOutOfRange:
+            return "The per-step delta from the last safe plan exceeded [-1,1]. Hard "
+                   "reject; retrying the same audio will not help.";
+        case I::NonFiniteValue:
+            return "The model emitted a non-finite value (NaN/Inf). This indicates a "
+                   "numerical failure on this input; retry, and if it persists the "
+                   "embedded model or the input gain-staging needs checking.";
+        case I::StalePlan:
+            return "The plan was stale by the time it reached validation (capture "
+                   "window too old). Soft hold — re-capture and retry.";
+        case I::Abstain:
+            return "The model explicitly abstained. Soft hold; try different audio.";
+        case I::ReviewOnly:
+            return "The plan was flagged review-only. Soft hold.";
+        case I::SchemaVersionMismatch:
+        case I::AudioCallbackRuntime:
+        case I::InvalidTimestamp:
+        case I::UnsupportedLayout:
+        case I::IllegalMask:
+        case I::HighRiskMask:
+            return std::string("Rejected (") + issue +
+                   "): an infrastructure/contract check failed. This is a hard reject "
+                   "and usually points to a build or wiring problem, not the audio.";
+        case I::MaxDeltaProjected:
+        case I::None:
+            return "The decoded plan was rejected by the safety policy.";
+    }
+    return "The decoded plan was rejected by the safety policy.";
+}
+
 static std::string sonicmasterFailureMessage(more_phi::DecisionFailure f, bool timedOut,
-                                             const more_phi::SonicMasterAnalysisEngine::CaptureDiagnostics& cd)
+                                             const more_phi::SonicMasterAnalysisEngine::CaptureDiagnostics& cd,
+                                             const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
 {
     if (timedOut)
         return "Inference did not complete within 5.0 s. The analysis thread may "
@@ -207,8 +282,10 @@ static std::string sonicmasterFailureMessage(more_phi::DecisionFailure f, bool t
             return "The model produced output but it could not be decoded into a "
                    "valid mastering plan (shape/contract mismatch).";
         case more_phi::DecisionFailure::SafetyRejected:
-            return "The decoded plan was rejected by the safety policy (confidence "
-                   "or sanity bounds). No plan was applied.";
+            // Delegate to the issue-specific explainer so the prose carries the
+            // ACTUAL reason (low_confidence vs target_out_of_range vs ...) instead
+            // of the old generic "confidence or sanity bounds" non-explanation.
+            return sonicmasterSafetyIssueMessage(sr);
         case more_phi::DecisionFailure::None:
             return "ok";
     }
@@ -6209,6 +6286,13 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     if (!inferenceOk)
     {
         const auto cd = engine.getCaptureDiagnostics();
+        // SAFETY-REJECTION-DETAIL (2026-06-26): when failure == SafetyRejected, pull
+        // the SPECIFIC issue(s) so the JSON can say "low_confidence (retryable)" vs
+        // "target_out_of_range (hard reject)" instead of the coarse bucket. Read
+        // unconditionally — it's cheap, and on a non-safety failure it carries the
+        // last rejection from a prior call (cleared on accept), which is still
+        // useful context ("the previous attempt was held for low_confidence").
+        const auto sr = engine.getLastSafetyRejection();
         json err;
         err["success"] = false;
         err["available"] = engine.isAvailable();
@@ -6221,7 +6305,13 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         err["failure_reason"] = sonicmasterFailureState(failure);
         err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
         err["error"]          = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
-                                                          timedOut, cd);
+                                                          timedOut, cd, sr);
+        // When the failure is a safety reject, fold the specific issue into the
+        // top-level state so clients reading only `state` still see the reason
+        // (e.g. "safety_rejected:low_confidence"). Non-safety failures keep the
+        // plain reason.
+        if (!timedOut && failure == more_phi::DecisionFailure::SafetyRejected && sr.valid)
+            err["state"] = std::string("safety_rejected:") + more_phi::neuralMasteringIssueKey(sr.primaryIssue);
         // last_inference_ms disambiguates "model hung" (large value) from "model
         // fast but rejected" (small value, failure_reason=inference_rejected).
         err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
@@ -6248,6 +6338,12 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         else
             cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
         err["capture_diagnostics"] = cap;
+        // SAFETY-REJECTION-DETAIL (2026-06-26): the specific issue(s) + retryable
+        // flag. Always emit so the shape is stable; `valid=false` when no rejection
+        // has been recorded (e.g. insufficient_audio failure). This is the field the
+        // assistant should read to decide "retry" vs "change the audio" vs "hard
+        // reject — report this rather than guessing from the coarse failure_reason.
+        err["safety_rejection"] = sonicmasterSafetyRejectionJson(sr);
         // DIAG (2026-06-26): surface the real ORT exception + run/fail counters.
         // The catch(...) in runDecision previously swallowed the reason entirely;
         // these fields turn "inference failed" into an actionable message.
@@ -6606,6 +6702,7 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     if (!inferenceOk)
     {
         const auto cd = engine.getCaptureDiagnostics();
+        const auto sr = engine.getLastSafetyRejection();
         json err;
         err["success"] = false;
         err["available"] = true;
@@ -6613,12 +6710,14 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
         err["timed_out"]      = timedOut;
         err["state"]          = timedOut ? "timeout" : sonicmasterFailureState(failure);
         err["failure_reason"] = sonicmasterFailureState(failure);
+        if (!timedOut && failure == more_phi::DecisionFailure::SafetyRejected && sr.valid)
+            err["state"] = std::string("safety_rejected:") + more_phi::neuralMasteringIssueKey(sr.primaryIssue);
         err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
         err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
         err["error"] = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
-                                                 timedOut, cd);
+                                                 timedOut, cd, sr);
         // Mirror sonicmaster_decision's failure-path diagnostics so callers of the
-        // commit door get the same capture + measurement context.
+        // commit door get the same capture + measurement + safety context.
         json cap;
         cap["prepared"]         = cd.prepared;
         cap["active"]           = cd.active;
@@ -6636,6 +6735,12 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
         else
             cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
         err["capture_diagnostics"] = cap;
+        err["safety_rejection"] = sonicmasterSafetyRejectionJson(sr);
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        err["inference_diagnostics"] = infer;
         err["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
         err["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
         return toJString(err);

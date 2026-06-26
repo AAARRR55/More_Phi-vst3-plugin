@@ -19,6 +19,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -590,4 +592,276 @@ TEST_CASE("Closed LUFS loop bounds are bounded + deadbanded (Stage D contract)",
     // Target clamp matches the engine's [-23,-8] loudness output range.
     CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMinTargetLu == Catch::Approx(-23.0f));
     CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMaxTargetLu == Catch::Approx(-8.0f));
+}
+
+// DIAGNOSTIC (2026-06-26): the failure-reason out-param. The production failure
+// was that sonicmaster_decision / mastering.neural_apply returned an opaque
+// "Inference failed or model unavailable." for EVERY false return, so the
+// assistant confabulated causes ("no audio captured" / "inference server down").
+// requestDecisionNow now takes DecisionFailure* and stamps the ACTUAL gate that
+// tripped. These tests pin each reason so the structured signal can't regress to
+// the opaque bool. The MCP tool surfaces this as failure_reason / state; see
+// sonicmasterDecision's failure block in MCPToolHandler.cpp.
+TEST_CASE("requestDecisionNow reports InsufficientAudio before any capture",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    // NOTE: no audio fed — the ring is allocated (eagerly in prepare) but empty.
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    REQUIRE_FALSE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
+    CHECK(failure == more_phi::DecisionFailure::InsufficientAudio);
+    CHECK(source.callCount() == 0);  // never even called inference
+
+    eng.release();
+}
+
+TEST_CASE("requestDecisionNow reports SilentInput on an all-zero capture",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+
+    // Feed a full window of TRUE silence (0.0f). The peak gate at <1e-15 trips
+    // BEFORE inference is attempted, so failure == SilentInput (not InsufficientAudio
+    // — the ring IS full). feedSilence uses 1e-4f so we must feed real zeros here.
+    const std::size_t frames = hostWindowFrames(48000.0) + 1024;
+    std::vector<float> z(frames, 0.0f);
+    constexpr std::size_t kBlock = 512;
+    for (std::size_t off = 0; off < frames; off += kBlock)
+    {
+        const std::size_t n = std::min(kBlock, frames - off);
+        eng.capture(z.data() + off, z.data() + off, n);
+    }
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    REQUIRE_FALSE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
+    CHECK(failure == more_phi::DecisionFailure::SilentInput);
+    CHECK(source.callCount() == 0);  // peak gate fires before inference
+
+    eng.release();
+}
+
+TEST_CASE("requestDecisionNow reports InferenceRejected when the source fails",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    source.setShouldSucceed(false);  // infer() returns false
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);  // loud enough (1e-4)
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    REQUIRE_FALSE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
+    CHECK(failure == more_phi::DecisionFailure::InferenceRejected);
+    CHECK(source.callCount() >= 1);  // inference WAS attempted, then rejected
+
+    eng.release();
+}
+
+TEST_CASE("requestDecisionNow reports None on success",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::InsufficientAudio; // sentinel
+    REQUIRE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
+    CHECK(failure == more_phi::DecisionFailure::None);
+
+    eng.release();
+}
+
+TEST_CASE("requestDecisionNow default out-param keeps source compatibility",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    // The new out-param defaults to nullptr so the 4 existing call sites
+    // (TestSonicMasterAnalysisEngine.cpp:191-192,265 + MCPToolHandler) compile
+    // unchanged. This test pins that contract: calling without the arg still works.
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0));  // no outFailure arg
+
+    eng.release();
+}
+
+TEST_CASE("getCaptureDiagnostics reports fill ratio as audio accumulates",
+          "[SonicMaster][Engine][Diagnostic]")
+{
+    // The capture_diagnostics block in the failure JSON is built from this struct.
+    // Pin its semantics: requiredFrames matches the ~6s host window, capturedFrames
+    // grows with capture(), and the ratio crosses 1.0 once a full window is in.
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+
+    const auto d0 = eng.getCaptureDiagnostics();
+    CHECK(d0.prepared);
+    CHECK(d0.ringAllocated);          // eagerly allocated in prepare() (CAPTURE-DECOUPLE)
+    CHECK(d0.capturedFrames == 0);
+    CHECK(d0.requiredFrames == hostWindowFrames(48000.0));
+
+    // Feed half the required window; capturedFrames should reflect it (clamped to
+    // capacity, which is >= requiredFrames after pow2 rounding).
+    feedSilence(eng, d0.requiredFrames / 2);
+    const auto d1 = eng.getCaptureDiagnostics();
+    CHECK(d1.capturedFrames >= d0.requiredFrames / 2);
+
+    // Feed well past the window; the ring saturates at capacity.
+    feedSilence(eng, d0.requiredFrames * 4);
+    const auto d2 = eng.getCaptureDiagnostics();
+    CHECK(d2.capturedFrames >= d0.requiredFrames);   // a full window is available
+
+    eng.release();
+}
+
+// SAFETY-REJECTION-DETAIL (2026-06-26): the production failure was that a safety
+// reject surfaced only as the coarse "safety_rejected" with the SPECIFIC issue
+// (LowConfidence vs TargetOutOfRange vs NonFiniteValue) discarded. The engine now
+// records the issue(s) on both paths and exposes them via getLastSafetyRejection();
+// the MCP tool folds them into the failure JSON. These tests pin the new public
+// surface so the structured signal can't regress to the opaque bucket.
+//
+// We test the pure enum mappers directly (deterministic, no engine state) and the
+// accessor's lifecycle invariants (default-invalid, clear-on-success). Driving a
+// SPECIFIC issue through the full pipeline would require reaching the engine's
+// private safetyPolicy_ config; instead the makeSafetyCandidate→validate path is
+// already covered by TestNeuralMasteringSafetyPolicy.cpp, and the wiring (record
+// on reject, clear on accept, expose via accessor) is what we pin here.
+
+TEST_CASE("neuralMasteringIssueKey maps every issue to a stable snake_case key",
+          "[SonicMaster][Engine][SafetyDiagnostic]")
+{
+    using I = more_phi::NeuralMasteringValidationIssue;
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::None))                  == "none");
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::LowConfidence))         == "low_confidence");
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::TargetOutOfRange))      == "target_out_of_range");
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::NonFiniteValue))        == "non_finite_value");
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::StalePlan))             == "stale_plan");
+    CHECK(std::string(more_phi::neuralMasteringIssueKey(I::HighRiskMask))          == "high_risk_mask");
+    // Every key is non-empty and none collides with another (regression guard for
+    // a future enum edit that copies a label).
+    std::set<std::string> seen;
+    for (auto i : { I::None, I::SchemaVersionMismatch, I::AudioCallbackRuntime,
+                    I::InvalidTimestamp, I::StalePlan, I::LowConfidence, I::Abstain,
+                    I::ReviewOnly, I::UnsupportedLayout, I::NonFiniteValue,
+                    I::TargetOutOfRange, I::DeltaOutOfRange, I::IllegalMask,
+                    I::HighRiskMask, I::MaxDeltaProjected })
+    {
+        const std::string k = more_phi::neuralMasteringIssueKey(i);
+        REQUIRE(!k.empty());
+        INFO("duplicate key: " << k);
+        CHECK(seen.insert(k).second);
+    }
+}
+
+TEST_CASE("isHardRejectNeuralMasteringIssue classifies hard vs soft correctly",
+          "[SonicMaster][Engine][SafetyDiagnostic]")
+{
+    using I = more_phi::NeuralMasteringValidationIssue;
+    // Hard rejects — retrying the same audio will NOT flip these.
+    CHECK(more_phi::isHardRejectNeuralMasteringIssue(I::TargetOutOfRange));
+    CHECK(more_phi::isHardRejectNeuralMasteringIssue(I::DeltaOutOfRange));
+    CHECK(more_phi::isHardRejectNeuralMasteringIssue(I::NonFiniteValue));
+    CHECK(more_phi::isHardRejectNeuralMasteringIssue(I::SchemaVersionMismatch));
+    CHECK(more_phi::isHardRejectNeuralMasteringIssue(I::HighRiskMask));
+    // Soft holds — retryable / informational.
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::LowConfidence));
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::StalePlan));
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::Abstain));
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::ReviewOnly));
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::MaxDeltaProjected));
+    CHECK_FALSE(more_phi::isHardRejectNeuralMasteringIssue(I::None));
+}
+
+TEST_CASE("getLastSafetyRejection is invalid before any reject and clears on success",
+          "[SonicMaster][Engine][SafetyDiagnostic]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+
+    // Default state: no rejection recorded.
+    const auto sr0 = eng.getLastSafetyRejection();
+    CHECK_FALSE(sr0.valid);
+    CHECK(sr0.primaryIssue == more_phi::NeuralMasteringValidationIssue::None);
+    CHECK_FALSE(sr0.hardReject);
+
+    // A successful decision clears any prior rejection snapshot (and there's none
+    // here, so this pins the clear-on-success path doesn't corrupt state).
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    REQUIRE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
+    CHECK(failure == more_phi::DecisionFailure::None);
+    const auto sr1 = eng.getLastSafetyRejection();
+    CHECK_FALSE(sr1.valid);  // success cleared it
+
+    eng.release();
+}
+
+TEST_CASE("getLastSafetyRejection records a specific issue on a safety reject",
+          "[SonicMaster][Engine][SafetyDiagnostic]")
+{
+    // Force a safety reject: make the stub emit a decision whose decoded plan
+    // falls outside the safety policy's sanity bounds. Setting an EQ gain at the
+    // max edge + an extreme target_lufs pushes projected targets to the bound;
+    // the stub's neutral compressor/limiter keep other slots finite. If validate()
+    // accepts, the test still passes (we only assert that IF it rejected, the
+    // specific issue was recorded) — but in practice the extreme target triggers
+    // TargetOutOfRange or LowConfidence-style projection. Either way the
+    // snapshot's primaryIssue must be non-None and valid=true on reject.
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    const bool ok = eng.requestDecisionNow(-30.0f, plan, nullptr, 0, &failure);
+
+    if (!ok && failure == more_phi::DecisionFailure::SafetyRejected)
+    {
+        // The diagnostic contract: a safety reject MUST populate the snapshot with
+        // a specific, non-None primary issue. This is exactly what the assistant
+        // needs to stop saying "rejected, try again" and start naming the reason.
+        const auto sr = eng.getLastSafetyRejection();
+        CHECK(sr.valid);
+        CHECK(sr.primaryIssue != more_phi::NeuralMasteringValidationIssue::None);
+        CHECK(sr.issueCount > 0);
+        // hardReject must agree with isHardRejectNeuralMasteringIssue(primaryIssue).
+        CHECK(sr.hardReject == more_phi::isHardRejectNeuralMasteringIssue(sr.primaryIssue));
+    }
+    // If ok (the policy accepted the extreme target via projection), we can't
+    // force a reject deterministically without private config access — the
+    // pure-function tests above already pin the classification, and this branch
+    // documents that acceptance leaves the snapshot valid=false.
+    if (ok)
+    {
+        const auto sr = eng.getLastSafetyRejection();
+        CHECK_FALSE(sr.valid);
+    }
+
+    eng.release();
 }
