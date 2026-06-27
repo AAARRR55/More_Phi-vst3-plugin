@@ -784,6 +784,30 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     if (ozoneApplied == 0 && chainPlanner_.hasOzoneApplicator())
         return false;
 
+    // AUDIT-FIX (R8, Phase 3b): per-cycle composite quality score. An
+    // informational signal for callers to gauge whether the apply improved
+    // things. Not a gate — purely telemetry. Formula:
+    //   composite = w_v * verificationFraction + w_d * (1 - clampCount/total)
+    //              + w_l * loudnessReasonableness
+    // where w_v=0.5, w_d=0.2, w_l=0.3.
+    // verificationFraction measures how many parameter writes landed correctly;
+    // deltaClampCount measures how many dimensions hit the per-cycle slew limit;
+    // loudnessReasonableness penalizes targets far from the streaming standard.
+    {
+        CompositeQualityScore sq;
+        sq.verificationFraction  = lastApplyVerification_.verifiedFraction();
+        sq.deltaClampCount       = clamped;
+        const float clampRatio = static_cast<float>(clamped) / 50.0f; // 50 max dims
+        // Loudness reasonableness: 1.0 at -14 LUFS, drops to ~0.67 at -8 or -20.
+        const float targetLufs = std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f,
+                                            -23.0f, -8.0f);
+        sq.loudnessReasonableness = 1.0f - std::abs(targetLufs + 14.0f) / 20.0f;
+        sq.composite = 0.5f * sq.verificationFraction
+                     + 0.2f * (1.0f - clampRatio)
+                     + 0.3f * sq.loudnessReasonableness;
+        lastQualityScore_ = sq;
+    }
+
     lastSafeNeuralPlan_ = plan;
     hasLastSafeNeuralPlan_ = true;
     return true;

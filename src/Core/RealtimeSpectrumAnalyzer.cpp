@@ -68,6 +68,10 @@ void RealtimeSpectrumAnalyzer::reset() noexcept
     // AUDIT (crest/RMS): re-zero so the program-crest EMA re-gates after reset.
     samplesCaptured_ = 0;
     crestProgramEma_ = 0.0f;   // AUDIT-FIX (A7): reset program-crest EMA
+    // AUDIT-FIX (DSP-3, Phase 4a): reset noise floor tracking state.
+    noiseFloorDb_    = -120.0f;
+    peakSignalDb_    = -120.0f;
+    noiseFloorValid_ = false;
 
     SpectrumSnapshot empty;
     empty.binCount = kMaxBins;
@@ -381,6 +385,58 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     snapshot.spectralTilt = std::abs(denom) > kEps
         ? (static_cast<float>(regressionCount) * sumXY - sumX * sumY) / denom
         : 0.0f;
+
+    // AUDIT-FIX (DSP-3, Phase 4a): noise floor and SNR tracking. During silent
+    // frames (peak < kSilenceThreshold ≈ -60 dBFS), update the noise floor estimate
+    // as an exponential average of the per-bin magnitude. During audible frames,
+    // track the peak signal level with a slow-decay peak-hold. SNR is published as
+    // peakSignalDb - noiseFloorDb when both estimates are valid.
+    {
+        const float framePeakDb = amplitudeToDB(peak);
+        if (peak < kSilenceThreshold && framePeakDb > kMinDB)
+        {
+            // Silent frame: update noise floor from the average bin magnitude.
+            // Compute the mean bin magnitude in dB over the full spectrum.
+            float avgMagDb = 0.0f;
+            int validBins = 0;
+            for (int bin = 1; bin < numBins_; ++bin)
+            {
+                const float m = rawMagnitude_[static_cast<size_t>(bin)];
+                if (m > 1e-12f)
+                {
+                    avgMagDb += amplitudeToDB(m);
+                    ++validBins;
+                }
+            }
+            if (validBins > 0)
+            {
+                avgMagDb /= static_cast<float>(validBins);
+                if (!noiseFloorValid_)
+                {
+                    noiseFloorDb_ = avgMagDb;
+                    noiseFloorValid_ = true;
+                }
+                else
+                {
+                    noiseFloorDb_ += kNoiseFloorAlpha * (avgMagDb - noiseFloorDb_);
+                }
+            }
+        }
+        else if (framePeakDb > noiseFloorDb_ + 3.0f)
+        {
+            // Audible frame above noise floor: update peak signal tracker with
+            // slow decay. The peak signal is the max of the current frame peak
+            // and the decaying previous peak (so it rises quickly, falls slowly).
+            if (framePeakDb > peakSignalDb_)
+                peakSignalDb_ = framePeakDb;
+            else
+                peakSignalDb_ += kPeakSignalAlpha * (framePeakDb - peakSignalDb_);
+        }
+        snapshot.noiseFloorDb = noiseFloorValid_ ? noiseFloorDb_ : kMinDB;
+        snapshot.signalToNoiseDb = (noiseFloorValid_ && peakSignalDb_ > noiseFloorDb_ + 3.0f)
+            ? peakSignalDb_ - noiseFloorDb_
+            : 0.0f;
+    }
 
     // AUDIT-FIX (H1): persist the dB-domain magnitudes for next frame's flux
     // delta. The previous code stored linear magnitudes and differenced those,

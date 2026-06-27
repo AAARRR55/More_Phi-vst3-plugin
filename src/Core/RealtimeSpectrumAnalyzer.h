@@ -32,6 +32,14 @@ public:
         float thdPercent = 0.0f;
         float crestFactorProgram = 0.0f;
         float spectralTilt = 0.0f;
+        // AUDIT-FIX (DSP-3, Phase 4a): noise floor and SNR metrics. noiseFloorDb
+        // is a running exponential average of the per-bin magnitude during silent
+        // passages (frame RMS < -60 dBFS). signalToNoiseDb is the difference between
+        // the peak signal magnitude and the noise floor. Both are -120 dB (kMinDB)
+        // before a valid estimate exists (first ~1 s of audio, or constantly-loud
+        // material with no silence).
+        float noiseFloorDb = -120.0f;
+        float signalToNoiseDb = 0.0f;
         uint64_t frameIndex = 0;
         double sampleRate = 0.0;
         int fftSize = 0;
@@ -98,6 +106,17 @@ private:
     // AUDIT-FIX (A7): program-level crest EMA state + per-frame smoothing coeff.
     float crestProgramEma_ = 0.0f;
     float crestProgramAlpha_ = 0.0f;
+
+    // AUDIT-FIX (DSP-3, Phase 4a): noise floor tracking state.
+    // noiseFloorDb_ is an exponential average updated only during silent frames
+    // (peak < kSilenceThreshold). noiseFloorValid_ is set after the first silent
+    // frame. peakSignalDb_ tracks the highest signal level seen.
+    static constexpr float kSilenceThreshold   = 0.001f;   // ~-60 dBFS peak
+    static constexpr float kNoiseFloorAlpha     = 0.01f;    // slow tracking (~100 frames)
+    static constexpr float kPeakSignalAlpha     = 0.001f;   // very slow decay
+    float noiseFloorDb_    = -120.0f;
+    float peakSignalDb_    = -120.0f;
+    bool  noiseFloorValid_ = false;
 
     mutable std::atomic<uint32_t> version_ { 0 };
     SpectrumSnapshot publishedSnapshot_;
