@@ -594,6 +594,46 @@ TEST_CASE("Closed LUFS loop bounds are bounded + deadbanded (Stage D contract)",
     CHECK(more_phi::SonicMasterAnalysisEngine::kFeedbackMaxTargetLu == Catch::Approx(-8.0f));
 }
 
+// AUDIT-F3.2 (2026-06-27): when the apply reached audio (internalActive==true)
+// but the captured signal is too quiet to cross the LUFS gate, the live meter
+// returns -infinity. Before the fix, the closed-loop computed
+//   lastLufsError_ = lastAppliedTargetLufs_ - (-inf) = +inf
+// which (a) serialised as `null` in sonicmasterClosedLoopJson and (b) clamped to
+// the +/-1.0 LU nudge bound every cycle, drifting the target monotonically. The
+// fix guards on std::isfinite(m.lufsIntegrated): a non-finite reading must hold
+// the loop at its last good target and report a NEUTRAL (zero) error.
+TEST_CASE("Closed LUFS loop holds neutral error on non-finite loudness reading (F3.2)",
+          "[SonicMaster][Engine][StageD][Audit-F3-2]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+    engine.setActive(true);   // internalActive==true -> reachedAudio==true
+
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+    eng.setActive(true);
+    // Silence: the LUFS gate never opens, so getLUFSIntegrated() returns -inf.
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    REQUIRE(eng.runOneCycleForTest());
+    // The apply reached audio (chain active), so the feedback path executes.
+    CHECK(eng.lastApplyReachedAudioPath());
+
+    const auto cl = eng.getClosedLoopState();
+    // CRITICAL: lastLufsError must be FINITE (zero), never +inf -> null. This is
+    // the regression guard for the silent non-finite-loudness path.
+    CHECK(std::isfinite(cl.lastLufsError));
+    CHECK(std::abs(cl.lastLufsError) < 1e-6f);
+    // The loop must not spuriously activate on a non-finite reading (no target
+    // drift toward the +/-1.0 LU nudge bound).
+    CHECK(cl.feedbackActive == false);
+
+    eng.release();
+}
+
 // DIAGNOSTIC (2026-06-26): the failure-reason out-param. The production failure
 // was that sonicmaster_decision / mastering.neural_apply returned an opaque
 // "Inference failed or model unavailable." for EVERY false return, so the
@@ -645,6 +685,59 @@ TEST_CASE("requestDecisionNow reports SilentInput on an all-zero capture",
     REQUIRE_FALSE(eng.requestDecisionNow(-14.0f, plan, nullptr, 0, &failure));
     CHECK(failure == more_phi::DecisionFailure::SilentInput);
     CHECK(source.callCount() == 0);  // peak gate fires before inference
+
+    eng.release();
+}
+
+// AUDIT-F1.5 (2026-06-27): the BACKGROUND runCycle previously returned a bare
+// false on its silence gate, with no structured reason — so when the assistant
+// asked "why did the always-on cycle skip?", it got nothing. The on-demand
+// requestDecisionNow path already surfaced DecisionFailure::SilentInput via its
+// out-param; the background path now stamps lastCycleFailure_ symmetrically and
+// exposes it via getLastCycleFailure(). This test pins the symmetry: feed true
+// silence, drive a background cycle, assert the structured skip reason.
+TEST_CASE("runCycle surfaces SilentInput on an all-zero capture (F1.5 background parity)",
+          "[SonicMaster][Engine][Diagnostic][Audit-F1-5]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+
+    // Before any cycle, the skip reason is the neutral None.
+    CHECK(eng.getLastCycleFailure() == more_phi::DecisionFailure::None);
+
+    // Feed a full window of TRUE silence (0.0f) — peak gate trips before infer.
+    const std::size_t frames = hostWindowFrames(48000.0) + 1024;
+    std::vector<float> z(frames, 0.0f);
+    constexpr std::size_t kBlock = 512;
+    for (std::size_t off = 0; off < frames; off += kBlock)
+    {
+        const std::size_t n = std::min(kBlock, frames - off);
+        eng.capture(z.data() + off, z.data() + off, n);
+    }
+
+    REQUIRE_FALSE(eng.runOneCycleForTest());
+    // CRITICAL: the background cycle's silence gate must surface SilentInput,
+    // not a bare skip. source.callCount()==0 confirms the gate fired pre-infer.
+    CHECK(eng.getLastCycleFailure() == more_phi::DecisionFailure::SilentInput);
+    CHECK(source.callCount() == 0);
+
+    eng.release();
+}
+
+TEST_CASE("runCycle surfaces InsufficientAudio before the ring fills (F1.5)",
+          "[SonicMaster][Engine][Diagnostic][Audit-F1-5]")
+{
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    eng.setInferenceSource(&source);
+    eng.prepare(48000.0, 512);
+    // NOTE: no audio fed — the ring is allocated but empty.
+
+    REQUIRE_FALSE(eng.runOneCycleForTest());
+    CHECK(eng.getLastCycleFailure() == more_phi::DecisionFailure::InsufficientAudio);
+    CHECK(source.callCount() == 0);
 
     eng.release();
 }
@@ -865,3 +958,89 @@ TEST_CASE("getLastSafetyRejection records a specific issue on a safety reject",
 
     eng.release();
 }
+
+// ── AUDIT coverage gaps (2026-06-27) ──────────────────────────────────────────
+// These pin behaviours that previously had NO direct test, closing the edge-case
+// coverage gaps flagged in the audit (Layer 1 edge cases: ONNX→HTTP failover
+// swap, NaN decision through the stub, finite-and-in-range outputs on edge
+// inputs).
+
+// AUDIT gap: ONNX→HTTP failover swap (SonicMasterAnalysisEngine.cpp:607-612).
+// After consecutiveFailureLimit (3) primary failures, the engine should swap to
+// the fallback source and STAY ACTIVE (not ErrorAutoDisabled). The swap was
+// previously covered only with a single source (the auto-disable path).
+TEST_CASE("AnalysisEngine swaps to the fallback source after N primary failures (failover gap)",
+          "[SonicMaster][Engine][Failover][Audit-Gap]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource primary;
+    primary.setShouldSucceed(false);   // primary always fails
+    StubDecisionSource fallback;
+    fallback.setShouldSucceed(true);   // fallback succeeds
+    eng.setInferenceSource(&primary);
+    eng.setFallbackInferenceSource(&fallback);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+    eng.setActive(true);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    CHECK(fallback.callCount() == 0);
+
+    // 3 failures -> swap to fallback. The 3rd cycle's failure triggers the swap;
+    // a 4th cycle should now run inference on the FALLBACK (callCount > 0) and
+    // the engine must still be ACTIVE (not auto-disabled).
+    for (int i = 0; i < 3; ++i)
+        eng.runOneCycleForTest();
+    eng.runOneCycleForTest();  // this one runs on the fallback
+
+    CHECK(fallback.callCount() >= 1);
+    CHECK(eng.isActive());
+    CHECK(eng.getStatus() != more_phi::SonicMasterAnalysisEngine::Status::ErrorAutoDisabled);
+
+    eng.release();
+    engine.reset();
+}
+
+// AUDIT gap: a NaN in the model's decision vector must not poison projectedTargets
+// or crash. The decoder coerces NaN to 0 before clamping (SonicMasterDecisionDecoder
+// finiteOr), but no test injected a NaN-emitting stub through the full runCycle.
+TEST_CASE("AnalysisEngine survives a NaN decision vector without poisoning targets (NaN-decision gap)",
+          "[SonicMaster][Engine][Audit-Gap]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    more_phi::SonicMasterAnalysisEngine eng;
+    StubDecisionSource source;
+    // Inject NaN across the decision slots (EQ + loudness).
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+        source.setDecisionValue(more_phi::kSonicMasterEqGainOffset + i, nan);
+    source.setDecisionValue(more_phi::kSonicMasterTargetLufsIdx, nan);
+    eng.setInferenceSource(&source);
+    eng.setApplicationEngine(&engine);
+    eng.prepare(48000.0, 512);
+    eng.setActive(true);
+    feedSilence(eng, hostWindowFrames(48000.0) + 1024);
+
+    // The cycle must not crash. Decode NaN-coerces to 0; the safety policy may
+    // accept or reject, but either way the engine stays in a sane state and no
+    // NaN leaks into the application engine's last-safe plan projectedTargets.
+    eng.runOneCycleForTest();
+
+    if (engine.hasLastSafeNeuralMasteringPlan())
+    {
+        const auto& p = engine.getLastSafeNeuralMasteringPlan();
+        for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+            CHECK(std::isfinite(p.projectedTargets.eq[i]));
+        for (std::size_t i = 0; i < p.projectedTargets.loudness.size(); ++i)
+            CHECK(std::isfinite(p.projectedTargets.loudness[i]));
+    }
+
+    eng.release();
+    engine.reset();
+}
+

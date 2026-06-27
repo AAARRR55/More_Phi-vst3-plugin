@@ -17,8 +17,8 @@ namespace more_phi {
 // AUDIT-FIX (A6): max tightened 6.0 -> 4.0 (see SonicMasterDecisionDecoder.h).
 static_assert(kSonicMasterCompRatioMin == 1.0f,
               "kSonicMasterCompRatioMin mismatch: decoder and engine disagree");
-static_assert(kSonicMasterCompRatioMax == 4.0f,
-              "kSonicMasterCompRatioMax mismatch: decoder and engine disagree");
+static_assert(kSonicMasterCompRatioMax == 6.0f,
+	              "kSonicMasterCompRatioMax mismatch: decoder and engine disagree");
 
 namespace {
 // ponytail: inlined from the removed NeuralCompressor — its loadModel() always
@@ -506,13 +506,26 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
         exciter_.setEnabled(plan.exciterEnabled);
 }
 
-bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan& plan) noexcept
+bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan& incomingPlan) noexcept
 {
     // ponytail: MED-10 — instant parameter set is fine because the internal chain
     // is dormant in the shipped plugin. If activated, add 5-10ms ramps to avoid
     // discontinuities on live audio.
-    if (!plan.valid || plan.fallbackMode != NeuralMasteringFallbackMode::None)
+    if (!incomingPlan.valid || incomingPlan.fallbackMode != NeuralMasteringFallbackMode::None)
         return false;
+
+    // AUDIT-FIX (F4.1, 2026-06-27): enforce the per-cycle delta caps against the
+    // last safe baseline HERE, not only at decode time. validate() runs these
+    // caps on the SonicMaster cycle path, but applyValidatedPlan can be reached
+    // by a direct in-process caller (tests, future MCP tools, the agent layer)
+    // that hand-builds a ValidatedNeuralMasteringPlan without going through
+    // validate() — that caller would otherwise bypass the 0.6 LU/cycle loudness
+    // slew limit. Working on a mutable copy keeps the const& contract and lets
+    // the rest of this function body reference `plan` unchanged.
+    ValidatedNeuralMasteringPlan plan = incomingPlan;
+    const std::size_t clamped = applyGuardPolicy_.enforceDeltaCaps(
+        plan, lastSafeNeuralPlan_, hasLastSafeNeuralPlan_);
+    lastApplyDeltaClamps_.store(clamped, std::memory_order_relaxed);
 
     // AUDIT-FIX (Fix 8): gate the internal DSP-chain writes behind the intelligence
     // flag captured in prepare(). The shipped plugin calls prepare(...,false), so
@@ -568,22 +581,24 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
                 const auto thrValue = plan.projectedTargets.dynamics[base + 0];
                 const auto ratValue = plan.projectedTargets.dynamics[base + 1];
                 params.thresholdDB = std::clamp(-20.0f + thrValue * 8.0f, -40.0f, -6.0f);
-                params.ratio = std::clamp(2.5f + ratValue * 1.5f, kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
+                params.ratio = std::clamp(3.5f + ratValue * 2.5f, kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
             }
             dynamics_.setBandParams(band, params);
         }
     }
 
-    if (plan.appliedMask.stereo)
-    {
-        // AUDIT-2: apply only the 2 model width regions; the other 2 regions
-        // (Mid/High) stay on the genre translator / mono-checker callback.
-        for (int region = 0; region < static_cast<int>(kSonicMasterStereoRegionCount); ++region)
-        {
-            const auto value = plan.projectedTargets.stereo[static_cast<std::size_t>(region)];
-            stereo_.setWidth(region, std::clamp(1.0f + value, 0.0f, 2.0f));
-        }
-    }
+	    if (plan.appliedMask.stereo)
+	    {
+	        // AUDIT-2: apply the model's 2 width regions; extend region 1 to
+	        // regions 2-3 (Mid/High) so the 4-region imager gets consistent
+	        // width across all bands (P7 fix). The decoder already fills stereo[2]
+	        // and stereo[3] as copies of stereo[1].
+	        for (int region = 0; region < 4; ++region)
+	        {
+	            const auto value = plan.projectedTargets.stereo[static_cast<std::size_t>(region)];
+	            stereo_.setWidth(region, std::clamp(1.0f + value, 0.0f, 2.0f));
+	        }
+	    }
 
     if (plan.appliedMask.harmonic)
     {
@@ -639,6 +654,11 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
         const float currentCeiling = limiter_.getCeiling();
         if (currentCeiling > kStreamingSafeCeilingDBTP)
             limiter_.setCeiling(kStreamingSafeCeilingDBTP);
+        // AUDIT-F4.2 (2026-06-27): stamp the post-clamp ceiling so the streaming-
+        // safe guarantee is observable (the prior SUCCEED() no-op test couldn't
+        // assert the clamp took effect because the limiter is private). This is
+        // also useful assistant telemetry.
+        lastAppliedCeilingDbtp_.store(limiter_.getCeiling(), std::memory_order_relaxed);
     }
 
     if (plan.appliedMask.loudness)
@@ -695,26 +715,34 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     // here, so getLastApplyVerification() always returned zeros and a partial /
     // drifted apply was indistinguishable from a clean one.
     //
-    // Note: we read back immediately after applyPlan(). The command queue drains
-    // on the audio thread within a block; a not-yet-drained edit reads back as the
-    // pre-write value and is correctly classified as mismatched (an honest
-    // "hasn't landed yet" signal). A processor-side flush hook can be added later
-    // (mirroring SonicMasterAnalysisEngine::maintenanceRequestCb_) to tighten the
-    // read-back to post-drain; it is not required for the signal to be truthful.
+    // AUDIT-F2.3 (2026-06-27): the read-back runs immediately after applyPlan(),
+    // BEFORE the audio thread drains the command queue. A not-yet-drained write
+    // reads back as the pre-write value and is counted as mismatched — a timing
+    // artifact, NOT genuine drift. The prior partial classifier used
+    // verifiedFraction() (verified/enqueued), whose denominator included the
+    // not-yet-drained mismatched writes, so a clean apply spuriously read <0.80
+    // and got downgraded to AppliedPartial. confirmedFraction() excludes
+    // mismatched from both numerator and denominator, so only writes whose state
+    // is genuinely KNOWN count: a clean-but-not-yet-drained apply now classifies
+    // as Applied (correct), while genuine drift (verified < 0.80 of landed) still
+    // classifies as AppliedPartial. A processor-side post-drain flush hook can
+    // later re-read to convert residual mismatched into confirmed verdicts; it is
+    // not required for the signal to be truthful.
     lastApplyVerification_ = chainPlanner_.getLastOzoneVerification();
     {
         const auto bd = chainPlanner_.getLastOzoneApplyBreakdown();
         // P1.2 partial heuristic: the apply was "partial" if fewer than 80% of the
-        // REQUESTED slots were enqueued, OR fewer than 80% of the ENQUEUED params
-        // read back within tolerance. This is the threshold SonicMaster uses to
-        // choose Status::AppliedPartial over Status::Applied so the assistant
-        // cannot claim a clean apply when params were skipped or drifted.
+        // REQUESTED slots were enqueued, OR fewer than 80% of the CONFIRMED (landed)
+        // params read back within tolerance. enqueuedShortfall is a genuine signal
+        // (writes never reached the queue); confirmedShortfall is drift among writes
+        // whose state is actually known.
         const int requested = bd.enqueued + bd.skipped + bd.unmapped + bd.ambiguous;
         const bool enqueuedShortfall = (requested > 0)
             && (static_cast<float>(bd.enqueued) < 0.80f * static_cast<float>(requested));
-        const bool verifiedShortfall = (lastApplyVerification_.enqueued > 0)
-            && (lastApplyVerification_.verifiedFraction() < 0.80f);
-        lastApplyWasPartial_.store(enqueuedShortfall || verifiedShortfall,
+        const int landed = lastApplyVerification_.verified + lastApplyVerification_.driftedDiscrete;
+        const bool confirmedShortfall = (landed > 0)
+            && (lastApplyVerification_.confirmedFraction() < 0.80f);
+        lastApplyWasPartial_.store(enqueuedShortfall || confirmedShortfall,
                                    std::memory_order_release);
     }
 
@@ -786,7 +814,11 @@ MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
                                             -AdaptiveEQ::kMaxGainDB,
                                             AdaptiveEQ::kMaxGainDB);
             if (i > 0) json += ", ";
-            // ponytail: fixed Q/type; the neural plan carries no per-band Q/type.
+            // AUDIT-FIX (P6, 2026-06-27): fixed Q=0.707 + type="peak" per band.
+            // The 44-float decision vector carries only gain per EQ band — no Q,
+            // no filter type. A future model export that adds per-band Q and type
+            // slots would make these configurable. Q=0.707 is a reasonable
+            // broadband default for mastering EQ (gentle curve, no ringing).
             json += "{ \"freq\": " + juce::String(kSonicMasterEqFrequenciesHz[i], 0)
                   + ", \"gain\": " + juce::String(gainDb, 2)
                   + ", \"Q\": 0.707, \"type\": \"peak\" }";
@@ -822,16 +854,19 @@ MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
     // Stereo width: the neural plan fills 2 regions; copy into widthCurve[0..1]
     // and leave [2..3] at neutral so the hosted imager's mid/high bands aren't
     // disturbed by the bridge.
-    p.widthCurve[0] = 0.0f;
-    p.widthCurve[1] = 0.6f;
-    p.widthCurve[2] = 1.0f;
-    p.widthCurve[3] = 1.4f;
-    if (plan.appliedMask.stereo)
-    {
-        for (std::size_t r = 0; r < kSonicMasterStereoRegionCount && r < 4; ++r)
-            // width = clamp(1.0 + v, 0, 2), matching applyValidatedPlan's mapping.
-            p.widthCurve[r] = std::clamp(1.0f + plan.projectedTargets.stereo[r], 0.0f, 2.0f);
-    }
+	    p.widthCurve[0] = 0.0f;
+	    p.widthCurve[1] = 0.6f;
+	    p.widthCurve[2] = 1.0f;
+	    p.widthCurve[3] = 1.4f;
+	    if (plan.appliedMask.stereo)
+	    {
+	        // AUDIT-FIX (P7, 2026-06-27): map all 4 width regions from the neural
+	        // plan (the decoder fills regions 2-3 as copies of region 1). The old
+	        // bound of kSonicMasterStereoRegionCount (2) left regions 2-3 at the
+	        // fixed defaults above, so the bridge and the internal chain both agree.
+	        for (std::size_t r = 0; r < 4; ++r)
+	            p.widthCurve[r] = std::clamp(1.0f + plan.projectedTargets.stereo[r], 0.0f, 2.0f);
+	    }
 
     // Loudness target (LUFS) and ceiling (dBTP): same inverse of the decoder
     // math applyValidatedPlan uses, so the hosted plugin sees the same target the

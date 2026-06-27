@@ -185,6 +185,35 @@ void projectMaskedTargets(MasteringTargetVector& output,
         projectArray(output.loudness, previous.loudness, candidate.deltas.loudness, config.minTargets.loudness, config.maxTargets.loudness, config.maxDeltaPerPlan.loudness, projected);
 }
 
+// AUDIT-FIX (F4.1): clamp a plan's projectedTargets deltas to maxDeltaPerPlan
+// relative to the last safe baseline. Used by applyValidatedPlan so a direct
+// in-process caller that bypasses validate() cannot exceed the per-cycle slew
+// limit (e.g. >0.6 LU/cycle loudness). Only the dimensions the plan actually
+// applies (plan.appliedMask) are slew-limited; unmasked dimensions are left to
+// the caller. Returns the count of clamped dimensions for telemetry.
+template <std::size_t N>
+std::size_t clampDeltaArray(std::array<float, N>& current,
+                            const std::array<float, N>& previous,
+                            const std::array<float, N>& maxDelta) noexcept
+{
+    std::size_t clamped = 0;
+    for (std::size_t i = 0; i < current.size(); ++i)
+    {
+        const float delta = current[i] - previous[i];
+        const float bounded = std::clamp(delta, -maxDelta[i], maxDelta[i]);
+        if (bounded != delta)
+        {
+            current[i] = previous[i] + bounded;
+            ++clamped;
+        }
+    }
+    return clamped;
+}
+
+// enforceDeltaCaps moved out of the anonymous namespace (C2888: a class member
+// cannot be defined inside an anonymous namespace it wasn't declared in). See
+// the definition below, after the anon-namespace closes.
+
 bool isHardRejectIssue(NeuralMasteringValidationIssue issue) noexcept
 {
     switch (issue)
@@ -325,6 +354,36 @@ NeuralMasteringSafetyPolicyConfig NeuralMasteringSafetyPolicy::defaultConfig() n
     config.highRiskControls.harmonic = true;
     config.highRiskControls.limiter = true;
     return config;
+}
+
+// AUDIT-FIX (F4.1): clamp a plan's projectedTargets deltas to maxDeltaPerPlan
+// relative to the last safe baseline. Defined OUTSIDE the anonymous namespace
+// (it's a class member; C2888 forbids member defs inside an anon namespace).
+// Uses clampDeltaArray which is internal-linkage and stays in the anon block.
+std::size_t NeuralMasteringSafetyPolicy::enforceDeltaCaps(
+    ValidatedNeuralMasteringPlan& current,
+    const ValidatedNeuralMasteringPlan& lastSafePlan,
+    bool hasLastSafe) noexcept
+{
+    if (!hasLastSafe)
+        return 0; // no baseline -> first apply is unconstrained (same as validate())
+
+    const auto& cfg = config_;
+    const auto& prev = lastSafePlan.projectedTargets;
+    std::size_t total = 0;
+    if (current.appliedMask.eq)
+        total += clampDeltaArray(current.projectedTargets.eq, prev.eq, cfg.maxDeltaPerPlan.eq);
+    if (current.appliedMask.dynamics)
+        total += clampDeltaArray(current.projectedTargets.dynamics, prev.dynamics, cfg.maxDeltaPerPlan.dynamics);
+    if (current.appliedMask.stereo)
+        total += clampDeltaArray(current.projectedTargets.stereo, prev.stereo, cfg.maxDeltaPerPlan.stereo);
+    if (current.appliedMask.harmonic)
+        total += clampDeltaArray(current.projectedTargets.harmonic, prev.harmonic, cfg.maxDeltaPerPlan.harmonic);
+    if (current.appliedMask.limiter)
+        total += clampDeltaArray(current.projectedTargets.limiter, prev.limiter, cfg.maxDeltaPerPlan.limiter);
+    if (current.appliedMask.loudness)
+        total += clampDeltaArray(current.projectedTargets.loudness, prev.loudness, cfg.maxDeltaPerPlan.loudness);
+    return total;
 }
 
 NeuralMasteringSafetyPolicy::NeuralMasteringSafetyPolicy(NeuralMasteringSafetyPolicyConfig config) noexcept

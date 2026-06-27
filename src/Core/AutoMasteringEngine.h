@@ -76,6 +76,7 @@
 #include "StereoFieldAnalyzer.h"
 #include "TransientShaper.h"
 #include "NeuralMasteringTypes.h"
+#include "NeuralMasteringSafetyPolicy.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
 #include "../AI/GenreClassifier.h"
@@ -117,6 +118,21 @@ struct ApplyVerification
     [[nodiscard]] float verifiedFraction() const noexcept
     {
         return enqueued > 0 ? static_cast<float>(verified) / static_cast<float>(enqueued) : 0.0f;
+    }
+
+    // AUDIT-F2.3 (2026-06-27): fraction of enqueued writes whose read-back
+    // either matched OR snapped to a valid discrete step, over the writes whose
+    // read-back has actually LANDED (verified + driftedDiscrete). mismatched is
+    // excluded from BOTH numerator and denominator because the read-back runs
+    // immediately after applyPlan(), BEFORE the audio thread drains the command
+    // queue — so a not-yet-drained write reads back as mismatched purely due to
+    // timing, not genuine drift. Counting it against verifiedFraction() made a
+    // clean apply spuriously read <0.80 -> AppliedPartial. confirmedFraction()
+    // only counts writes whose state is genuinely known.
+    [[nodiscard]] float confirmedFraction() const noexcept
+    {
+        const int landed = verified + driftedDiscrete;
+        return landed > 0 ? static_cast<float>(verified) / static_cast<float>(landed) : 1.0f;
     }
 };
 
@@ -244,6 +260,15 @@ public:
     void clearLastSafeNeuralMasteringPlan() noexcept;
     [[nodiscard]] bool hasLastSafeNeuralMasteringPlan() const noexcept { return hasLastSafeNeuralPlan_; }
     [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept { return lastSafeNeuralPlan_; }
+    // AUDIT-F4.1: number of projectedTargets dimensions the apply-time delta cap
+    // clamped on the most recent applyValidatedPlan call (0 = within slew limits,
+    // or no last-safe baseline). For telemetry / regression tests.
+    [[nodiscard]] std::size_t getLastApplyDeltaClamps() const noexcept { return lastApplyDeltaClamps_.load(std::memory_order_relaxed); }
+    // AUDIT-F4.2: the limiter ceiling (dBTP) stamped after the streaming-safe
+    // clamp on the most recent applyValidatedPlan. Guaranteed <= -1.0 dBTP
+    // (kStreamingSafeCeilingDBTP) regardless of the limiter mask, so the
+    // streaming-safe guarantee is observable without exposing the private limiter.
+    [[nodiscard]] float getLastAppliedCeilingDbtp() const noexcept { return lastAppliedCeilingDbtp_.load(std::memory_order_relaxed); }
 
     // P2.5 (AUDIT): wire the ActionLedger so neural mastering writes (which bypass
     // MCPToolHandler::handle and were therefore NOT recorded) become auditable. Pass
@@ -346,6 +371,14 @@ private:
     float smoothedSpectralTilt_ = 0.0f;
     ValidatedNeuralMasteringPlan lastSafeNeuralPlan_ {};
     bool hasLastSafeNeuralPlan_ = false;
+    // AUDIT-FIX (F4.1): apply-time delta-cap guard. validate() runs these caps
+    // at decode time, but applyValidatedPlan can be reached by a direct
+    // in-process caller that bypasses validate(); this instance closes that gap
+    // so the 0.6 LU/cycle slew limit is invariant regardless of entry point.
+    NeuralMasteringSafetyPolicy applyGuardPolicy_ { NeuralMasteringSafetyPolicy::defaultConfig() };
+    std::atomic<std::size_t> lastApplyDeltaClamps_ { 0 };
+    // AUDIT-F4.2: post-clamp limiter ceiling stamp (<= kStreamingSafeCeilingDBTP).
+    std::atomic<float> lastAppliedCeilingDbtp_ { -1.0f };
     // AUDIT CRITICAL-7: count of hosted-plugin parameters written by the last
     // neural→Ozone bridge apply. -1 = no applicator / not yet applied.
     std::atomic<int> lastOzoneAppliedCount_ { -1 };

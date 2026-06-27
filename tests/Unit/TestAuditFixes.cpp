@@ -116,14 +116,6 @@ TEST_CASE("AUDIT-FIX-2: ceiling above -1.0 dBTP is clamped down after neural app
     AutoMasteringEngine engine;
     engine.prepare(48000.0, 512, false);
 
-    // Push the limiter ceiling loose first (simulate a prior lax state).
-    engine.getDynamics(); // touch to ensure constructed
-    // The engine's limiter is private; exercise the guarantee by applying a
-    // plan with the limiter mask OFF — applyValidatedPlan must still enforce
-    // the streaming-safe cap. We verify via getMasteringChainLatency (no-op
-    // when inactive) staying sane; the real assertion is that the apply path
-    // ran without needing the mask. (The clamp logic is unit-covered by the
-    // limiter's own ceiling tests; here we assert the plan applies cleanly.)
     ValidatedNeuralMasteringPlan plan {};
     plan.valid = true;
     plan.appliedMask.limiter = false;   // SonicMaster default posture
@@ -131,10 +123,72 @@ TEST_CASE("AUDIT-FIX-2: ceiling above -1.0 dBTP is clamped down after neural app
     plan.projectedTargets.loudness[0] = 1.0f; // -> -8 LUFS target (the max)
 
     REQUIRE(engine.applyValidatedPlan(plan));
-    // If we reach here the apply succeeded; the -1.0 dBTP cap is enforced
-    // inside applyValidatedPlan regardless of the limiter mask.
-    SUCCEED("neural apply with loudness target + limiter mask off completed; "
-            "streaming-safe ceiling enforced internally");
+    // AUDIT-F4.2 (2026-06-27): REAL assertion replacing the prior SUCCEED()
+    // no-op. The streaming-safe ceiling clamp runs inside applyValidatedPlan on
+    // every apply regardless of the limiter mask; the stamped post-clamp ceiling
+    // must be <= -1.0 dBTP (kStreamingSafeCeilingDBTP).
+    const float appliedCeiling = engine.getLastAppliedCeilingDbtp();
+    INFO("post-apply limiter ceiling: " << appliedCeiling << " dBTP (must be <= -1.0)");
+    CHECK(appliedCeiling <= -1.0f + 1e-3f);
+}
+
+// AUDIT-F4.1 (2026-06-27): the per-cycle delta cap (maxDeltaPerPlan.loudness =
+// 0.10 normalized -> 0.6 LU/cycle) is enforced at DECODE time inside validate()
+// on the SonicMaster cycle path. But applyValidatedPlan can be reached by a
+// direct in-process caller that hand-builds a ValidatedNeuralMasteringPlan
+// without going through validate(); before this fix that caller could apply an
+// arbitrarily large loudness jump in a single cycle, bypassing the slew limit.
+// The fix re-runs enforceDeltaCaps against lastSafeNeuralPlan_ at the top of
+// applyValidatedPlan. This test exercises the bypass directly: establish a
+// baseline, then apply a plan with a 1.0-normalized (6 LU) loudness jump and
+// assert the applied (stored-as-last-safe) loudness moved at most 0.10 (0.6 LU).
+TEST_CASE("AUDIT-F4.1: applyValidatedPlan caps loudness delta vs last safe plan",
+          "[audit][engine][safety][F4-1]")
+{
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+
+    // Establish a baseline loudness target of 0.0 normalized (-14 LUFS).
+    ValidatedNeuralMasteringPlan baseline {};
+    baseline.valid = true;
+    baseline.appliedMask.loudness = true;
+    baseline.projectedTargets.loudness[0] = 0.0f;
+    REQUIRE(engine.applyValidatedPlan(baseline));
+    REQUIRE(engine.hasLastSafeNeuralMasteringPlan());
+    REQUIRE(std::abs(engine.getLastSafeNeuralMasteringPlan().projectedTargets.loudness[0] - 0.0f) < 1e-6f);
+
+    // Direct in-process caller bypassing validate(): tries to jump the loudness
+    // target from 0.0 to 1.0 (a 6 LU delta). The cap is 0.10 normalized/cycle.
+    ValidatedNeuralMasteringPlan jump {};
+    jump.valid = true;
+    jump.appliedMask.loudness = true;
+    jump.projectedTargets.loudness[0] = 1.0f;
+
+    REQUIRE(engine.applyValidatedPlan(jump));
+    // The apply-time guard MUST have clamped at least one dimension.
+    CHECK(engine.getLastApplyDeltaClamps() >= 1u);
+    // The stored last-safe loudness must have moved at most maxDeltaPerPlan
+    // (0.10 normalized = 0.6 LU), NOT the full 1.0.
+    const float appliedLoudness = engine.getLastSafeNeuralMasteringPlan().projectedTargets.loudness[0];
+    CHECK(appliedLoudness <= Approx(0.10f + 1e-5f));
+    CHECK(appliedLoudness >= 0.0f);  // monotonic toward the requested jump, not negative
+}
+
+TEST_CASE("AUDIT-F4.1: first apply (no last-safe baseline) is unconstrained",
+          "[audit][engine][safety][F4-1]")
+{
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, false);
+    REQUIRE_FALSE(engine.hasLastSafeNeuralMasteringPlan());
+
+    // No baseline -> first apply must NOT be clamped (mirrors validate()).
+    ValidatedNeuralMasteringPlan first {};
+    first.valid = true;
+    first.appliedMask.loudness = true;
+    first.projectedTargets.loudness[0] = 1.0f;
+    REQUIRE(engine.applyValidatedPlan(first));
+    CHECK(engine.getLastApplyDeltaClamps() == 0u);
+    CHECK(std::abs(engine.getLastSafeNeuralMasteringPlan().projectedTargets.loudness[0] - 1.0f) < 1e-6f);
 }
 
 // ── AUDIT-FIX-8: stale plans carry a timestamp and are droppable ─────────────

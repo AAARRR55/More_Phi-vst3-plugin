@@ -61,3 +61,32 @@ TEST_CASE("Genre prior wiring: engines coexist and classifier defaults to Stream
 
     proc.releaseResources();
 }
+
+TEST_CASE("Genre prior wiring: pluggable model load is graceful when no model present",
+          "[integration][GenrePrior]")
+{
+    // Phase C: initializeGenreClassifier searches %APPDATA%/MorePhi/models and
+    // the plugin dir for genre_classifier.onnx. In the test env neither holds a
+    // model, so the classifier stays on its heuristic path — the processor must
+    // construct and the classifier must remain usable (not crashed, not stranded).
+    more_phi::MorePhiProcessor proc;
+    proc.prepareToPlay(48000.0, 512);
+
+    auto& classifier = proc.getAutoMasteringEngine().getGenreClassifier();
+    // No model loaded in the test environment — heuristic fallback active.
+    CHECK_FALSE(classifier.isModelLoaded());
+
+    // The heuristic still reports a valid in-range genre (constructor default or
+    // a fresh heuristic guess), so the prior-wiring target is never stranded.
+    const int g = classifier.getTopGenre();
+    CHECK(g >= 0);
+    CHECK(g < more_phi::GenreClassifier::kNumGenres);
+
+    // loadModel on a missing path is a clean false, not a crash.
+    const auto missing = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("nonexistent_genre_e2e.onnx");
+    CHECK_FALSE(classifier.loadModel(missing));
+    CHECK_FALSE(classifier.isModelLoaded());
+
+    proc.releaseResources();
+}

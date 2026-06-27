@@ -355,9 +355,55 @@ void MorePhiProcessor::initializeSonicMaster()
             "HTTP fallback disabled. Neural Master unavailable.");
     }
 #endif
+
+    // PLUGGABLE GENRE MODEL (Phase C, 2026-06-27): load a user-supplied
+    // genre-classification ONNX model from the search path. NOT embedded — we
+    // don't control the bytes, so no SHA pinning (unlike the SonicMaster model).
+    // Search order:
+    //   1. %APPDATA%/MorePhi/models/genre_classifier.onnx   (user-writable)
+    //   2. alongside the plugin binary                        (dev/drop-in)
+    // If loadModel returns false (no file / ORT off / validation failed / threw)
+    // the genre classifier keeps running its time-domain heuristic — nothing
+    // breaks. Expected model shape: input [N, 128, T] log-mel, output [N, C]
+    // softmax. See AGENTS.md "Genre-Conditioned Priors" for the full contract.
+    initializeGenreClassifier();
 }
 
-// ── V2 feature→delta ONNX path initialization ─────────────────────────────
+void MorePhiProcessor::initializeGenreClassifier()
+{
+    const juce::String modelName = "genre_classifier.onnx";
+
+    juce::File candidate;
+    // 1. User data dir (survives plugin reinstalls; the canonical drop-in spot).
+    {
+        const auto appData = juce::File::getSpecialLocation(
+            juce::File::userApplicationDataDirectory);   // %APPDATA% on Windows
+        const auto userModelDir = appData.getChildFile("MorePhi").getChildFile("models");
+        const auto f = userModelDir.getChildFile(modelName);
+        if (f.existsAsFile()) candidate = f;
+    }
+    // 2. Alongside the plugin binary (dev / portable-install drop-in).
+    if (candidate == juce::File())
+    {
+        const auto pluginDir = juce::File::getSpecialLocation(
+            juce::File::SpecialLocationType::currentExecutableFile).getParentDirectory();
+        const auto f = pluginDir.getChildFile(modelName);
+        if (f.existsAsFile()) candidate = f;
+    }
+
+    if (candidate == juce::File())
+    {
+        DBG("[MorePhiProcessor] Genre classifier model not found — using heuristic fallback. "
+            "Drop genre_classifier.onnx into %APPDATA%/MorePhi/models/ to enable neural genre.");
+        return;
+    }
+
+    if (autoMasteringEngine_.getGenreClassifier().loadModel(candidate))
+        DBG("[MorePhiProcessor] Genre classifier ONNX model loaded: " + candidate.getFullPathName());
+    else
+        DBG("[MorePhiProcessor] Genre classifier model load failed (validation/shape mismatch); "
+            "heuristic fallback remains active. File: " + candidate.getFullPathName());
+}
 
 void MorePhiProcessor::initializeNeuralMasteringV2()
 {
@@ -432,6 +478,13 @@ MorePhiProcessor::~MorePhiProcessor()
     DBG("[~MorePhiProcessor] entering destructor");
     stopTimer();
     DBG("[~MorePhiProcessor] stopped timer");
+    // H-5 FIX: Clear any pending plugin load retry state so the destructor
+    // doesn't leave stale references (pendingPluginDesc_ has its own cleanup
+    // via ~PluginDescription, but the atomic flags are reset defensively for
+    // clarity — they prevent a hypothetical timer-edge from observing pending
+    // state after stopTimer() returns).
+    hasPendingPluginLoad_.store(false, std::memory_order_release);
+    pendingLoadAttempts_.store(0, std::memory_order_relaxed);
     // Stop the agent runtime FIRST — its workers borrow references to the MCP
     // server's AutomationRuntime (events/workflows/etc.) and to the four holders
     // below, so they must be joined before any of those are torn down.
@@ -508,6 +561,8 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.morphAlpha = apvts.getRawParameterValue("morphAlpha");
     rawParams_.bypass = apvts.getRawParameterValue("bypass");
     rawParams_.outputGain = apvts.getRawParameterValue("outputGain");
+    rawParams_.outputProtect = apvts.getRawParameterValue("outputProtect");
+    rawParams_.outputCeiling = apvts.getRawParameterValue("outputCeiling");
     rawParams_.driftOutputX = apvts.getRawParameterValue("driftOutputX");
     rawParams_.driftOutputY = apvts.getRawParameterValue("driftOutputY");
     rawParams_.coarseParameterWrites = apvts.getRawParameterValue("coarseParameterWrites");
@@ -1449,6 +1504,17 @@ MorePhiProcessor::createParameterLayout()
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{"outputGain", 1}, "Output Gain",
         juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
+
+    // Output protection: lookahead brickwall limiter on the main wet path.
+    // Default ON so morph-driven overshoots (high-gain snapshots, correlated
+    // HybridBlend sums) cannot clip past the ceiling. Lookahead is reported to
+    // the DAW via LatencyManager so PDC compensates. -1.0 dBTP is streaming-safe.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"outputProtect", 1}, "Output Protect", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{"outputCeiling", 1}, "Output Ceiling",
+        juce::NormalisableRange<float>(-3.0f, -0.1f, 0.1f), -1.0f));
+
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"bypass", 1}, "Bypass", false));
 
@@ -1604,6 +1670,18 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     neuralMasteringController_.resetStatus();
     sonicMasterEngine_.prepare(sampleRate, samplesPerBlock);
 
+    // Output-protection limiter on the main wet path. Prepared + reset every
+    // prepareToPlay so a sample-rate / block-size change rebuilds the lookahead
+    // window. Seed the ceiling from the APVTS default (the limiter ctor already
+    // defaults to -1.0 dBTP, so this only matters when a persisted value loads).
+    morphOutputLimiter_.prepare(sampleRate, samplesPerBlock);
+    morphOutputLimiter_.reset();
+    if (rawParams_.outputCeiling != nullptr)
+        morphOutputLimiter_.setCeiling(rawParams_.outputCeiling->load(std::memory_order_relaxed));
+    // Apply the user toggle so setEnabled reflects outputProtect immediately.
+    if (rawParams_.outputProtect != nullptr)
+        morphOutputLimiter_.setEnabled(rawParams_.outputProtect->load(std::memory_order_relaxed) > 0.5f);
+
     // Pre-allocate morph processor buffers
     morphProcessor.prepare(MAX_PARAMETERS);  // Max expected param count
     finalOutput_.resize(MAX_PARAMETERS, 0.0f);
@@ -1652,6 +1730,11 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     profiler_.registerSection("hosted_plugin_process");
     profiler_.registerSection("sonicmaster_capture");
     profiler_.registerSection("modulation_engine");
+    // Output-protection brickwall limiter on the main wet path (after hosted
+    // plugin + HybridBlend + output gain). Registered so its audio-thread cost
+    // is captured, per the AGENTS.md rule that sections MUST be registered here
+    // before audio starts (else updateStats() silently drops them).
+    profiler_.registerSection("output_protect");
 
     // Pre-allocate snapshot bank scratch buffers (real-time safety)
     snapshotBank.prepare(MAX_PARAMETERS);
@@ -1699,6 +1782,17 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // same size as the incoming buffer — never oversampled).
     dryBuffer_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
 
+    // H-7 FIX: Seed the getStateInformation audio-thread cache now (on the
+    // message thread) so that any audio-thread call to getStateInformation
+    // (e.g. DAW offline export right after load) finds a valid cached state
+    // instead of falling back to an empty MemoryBlock. The MemoryBlock is
+    // immediately discarded — only the side-effect of populating
+    // cachedSavedState_ inside getStateInformation matters.
+    {
+        juce::MemoryBlock seedBlock;
+        getStateInformation(seedBlock);
+    }
+
     prepared.store(true, std::memory_order_release);
     startTimer(50);  // persistent timer — always-on after prepare so audio thread never allocates to kick it
     diagnostics_.start();
@@ -1706,8 +1800,12 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 
 void MorePhiProcessor::releaseResources()
 {
-    // P2 FIX: Explicit release store — pairs with acquire load in processBlock.
+    // C-1 FIX: Emit a seq_cst fence AFTER the prepared store so every core
+    // observes prepared==false before the spin-wait begins. Without this, a
+    // processBlock that loaded prepared==true just before the store might still
+    // be mid-flight, inflating audioThreadActive_ and causing a spurious timeout.
     prepared.store(false, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 
     // W4 FIX: Bounded drain of in-flight audio-thread leases. JUCE guarantees
     // the host won't call processBlock after releaseResources, but FL Studio
@@ -1747,17 +1845,23 @@ void MorePhiProcessor::releaseResources()
 
 void MorePhiProcessor::reset()
 {
-    // Flush internal state for clean re-initialization
-    // (e.g., when host calls setActive(false) then setActive(true))
-    morphProcessor.prepare(MAX_PARAMETERS);  // Re-init morph processor
-    autoMasteringEngine_.reset();
-    spectralEngine_.reset();
-    granularEngine_.reset();
-    formantEngine_.reset();
-    oversampling_.reset();
-    oversamplingB_.reset();
-    modulationEngine_.reset();
-}
+	    // Flush internal state for clean re-initialization
+	    // (e.g., when host calls setActive(false) then setActive(true))
+	    morphProcessor.prepare(MAX_PARAMETERS);  // Re-init morph processor
+	    autoMasteringEngine_.reset();
+	    spectralEngine_.reset();
+	    granularEngine_.reset();
+	    formantEngine_.reset();
+	    oversampling_.reset();
+	    oversamplingB_.reset();
+	    modulationEngine_.reset();
+
+    // AUDIT-FIX (P4, 2026-06-27): notify the SonicMaster engine that the audio
+    // source may have changed (transport restart / reconfiguration). This arms
+    // the transition guard so the next analysis cycle discards any capture window
+    // that blends pre-reset and post-reset audio.
+    sonicMasterEngine_.notifyAudioSourceChanged("processor_reset");
+	}
 
 bool MorePhiProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
@@ -1901,6 +2005,19 @@ void MorePhiProcessor::syncStateFromAPVTS()
     throttleParamCommits_.store(readRawBool(rawParams_.throttleParamCommits, false),
                                 std::memory_order_relaxed);
 
+    // Output protection: push the toggle + ceiling to the wet-path limiter and
+    // dirty latency so updateReportedLatency() adds/removes the 4 ms lookahead.
+    // The limiter setters are atomic / any-thread safe.
+    const bool outputProtectOn = readRawBool(rawParams_.outputProtect, true);
+    morphOutputLimiter_.setEnabled(outputProtectOn);
+    if (rawParams_.outputCeiling != nullptr)
+        morphOutputLimiter_.setCeiling(rawParams_.outputCeiling->load(std::memory_order_relaxed));
+    if (outputProtectOn != lastOutputProtectEnabled_)
+    {
+        lastOutputProtectEnabled_ = outputProtectOn;
+        latencyConfigDirty_.store(true, std::memory_order_release);
+    }
+
     if (audioDomainEnabled != lastLatencyAudioDomainEnabled_
         || spectralActive != lastLatencySpectralActive_
         || granularActive != lastLatencyGranularActive_)
@@ -1963,14 +2080,15 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // P2 FIX: Explicit acquire load — pairs with prepareToPlay / releaseResources
     // release stores. Avoids implicit seq_cst overhead on the hot path.
+    // M-4 FIX: Single prepared check before incrementing audioThreadActive_.
+    // The second check after fetch_add was redundant — the AudioGuard
+    // destructor always decrements even if the config changes between check
+    // and process start. Removing one atomic load per block on the hot path.
     if (!prepared.load(std::memory_order_acquire)
         || shuttingDown_.load(std::memory_order_acquire)) return;
 
     audioThreadActive_.fetch_add(1, std::memory_order_acq_rel);
     struct AudioGuard { std::atomic<int>& ref; ~AudioGuard() { ref.fetch_sub(1, std::memory_order_acq_rel); } } audioGuard{audioThreadActive_};
-
-    if (!prepared.load(std::memory_order_acquire)
-        || shuttingDown_.load(std::memory_order_acquire)) return;
 
     // The persistent maintenance timer (started in prepareToPlay) will pick up
     // pendingStateRestore_ on its next tick — no need to allocate here.
@@ -2734,6 +2852,23 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
                 buffer.applyGain(targetGainLinear);
             }
         }
+    }
+
+    // Output protection: lookahead brickwall limiter on the main wet path.
+    // Sits after the hosted plugin + HybridBlend + output gain (all potential
+    // overshoot sources during morphing) and before the wet/dry crossfade, so a
+    // morph into a high-gain snapshot — or a correlated-peak HybridBlend sum —
+    // cannot clip past the ceiling. Default ON (outputProtect). Bypass stays
+    // truly dry: this only touches the wet `buffer`; the dry copy for the
+    // crossfade was captured earlier. Lookahead is reported to the DAW via
+    // latencyManager_ so PDC keeps the wet/dry fade aligned.
+    if (wetNeeded && rawParams_.outputProtect != nullptr
+        && rawParams_.outputProtect->load(std::memory_order_relaxed) > 0.5f)
+    {
+        if (rawParams_.outputCeiling != nullptr)
+            morphOutputLimiter_.setCeiling(rawParams_.outputCeiling->load(std::memory_order_relaxed));
+        MORE_PHI_PROFILE(profiler_, "output_protect");
+        morphOutputLimiter_.processBlock(buffer);
     }
 
     // C-6 FIX (audit): Wet/dry crossfade + mix-ramp advance.
@@ -3762,6 +3897,11 @@ void MorePhiProcessor::updateReportedLatency()
     // chain is dormant (shipped plugin only meters), so the live reported latency
     // is unchanged until mastering is engaged.
     latencyManager_.setMasteringChainLatency(autoMasteringEngine_.getMasteringChainLatency());
+    // Output-protection brickwall limiter on the main wet path: report its 4 ms
+    // lookahead only while the user has outputProtect engaged, so the DAW PDC
+    // compensates and bypass crossfades stay aligned. 0 when disabled.
+    latencyManager_.setMorphOutputLatency(
+        readRawBool(rawParams_.outputProtect, true) ? morphOutputLimiter_.getLookaheadSamples() : 0);
     setLatencySamples(latencyManager_.getTotal());
     latencyConfigDirty_.store(false, std::memory_order_release);
 }

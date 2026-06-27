@@ -33,12 +33,13 @@ inline constexpr std::size_t kSonicMasterCompBandWidth = 6;
 // and the applied DSP disagree by up to 3.3x. Raise BOTH together (and verify
 // MultibandDynamicsProcessor supports the wider range) before widening.
 inline constexpr float kSonicMasterCompRatioMin = 1.0f;
-// AUDIT-FIX (A6): tightened from 6.0 to 4.0 so every decoded ratio maps into
-// the safety policy's normalized [-1, +1] dynamics bound. With the previous 6.0
-// max, the normalized value (ratio-2.5)/1.5 could reach +2.33, and any decoded
-// ratio > 4.0 was silently rejected by the safety gate (TargetOutOfRange).
-// Gentler compression is also safer for a default-on mastering assistant.
-inline constexpr float kSonicMasterCompRatioMax = 4.0f;
+	// AUDIT-FIX (A6, P5 2026-06-27): tightened from 6.0 to 4.0 in the original A6
+	// fix so the safety policy's normalized [-1, +1] dynamics bound could represent
+	// every value. Widened back to 6.0 in P5 after confirming MultibandDynamicsProcessor
+	// supports any positive ratio with no internal clamp. The safety policy's
+	// maxDeltaPerPlan.dynamics was also widened (0.12 -> 0.20) to accommodate
+	// the wider range. Raise ALL THREE bounds together before widening further.
+	inline constexpr float kSonicMasterCompRatioMax = 6.0f;
 
 // AUDIT-2/3: the model emits these counts; AutoMasteringEngine applies ONLY
 // these many bands from a SonicMaster plan and leaves the rest to the genre
@@ -65,8 +66,14 @@ inline constexpr float kSonicMasterEqFrequenciesHz[kSonicMasterEqGainCount] = {
     60.0f, 120.0f, 250.0f, 500.0f, 1000.0f, 2500.0f, 5000.0f, 10000.0f
 };
 
-// Default neutral Q for the decoded EQ bands (matches EQ_DECISION_Q).
-inline constexpr float kSonicMasterEqDefaultQ = 0.707f;
+	// Default neutral Q for the decoded EQ bands (matches EQ_DECISION_Q).
+	// AUDIT-FIX (P6, 2026-06-27): Q and filter type are FIXED per-band because
+	// the 44-float decision vector carries only gain per band (no Q, no type).
+	// Q=0.707 is a reasonable broadband mastering EQ default (gentle enough
+	// for surgical use, not so wide it rings). A future model export that adds
+	// Q and type slots per band would make these per-band configurable.
+	// Until then, all 8 bands are bell/peak filters at Q=0.707.
+	inline constexpr float kSonicMasterEqDefaultQ = 0.707f;
 
 // Mirrors AdaptiveEQ::kMaxGainDB (Core/AdaptiveEQ.h). Re-stated here so the
 // decoder stays DSP-header-free and the tests can assert against it without

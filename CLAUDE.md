@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-More-Phi is a JUCE 8-based C++20 VST3/AU audio plugin that hosts other plugins and morphs between parameter snapshots using parameter interpolation, physics modes, audio-domain engines, genetic breeding, and AI control through MCP. The project version in CMake is 3.3.0.
+More-Phi is a JUCE 8-based C++20 VST3/AU audio plugin that hosts other plugins and morphs between parameter snapshots using parameter interpolation, physics modes, audio-domain engines, genetic breeding, and AI control through MCP. The project version in CMake is 3.4.0.
 
 Everything is in the `more_phi` namespace unless a submodule states otherwise. The plugin entry point is `MorePhiProcessor` (`src/Plugin/PluginProcessor.*`), which owns subsystem instances directly; avoid adding singletons except for the existing cross-instance `InstanceRegistry`.
 
@@ -110,7 +110,7 @@ Useful CMake options:
 - `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` (default `OFF`) — copies built plugin to the system plugin folder.
 - `MORE_PHI_ENABLE_SANITIZERS` (default `OFF`) — ASAN/UBSAN for Clang/GCC Debug builds.
 - `MORE_PHI_SAFE_BUILD_MODE` (default `ON`) — conservative MSVC linker/build settings.
-- `MORE_PHI_MSVC_MP` (default `2`) — MSVC `/MP` worker count; set `0` to disable.
+- `MORE_PHI_MSVC_MP` (defaults to host logical-core count via `ProcessorCount`) — MSVC `/MP` worker count; set `0` to disable.
 - `MORE_PHI_ENABLE_LTO` (default `OFF`) — Release LTO, intended for CI/release rather than local stability.
 - `MORE_PHI_BUILD_COMPREHENSIVE_E2E` (default `OFF`) — adds generated comprehensive VST3 E2E suite; tracks experimental APIs.
 - `MORE_PHI_ENABLE_DATASET_V3` is a deprecated compatibility flag; Dataset V3 sources are always compiled.
@@ -236,7 +236,7 @@ CMakePresets.json defines cross-platform configure/build/test presets beyond the
 - `cmake/PatchJuceForMSVC.cmake` patches JUCE headers that conflict with Windows macros.
 - Windows local builds default to conservative `/MP2`, safe linker threading, and no LTO; use `docs/BUILD_STABILITY_GUIDE.md` if builds freeze or exhaust resources.
 - AU is built only on macOS; non-macOS builds emit VST3 only.
-- `ParameterState` uses fixed arrays for up to 2048 parameters; `SnapshotBank` heap-allocates its 12-slot array (~97 KB) to avoid host stack pressure.
+- `ParameterState` uses fixed arrays for up to 4096 parameters; `SnapshotBank` heap-allocates its 12-slot array (~197 KB) to avoid host stack pressure.
 - SIMD tuning is scoped to `src/Core/SIMDAudio.cpp` (`/arch:AVX2` on MSVC or `-mavx2 -msse4.1` on Clang/GCC when x86 is detected).
 
 <!-- SPECKIT START -->

@@ -11,6 +11,8 @@
  *   totalLatency = oversamplingLatency
  *                + fftWindowLatency          (spectral morph mode only)
  *                + hostedPluginLatency        (passthrough from hosted VST3)
+ *                + morphOutputLatency         (output-protection BrickwallLimiter, outputProtect)
+ *                + masteringChainLatency      (dormant AutoMasteringEngine brickwall)
  *
  * Threading:
  *   All setters are called from the message thread (prepareToPlay).
@@ -69,6 +71,20 @@ public:
         recompute();
     }
 
+    /**
+     * Latency introduced by the morph-output protection BrickwallLimiter that
+     * sits on the main wet path (outputProtect). Same 4 ms lookahead as the
+     * mastering chain limiter, but a SEPARATE stage — reported only while
+     * output protection is engaged (set to 0 when the user disables it) so the
+     * DAW PDC can compensate and bypass crossfades stay aligned. Distinct from
+     * setMasteringChainLatency(), which tracks the (dormant) AutoMasteringEngine.
+     */
+    void setMorphOutputLatency(int samples) noexcept
+    {
+        morphOutputLatency_.store(std::max(0, samples), std::memory_order_relaxed);
+        recompute();
+    }
+
     // ─── Getter (any thread) ──────────────────────────────────────────────
 
     /** Total reported latency in samples. Feed directly to setLatencySamples(). */
@@ -81,6 +97,7 @@ public:
     [[nodiscard]] int getFFTWindowLatency()      const noexcept { return fftWindowLatency_.load(std::memory_order_relaxed); }
     [[nodiscard]] int getHostedPluginLatency()   const noexcept { return hostedPluginLatency_.load(std::memory_order_relaxed); }
     [[nodiscard]] int getMasteringChainLatency() const noexcept { return masteringChainLatency_.load(std::memory_order_relaxed); }
+    [[nodiscard]] int getMorphOutputLatency()    const noexcept { return morphOutputLatency_.load(std::memory_order_relaxed); }
 
 private:
     void recompute() noexcept
@@ -88,7 +105,8 @@ private:
         int total = oversamplingLatency_.load(std::memory_order_relaxed)
                   + fftWindowLatency_.load(std::memory_order_relaxed)
                   + hostedPluginLatency_.load(std::memory_order_relaxed)
-                  + masteringChainLatency_.load(std::memory_order_relaxed);
+                  + masteringChainLatency_.load(std::memory_order_relaxed)
+                  + morphOutputLatency_.load(std::memory_order_relaxed);
         total_.store(total, std::memory_order_relaxed);
     }
 
@@ -96,6 +114,7 @@ private:
     std::atomic<int> fftWindowLatency_      { 0 };
     std::atomic<int> hostedPluginLatency_   { 0 };
     std::atomic<int> masteringChainLatency_ { 0 };
+    std::atomic<int> morphOutputLatency_    { 0 };
     std::atomic<int> total_                 { 0 };
 };
 

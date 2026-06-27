@@ -35,6 +35,7 @@
 #include "Core/HybridBlend.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/LatencyManager.h"
+#include "Core/BrickwallLimiter.h"
 #include "Core/PerformanceProfiler.h"
 #include "Core/MorePhiDiagnostics.h"
 #include "Core/AutoMasteringEngine.h"
@@ -180,6 +181,8 @@ public:
     FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
     OversamplingWrapper&   getOversampling()          { return oversampling_; }
     LatencyManager&        getLatencyManager()        { return latencyManager_; }
+    // Output-protection limiter on the main wet path (diagnostics / tests).
+    BrickwallLimiter&      getMorphOutputLimiter()    { return morphOutputLimiter_; }
 
     // Audio-domain morph controls
     void setAudioDomainEnabled(bool v)
@@ -632,6 +635,12 @@ private:
     // alongside the plugin binary; falls back to the HTTP inference server.
     void initializeSonicMaster();
 
+    // PLUGGABLE GENRE MODEL (Phase C, 2026-06-27): searches %APPDATA%/MorePhi/models
+    // then the plugin binary dir for genre_classifier.onnx and loads it into the
+    // AutoMasteringEngine's GenreClassifier. No-op (heuristic stays active) when
+    // the file is absent or ORT validation fails. No embedding / no SHA pinning.
+    void initializeGenreClassifier();
+
     // V2: wire the feature→delta ONNX path (63→72 model). Searches for a
     // matching model alongside the plugin binary; falls through to the
     // DeterministicBaseline runner if none is found.
@@ -653,6 +662,13 @@ private:
     OversamplingWrapper oversampling_;
     OversamplingWrapper oversamplingB_;
     LatencyManager      latencyManager_;
+
+    // Output-protection brickwall limiter on the main wet path. Sits AFTER the
+    // hosted plugin + HybridBlend + output gain and BEFORE the wet/dry crossfade,
+    // so morph-driven overshoots (high-gain snapshots, correlated-peak sums)
+    // cannot clip past the configured ceiling. Default ON via the outputProtect
+    // APVTS param; lookahead reported to the DAW through latencyManager_.
+    BrickwallLimiter    morphOutputLimiter_;
 
     // Performance profiler for CPU spike diagnosis
     PerformanceProfiler profiler_;
@@ -769,18 +785,24 @@ private:
     void clearLiveEditHoldsAudioThread() noexcept;
     bool shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept;
     // C4 FIX: Drop the cached "last applied" value for every parameter so the
-    // next morph pass treats the just-recalled snapshot values as the new
-    // baseline instead of overwriting them. Called on the audio thread right
-    // after a recall path (MIDI note trigger, MCP recall) writes hosted params
-    // directly via ParameterBridge, bypassing lastApplied_ bookkeeping. Without
-    // this, applyMorphAndParameters() in the same block sees a stale lastApplied_
-    // and writes the morph output right back over the recalled snapshot.
-    void invalidateAppliedCacheAudioThread() noexcept;
-    int drainParameterCommandQueue(int cachedParamCount,
-                                   int maxCommands,
-                                   juce::AudioPluginInstance* exclusivePlugin = nullptr,
-                                   int* outOfRangeCount = nullptr) noexcept;
-    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands) noexcept;
+	    // next morph pass treats the just-recalled snapshot values as the new
+	    // baseline instead of overwriting them. Called on the audio thread right
+	    // after a recall path (MIDI note trigger, MCP recall) writes hosted params
+	    // directly via ParameterBridge, bypassing lastApplied_ bookkeeping. Without
+	    // this, applyMorphAndParameters() in the same block sees a stale lastApplied_
+	    // and writes the morph output right back over the recalled snapshot.
+	    void invalidateAppliedCacheAudioThread() noexcept;
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
+	public:
+#endif
+	    int drainParameterCommandQueue(int cachedParamCount,
+	                                   int maxCommands,
+	                                   juce::AudioPluginInstance* exclusivePlugin = nullptr,
+	                                   int* outOfRangeCount = nullptr) noexcept;
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
+	private:
+#endif
+	    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands) noexcept;
     void processMIDIAndSidechain(juce::MidiBuffer& midi, juce::AudioBuffer<float>& buffer) noexcept;
     void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters) noexcept;
     void applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer, bool isBypassed) noexcept;
@@ -892,6 +914,10 @@ private:
         std::atomic<float>* morphAlpha = nullptr;
         std::atomic<float>* bypass = nullptr;
         std::atomic<float>* outputGain = nullptr;
+        // Output-protection brickwall limiter on the main wet path (default ON).
+        // outputProtect gates the limiter; outputCeiling is the target dBTP.
+        std::atomic<float>* outputProtect = nullptr;
+        std::atomic<float>* outputCeiling = nullptr;
         std::atomic<float>* driftOutputX = nullptr;
         std::atomic<float>* driftOutputY = nullptr;
         std::atomic<float>* coarseParameterWrites = nullptr;
@@ -941,6 +967,9 @@ private:
     bool lastLatencyAudioDomainEnabled_ = false;
     bool lastLatencySpectralActive_ = false;
     bool lastLatencyGranularActive_ = false;
+    // Tracks the outputProtect toggle so toggling it dirties latency (the limiter
+    // adds/removes its 4 ms lookahead from the reported total).
+    bool lastOutputProtectEnabled_ = true;
 
     std::atomic<int> pendingFullStateRecallSlot_{-1};
     std::atomic<uint32_t> pendingFullStateRecallGeneration_{0};

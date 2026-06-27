@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-More-Phi is a JUCE 8-based VST3/AU audio plugin (C++20) that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, and AI integration via an embedded MCP server. Version 3.3.0.
+More-Phi is a JUCE 8-based VST3/AU audio plugin (C++20) that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, and AI integration via an embedded MCP server. Version 3.4.1.
 
 ## Build Commands
 
@@ -132,9 +132,9 @@ An additive agent layer sits ABOVE the existing `MCPToolHandler` / `AutomationCo
 - **Atomics** (`memory_order_relaxed`) — All morph position, physics mode, and toggle state transferred between UI and audio threads. See Memory Ordering table above for the full convention.
 - **Timer-deferred notification** — `morphPositionNotifyPending_` flag + `requestMessageThreadMaintenance()` replaces `callAsync()` for APVTS morph-position sync. Timer fires reliably on message thread even with editor closed.
 - **Touch detection** — Prevents morph from overwriting manual knob changes using per-parameter cooldown counters. Dynamic cooldown duration (~200ms) computed from sample rate / block size in `prepareToPlay()`.
-- **PERF-IA: Interleaved touch sampling** (2026-07-16) — Instead of calling `getValue()` on all 2,048 parameters every block (the dominant CPU cost), only samples 1/`kTouchSamplingStride` (4) params per block using a rotating `touchSamplingPhase_`. Touch detection is gated to sampled params only. Cooldown tick-down and morph setValue still run for all params. Reduces getValue virtual-call cost by ~75%, touch detection latency ~20ms (well within ~200ms cooldown).
+- **PERF-IA: Interleaved touch sampling** (2026-07-16) — Instead of calling `getValue()` on all 4,096 parameters every block (the dominant CPU cost), only samples 1/`kTouchSamplingStride` (4) params per block using a rotating `touchSamplingPhase_`. Touch detection is gated to sampled params only. Cooldown tick-down and morph setValue still run for all params. Reduces getValue virtual-call cost by ~75%, touch detection latency ~20ms (well within ~200ms cooldown).
 - **PERF-CPU: CPU Saver mode** (2026-07-16) — New `cpuSaver` APVTS bool parameter (default OFF). When enabled, halves audio-domain FFT size (min 512) and caps oversampling at ×2. Reduces audio-domain CPU by ~40-60%. Applied in both `prepareToPlay` and `syncStateFromAPVTS`.
-- **PERF-MEM: SonicMaster lazy ring allocation** (2026-07-16) — The `AudioCaptureRing` size is now **rate-proportional** (`8.0 * sampleRate`, clamped to `[2×44100, 32×192000]` frames), then power-of-2 rounded by `AudioCaptureRing`'s constructor. At 44.1/48 kHz this yields ~4 MiB (vs the old fixed 16 MiB); at 192 kHz it still reaches ~16 MiB. The ring is allocated lazily via `ensureRing()` on first `setActive(true)`, `requestDecisionNow()`, or `runCycle()`. `prepare()` resets the ring to nullptr. `flushCaptureRing()` is called on hosted plugin load to discard stale audio. Saves the bulk of More-Phi's owned memory when SonicMaster is inactive.
+- **PERF-MEM: SonicMaster rate-proportional capture ring** (2026-07-16, updated 2026-06-27) — The `AudioCaptureRing` size is **rate-proportional** (`8.0 * sampleRate`, clamped to `[2×44100, 32×192000]` frames), then power-of-2 rounded by `AudioCaptureRing`'s constructor. At 44.1/48 kHz this yields ~4 MiB (vs the old fixed 16 MiB); at 192 kHz it still reaches ~16 MiB. **The ring is allocated EAGERLY in `prepare()`** (`SonicMasterAnalysisEngine.cpp:320-321`, CAPTURE-DECOUPLE fix) — the earlier "lazy" scheme (allocate on first `setActive`/`requestDecisionNow`) was abandoned because it broke on-demand capture (the ring was null during playback until the first decision request, by which point the window was empty). `ensureRing()` remains only as a defensive idempotent allocator for tests that skip `prepare()`. `flushCaptureRing()` is called on hosted plugin load to discard stale audio.
 - **PERF-MEM: throttleStates_ reduction** (2026-07-16) — Reduced from 8192 to 4096 entries (~64 KB saved).
 
 ### SonicMaster Audit Notes (2026-06-25)
@@ -163,7 +163,21 @@ The SonicMaster ONNX decision takes only the waveform as input — it cannot con
 - **Stage 1 — target LUFS prior**: `GenreMasteringProfile.h` maps each of the 12 `GenreClassifier` genre slots to a target LUFS (values mirror `ChainPlanExecutor::kGenreLUFS[12]`) and a `MasteringTargetCurve*`. The processor pushes the active genre's LUFS into `SonicMasterAnalysisEngine::setGenreTargetLufs`. Decode precedence on the background cycle is: **closed-loop feedback > genre prior > model default**; on the on-demand path, **explicit `targetLufs` > genre prior > model default**. The sentinel `kUseModelTargetLufs` clears the prior.
 - **Stage 2 — tonal-balance residual**: `TonalBalanceExtractor.h` integrates the spectrum snapshot into the 8 EQ band frequencies (level-invariant, mean-subtracted — same shape as `RuleBasedMasteringResolver`). `decodeSonicMasterDecision` takes an optional `GenreEqPrior{curve, measuredBandDb, residualBlend}`; when set, it blends `clamp(target − measured, ±6 dB) * residualBlend` into each EQ band *before* the ±12 dB clamp. The processor scales `residualBlend` by `getTopConfidence()` (capped 0.5×) and only asserts a curve when confidence ≥ 0.5.
 
-**No-model caveat:** `GenreClassifier` returns index 10 (Streaming) at confidence 1.0 when no genre ONNX is loaded, so the priors collapse to the Streaming profile until a model is wired — safe, non-destructive, and becomes meaningful the moment a genre model is loaded.
+**No-model caveat:** `GenreClassifier` runs a **time-domain heuristic** (low/high band split at 200 Hz + zero-crossing rate → coarse genre guess, confidence 0.5–0.65) out of the box — so the priors are **live and reacting to audio from day one**, not stuck on Streaming. The heuristic covers all 12 slots. When no ONNX genre model is loaded the heuristic is the active path; loading a model upgrades it to neural.
+
+### Pluggable Genre Model — Neural Path (2026-06-27)
+
+`GenreClassifier::loadModel` is a real ONNX path (Phase B), mirroring `SonicMasterDecisionRunner`'s pimpl session pattern. **No model is embedded** — it's pluggable:
+
+- **Search path** (`MorePhiProcessor::initializeGenreClassifier`, called once from `initializeSonicMaster`):
+  1. `%APPDATA%/MorePhi/models/genre_classifier.onnx` (user-writable, survives reinstalls)
+  2. alongside the plugin binary (dev/drop-in)
+- **Expected model shape:** input `[N, 128, T]` float log-mel (`N`∈{1,-1} batch, `128` mel bins — or symbolic, `T` mel frames — concrete or symbolic), output `[N, C]` float softmax over `C` genre classes. If the model's declared `T` is concrete, the mel frontend (`MelSpectrogram.h`) re-`prepare`s to match it; if symbolic, the frontend's 10 s window count is used.
+- **Label remap:** the model's `C` output classes are identity-mapped onto the plugin's 12 slots (`genreRemap_[i] = i` for `i < min(C, 12)`); unmapped outputs get `-1`. An argmax that lands on `-1` falls back to the heuristic rather than asserting a wrong genre. A future model can emit `genre_labels` metadata to refine this.
+- **Fallback discipline:** any failure (file absent, ORT not compiled, shape mismatch, inference threw, unmapped argmax) silently drops to the heuristic — `runClassification` is fail-soft, never fail-deaf. `unloadModel` does NOT reset `topGenre_`, so the heuristic keeps producing a live guess after a model is unloaded.
+- **No SHA pinning:** unlike the hash-pinned SonicMaster model, a user-supplied model's bytes aren't ours to verify.
+
+To enable neural genre: drop a compatible `genre_classifier.onnx` into `%APPDATA%/MorePhi/models/` and restart the plugin. Zero code changes required.
 
 Both priors feed `candidate.targets` (the decoded recommendation); the safety policy's per-cycle delta caps (`maxDeltaPerPlan.loudness ≈ 0.6 LU`) rate-limit the *applied* plan toward them over successive cycles (the same convergence the closed-loop Stage D uses).
 
@@ -173,7 +187,7 @@ Both priors feed `candidate.targets` (the decoded recommendation); the safety po
 
 ### Interfaces for Testability
 
-`IPluginHostManager`, `IParameterBridge`, `IMCPServer` (all in `Host/IPluginHostManager.h`) — abstract interfaces that enable mock injection in tests.
+`IPluginHostManager`, `IParameterBridge` (both in `Host/IPluginHostManager.h`) — abstract interfaces that enable mock injection in tests.
 
 ## Coding Conventions (2025-07-21 audit)
 
@@ -208,7 +222,7 @@ if (!isAudioThread)  // runtime guard — skip all logging on audio thread
 ### Profiling
 
 - **`MORE_PHI_PROFILE(profiler_, "section_name")`** — RAII timer macro (opt-in via `MORE_PHI_ENABLE_PROFILING=ON`). Expands to no-op in Release builds without the flag. **CRITICAL:** Sections MUST be registered via `profiler_.registerSection("section_name")` in `prepareToPlay()` BEFORE audio starts — otherwise all timing data is silently dropped (the audio-thread `updateStats()` path skips unregistered sections to avoid allocation).
-- **13 sections currently registered** (2026-07-16): `processBlock_total`, `command_queue_drain`, `midi_processing`, `morph_computation`, `modulation_engine`, `parameter_application`, `hosted_plugin_process`, `sonicmaster_capture`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`.
+- **19 sections currently registered** (audited 2026-06-27): `processBlock_total`, `command_queue_drain`, `morph_computation`, `parameter_application`, `param_getvalue_read`, `param_touch_detect`, `param_setvalue_write`, `command_drain_snapshot`, `command_drain_param`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`, `midi_processing`, `hosted_plugin_process`, `sonicmaster_capture`, `modulation_engine`, `output_protect`. (A prior revision claimed 13 — stale; the registration list is at `PluginProcessor.cpp:1708-1737`.)
 - **`MorePhiProcessor::getProfilingReport()`** — Returns a formatted string with per-section avg/max/percentage. Called from MCP tools and UI diagnostics.
 - **`MorePhiDiagnostics`** — 250ms watchdog timer detects message-thread stalls. Enabled with `MORE_PHI_ENABLE_PROFILING`. Writes to `diagnostics-<pid>.log`.
 
@@ -231,7 +245,7 @@ if (!isAudioThread)  // runtime guard — skip all logging on audio thread
 
 **VST3 Program Interface:** Exposes all 12 snapshot slots as DAW "programs" for preset-browser integration. Empty slots appear as "Empty N" and are selectable (no-op on recall). `setCurrentProgram()` calls `recallSnapshotQueued()` which enqueues parameter writes through the multi-producer-safe `LockFreeQueue`.
 
-### Parameter Classification (v3.3.0)
+### Parameter Classification (v3.4.0+)
 
 `ParameterClassifier` categorizes hosted plugin parameters (Continuous, Discrete, Binary, Frequency, Decibel, Enumeration) for Learn Mode. `DiscreteParameterHandler` ensures discrete/binary parameters snap to valid steps during morphing rather than interpolating through invalid intermediate values. `TokenOptimizer` manages AI token budgets by selecting which parameters to expose.
 
@@ -291,8 +305,8 @@ Tests compile with `MORE_PHI_TEST_MODE=1` and `JUCE_STANDALONE_APPLICATION=0`.
 - Windows builds set `/STACK:4194304` (4 MB) for FL Studio compatibility with plugin-in-plugin hosting
 - `cmake/PatchJuceForMSVC.cmake` patches JUCE headers that conflict with Windows macros
 - AU format only built on macOS; Windows builds VST3 only
-- `ParameterState` uses fixed `std::array<float, 2048>` (no heap allocation) for real-time safety
-- `SnapshotBank` heap-allocates its 12-slot array (~97 KB: 12 × 2048 × 4 B + overhead) to avoid stack overflow in hosts with small thread stacks
+- `ParameterState` uses fixed `std::array<float, 4096>` (no heap allocation) for real-time safety
+- `SnapshotBank` heap-allocates its 12-slot array (~197 KB: 12 × 4096 × 4 B + overhead) to avoid stack overflow in hosts with small thread stacks
 - `SnapshotBank::toXml()` contains a `static_assert` verifying the local `nameBuf[64]` matches `ParameterState::name[64]` to prevent silent truncation
 
 <!-- SPECKIT START -->

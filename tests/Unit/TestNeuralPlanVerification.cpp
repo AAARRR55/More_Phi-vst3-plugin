@@ -141,18 +141,85 @@ TEST_CASE("applyValidatedPlan flags partial when read-back verifies <80%",
     stub.returnCount = 10;
     // Breakdown: 10 requested, 10 enqueued.
     stub.breakdown.enqueued = 10;
-    // Verification: only 5 of 10 read back within tolerance → 50% < 80% → partial.
+    // Verification: of the 10 enqueued, 3 verified cleanly and 7 drifted to a
+    // DIFFERENT discrete step (genuine drift, not timing). confirmedFraction =
+    // verified/(verified+driftedDiscrete) = 3/10 = 0.30 < 0.80 -> partial.
+    // (AUDIT-F2.3: mismatched alone no longer triggers partial, so genuine drift
+    //  is represented here by driftedDiscrete, whose read-back LANDED.)
     stub.verification.requested = 10;
     stub.verification.enqueued  = 10;
-    stub.verification.verified  = 5;
-    stub.verification.mismatched = 5;
+    stub.verification.verified  = 3;
+    stub.verification.driftedDiscrete = 7;
 
     VerificationMockApplicator mock(stub);
     engine.getChainPlanner().setOzonePlanApplicator(&mock);
 
     REQUIRE(engine.applyValidatedPlan(makeMinimalPlan()));
     CHECK(engine.lastApplyWasPartial());
-    CHECK(engine.getLastApplyVerification().verified == 5);
+    CHECK(engine.getLastApplyVerification().verified == 3);
+
+    engine.getChainPlanner().clearOzonePlanApplicator();
+}
+
+// AUDIT-F2.3 (2026-06-27): the read-back runs immediately after applyPlan(),
+// BEFORE the audio thread drains the command queue. A not-yet-drained write
+// reads back as mismatched — a timing artifact, not genuine drift. Before the
+// fix, mismatched counted against verifiedFraction()'s denominator, so a clean
+// apply spuriously read <0.80 and got downgraded to AppliedPartial. The fix uses
+// confirmedFraction() (verified / (verified + driftedDiscrete)), excluding
+// mismatched. This test pins the corrected contract: a fully-mismatched read-
+// back (everything still queued) must NOT classify as partial.
+TEST_CASE("applyValidatedPlan does NOT flag partial when mismatched is only not-yet-drained (F2.3)",
+          "[neural][verification][p1.2][Audit-F2-3]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+
+    VerificationStub stub;
+    stub.returnCount = 10;
+    stub.breakdown.enqueued = 10;   // all 10 requested were enqueued
+    // The read-back ran before the drain: 0 verified, 10 mismatched (none landed).
+    // This is NOT genuine drift — confirmedFraction() = 0 landed -> 1.0 (neutral),
+    // and enqueuedShortfall is false (10/10 enqueued). Result: NOT partial.
+    stub.verification.requested = 10;
+    stub.verification.enqueued  = 10;
+    stub.verification.verified  = 0;
+    stub.verification.mismatched = 10;
+
+    VerificationMockApplicator mock(stub);
+    engine.getChainPlanner().setOzonePlanApplicator(&mock);
+
+    REQUIRE(engine.applyValidatedPlan(makeMinimalPlan()));
+    CHECK_FALSE(engine.lastApplyWasPartial());
+    CHECK(engine.getLastApplyVerification().mismatched == 10);
+
+    engine.getChainPlanner().clearOzonePlanApplicator();
+}
+
+// AUDIT-F2.3: a MIXED case — some verified, some not-yet-drained mismatched,
+// no genuine drift — must still classify as Applied (not partial). This is the
+// realistic mid-drain state during normal operation.
+TEST_CASE("applyValidatedPlan mid-drain (mixed verified+mismatched, no drift) is Applied (F2.3)",
+          "[neural][verification][p1.2][Audit-F2-3]")
+{
+    more_phi::AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+
+    VerificationStub stub;
+    stub.returnCount = 10;
+    stub.breakdown.enqueued = 10;
+    // 4 verified, 6 still queued (mismatched). confirmedFraction = 4/4 = 1.0
+    // (only verified+driftedDiscrete count; the 6 mismatched are excluded).
+    stub.verification.requested = 10;
+    stub.verification.enqueued  = 10;
+    stub.verification.verified  = 4;
+    stub.verification.mismatched = 6;
+
+    VerificationMockApplicator mock(stub);
+    engine.getChainPlanner().setOzonePlanApplicator(&mock);
+
+    REQUIRE(engine.applyValidatedPlan(makeMinimalPlan()));
+    CHECK_FALSE(engine.lastApplyWasPartial());
 
     engine.getChainPlanner().clearOzonePlanApplicator();
 }

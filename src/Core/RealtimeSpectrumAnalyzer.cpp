@@ -282,6 +282,34 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     }
     if (fundamentalBin > 0 && fundamentalMag > 1e-6f)
     {
+        // AUDIT-F1.4 (2026-06-27): parabolic peak interpolation of the
+        // fundamental magnitude. When the true fundamental frequency falls
+        // between two FFT bins, the bin-pick max underestimates the real peak
+        // (spectral leakage spreads energy into the skirts), which biases the
+        // THD ratio (sqrt(harmonicEnergy)/fundamental) LOW. Interpolating the
+        // peak from the fundamental bin and its two neighbours recovers a
+        // closer estimate of the true magnitude, so THD on off-bin
+        // fundamentals is no longer systematically under-reported. The classic
+        // quadratic-interpolator formula: d = 0.5*(aL-aR)/(aL-2*aC+aR);
+        // peak = aC - 0.25*(aL-aR)*d.
+        float fundamentalInterp = fundamentalMag;
+        if (fundamentalBin > 1 && fundamentalBin < nyquistBin - 1)
+        {
+            const float aL = rawMagnitude_[static_cast<size_t>(fundamentalBin - 1)];
+            const float aC = fundamentalMag;
+            const float aR = rawMagnitude_[static_cast<size_t>(fundamentalBin + 1)];
+            const float denom = (aL - 2.0f * aC + aR);
+            if (std::abs(denom) > 1e-12f)
+            {
+                const float d = 0.5f * (aL - aR) / denom;
+                fundamentalInterp = aC - 0.25f * (aL - aR) * d;
+                // The interpolant can dip slightly below the bin value on noisy
+                // frames; clamp to the bin max so we never divide by a smaller
+                // number than the un-interpolated path (which would inflate THD).
+                if (fundamentalInterp < fundamentalMag)
+                    fundamentalInterp = fundamentalMag;
+            }
+        }
         float harmonicEnergy = 0.0f;
         for (int h = 2; h <= 5; ++h)
         {
@@ -292,7 +320,7 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
                 harmonicEnergy += hm * hm;
             }
         }
-        const float ratio = std::sqrt(harmonicEnergy) / fundamentalMag;
+        const float ratio = std::sqrt(harmonicEnergy) / fundamentalInterp;
         snapshot.thdPercent = std::min(ratio, 1.0f) * 100.0f;
     }
     else

@@ -559,6 +559,8 @@ set(MORE_PHI_AI_SOURCES
     src/AI/AIAssistant.cpp
     src/AI/EQParameterTranslator.h
     src/AI/EQParameterTranslator.cpp
+    src/AI/MelSpectrogram.h
+    src/AI/MelSpectrogram.cpp
     src/AI/GenreClassifier.h
     src/AI/GenreClassifier.cpp
     src/AI/ChainPlanExecutor.h

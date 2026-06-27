@@ -5,6 +5,7 @@
 #include "Plugin/PluginProcessor.h"
 #include "Core/AutoMasteringEngine.h"   // AUDIT-FIX (Fix 2): ApplyVerification definition
 #include <nlohmann/json.hpp>
+#include <array>
 #include <cmath>
 #include <algorithm>
 
@@ -332,19 +333,63 @@ int OzonePlanApplicator::enqueueIfMapped(int idx, float normalizedValue,
 // the hosted plugin's own names), so a direct == would be too strict; a substring
 // check in both directions tolerates the vendor's suffix/prefix variations while
 // still catching a genuine mismatch (e.g. "EQ Band 1 Frequency" vs "Compressor Mix").
+//
+// AUDIT-FIX (F2.1, 2026-06-27): the prior bidirectional substring comparator
+// (a.contains(e) || e.contains(a)) was too permissive — a parameter literally
+// named "gain" would match an expected "eq band 1 gain" (because the expected
+// string contains "gain"), and an expected "compressor threshold" could match a
+// param named "threshold" alone even when the index pointed at a different
+// module's threshold. The tokenized comparator below splits both names on
+// non-alphanumeric boundaries and matches iff every token of the SHORTER string
+// is present in the LONGER string's token set. This preserves vendor-suffix
+// tolerance ("eq band 1 frequency" vs "EQ Band 1 Frequency (Hz)") and the
+// map-key-as-single-token case ("gain" vs "eq band 1 gain"), while rejecting
+// genuine module mismatches and band-swap confusion ("band 1" vs "band 2").
 bool OzonePlanApplicator::nameMatches(const juce::String& expectedName,
-                                      const juce::String& actualName) const noexcept
+                                      const juce::String& actualName) noexcept
 {
     if (expectedName.isEmpty() || actualName.isEmpty())
         return false;
-    const juce::String e = expectedName.toLowerCase().trim();
-    const juce::String a = actualName.toLowerCase().trim();
-    // OzoneParameterMap::buildFromHostedPlugin keys on substrings ("frequency",
-    // "gain", "bandwidth", "threshold", etc.). Accept if the expected token is
-    // present in the actual name — robust to "EQ Band 1 Frequency (Hz)"-style
-    // display decoration. Require BOTH the module token and (for EQ) the band
-    // qualifier to match where present, by checking the expected string wholesale.
-    return a.contains(e) || e.contains(a);
+    // Split on any non-alphanumeric run (space, punctuation, "(Hz)", etc.).
+    auto tokenize = [](const juce::String& s, std::array<juce::String, 16>& out)
+    {
+        std::size_t n = 0;
+        juce::String tok;
+        for (auto c : s)
+        {
+            if (juce::CharacterFunctions::isLetterOrDigit(c))
+                tok += juce::CharacterFunctions::toLowerCase(c);
+            else if (tok.isNotEmpty())
+            {
+                if (n < out.size()) out[n++] = tok;
+                tok.clear();
+            }
+        }
+        if (tok.isNotEmpty() && n < out.size()) out[n++] = tok;
+        return n;
+    };
+    std::array<juce::String, 16> eTok {}, aTok {};
+    const std::size_t eN = tokenize(expectedName.trim(), eTok);
+    const std::size_t aN = tokenize(actualName.trim(), aTok);
+    if (eN == 0 || aN == 0)
+        return false;
+    // The shorter token set must be a subset of the longer one. This preserves
+    // both directions: expected "gain" ⊆ actual "eq band 1 gain", and expected
+    // "eq band 1 frequency" ⊆ actual "eq band 1 frequency hz".
+    const bool eShorter = eN <= aN;
+    const auto& needle  = eShorter ? eTok : aTok;
+    const std::size_t needleN = eShorter ? eN : aN;
+    const auto& haystack = eShorter ? aTok : eTok;
+    const std::size_t hayN = eShorter ? aN : eN;
+    for (std::size_t i = 0; i < needleN; ++i)
+    {
+        bool found = false;
+        for (std::size_t j = 0; j < hayN; ++j)
+            if (needle[i] == haystack[j]) { found = true; break; }
+        if (!found)
+            return false;
+    }
+    return true;
 }
 
 } // namespace more_phi

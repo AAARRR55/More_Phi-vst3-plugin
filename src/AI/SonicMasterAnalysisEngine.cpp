@@ -320,17 +320,27 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     ringStorage_ = std::make_unique<AudioCaptureRing>(config_.captureRingFrames);
     ring_.store(ringStorage_.get(), std::memory_order_release);
 
-    // Host-rate window length equivalent to the 44.1k model segment.
-    // These model buffers (~4.2 MB total) are always allocated — they're needed
-    // for resampling and inference regardless of whether capture is active.
-    const std::size_t hostFrames = static_cast<std::size_t>(
-        std::llround(kSonicMasterSegmentFrames * sampleRate_ / 44100.0));
-    captureL_.assign(hostFrames, 0.0f);
-    captureR_.assign(hostFrames, 0.0f);
-    modelL_.assign(kSonicMasterSegmentFrames, 0.0f);
-    modelR_.assign(kSonicMasterSegmentFrames, 0.0f);
-    interleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
-    decision_.fill(0.0f);
+	    // Host-rate window length equivalent to the 44.1k model segment.
+	    // These model buffers (~4.2 MB total) are always allocated — they're needed
+	    // for resampling and inference regardless of whether capture is active.
+	    const std::size_t hostFrames = static_cast<std::size_t>(
+	        std::llround(kSonicMasterSegmentFrames * sampleRate_ / 44100.0));
+	    captureL_.assign(hostFrames, 0.0f);
+	    captureR_.assign(hostFrames, 0.0f);
+	    modelL_.assign(kSonicMasterSegmentFrames, 0.0f);
+	    modelR_.assign(kSonicMasterSegmentFrames, 0.0f);
+	    interleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
+	    decision_.fill(0.0f);
+
+	    // AUDIT-FIX (P2, 2026-06-27): size the on-demand scratch buffers alongside
+	    // the shared set so requestDecisionNow() can run without holding inferMutex_
+	    // across the resample/normalize stages. Sized identically to the shared set.
+	    onDemandL_.assign(hostFrames, 0.0f);
+	    onDemandR_.assign(hostFrames, 0.0f);
+	    onDemandModelL_.assign(kSonicMasterSegmentFrames, 0.0f);
+	    onDemandModelR_.assign(kSonicMasterSegmentFrames, 0.0f);
+	    onDemandInterleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
+	    onDemandDecision_.fill(0.0f);
 
     consecutiveFailures_.store(0, std::memory_order_relaxed);
     lastPlanId_ = 0;
@@ -374,44 +384,67 @@ void SonicMasterAnalysisEngine::release() noexcept
     ringStorage_.reset();
 }
 
-void SonicMasterAnalysisEngine::capture(const float* left, const float* right,
-                                        std::size_t n) noexcept
-{
-    // CAPTURE-DECOUPLE (2026-06-26): capture is NO LONGER gated by active_.
-    // Previously capture() bailed when the SonicMaster preview toggle was off
-    // (its default), so the ring never filled and the on-demand path
-    // (requestDecisionNow, called by sonicmaster_decision / mastering.neural_apply)
-    // always failed with "not enough audio captured yet" — even though the model
-    // itself was loaded (isAvailable() == true). The assistant then surfaced this
-    // as "Inference failed or model unavailable" and the LLM hallucinated an
-    // inference-server story. active_ now gates ONLY the background auto-apply
-    // cycle; capture runs whenever the engine is prepared so on-demand inference
-    // works the moment the assistant calls it. write() is a tight lock-free
-    // interleaved memcpy (~2 stores/frame, no allocation) — negligible cost.
-    if (!prepared_.load(std::memory_order_acquire)
-        || left == nullptr || right == nullptr)
-        return;
-    // C-3 FIX (audit): acquire-load the published ring pointer. Paired with
-    // the release-store in ensureRing()/prepare()/release(), this guarantees
-    // we see either a fully-constructed AudioCaptureRing or nullptr — never a
-    // torn or partially-constructed object.
-    auto* ring = ring_.load(std::memory_order_acquire);
-    if (ring == nullptr)
-        return;
-    ring->write(left, right, n);
-}
+	void SonicMasterAnalysisEngine::capture(const float* left, const float* right,
+	                                        std::size_t n) noexcept
+	{
+	    // CAPTURE-DECOUPLE (2026-06-26): capture is NO LONGER gated by active_.
+	    // Previously capture() bailed when the SonicMaster preview toggle was off
+	    // (its default), so the ring never filled and the on-demand path
+	    // (requestDecisionNow, called by sonicmaster_decision / mastering.neural_apply)
+	    // always failed with "not enough audio captured yet" — even though the model
+	    // itself was loaded (isAvailable() == true). The assistant then surfaced this
+	    // as "Inference failed or model unavailable" and the LLM hallucinated an
+	    // inference-server story. active_ now gates ONLY the background auto-apply
+	    // cycle; capture runs whenever the engine is prepared so on-demand inference
+	    // works the moment the assistant calls it. write() is a tight lock-free
+	    // interleaved memcpy (~2 stores/frame, no allocation) — negligible cost.
+	    if (!prepared_.load(std::memory_order_acquire)
+	        || left == nullptr || right == nullptr)
+	        return;
+	    // C-3 FIX (audit): acquire-load the published ring pointer. Paired with
+	    // the release-store in ensureRing()/prepare()/release(), this guarantees
+	    // we see either a fully-constructed AudioCaptureRing or nullptr — never a
+	    // torn or partially-constructed object.
+	    auto* ring = ring_.load(std::memory_order_acquire);
+	    if (ring == nullptr)
+	        return;
+
+	    // AUDIT-FIX (P4, 2026-06-27): first-block-after-silence / source-change
+	    // detection. If the ring was flushed (by flushCaptureRing or
+	    // notifyAudioSourceChanged) and this is the first write since the flush,
+	    // arm the transition guard so the next analysis cycle discards the blending
+	    // window. This is a best-effort guard: block-based monitoring means a
+	    // source change mid-block won't be caught here, but the explicit
+	    // notifyAudioSourceChanged path (called from PluginProcessor::reset) plus
+	    // the paramChangePending_ check in runCycle cover the common cases.
+	    if (capturedSinceLastFlush_.load(std::memory_order_relaxed) == 0u && n > 0)
+	    {
+	        // Ring was empty (just flushed). Arm the transition guard so the
+	        // analysis thread discards the next capture window.
+	        paramChangePending_.store(true, std::memory_order_relaxed);
+	        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+	            std::chrono::steady_clock::now().time_since_epoch()).count();
+	    }
+
+	    ring->write(left, right, n);
+	    capturedSinceLastFlush_.store(n, std::memory_order_relaxed);
+	}
 
 void SonicMasterAnalysisEngine::flushCaptureRing() noexcept
 {
-    // AUDIT-FIX-R7: Reset the ring discarding all previously captured audio.
-    // Safe to call on the message thread while the audio thread is writing
-    // (AudioCaptureRing::reset() only touches atomics). The analysis thread
-    // will see an empty ring on its next readNewest() call and skip the cycle
-    // with "CollectingAudio" status until enough new audio accumulates.
-    // C-3 FIX (audit): acquire-load the atomic pointer.
-    if (auto* ring = ring_.load(std::memory_order_acquire))
-        ring->reset();
-}
+	    // AUDIT-FIX-R7: Reset the ring discarding all previously captured audio.
+	    // Safe to call on the message thread while the audio thread is writing
+	    // (AudioCaptureRing::reset() only touches atomics). The analysis thread
+	    // will see an empty ring on its next readNewest() call and skip the cycle
+	    // with "CollectingAudio" status until enough new audio accumulates.
+	    // C-3 FIX (audit): acquire-load the atomic pointer.
+	    if (auto* ring = ring_.load(std::memory_order_acquire))
+	        ring->reset();
+	    // AUDIT-FIX (P4, 2026-06-27): reset the first-block-after-silence counter
+	    // so the next capture() call arms the transition guard. The counter is a
+	    // relaxed atomic — safe from the message thread.
+	    capturedSinceLastFlush_.store(0u, std::memory_order_relaxed);
+	}
 
 void SonicMasterAnalysisEngine::analysisLoop() noexcept
 {
@@ -512,6 +545,10 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     const std::size_t got = ring->readNewest(hostFrames, captureL_.data(), captureR_.data());
     if (got < hostFrames)
     {
+        // AUDIT-F1.5: surface InsufficientAudio (symmetric with requestDecisionNow)
+        // so the assistant can tell a background-cycle skip from a real failure.
+        lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::InsufficientAudio),
+                                std::memory_order_release);
         status_.store(Status::CollectingAudio, std::memory_order_release);
         return false;
     }
@@ -550,6 +587,10 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
             paramChangePending_.store(false, std::memory_order_relaxed);
             if (auto* ring2 = ring_.load(std::memory_order_acquire))
                 ring2->reset();
+            // AUDIT-F1.5: surface the transition-guard skip so the assistant
+            // understands the cycle deliberately re-collected (not a failure).
+            lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::InsufficientAudio),
+                                    std::memory_order_release);
             status_.store(Status::CollectingAudio, std::memory_order_release);
             return false;
         }
@@ -584,7 +625,14 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // gain-normalized all-NaN buffer to the model — that is undefined behaviour
     // for many operators (softmax, layer norm).
     if (!std::isfinite(peak) || peak < 1e-15f)
+    {
+        // AUDIT-F1.5: surface SilentInput (symmetric with requestDecisionNow's
+        // identical gate at the on-demand path) so the assistant gets the same
+        // reason on a background-cycle skip — was a bare false before this fix.
+        lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::SilentInput),
+                                std::memory_order_release);
         return false;
+    }
     // AUDIT-FIX (A2): use the named contract constant (was a bare 0.891f literal).
     const float gain = kSonicMasterPeakTargetLinear / peak;
     for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
@@ -616,6 +664,9 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
                 status_.store(Status::ErrorAutoDisabled, std::memory_order_release);
             }
         }
+        // AUDIT-F1.5: surface InferenceRejected (symmetric with requestDecisionNow).
+        lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::InferenceRejected),
+                                std::memory_order_release);
         return false;
     }
     consecutiveFailures_.store(0, std::memory_order_relaxed);
@@ -632,7 +683,12 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
         : (std::isfinite(genrePrior) ? genrePrior : more_phi::kUseModelTargetLufs);
     if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
                                    decodeTargetLufs, buildEqPrior_()))
+    {
+        // AUDIT-F1.5: surface DecodeFailed (symmetric with requestDecisionNow).
+        lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::DecodeFailed),
+                                std::memory_order_release);
         return false;
+    }
     plan.sourcePlanId = nextPlanId_++;
     plan.capturedAtSteadyClockNs = captureTimeNs_;  // stamp capture instant for staleness guard
     // Record the target this plan actually applied (pre-safety-projection value,
@@ -666,10 +722,16 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
         // on-demand path uses its own decisionPolicy copy but reads the same
         // lastSafetyRejection_ snapshot.
         recordSafetyRejection_(verdict, candidate.confidence);
+        // AUDIT-F1.5: surface SafetyRejected (symmetric with requestDecisionNow).
+        lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::SafetyRejected),
+                                std::memory_order_release);
         status_.store(Status::HeldLowConfidence, std::memory_order_release);
         return false;
     }
     clearSafetyRejection_();
+    // AUDIT-F1.5: a successful cycle clears the structured skip reason.
+    lastCycleFailure_.store(static_cast<std::uint8_t>(DecisionFailure::None),
+                            std::memory_order_release);
 
     // Apply the policy verdict, not the raw decoded plan. The verdict carries
     // per-plan delta projection (for example EQ/loudness slew limits).
@@ -683,8 +745,10 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // inside applyValidatedPlan; when a hosted plugin is wired, its parameter
     // enqueue count > 0 means audio is actually being affected even though the
     // internal chain is dormant.
-    const bool internalActive = (applicationEngine_ != nullptr) && applicationEngine_->isActive();
-    const bool ozoneWrote     = (applicationEngine_ != nullptr) && applicationEngine_->getLastOzoneAppliedCount() > 0;
+	    const bool internalActive = (applicationEngine_ != nullptr)
+	        && applicationEngine_->isActive()
+	        && applicationEngine_->isIntelligenceActive();
+	    const bool ozoneWrote     = (applicationEngine_ != nullptr) && applicationEngine_->getLastOzoneAppliedCount() > 0;
     const bool reachedAudio   = internalActive || ozoneWrote;
     lastApplyReachedAudioPath_.store(reachedAudio, std::memory_order_release);
     status_.store(reachedAudio ? Status::Applied : Status::AppliedNoAudioPath,
@@ -700,7 +764,17 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     if (reachedAudio)
     {
         const auto m = getLiveMeasurements();
-        if (m.valid)
+        // AUDIT-FIX (F3.2, 2026-06-27): guard on FINITENESS, not just m.valid. The
+        // snapshot's valid flag means "engine attached" — but LUFSMeter /
+        // TruePeakEstimator initialse to -infinity and only go finite once signal
+        // crosses the gates. Before this guard, when the engine was attached but
+        // no signal had crossed the gate, m.lufsIntegrated was -inf, so
+        // lastLufsError_ = target - (-inf) = +inf, which serialised as `null`
+        // via sonicmasterClosedLoopJson() and could spuriously drive the nudge
+        // clamp to its +/- 1.0 LU bound every cycle. Now a non-finite loudness
+        // reading holds the loop at its last good target and reports a neutral
+        // (zero) error instead of a misleading +inf.
+        if (m.valid && std::isfinite(m.lufsIntegrated))
         {
             lastMeasuredLufs_ = m.lufsIntegrated;
             lastLufsError_ = lastAppliedTargetLufs_ - m.lufsIntegrated; // + = too quiet
@@ -723,6 +797,14 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
                 feedbackActive_ = true;
             }
         }
+        else
+        {
+            // Measurement absent or non-finite (engine attached but no signal has
+            // crossed the LUFS gate yet): report a NEUTRAL error so the closed-loop
+            // JSON never emits a misleading +inf, and leave the loop holding its
+            // last good target rather than guessing.
+            lastLufsError_ = 0.0f;
+        }
         // If measurement is invalid (not enough signal), leave feedbackTargetLufs_
         // unchanged — the loop holds its last good target rather than guessing.
     }
@@ -731,145 +813,149 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
 }
 
 bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
-                                                    ValidatedNeuralMasteringPlan& outPlan,
-                                                    float* outRawDecision,
-                                                    std::size_t outRawCapacity,
-                                                    DecisionFailure* outFailure) noexcept
+	                                                    ValidatedNeuralMasteringPlan& outPlan,
+	                                                    float* outRawDecision,
+	                                                    std::size_t outRawCapacity,
+	                                                    DecisionFailure* outFailure) noexcept
 {
-    // On-demand path for the AI assistant's sonicmaster_decision MCP tool.
-    // Mirrors runCycle() but: (a) takes a target-LUFS argument, (b) does NOT
-    // require active_ to be set, (c) does NOT apply the plan or touch status_,
-    // (d) returns the decoded plan + raw decision for the caller to act on.
-    //
-    // DIAGNOSTIC (2026-06-26): every failure return now stamps *outFailure with
-    // the structured reason, so the MCP tool can surface the ACTUAL gate that
-    // tripped instead of the opaque "Inference failed or model unavailable" that
-    // forced the assistant to confabulate causes. See DecisionFailure enum.
-    if (outFailure != nullptr) *outFailure = DecisionFailure::None;
+	    // On-demand path for the AI assistant's sonicmaster_decision MCP tool.
+	    // Mirrors runCycle() but: (a) takes a target-LUFS argument, (b) does NOT
+	    // require active_ to be set, (c) does NOT apply the plan or touch status_,
+	    // (d) returns the decoded plan + raw decision for the caller to act on.
+	    //
+	    // AUDIT-FIX (P2, 2026-06-27): uses DEDICATED on-demand scratch buffers
+	    // (onDemandL_/R_/ModelL_/ModelR_/Interleaved_/Decision_) so the
+	    // resample/normalize stages run WITHOUT inferMutex_. Only the
+	    // source_->infer() call and the decode/safety block need the mutex
+	    // (the ONNX session is not thread-safe). This reduces the critical section
+	    // from ~500ms to ~200ms and prevents the background cycle from blocking
+	    // on-demand MCP tools during resampling.
+	    //
+	    // DIAGNOSTIC (2026-06-26): every failure return now stamps *outFailure with
+	    // the structured reason, so the MCP tool can surface the ACTUAL gate that
+	    // tripped instead of the opaque "Inference failed or model unavailable" that
+	    // forced the assistant to confabulate causes. See DecisionFailure enum.
+	    if (outFailure != nullptr) *outFailure = DecisionFailure::None;
 
-    ensureRing();  // PERF-MEM: lazy ring allocation
-    // C-3 FIX (audit): acquire-load the atomic ring pointer.
-    auto* ring = ring_.load(std::memory_order_acquire);
-    if (ring == nullptr || source_ == nullptr || !isAvailable())
-    {
-        if (outFailure != nullptr) *outFailure = DecisionFailure::NotPrepared;
-        return false;
-    }
+	    ensureRing();  // PERF-MEM: lazy ring allocation
+	    // C-3 FIX (audit): acquire-load the atomic ring pointer.
+	    auto* ring = ring_.load(std::memory_order_acquire);
+	    if (ring == nullptr || source_ == nullptr || !isAvailable())
+	    {
+	        if (outFailure != nullptr) *outFailure = DecisionFailure::NotPrepared;
+	        return false;
+	    }
 
-    // AUDIT-1: see runCycle() — serialize against the analysis thread's scratch use.
-    std::lock_guard<std::mutex> inferLock(inferMutex_);
+	    // ── Stage 1: drain ring into ON-DEMAND scratch buffers (no mutex) ─────
+	    // This is safe because onDemand* buffers are exclusively owned by this
+	    // function (allocated in prepare(), only touched here). The ring is
+	    // atomic-published (C-3 fix) — acquire-load safe from any thread.
+	    const std::size_t hostFrames = onDemandL_.size();
+	    const std::size_t got = ring->readNewest(hostFrames, onDemandL_.data(), onDemandR_.data());
+	    if (got < hostFrames)
+	    {
+	        if (outFailure != nullptr) *outFailure = DecisionFailure::InsufficientAudio;
+	        return false;  // not enough audio captured yet
+	    }
 
-    const std::size_t hostFrames = captureL_.size();
-    const std::size_t got = ring->readNewest(hostFrames, captureL_.data(), captureR_.data());
-    if (got < hostFrames)
-    {
-        if (outFailure != nullptr) *outFailure = DecisionFailure::InsufficientAudio;
-        return false;  // not enough audio captured yet
-    }
+	    // Stamp capture time for the staleness guard.
+	    captureTimeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+	        std::chrono::steady_clock::now().time_since_epoch()).count();
 
-    // FIX-1.3: stamp the capture time for the staleness guard, so an on-demand
-    // plan from the MCP tool cannot be applied hours later against fresh audio.
-    captureTimeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+	    // ── Stage 2: resample host-rate → 44.1k (no mutex) ───────────────────
+	    if (std::abs(sampleRate_ - 44100.0) < 0.5)
+	    {
+	        std::copy_n(onDemandL_.data(), kSonicMasterSegmentFrames, onDemandModelL_.data());
+	        std::copy_n(onDemandR_.data(), kSonicMasterSegmentFrames, onDemandModelR_.data());
+	    }
+	    else
+	    {
+	        resamplePolyphase(onDemandL_.data(), hostFrames, kSonicMasterSegmentFrames, onDemandModelL_.data());
+	        resamplePolyphase(onDemandR_.data(), hostFrames, kSonicMasterSegmentFrames, onDemandModelR_.data());
+	    }
 
-    if (std::abs(sampleRate_ - 44100.0) < 0.5)
-    {
-        std::copy_n(captureL_.data(), kSonicMasterSegmentFrames, modelL_.data());
-        std::copy_n(captureR_.data(), kSonicMasterSegmentFrames, modelR_.data());
-    }
-    else
-    {
-        resamplePolyphase(captureL_.data(), hostFrames, kSonicMasterSegmentFrames, modelL_.data());
-        resamplePolyphase(captureR_.data(), hostFrames, kSonicMasterSegmentFrames, modelR_.data());
-    }
+	    // ── Stage 3: peak-normalize (no mutex) ──────────────────────────────
+	    const float peak = std::max(peakAbs(onDemandModelL_.data(), kSonicMasterSegmentFrames),
+	                                peakAbs(onDemandModelR_.data(), kSonicMasterSegmentFrames));
+	    if (!std::isfinite(peak) || peak < 1e-15f)
+	    {
+	        if (outFailure != nullptr) *outFailure = DecisionFailure::SilentInput;
+	        return false;
+	    }
+	    const float gain = kSonicMasterPeakTargetLinear / peak;
+	    for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
+	    {
+	        onDemandInterleaved_[2 * i + 0] = onDemandModelL_[i] * gain;
+	        onDemandInterleaved_[2 * i + 1] = onDemandModelR_[i] * gain;
+	    }
 
-    const float peak = std::max(peakAbs(modelL_.data(), kSonicMasterSegmentFrames),
-                                peakAbs(modelR_.data(), kSonicMasterSegmentFrames));
-    if (!std::isfinite(peak) || peak < 1e-15f)
-    {
-        if (outFailure != nullptr) *outFailure = DecisionFailure::SilentInput;
-        return false;
-    }
-    // AUDIT-FIX (A2): use the named contract constant (was a bare 0.891f literal).
-    const float gain = kSonicMasterPeakTargetLinear / peak;
-    for (std::size_t i = 0; i < kSonicMasterSegmentFrames; ++i)
-    {
-        interleaved_[2 * i + 0] = modelL_[i] * gain;
-        interleaved_[2 * i + 1] = modelR_[i] * gain;
-    }
+	    // ── Stage 4: infer + decode + validate (under inferMutex_) ──────────
+	    // The ONNX session (source_) is NOT thread-safe — only the analysis
+	    // thread or this function may call infer() at any moment. The mutex
+	    // serializes access.
+	    {
+	        std::lock_guard<std::mutex> inferLock(inferMutex_);
 
-    // Propagate the requested target LUFS to the inference source (the HTTP
-    // source sends it as a query param; the ONNX source ignores it).
-    source_->setTargetLufs(targetLufs);
+	        // Propagate the requested target LUFS to the inference source.
+	        source_->setTargetLufs(targetLufs);
 
-    if (!source_->infer(interleaved_.data(), decision_.data(), decision_.size()))
-    {
-        if (outFailure != nullptr) *outFailure = DecisionFailure::InferenceRejected;
-        return false;
-    }
+	        if (!source_->infer(onDemandInterleaved_.data(), onDemandDecision_.data(),
+	                            onDemandDecision_.size()))
+	        {
+	            if (outFailure != nullptr) *outFailure = DecisionFailure::InferenceRejected;
+	            return false;
+	        }
 
-    if (outRawDecision != nullptr && outRawCapacity >= kSonicMasterDecisionWidth)
-        std::copy_n(decision_.data(), kSonicMasterDecisionWidth, outRawDecision);
+	        if (outRawDecision != nullptr && outRawCapacity >= kSonicMasterDecisionWidth)
+	            std::copy_n(onDemandDecision_.data(), kSonicMasterDecisionWidth, outRawDecision);
 
-    ValidatedNeuralMasteringPlan plan {};
-    // Stage A (2026-06-26): honor the caller's explicit target_lufs at decode
-    // time. The ONNX graph can't condition on a target during inference, so this
-    // decode-side override is what makes an explicit target (profile, manual, or
-    // closed-loop correction) actually reach the apply. requestDecisionNow is the
-    // explicit on-demand path; the background runCycle uses the model default and
-    // is nudged by the closed loop (Stage D).
-    // Stage 1 (genre prior): when the caller passes no explicit target, fall back
-    // to the genre-derived prior before the model default — so an on-demand call
-    // with targetLufs=NaN still reflects the active genre profile.
-    float onDemandTarget = targetLufs;
-    if (!std::isfinite(onDemandTarget))
-    {
-        const float genrePrior = genreTargetLufs_.load(std::memory_order_relaxed);
-        if (std::isfinite(genrePrior))
-            onDemandTarget = genrePrior;
-    }
-    if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
-                                   std::isfinite(onDemandTarget) ? onDemandTarget : kUseModelTargetLufs,
-                                   buildEqPrior_()))
-    {
-        if (outFailure != nullptr) *outFailure = DecisionFailure::DecodeFailed;
-        return false;
-    }
-    plan.sourcePlanId = nextPlanId_++;
-    plan.capturedAtSteadyClockNs = captureTimeNs_;
+	        ValidatedNeuralMasteringPlan plan {};
+	        // Stage A: honor caller's explicit target_lufs at decode time.
+	        float onDemandTarget = targetLufs;
+	        if (!std::isfinite(onDemandTarget))
+	        {
+	            const float genrePrior = genreTargetLufs_.load(std::memory_order_relaxed);
+	            if (std::isfinite(genrePrior))
+	                onDemandTarget = genrePrior;
+	        }
+	        if (!decodeSonicMasterDecision(onDemandDecision_.data(), onDemandDecision_.size(),
+	                                       sampleRate_, plan,
+	                                       std::isfinite(onDemandTarget) ? onDemandTarget : kUseModelTargetLufs,
+	                                       buildEqPrior_()))
+	        {
+	            if (outFailure != nullptr) *outFailure = DecisionFailure::DecodeFailed;
+	            return false;
+	        }
+	        plan.sourcePlanId = nextPlanId_++;
+	        plan.capturedAtSteadyClockNs = captureTimeNs_;
 
-    NeuralMasteringRuntimeState runtime {};
-    runtime.sampleRate = sampleRate_;
-    runtime.channelCount = 2;
-    runtime.layout = NeuralMasteringLayout::Stereo;
-    // AUDIT-FIX (Fix 7): same frame-based staleness population as runCycle above.
-    if (applicationEngine_ != nullptr)
-        runtime.currentFrame = applicationEngine_->getAnalyzedSampleCount();
+	        NeuralMasteringRuntimeState runtime {};
+	        runtime.sampleRate = sampleRate_;
+	        runtime.channelCount = 2;
+	        runtime.layout = NeuralMasteringLayout::Stereo;
+	        if (applicationEngine_ != nullptr)
+	            runtime.currentFrame = applicationEngine_->getAnalyzedSampleCount();
 
-    auto decisionPolicy = safetyPolicy_;
-    const auto candidate = makeSafetyCandidate(plan,
-                                               NeuralMasteringRuntimeMode::MessageThread,
-                                               config_.confidenceFloor,
-                                               decisionPolicy,
-                                               runtime.currentFrame);
-    const auto verdict = decisionPolicy.validate(candidate, runtime);
-    if (!verdict.accepted)
-    {
-        // DIAGNOSTIC (2026-06-26): record the SPECIFIC issue(s) so the failure JSON
-        // can say "low_confidence (model confidence 0.4, floor 0.75)" vs
-        // "target_out_of_range" vs "non_finite_value" — instead of the coarse
-        // "safety_rejected" that left the assistant guessing whether to retry.
-        recordSafetyRejection_(verdict, candidate.confidence);
-        if (outFailure != nullptr) *outFailure = DecisionFailure::SafetyRejected;
-        return false;
-    }
+	        auto decisionPolicy = safetyPolicy_;
+	        const auto candidate = makeSafetyCandidate(plan,
+	                                                   NeuralMasteringRuntimeMode::MessageThread,
+	                                                   config_.confidenceFloor,
+	                                                   decisionPolicy,
+	                                                   runtime.currentFrame);
+	        const auto verdict = decisionPolicy.validate(candidate, runtime);
+	        if (!verdict.accepted)
+	        {
+	            recordSafetyRejection_(verdict, candidate.confidence);
+	            if (outFailure != nullptr) *outFailure = DecisionFailure::SafetyRejected;
+	            return false;
+	        }
 
-    // Accepted: clear any prior rejection detail so a stale snapshot from an
-    // earlier call can't be misread after a success.
-    clearSafetyRejection_();
-    outPlan = verdict.plan;
-    return true;
-}
+	        clearSafetyRejection_();
+	        outPlan = verdict.plan;
+	    } // inferMutex_ released
+
+	    return true;
+	}
 
 void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& plan) noexcept
 {

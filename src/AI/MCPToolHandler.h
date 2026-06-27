@@ -8,6 +8,7 @@
 #include <juce_core/juce_core.h>
 #include "ToolResultCache.h"
 #include "AsyncToolExecutor.h"
+#include <nlohmann/json.hpp>
 
 namespace more_phi {
 
@@ -53,6 +54,14 @@ public:
     // approval-flow tests). sonicmaster_decision stays private because its tests
     // run through handle() with read-only classification.
     static juce::String masteringNeuralApply(const juce::var& params, MorePhiProcessor& p);
+
+    // AUDIT-FIX (F3.1, 2026-06-27): pure-function serializer for the
+    // live_measurements JSON block, exposed so the finite-guard regression can
+    // be unit-tested directly without spinning up a hosted plugin. The internal
+    // sonicmasterMeasurementsJson() helper delegates to this; it lives on the
+    // public surface only because it is a pure function with no processor state.
+    static nlohmann::json serializeMeasurementsForTests(
+        const struct SonicMasterMeasurementSnapshot& snapshot);
 
 private:
     static juce::String getPluginInfo(MorePhiProcessor& p);

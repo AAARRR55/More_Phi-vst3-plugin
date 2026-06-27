@@ -27,6 +27,8 @@ add_executable(MorePhiTests
     Unit/TestRecallRamp.cpp
     Unit/TestBypassCrossfade.cpp
     Unit/TestDSPQuality.cpp
+    # Output-protection limiter on the main wet path (morph-clip fix).
+    Unit/TestMorphOutputProtection.cpp
     Unit/TestAIRegressions.cpp
     Unit/TestLLMSettings.cpp
     Unit/TestLLMSettingsStore.cpp
@@ -112,11 +114,22 @@ add_executable(MorePhiTests
     Unit/TestNeuralPlanVerification.cpp
     Unit/TestMasteringMeters.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
+    # AUDIT-FIX (P0, 2026-06-27): full-chain E2E signal integrity test.
+    Unit/TestEndToEndSignalIntegrity.cpp
     Unit/TestGenreLoudnessPrior.cpp
     Unit/TestTonalBalanceExtractor.cpp
     Unit/TestTransientShaper.cpp
+    Unit/TestMelSpectrogram.cpp
+    Unit/TestGenreClassifierFallback.cpp
+    Unit/TestGenreClassifierRemap.cpp
     Unit/TestSonicMasterHttpInferenceSource.cpp
     Unit/TestSonicMasterHttpLive.cpp
+    # AUDIT-F3.1: live_measurements finite-guard regression (no -inf -> null).
+    Unit/TestSonicMasterMeasurementsJson.cpp
+    # AUDIT-F2.1: tokenized nameMatches comparator regression.
+    Unit/TestOzonePlanApplicatorNameMatch.cpp
+    # AUDIT-F2.2: P3.10 plan-boundary drain observability contract.
+    Unit/TestPlanBoundaryDrain.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp

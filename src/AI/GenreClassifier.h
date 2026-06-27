@@ -19,8 +19,11 @@
  */
 #pragma once
 
+#include "AI/MelSpectrogram.h"
+
 #include <atomic>
 #include <array>
+#include <memory>
 #include <vector>
 #include <string>
 #include <juce_core/juce_core.h>
@@ -29,16 +32,42 @@
 
 namespace more_phi {
 
+// ONNX session is pimpl'd so the header stays ORT-free for the many TUs that
+// include it (AutoMasteringEngine, PluginProcessor, tests). Defined in the .cpp.
+struct GenreSessionHandle;
+
 class GenreClassifier : public juce::Timer
 {
 public:
     static constexpr int kNumGenres = 12;
 
+    // Phase B helper: remap a model's per-class softmax output onto the plugin's
+    // kNumGenres slots, given a modelOutputIdx→pluginSlot table (-1 = unmapped).
+    // Writes the kNumGenres-wide probability vector to outProbs (must have room
+    // for kNumGenres floats). Returns the remapped argmax slot, or -1 if the
+    // top model class is unmapped (caller should fall back to the heuristic).
+    // Pure/noexcept — unit-testable without any ONNX or model file.
+    static int remapGenreProbs(const float* modelProbs, int numModelClasses,
+                               const int* genreRemap, int genreRemapCount,
+                               float* outProbs) noexcept;
+
     // Genre index → name mapping (matches mastering_profiles.json)
     static const char* const kGenreNames[kNumGenres];
 
     GenreClassifier();
-    ~GenreClassifier() override { stopTimer(); }
+    // Out-of-line destructor: session_ is a unique_ptr<GenreSessionHandle> and
+    // GenreSessionHandle is an incomplete pimpl in this header (defined in the
+    // .cpp). An inline destructor would instantiate ~unique_ptr here with an
+    // incomplete type → "can't delete an incomplete type" in every including TU.
+    ~GenreClassifier() override;
+
+    // Non-copyable, non-movable: the pimpl'd ONNX session + the juce::Timer base
+    // make moves unsafe, and deleting these (matching SonicMasterDecisionRunner's
+    // idiom) also forces MSVC to emit copy/move destruction only in the .cpp.
+    GenreClassifier(const GenreClassifier&) = delete;
+    GenreClassifier& operator=(const GenreClassifier&) = delete;
+    GenreClassifier(GenreClassifier&&) = delete;
+    GenreClassifier& operator=(GenreClassifier&&) = delete;
 
     // ── Model management (message thread) ─────────────────────────────────────
 
@@ -67,6 +96,12 @@ public:
 
     void feedAudio(const juce::AudioBuffer<float>& audio, double sampleRate);
 
+    // Test hook: run one classification immediately on the calling thread,
+    // bypassing the 1 Hz / 30 s timer gate. Used by unit tests to exercise the
+    // heuristic (and, when a model is loaded, the ONNX path) deterministically.
+    // Message thread only.
+    void runClassificationForTest() noexcept;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     void start() { startTimerHz(1); }  // run at 1 Hz, but only classifies every 30 s
@@ -75,6 +110,13 @@ public:
 private:
     void timerCallback() override;
     void runClassification();
+    // Phase B: ONNX path. Returns true if it published a genre guess; false on
+    // any failure (no audio, inference threw, shape drift, unmapped argmax) so
+    // runClassification can fall through to the heuristic. noexcept.
+    bool runNeuralClassification_() noexcept;
+    // Time-domain heuristic: low/high band split + zero-crossing rate → coarse
+    // genre guess. The documented fallback for slots a model can't classify.
+    void runHeuristicClassification_();
 
     std::atomic<int>   topGenre_    { 10 };   // default: Streaming
     std::atomic<float> topConf_     { 1.f };
@@ -91,6 +133,16 @@ private:
 
     std::atomic<bool> modelLoaded_ { false };
     std::atomic<bool> hasNewAudio_ { false };
+
+    // ── Neural genre path (Phase B, 2026-06-27) ───────────────────────────────
+    // When a model is loaded, runClassification runs the mel frontend + ONNX
+    // inference and remaps the model's output classes onto the 12 genre slots;
+    // any failure falls through to the time-domain heuristic below. See .cpp.
+    MelSpectrogram mel_;
+    std::vector<float> probsScratch_;   // model output softmax (numModelClasses)
+    std::vector<int>  genreRemap_;      // modelOutputIdx → plugin slot idx (-1 = unmapped)
+    int numModelClasses_ = 0;           // model output width (read at load)
+    std::unique_ptr<GenreSessionHandle> session_;
 
     static constexpr int kAnalysisIntervalSeconds = 30;
 };

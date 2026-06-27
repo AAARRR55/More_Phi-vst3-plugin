@@ -203,12 +203,32 @@ public:
         paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
-    // P2.8: configurable settling period (seconds). After a parameter change the
-    // engine waits this long before trusting a capture window, so the hosted
-    // plugin's internal state (filters, lookahead, tails) has flushed. Defaults to
-    // 0.5 s; raise for plugins with long tails/reverb. Message thread.
-    void setParamTransitionSettleSeconds(double seconds) noexcept
-    { paramSettleSeconds_ = seconds > 0.0 ? seconds : 0.0; }
+	    // P2.8: configurable settling period (seconds). After a parameter change the
+	    // engine waits this long before trusting a capture window, so the hosted
+	    // plugin's internal state (filters, lookahead, tails) has flushed. Defaults to
+	    // 0.5 s; raise for plugins with long tails/reverb. Message thread.
+	    void setParamTransitionSettleSeconds(double seconds) noexcept
+	    { paramSettleSeconds_ = seconds > 0.0 ? seconds : 0.0; }
+
+	    // AUDIT-FIX (P4, 2026-06-27): audio source change notification. When the DAW
+	    // switches routing, the user changes the input source, or the processor resets,
+	    // the capture ring contains a blend of old and new audio — analyzing the window
+	    // would produce a decision for a state that never existed. This arms the same
+	    // transition guard as notifyHostedParameterChanged, with an optional human-
+	    // readable reason string for diagnostics. Thread-safe: relaxed atomics.
+	    // Call from message thread (PluginProcessor::reset, etc.).
+	    void notifyAudioSourceChanged(const char* reason = "input_changed") noexcept
+	    {
+	        paramChangePending_.store(true, std::memory_order_relaxed);
+	        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+	            std::chrono::steady_clock::now().time_since_epoch()).count();
+	        lastSourceChangeReason_ = reason;
+	    }
+	    // DIAGNOSTIC: returns the reason string from the most recent audio source
+	    // change notification, or empty if none. Advisory — only the most recent
+	    // change reason is remembered.
+	    [[nodiscard]] const char* getLastSourceChangeReason() const noexcept
+	    { return lastSourceChangeReason_; }
 
     // GENRE PRIOR (Stage 1, 2026-06-26): set a genre-derived target LUFS that the
     // background decode path folds in below the closed-loop feedback but above the
@@ -305,6 +325,14 @@ public:
     // Mirrors the Applied vs AppliedNoAudioPath split for clients that read a
     // boolean rather than the enum.
     [[nodiscard]] bool lastApplyReachedAudioPath() const noexcept { return lastApplyReachedAudioPath_.load(std::memory_order_acquire); }
+
+    // AUDIT-F1.5: structured reason the most recent background runCycle skipped
+    // inference. Symmetric with requestDecisionNow's DecisionFailure out-param
+    // so the assistant gets the same diagnostic on background-cycle skips.
+    [[nodiscard]] DecisionFailure getLastCycleFailure() const noexcept
+    {
+        return static_cast<DecisionFailure>(lastCycleFailure_.load(std::memory_order_acquire));
+    }
 
     // CAPTURE-TELEMETRY (2026-06-26): live capture-ring state for diagnostics.
     // Exposed so sonicmaster_decision can report WHY inference was skipped —
@@ -459,14 +487,38 @@ private:
     // existing thread-join + host prepare/process mutual-exclusion discipline
     // (capture() is only called from processBlock; JUCE guarantees prepare()/
     // release() are mutually exclusive with processBlock).
-    std::unique_ptr<AudioCaptureRing> ringStorage_;
-    std::atomic<AudioCaptureRing*> ring_ { nullptr };
-    std::vector<float> captureL_, captureR_;   // host-rate window
-    std::vector<float> modelL_, modelR_;       // 44.1k window
-    std::vector<float> interleaved_;           // 2 * kSonicMasterSegmentFrames
-    std::array<float, kSonicMasterDecisionWidth> decision_ {};
+	    std::unique_ptr<AudioCaptureRing> ringStorage_;
+	    std::atomic<AudioCaptureRing*> ring_ { nullptr };
+	    // AUDIT-FIX (P4, 2026-06-27): counter of samples captured since the last
+	    // flushCaptureRing() / notifyAudioSourceChanged() call. Written by capture()
+	    // (audio thread) with relaxed ordering; reset to 0 by flushCaptureRing()
+	    // (message thread). Used as a best-effort first-block-after-silence
+	    // detector — when the counter transitions from 0 to >0 in capture(), the
+	    // transition guard is armed so the analysis cycle discards the blending
+	    // window between old and new audio. Atomically safe: a missed transition
+	    // only risks analyzing one stale window, never corrupts data.
+	    std::atomic<std::size_t> capturedSinceLastFlush_ { 0 };
+	    std::vector<float> captureL_, captureR_;   // host-rate window
+	    std::vector<float> modelL_, modelR_;       // 44.1k window
+	    std::vector<float> interleaved_;           // 2 * kSonicMasterSegmentFrames
+	    std::array<float, kSonicMasterDecisionWidth> decision_ {};
 
-    NeuralMasteringSafetyPolicy safetyPolicy_ {};
+	    // AUDIT-FIX (P2, 2026-06-27): dedicated scratch buffers for the on-demand
+	    // inference path (requestDecisionNow). These are sized in prepare() alongside
+	    // the shared buffers and used exclusively by requestDecisionNow() so it does
+	    // NOT need to hold inferMutex_ across the resample/normalize stages — only
+	    // around the actual source_->infer() call. This eliminates ~300ms of critical
+	    // section contention between the background cycle and MCP on-demand calls.
+	    // Total additional memory: ~6.2 MiB at 48 kHz (the same footprint as the
+	    // shared set), allocated once in prepare(), freed in release().
+	    std::vector<float> onDemandL_;
+	    std::vector<float> onDemandR_;
+	    std::vector<float> onDemandModelL_;
+	    std::vector<float> onDemandModelR_;
+	    std::vector<float> onDemandInterleaved_;
+	    std::array<float, kSonicMasterDecisionWidth> onDemandDecision_ {};
+
+	    NeuralMasteringSafetyPolicy safetyPolicy_ {};
 
     // DIAGNOSTIC (2026-06-26): last safety-policy rejection detail. Populated on
     // the analysis thread (runCycle) and the message thread (requestDecisionNow)
@@ -490,6 +542,14 @@ private:
     // F2/AUDIT: set true only when applyRamped targeted an active app engine.
     std::atomic<bool> lastApplyReachedAudioPath_ { false };
     std::atomic<int> consecutiveFailures_ { 0 };
+    // AUDIT-F1.5 (2026-06-27): structured reason the most recent background
+    // runCycle returned false / skipped inference. requestDecisionNow already
+    // surfaces this via its DecisionFailure out-param, but the background loop
+    // previously returned a bare false on every skip (insufficient audio, silent
+    // input, decode failure), leaving "why did the cycle skip?" unanswerable.
+    // Surfaced via getLastCycleFailure() and the MCP diagnostic block so the
+    // assistant sees the same reason on background-cycle skips as on-demand.
+    std::atomic<std::uint8_t> lastCycleFailure_ { static_cast<std::uint8_t>(DecisionFailure::None) };
     std::uint64_t lastPlanId_ = 0;
     std::uint64_t nextPlanId_ = 1;
     double sampleRate_ = 48000.0;
@@ -537,14 +597,19 @@ private:
     ValidatedNeuralMasteringPlan pendingPlan_ {};
     std::function<void()> maintenanceRequestCb_;  // set by processor; called after flag is set
 
-    // P2.8 (AUDIT): hosted-parameter transition guard. paramChangePending_ is set by
-    // notifyHostedParameterChanged() (message/MCP thread) and consumed+cleared by
-    // runCycle() (analysis thread). paramChangeNs_ is the steady-clock instant of
-    // the most recent change. Relaxed atomics: advisory — a missed/delayed observation
-    // only risks analyzing one stale window, never corrupts data.
-    std::atomic<bool> paramChangePending_ { false };
-    std::uint64_t paramChangeNs_ = 0;
-    double paramSettleSeconds_ = 0.5;   // default settling period after a param change
+	    // P2.8 (AUDIT): hosted-parameter transition guard. paramChangePending_ is set by
+	    // notifyHostedParameterChanged() (message/MCP thread) and consumed+cleared by
+	    // runCycle() (analysis thread). paramChangeNs_ is the steady-clock instant of
+	    // the most recent change. Relaxed atomics: advisory — a missed/delayed observation
+	    // only risks analyzing one stale window, never corrupts data.
+	    std::atomic<bool> paramChangePending_ { false };
+	    std::uint64_t paramChangeNs_ = 0;
+	    double paramSettleSeconds_ = 0.5;   // default settling period after a param change
+	    // AUDIT-FIX (P4, 2026-06-27): reason string from the most recent
+	    // notifyAudioSourceChanged call. const char* pointer is stable (string
+	    // literals / static storage only — never heap-allocated, never freed).
+	    // Defaults to "unknown" before any source change notification.
+	    const char* lastSourceChangeReason_ = "unknown";
 };
 
 } // namespace more_phi

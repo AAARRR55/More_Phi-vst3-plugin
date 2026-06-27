@@ -134,7 +134,18 @@ static const char* sonicmasterStatusString(more_phi::SonicMasterAnalysisEngine::
 // lufs_integrated / true_peak_dbtp immediately disambiguate "audio is playing and
 // is loud" from "no signal is reaching the plugin," which is exactly the
 // distinction the assistant was guessing at when it said "no fresh audio captured."
-static json sonicmasterMeasurementsJson(const more_phi::SonicMasterMeasurementSnapshot& m)
+//
+// AUDIT-FIX (F3.1, 2026-06-27): LUFSMeter / TruePeakEstimator initialse their
+// atomics to -infinity and only go finite once signal crosses the gates. The raw
+// values, emitted through nlohmann::json, serialise as `null` — so the assistant
+// previously received {"valid":true,"lufs_integrated":null,...} and could not
+// tell "engine attached, no signal yet" from "engine failed." Every other
+// metrics path in this file uses finiteOr(); this block was the lone exception.
+// Now every numeric field is finiteOr()-guarded, and a measured_finite flag
+// reports whether the loudness/true-peak readings are genuine (signal has
+// crossed the gates) vs. fallback floors.
+json MCPToolHandler::serializeMeasurementsForTests(
+    const more_phi::SonicMasterMeasurementSnapshot& m)
 {
     json meas;
     meas["valid"]            = m.valid;
@@ -143,20 +154,41 @@ static json sonicmasterMeasurementsJson(const more_phi::SonicMasterMeasurementSn
     meas["true_peak_method"] = "ITU-R_BS1770-4_4x_polyphase_oversampled";
     if (m.valid)
     {
-        meas["lufs_integrated"]      = m.lufsIntegrated;
-        meas["lufs_short_term"]      = m.lufsShortTerm;
-        meas["lufs_momentary"]       = m.lufsMomentary;
-        meas["lra"]                  = m.lra;
-        meas["true_peak_dbtp"]       = m.truePeakDbtp;
-        meas["spectral_centroid_hz"] = m.spectralCentroidHz;
-        meas["spectral_tilt"]        = m.spectralTilt;
-        meas["stereo_width"]         = m.stereoWidth;
-        meas["correlation_mid"]      = m.correlationMid;
-        meas["thd_percent"]          = m.thdPercent;
-        meas["crest_factor_program"] = m.crestFactorProgram;
+        // measured_finite: true only when the loudness + true-peak readings are
+        // genuine (signal crossed the gates). Falls to false for the post-prepare
+        // "engine attached, no signal yet" state, so the assistant can
+        // disambiguate without parsing fallback values.
+        const bool loudnessFinite = std::isfinite(m.lufsIntegrated)
+                                 && std::isfinite(m.truePeakDbtp);
+        meas["measured_finite"]   = loudnessFinite;
+        // Fallback floors mirror the heuristic-input convention (finiteOr at
+        // buildRuleBasedInputFromLiveMeters, ~line 199-201): -70 LUFS for
+        // unread loudness, -6 dBTP for unread true-peak, 0 elsewhere.
+        meas["lufs_integrated"]      = finiteOr(m.lufsIntegrated,  -70.0);
+        meas["lufs_short_term"]      = finiteOr(m.lufsShortTerm,   -70.0);
+        meas["lufs_momentary"]       = finiteOr(m.lufsMomentary,    -70.0);
+        meas["lra"]                  = finiteOr(m.lra,               0.0);
+        meas["true_peak_dbtp"]       = finiteOr(m.truePeakDbtp,      -6.0);
+        meas["spectral_centroid_hz"] = finiteOr(m.spectralCentroidHz, 0.0);
+        meas["spectral_tilt"]        = finiteOr(m.spectralTilt,       0.0);
+        meas["stereo_width"]         = finiteOr(m.stereoWidth,        0.0);
+        meas["correlation_mid"]      = finiteOr(m.correlationMid,     0.0);
+        meas["thd_percent"]          = finiteOr(m.thdPercent,         0.0);
+        meas["crest_factor_program"] = finiteOr(m.crestFactorProgram, 0.0);
         meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
     }
+    else
+    {
+        // Engine not attached: no numeric block at all, so the assistant never
+        // sees stale zeros masquerading as a flat-but-real reading.
+        meas["measured_finite"] = false;
+    }
     return meas;
+}
+
+static json sonicmasterMeasurementsJson(const more_phi::SonicMasterMeasurementSnapshot& m)
+{
+    return MCPToolHandler::serializeMeasurementsForTests(m);
 }
 
 static json sonicmasterClosedLoopJson(const more_phi::SonicMasterAnalysisEngine::ClosedLoopState& cl)
@@ -2234,7 +2266,7 @@ static const ToolDefinition kCoreTools[] = {
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-     {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk). NOTE (fallback_to_heuristic, 2026-06-27): opt-in bool. When true AND the neural model REFUSES (safety_rejected/low_confidence/target_out_of_range — common on already-loud or out-of-distribution material, since the model is loudness-blind), the tool automatically runs the measurement-driven RuleBasedMasteringResolver (which DOES see the measured input LUFS) and APPLIES its plan, returning a success-shaped result with path='heuristic_fallback' and the original neural_refusal_reason preserved. Default false (the model's refusal is surfaced as-is). The result's top-level `path` field reports which path ran: 'neural' (model produced the plan) or 'heuristic_fallback' (model refused, heuristic took over). Use this when the user wants a result on material the model refuses rather than a flat failure. fallback_target_lufs (default -14) sets the heuristic's loudness target independently of target_lufs.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false},"fallback_to_heuristic":{"type":"boolean","default":false},"fallback_target_lufs":{"type":"number","default":-14.0,"minimum":-23,"maximum":-8}}})"},
+	    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk). NOTE (fallback_to_heuristic, 2026-06-27): bool, default true. When true AND the neural model REFUSES (safety_rejected/low_confidence/target_out_of_range — common on already-loud or out-of-distribution material, since the model is loudness-blind), the tool automatically runs the measurement-driven RuleBasedMasteringResolver (which DOES see the measured input LUFS) and APPLIES its plan, returning a success-shaped result with path='heuristic_fallback' and the original neural_refusal_reason preserved. Default true because a measurement-driven heuristic plan is always better than a flat failure on material the model cannot assess. The result's top-level `path` field reports which path ran: 'neural' (model produced the plan) or 'heuristic_fallback' (model refused, heuristic took over). Set false to see the raw model refusal instead of the automatic fallback. fallback_target_lufs (default -14) sets the heuristic's loudness target independently of target_lufs.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false},"fallback_to_heuristic":{"type":"boolean","default":true},"fallback_target_lufs":{"type":"number","default":-14.0,"minimum":-23,"maximum":-8}}})"},
     {"mastering.neural_apply", "One-click neural Master Assistant: run the ONNX decision on the last ~6s of captured audio AND apply it to the hosted plugin in a single call. Composes requestDecisionNow + applyValidatedPlan. Returns applied=true with the per-slot breakdown (enqueued/skipped/unmapped) via mapping_status. This is the COMMIT door — sonicmaster_decision stays decision-only for preview; this writes hosted-plugin parameters. Requires a hosted plugin whose parameters are mapped (check mapping_status.ozone_mapped); if no plugin is hosted or the map is all-stubs, the apply is a no-op and the response explains why. Params: target_lufs (float, default -14, overrides the model's loudness recommendation), apply_limiter_ceiling (bool, default false). The user should play audio for ~6s before calling.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
     {"morephi_ipc_attach", "Attach read-only to a named IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
     {"morephi_ipc_detach", "Detach from the currently mapped IPC segment.", R"({"type":"object","properties":{}})"},
@@ -6253,11 +6285,15 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     // refuses (safety_rejected / low_confidence / target_out_of_range — the exact
     // failure on already-hot material, since the model is loudness-blind per
     // AUDIT-7 and cannot see that the input is at -7 LUFS), fall through to the
-    // measurement-driven heuristic (RuleBasedMasteringResolver), which DOES see
-    // the measured LUFS. Default false: nothing changes for existing callers, and
-    // the assistant must explicitly opt in. The result's `path` field reports
-    // which path ran so nobody mistakes a heuristic plan for a neural one.
-    const bool fallbackToHeuristic = params.getProperty("fallback_to_heuristic", false);
+	    // measurement-driven heuristic (RuleBasedMasteringResolver), which DOES see
+	    // the measured LUFS. Default true: a neural refusal on already-hot material
+	    // is the most common user-facing failure (the model is loudness-blind and
+	    // cannot measure input LUFS — see AUDIT-7). The heuristic ALWAYS sees the
+	    // measured LUFS and can produce a sensible plan. The result's `path` field
+	    // reports "heuristic_fallback" so nobody mistakes a heuristic plan for a
+	    // neural one, and the original refusal reason is preserved in
+	    // `neural_refusal_reason`. Set false to see the raw model failure instead.
+	    const bool fallbackToHeuristic = params.getProperty("fallback_to_heuristic", true);
     // The heuristic always targets the streaming-safe default (-14 LUFS) unless
     // the caller explicitly overrides via the dedicated param. This is deliberate:
     // the neural attempt may have used a different target than what's sensible for
@@ -6503,6 +6539,49 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     rawModelDecision["target_lufs_semantics"] = "requested_mastering_target_not_input_loudness_measurement";
     rawModelDecision["true_peak_ceiling_dbtp"] = raw[more_phi::kSonicMasterTruePeakIdx];
 
+    // AUDIT-F1.1 (2026-06-27): the embedded ONNX graph was exported with
+    // target_lufs baked as a CONSTANT (-14.0, tools/export_onnx/export_patched.py:376)
+    // because the C++ runner takes a single waveform input. The HTTP fallback
+    // server (tools/inference_server/server.py:83-88) passes target_lufs as a
+    // LIVE input. So the two paths agree at -14 but DIVERGE whenever the closed-
+    // loop feedback or genre prior pushes a target != -14 — the HTTP path
+    // conditions on the actual target, the ONNX graph cannot. This field tells
+    // the assistant which path shaped the applied target so the model's loudness
+    // recommendation (always computed against -14 on the ONNX path) is not
+    // mistaken for a target-aware recommendation.
+    {
+        const auto cl = engine.getClosedLoopState();
+        const bool explicitOverride = std::abs(targetLufs - (-14.0f)) > 0.01f;
+        std::string path;
+        std::string divergenceNote;
+        if (cl.feedbackActive)
+        {
+            path = "closed_loop_feedback";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "applied target driven by closed-loop LUFS servo (may diverge from HTTP path).";
+        }
+        else if (explicitOverride)
+        {
+            path = "explicit_on_demand_override";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "applied target is the caller's explicit override (may diverge from HTTP path).";
+        }
+        else
+        {
+            // genre prior is folded at decode (setGenreTargetLufs) when confidence
+            // >= 0.5; otherwise the model default (-14 baked) applies. We can't
+            // observe the genre flag from here without the classifier, so report
+            // the conservative default path; the closed_loop_state block carries
+            // the live next-target for confirmation.
+            path = "model_default_or_genre_prior";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "a genre prior (when classifier confidence >= 0.5) may also shape decode.";
+        }
+        rawModelDecision["loudness_target_path"] = path;
+        rawModelDecision["loudness_path_divergence_note"] = divergenceNote;
+        rawModelDecision["onnx_baked_target_lufs"] = -14.0;
+    }
+
     json compBands = json::array();
     for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
     {
@@ -6701,11 +6780,39 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     // Factored into sonicmasterClosedLoopJson() so the failure path matches.
     result["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
 
-    result["warnings"] = json::array({
-        "decision_contains_raw_model_telemetry_not_applied_parameters",
-        "target_lufs_is_requested_target_not_input_loudness_measurement",
-        "limiter_ceiling_is_telemetry_unless_applied_mask_limiter_true"
-    });
+    // AUDIT-F1.5 (2026-06-27): surface the structured reason the most recent
+    // BACKGROUND runCycle skipped (symmetric with failure_reason, which covers
+    // this on-demand call). The assistant can now tell "the background cycle
+    // last skipped because the input was silent" vs "low confidence" vs "ok".
+    result["last_cycle_skip_reason"] = sonicmasterFailureState(engine.getLastCycleFailure());
+
+	    result["warnings"] = json::array({
+	        "decision_contains_raw_model_telemetry_not_applied_parameters",
+	        "target_lufs_is_requested_target_not_input_loudness_measurement",
+	        "limiter_ceiling_is_telemetry_unless_applied_mask_limiter_true"
+	    });
+
+	    // AUDIT-FIX (P8, 2026-06-27): semantic labeling block. Explicitly documents
+	    // for every field whether it is a measurement, a target, or a model estimate.
+	    // Prevents the AI assistant from conflating the model's peak-normalized
+	    // loudness TARGET with the genuine BS.1770-4 input MEASUREMENT.
+	    result["semantics"] = json::object({
+	        {"projected_plan.target_lufs", "mastering_target"},
+	        {"projected_plan.eq_gains", "model_estimate"},
+	        {"projected_plan.true_peak_ceiling", "model_estimate"},
+	        {"projected_plan.comp_ratio", "model_estimate"},
+	        {"live_measurements.lufs_integrated", "measurement"},
+	        {"live_measurements.lufs_short_term", "measurement"},
+	        {"live_measurements.lufs_momentary", "measurement"},
+	        {"live_measurements.true_peak_dbtp", "measurement"},
+	        {"live_measurements.thd_percent", "measurement"},
+	        {"live_measurements.crest_factor", "measurement"},
+	        {"live_measurements.spectral_centroid_hz", "measurement"},
+	        {"live_measurements.spectral_tilt", "measurement"},
+	        {"live_measurements.stereo_width", "measurement"},
+	        {"live_measurements.correlation_mid", "measurement"},
+	        {"closed_loop_state.last_lufs_error", "closed_loop_correction"}
+	    });
 
     // Legacy normalized arrays retained for existing clients. Prefer
     // projected_plan.*_normalized in new integrations.

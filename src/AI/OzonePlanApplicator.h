@@ -86,6 +86,11 @@ public:
     // mismatched (outside tolerance). Empty before the first apply.
     ApplyVerification getLastVerification() const noexcept override;
 
+    // AUDIT-F2.1: static public so the tokenized-match regression can be unit
+    // tested without a hosted plugin. It is a pure function over two strings.
+    static bool nameMatches(const juce::String& expectedName,
+                            const juce::String& actualName) noexcept;
+
 private:
     /** Apply EQ prescription (parses plan.eqPrescriptionJSON). */
     int applyEQ(const MultiEffectPlan& plan);
@@ -111,10 +116,6 @@ private:
     // unrelated control. Pass an empty expectedName to skip the check (legacy
     // callers that don't yet supply a name).
     int enqueueIfMapped(int idx, float normalizedValue, const juce::String& expectedName);
-
-    // P2.6 (AUDIT): case-insensitive comparator used by the index-drift check.
-    bool nameMatches(const juce::String& expectedName,
-                     const juce::String& actualName) const noexcept;
 
     MorePhiProcessor&        processor_;
     const OzoneParameterMap& map_;
