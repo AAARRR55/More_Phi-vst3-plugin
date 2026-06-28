@@ -492,10 +492,14 @@ TEST_CASE("V2 pipeline: process() is noexcept at V1 layer", "[integration][v2]")
     proc.prepare(4);
 
     std::vector<float> out(4, 0.0f);
-    // process() is declared noexcept in MorphProcessor.h
+    // process() is declared noexcept in MorphProcessor.h. H-3 FIX migrated the
+    // output arg to std::span<float>; construct it explicitly so this noexcept
+    // check targets process() itself, not the (trivial but compiler-dependent)
+    // vector→span conversion expression.
+    std::span<float> outSpan{ out };
     STATIC_REQUIRE(noexcept(proc.process(0.f, 0.f, 0.f,
                                          MorphSource::XYPad, MorphMode::Direct,
-                                         1.f / 60.f, out)));
+                                         1.f / 60.f, outSpan)));
 }
 
 TEST_CASE("V2 pipeline: V2 config with all features disabled is equivalent to V1", "[integration][v2]")

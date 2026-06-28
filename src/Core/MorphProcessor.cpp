@@ -55,7 +55,7 @@ void MorphProcessor::prepare(int maxParamCount)
 
 void MorphProcessor::process(float rawX, float rawY, float faderPos,
                               MorphSource source, MorphMode mode,
-                              float dt, std::vector<float>& output) noexcept
+                              float dt, std::span<float> output) noexcept
 {
     if (!prepared_.load(std::memory_order_acquire) || !bank_.hasAnyOccupied()) return;
 
@@ -227,7 +227,7 @@ float MorphProcessor::computeSmoothingRateFor(MorphMode mode, float dt) noexcept
     return rate;
 }
 
-void MorphProcessor::applySmoothing(std::vector<float>& output, float rate) noexcept
+void MorphProcessor::applySmoothing(std::span<float> output, float rate) noexcept
 {
     // CRITICAL: Never resize in audio thread - output should fit pre-allocated buffer
     const size_t maxSmoothable = std::min(output.size(), smoothedValues_.size());
@@ -301,7 +301,7 @@ void MorphProcessor::applySmoothing(std::vector<float>& output, float rate) noex
 #endif
 }
 
-void MorphProcessor::applyListenFilter(std::vector<float>& output) noexcept
+void MorphProcessor::applyListenFilter(std::span<float> output) noexcept
 {
     if (!listenMode_.load(std::memory_order_relaxed)) return;
 

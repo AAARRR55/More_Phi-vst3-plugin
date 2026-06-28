@@ -68,7 +68,19 @@ public:
     float getParameterNormalized(int index) const noexcept override;
     float getParameterNormalized(juce::AudioPluginInstance& plugin, int index) const noexcept;
     void setParameterNormalized(int index, float value) noexcept override;
+    // H-1 FIX: overload accepting a cached block timestamp so the audio thread
+    // avoids per-parameter getMillisecondCounter() kernel calls. Delegate from
+    // the no-timestamp overload (calls getMillisecondCounter() for backward compat).
+    void setParameterNormalized(int index, float value, juce::uint32 now) noexcept;
+    // M-5 FIX: Resize throttle state to the actual parameter count of the
+    // hosted plugin. Called from prepareToPlay() after a plugin is loaded,
+    // this trims throttleStates_ from the fixed 4096 entries (~64 KB) down
+    // to the plugin's actual count (typically 64-512). Only shrinks — if the
+    // new count is larger, it grows up to MAX_PARAMETERS.
+    void prepare(int actualParamCount) noexcept;
+
     void setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value) noexcept;
+    void setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value, juce::uint32 now) noexcept;
 
     // AUDIT-FIX (Fix 5): setParameterNormalized variant that SNAPS the value to the
     // nearest valid step for discrete/boolean parameters before writing. The raw
@@ -88,6 +100,9 @@ public:
 
     void applyParameterState(const float* values, int count) noexcept override;
     void applyParameterState(const std::vector<float>& values) noexcept override;
+    // H-1 FIX: overload accepting a cached block timestamp.
+    void applyParameterState(const float* values, int count, juce::uint32 now) noexcept;
+    void applyParameterState(const std::vector<float>& values, juce::uint32 now) noexcept;
 
     // C-5 FIX (audit): Ramped recall. Instead of snapping every hosted
     // parameter to the snapshot value in one block (an audible click on
@@ -175,6 +190,9 @@ public:
     // also driving). Audio-safe: fixed std::array + relaxed atomics, no locks.
     static constexpr int kWritePrecedenceSettleMs = 250;
     void noteWriteSource(int index, HostedWriteSource source) noexcept;
+    // H-1 FIX: caller-supplied timestamp variant — avoids repeated
+    // getMillisecondCounter() syscalls on the audio thread.
+    void noteWriteSource(int index, HostedWriteSource source, juce::uint32 now) noexcept;
     uint64_t getWritePrecedenceConflicts() const noexcept
     {
         return writePrecedenceConflictCount_.load(std::memory_order_relaxed);
@@ -184,6 +202,19 @@ public:
         writePrecedenceConflictCount_.store(0, std::memory_order_relaxed);
     }
     HostedWriteSource getLastWriteSource(int index) const noexcept;
+
+    // C-1 FIX (audit, 2026-06-28): noexcept wrapper for hosted-plugin setValue/getValue.
+    // On Windows, MSVC's C++ try/catch can heap-allocate during exception unwinding,
+    // which is a hard RT violation on the audio thread. SEH (__try/__except) avoids
+    // C++ heap allocation entirely. On non-Windows, VST3 setValue is noexcept per
+    // spec so direct call is safe. Returns true if the call succeeded, false if it
+    // was caught/swallowed. Increments applyExceptionCount_ on failure (B4 FIX).
+    // Public: the audio-thread drain loop in PluginProcessor calls these directly
+    // (passing &paramBridge so failure can bump the per-instance exception counter).
+    static bool setValueNoexcept(juce::AudioProcessorParameter* param, float value,
+                                 const ParameterBridge* bridge = nullptr) noexcept;
+    static float getValueNoexcept(juce::AudioProcessorParameter* param,
+                                  float fallback = 0.0f) noexcept;
 
 private:
     struct ThrottleState

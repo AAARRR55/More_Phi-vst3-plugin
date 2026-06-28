@@ -353,9 +353,15 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
 
 bool OzoneParameterMap::isOzone11(const juce::String& pluginName) noexcept
 {
-    // Case-insensitive substring match; handles both "Ozone 11" and "iZotope Ozone 11 Advanced"
+    // Case-insensitive substring match.
+    // Matches "Ozone 11" / "iZotope Ozone 11 Advanced" (numbered release) and
+    // "Ozone Pro" (the version-less product name iZotope ships the same engine
+    // under for Ozone 11 Advanced). Ozone 10 and earlier are rejected: their
+    // parameter sets predate the Ozone 11 Advanced layout this map targets, so
+    // auto-registration would silently route to the wrong indices.
     const auto lower = pluginName.toLowerCase();
-    return lower.contains("ozone 11") || lower.contains("ozone11");
+    return lower.contains("ozone 11") || lower.contains("ozone11")
+        || lower.contains("ozone pro");
 }
 
 // ── Normalization helpers ─────────────────────────────────────────────────────

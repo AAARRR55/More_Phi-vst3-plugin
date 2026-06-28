@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <span>
 
 namespace more_phi {
 
@@ -37,9 +38,11 @@ public:
     // rawX, rawY ∈ [0,1], faderPos ∈ [0,1]
     // dt = blockSize / sampleRate
     // noexcept: All buffers pre-allocated in prepare(), no allocations or throwing ops
+    // H-3 FIX: std::span<float> guarantees the callee cannot resize the output
+    // buffer — compile-time enforcement of the "no realloc on audio thread" rule.
     void process(float rawX, float rawY, float faderPos,
                  MorphSource source, MorphMode mode,
-                 float dt, std::vector<float>& output) noexcept;
+                 float dt, std::span<float> output) noexcept;
 
     // Physics tuning (ATS-M7+M8: all atomics for cross-thread safety)
     void setElasticPreset(ElasticPreset p) { elasticPreset_.store(static_cast<int>(p), std::memory_order_relaxed); }
@@ -132,7 +135,7 @@ private:
     // C-4 FIX (audit): applySmoothing now takes an explicit one-pole rate
     // (computed by computeSmoothingRateFor below) so Direct mode can opt into
     // a guaranteed fast de-zipper without affecting Elastic/Drift behavior.
-    void applySmoothing(std::vector<float>& output, float rate) noexcept;
+    void applySmoothing(std::span<float> output, float rate) noexcept;
 
     // C-4 FIX (audit): Derives the per-block one-pole rate from the user's
     // smoothTau_ and the active morph mode. Non-Direct modes honor smoothTau_
@@ -199,7 +202,7 @@ private:
     using DiscreteMask = std::vector<uint8_t>;
     std::array<std::unique_ptr<DiscreteMask>, 2> discreteBuffers_{};
     std::atomic<int> discreteActiveIndex_{0};
-    void applyListenFilter(std::vector<float>& output) noexcept;
+    void applyListenFilter(std::span<float> output) noexcept;
 };
 
 } // namespace more_phi

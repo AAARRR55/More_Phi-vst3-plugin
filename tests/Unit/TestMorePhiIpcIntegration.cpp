@@ -169,6 +169,15 @@ TEST_CASE("OzoneParameterMap::isOzone11 name detection", "[ozone][detection]")
         REQUIRE(OzoneParameterMap::isOzone11("izotope ozone 11 standard"));
     }
 
+    // ponytail: "Ozone Pro" is the version-less product name for the Ozone 11
+    // Advanced engine. Without this, refreshHostedMasteringApplicators silently
+    // no-ops on the most common install path and the plan never applies.
+    SECTION("Ozone Pro (version-less product name) matches")
+    {
+        REQUIRE(OzoneParameterMap::isOzone11("iZotope Ozone Pro"));
+        REQUIRE(OzoneParameterMap::isOzone11("Ozone Pro"));
+    }
+
     SECTION("Neutron 5 does NOT match")
     {
         REQUIRE_FALSE(OzoneParameterMap::isOzone11("iZotope Neutron 5"));
