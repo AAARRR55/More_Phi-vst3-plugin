@@ -1,7 +1,7 @@
 # More-Phi Multi-Agent Ecosystem — Technical Reference
 
-> **Version:** 3.3.0 (Synthesizer Edition)  
-> **Last Updated:** 2026-06-21  
+> **Version:** 3.4.1 (Commercial Hardening)  
+> **Last Updated:** 2026-06-27  
 > **Scope:** Complete architectural reference for the VST3 plugin, multi-agent orchestration layer, MCP server, and integration protocols.  
 
 ---
@@ -102,7 +102,7 @@ flowchart TB
 - **Touch detection:** Per-parameter cooldown prevents morph from overwriting manual knob changes (`TOUCH_THRESHOLD = 0.005f`, ~200ms dynamic cooldown)
 - **Live edit holds:** `liveEditHold_` keeps manual parameter edits stable against morph output until the user moves the morph cursor
 
-**Audio-domain processing (v3.3.0):**
+**Audio-domain processing (v3.4.0+):**
 - `SpectralMorphEngine`, `GranularMorphEngine`, `FormantMorphEngine` for advanced spectral manipulation
 - `OversamplingWrapper` with configurable factor
 - `AutoMasteringEngine` + `NeuralMasteringController` for automated mastering
@@ -131,7 +131,7 @@ Message-thread-domain priority queue + worker pool. **NEVER used from the audio 
 | High | 2 | User-initiated goal subtasks |
 | RealtimeCritical | 3 | Reactive corrections (jumps agent queue only) |
 
-Features starvation detection: background tasks are bumped to Normal if they wait longer than 5000ms.
+Features starvation detection: background tasks are bumped to Normal if they wait longer than 1000ms (H-1/M-4 fix, 2026-07-15).
 
 #### `BlackboardBridge`
 Typed pub/sub **over** the existing `IntegrationEventBus`. Does not modify it. `poll()` must be called on a scheduler/message thread to fan out events to matching subscribers. Subscribers register by `agentId` + event type list + callback.
@@ -496,10 +496,10 @@ The ecosystem uses a combination of compile-time constants, APVTS parameters, an
 - **MCP connection limit:** Max 4 concurrent TCP clients
 
 ### 9.4 Input Validation & Sanitization
-- Parameter indices are bounds-checked against `MAX_PARAMETERS` (2048)
+- Parameter indices are bounds-checked against `MAX_PARAMETERS` (4096)
 - Normalized values are clamped to `[0.0f, 1.0f]` via `juce::jlimit`
 - JSON parsing uses `nlohmann::json` with schema validation where applicable
-- `SecurityValidator` (planned) will enforce max depth, max size, and allowed fields
+- `SecurityValidator` enforces max depth, max size, and allowed fields
 
 ### 9.5 Message Safety
 - `MCPServer::processRequest()` sanitizes input before dispatch
@@ -711,14 +711,14 @@ If your agent requires new tools, add them to `MCPToolHandler` and update the ca
 
 | Component | Approximate Size | Notes |
 |-----------|------------------|-------|
-| `ParameterState` | `std::array<float, 2048>` ≈ 8 KB | Fixed, no heap allocation |
+| `ParameterState` | `std::array<float, 4096>` ≈ 16 KB | Fixed, no heap allocation |
 | `SnapshotBank` (12 slots) | ~384 KB | Heap-allocated to avoid stack overflow in hosts with small stacks |
 | `LockFreeQueue` | 8192 × sizeof(ParamCommand) ≈ 64 KB | Fixed at compile time |
 | `currentParamSnapshot_` | ~8 KB | Pre-allocated in `prepareToPlay()` |
 | Agent runtime | <1 MB | Worker threads, blackboard, registry |
 | MCP server | <500 KB | Per-connection buffers, JSON parsing |
 
-### 13.5 Optimization Flags (v3.3.0)
+### 13.5 Optimization Flags (v3.4.0+)
 
 | Flag | Effect | When to Use |
 |------|--------|-------------|

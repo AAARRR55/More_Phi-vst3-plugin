@@ -3,7 +3,7 @@
  *
  * ITU-R BS.1770-4 True Peak (inter-sample peak, ISP) estimator.
  *
- * Uses a simple 4x polyphase FIR upsampler (12-tap per phase) to detect
+ * Uses a simple 4x polyphase FIR upsampler (64-tap per phase) to detect
  * inter-sample peaks that standard sample-domain peak meters miss.
  * This is an intentionally lightweight implementation that does not depend
  * on the full OversamplingWrapper — it is designed to be instantiated

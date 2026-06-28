@@ -55,6 +55,19 @@ void AgentRuntime::start(unsigned numWorkers)
     registry_.seal();
     registry_.prepareAll(sharedContext_);
 
+    // H-4: Wire the ConductorAgent's async submit callback so that deferred
+    // LLM decompositions can enqueue specialist subtasks via submitTask.
+    if (auto* conductor = registry_.find(AgentRole::Conductor))
+    {
+        if (auto* c = dynamic_cast<ConductorAgent*>(conductor))
+        {
+            c->setSubmitCallback([this](std::vector<AgentTask> tasks) {
+                for (auto& t : tasks)
+                    submitTask(std::move(t));
+            });
+        }
+    }
+
     // Subscribe each agent's declared event types to the blackboard exactly once.
     // On restart after stop() the same agent instances are still registered, so a
     // runtime-side flag guards against duplicate subscriptions piling up across
@@ -89,6 +102,9 @@ void AgentRuntime::start(unsigned numWorkers)
                 // gate — poll()'s internal listRecentSince() is cheap when nothing
                 // is new, and the old check risked event loss under burst eviction.
                 blackboard_.poll();
+                // H-4: Check if any async Conductor decompositions have completed.
+                if (auto* conductor = registry_.find(AgentRole::Conductor))
+                    static_cast<ConductorAgent*>(conductor)->checkPendingDecompositions();
             } catch (const std::exception& e) {
                 logger_.log("runtime", "error", "blackboard pump threw",
                             { { "exception", e.what() } });
@@ -169,8 +185,10 @@ juce::String AgentRuntime::submitTask(AgentTask task)
     if (moved.targetRole == AgentRole::Conductor && moved.payload.value("isGoal", false))
         registerRun(moved.id, moved.id);   // goal task id == run id (ConductorAgent uses task.id as runId)
 
+    // L-3: forward the soft deadline (if set) to the scheduler so expired
+    // tasks are skipped rather than executed after their deadline.
     scheduler_.submit([this, agentPtr, moved] { executeOnWorker(*agentPtr, moved); },
-                      moved.priority);
+                      moved.priority, moved.deadlineMs);
     return moved.id;
 }
 

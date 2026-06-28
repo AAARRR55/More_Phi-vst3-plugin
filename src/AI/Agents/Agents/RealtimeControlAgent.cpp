@@ -17,10 +17,14 @@ juce::int64 nowMs() noexcept { return juce::Time::currentTimeMillis(); }
 // is monotonic and bounded so the floor check is meaningful.
 float dbToNormalized(float db)
 {
-    // Map [-24 dB, +12 dB] → [0, 1] linearly; clamp. Good enough for trim math
-    // since the agent only ever moves gain DOWN by small steps and re-reads via
-    // the tool result. (Real normalization skew is host-resolved at apply time.)
-    const float lo = -24.0f, hi = 12.0f;
+    // H-2 FIX: Match the actual APVTS NormalisableRange for the output gain
+    // parameter (declared as [-24, +24] in PluginProcessor.cpp:1460).
+    // Previously was [-24, +12] — the upper bound was too narrow, causing a
+    // minor skew when the agent's internal dB estimate was converted back
+    // through the APVTS. For the agent's trim-down-only use case this doesn't
+    // affect correctness (the APVTS clamps and the tool handler resolves the
+    // true range), but matching the real range avoids confusion.
+    constexpr float lo = -24.0f, hi = 24.0f;
     return juce::jlimit(0.0f, 1.0f, (db - lo) / (hi - lo));
 }
 } // namespace
@@ -116,6 +120,8 @@ void RealtimeControlAgent::onEvent(const juce::String& type,
     // more_phi.set_parameter resolves by parameter_id; the value is ABSOLUTE
     // (not a -delta). Synchronous on the blackboard pump thread.
     //
+    // C-4 FIX: use weakTools_ (weak_ptr to the raw tools pointer) so invoke()
+    // gracefully returns when teardown has freed the DefaultToolInvoker.
     // M5 NOTE: invoked synchronously here, NOT via MessageManager::callAsync.
     // The pump thread is joined in AgentRuntime::stop() BEFORE the registry
     // destroys agents, so there is no deferred callback to outlive `this` —
@@ -125,11 +131,12 @@ void RealtimeControlAgent::onEvent(const juce::String& type,
     // defensively in case a future caller ever defers this path.
     if (! alive_->load(std::memory_order_acquire))
         return;
-    if (! ctx_->tools)
+    auto tools = weakTools_.lock();
+    if (! tools)
         return;
 
     const juce::String paramName = config_.outputGainParamName;
-    auto result = ctx_->tools->invoke("more_phi.set_parameter",
+    auto result = tools->invoke("more_phi.set_parameter",
         { { "parameter_id", paramName.toStdString() },
           { "value", targetNormalized } }, id());
 

@@ -1,6 +1,6 @@
 # MORPH-028: DAW Compatibility Testing Checklist
 
-**Version:** More-Phi v3.3.0
+**Version:** More-Phi v3.4.1
 
 Manual validation checklist for each supported DAW.  
 Automated integration tests cover the programmatic API contract — this checklist covers host-specific behaviors.
@@ -27,7 +27,7 @@ Automated integration tests cover the programmatic API contract — this checkli
 
 ### Ableton Live 11+
 - [ ] Plugin loads in instrument/audio effect rack
-- [ ] Automation lanes available for all 4 new parameters
+- [ ] Automation lanes available for all APVTS parameters
 - [ ] Session save/restore preserves all state
 - [ ] Sidechain input routable via Ableton's routing
 - [ ] No issues with Ableton's chunked processBlock sizes
@@ -61,7 +61,7 @@ Automated integration tests cover the programmatic API contract — this checkli
 
 ---
 
-## Multi-Agent Orchestration Testing (v3.3.0)
+## Multi-Agent Orchestration Testing (v3.4.0+)
 
 ### Core Orchestrator Checks
 - [ ] Agent orchestrator starts successfully in DAW

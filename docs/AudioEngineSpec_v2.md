@@ -707,7 +707,7 @@ Functions marked `noexcept` in the audio path must not call:
 - Any `juce::Logger` or `DBG()` calls
 - `std::mutex::lock()` (blocks)
 
-The `AllocationTracker.h` already provides a runtime assertion for debug builds.
+Runtime allocation assertions are available in debug builds via JUCE's `jassert` and custom RAII guards.
 
 #### Code Coverage
 
@@ -738,7 +738,7 @@ Coverage targets:
 ```ini
 # docs/Doxyfile (key settings)
 PROJECT_NAME           = "More-Phi Audio Engine"
-PROJECT_NUMBER         = 3.3.0
+PROJECT_NUMBER         = 3.4.1
 OUTPUT_DIRECTORY       = docs/api
 INPUT                  = src/
 RECURSIVE              = YES
@@ -775,7 +775,7 @@ hotfix/*         Critical production fixes. Branch from main, PR to both.
 #### Semantic Versioning Rules
 
 ```
-MAJOR.MINOR.PATCH  (e.g., 3.3.0)
+MAJOR.MINOR.PATCH  (e.g., 3.4.1)
 
 MAJOR: Breaking change to preset format, MCP API contract, or
        minimum supported OS/DAW version.

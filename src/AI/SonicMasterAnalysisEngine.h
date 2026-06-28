@@ -498,6 +498,13 @@ private:
 	    // window between old and new audio. Atomically safe: a missed transition
 	    // only risks analyzing one stale window, never corrupts data.
 	    std::atomic<std::size_t> capturedSinceLastFlush_ { 0 };
+	    // AUDIT-FIX (P4 regression, 2026-06-27): the first-block-after-silence
+	    // detector must NOT arm on the initial fill (the very first capture after
+	    // prepare()). Otherwise the first analysis cycle always discards its
+	    // window as "blending old+new audio" when there was no old audio. This
+	    // flag flips true after the first full capture sequence; only then does
+	    // a subsequent flush+recapture count as a genuine source change.
+	    std::atomic<bool> everCapturedFullWindow_ { false };
 	    std::vector<float> captureL_, captureR_;   // host-rate window
 	    std::vector<float> modelL_, modelR_;       // 44.1k window
 	    std::vector<float> interleaved_;           // 2 * kSonicMasterSegmentFrames

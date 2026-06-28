@@ -127,7 +127,7 @@ juce::Font MorePhiLookAndFeel::makeScaledFont(float baseSize, float minSize, int
 
 juce::Font MorePhiLookAndFeel::makeRoleFont(FontRole role, int style) const
 {
-    // Title + Section labels use Syncopate (display); everything else uses Outfit.
+    // Title uses Syncopate (display); Section and below use Outfit (body) for readability at small sizes.
     auto withFamily = [this, style](const juce::String& family, float base, float minSize)
     {
         return juce::Font(juce::FontOptions(
@@ -137,7 +137,7 @@ juce::Font MorePhiLookAndFeel::makeRoleFont(FontRole role, int style) const
     switch (role)
     {
         case FontRole::Title:   return withFamily(displayTypefaceName(), 20.0f, 16.0f);
-        case FontRole::Section: return withFamily(displayTypefaceName(), 10.5f, kMinSectionLabel);
+        case FontRole::Section: return withFamily(bodyTypefaceName(), 10.5f, kMinSectionLabel);
         case FontRole::Control: return makeScaledFont(12.0f, kMinControlLabel, style);
         case FontRole::Value:   return makeScaledFont(11.0f, kMinValueLabel, style);
         case FontRole::Micro:   return makeScaledFont(10.0f, kMinModeLabel, style);
@@ -374,7 +374,7 @@ void MorePhiLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w
 // ── ComboBox ─────────────────────────────────────────────────────────────────
 
 void MorePhiLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool isDown,
-                                          int, int, int, int, juce::ComboBox&)
+                                          int, int, int, int, juce::ComboBox& comboBox)
 {
     auto bounds = juce::Rectangle<float>(0, 0, static_cast<float>(w), static_cast<float>(h));
     g.setColour(isDown ? surfaceLight.brighter(0.1f) : surfaceLight);
@@ -388,6 +388,9 @@ void MorePhiLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool isDo
     arrow.addTriangle(arrowX, arrowY, arrowX + 8, arrowY, arrowX + 4, arrowY + 5);
     g.setColour(textSecondary);
     g.fillPath(arrow);
+
+    // Focus ring (WCAG 2.4.7) — was missing from ComboBox
+    drawFocusRingIfFocused(g, comboBox, comboBox.getLocalBounds().toFloat());
 }
 
 // ── Popup Menu ───────────────────────────────────────────────────────────────

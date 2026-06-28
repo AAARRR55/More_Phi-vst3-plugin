@@ -2,8 +2,8 @@
 
 **Status:** Recommendation with cited rationale, **not** a ratified commercial decision.
 **Date:** 2026-06-19
-**Author:** Derived from a two-round technical + market scrutiny of More-Phi v3.3.0
-(`chore/ponytail-dead-code-cleanup` branch, 520 tests / 87,445 assertions green).
+**Author:** Derived from a two-round technical + market scrutiny of More-Phi v3.4.1
+(`feature/multi-agent-layer` branch, 95+ test cases green).
 
 > **Read this first.** The numbers below are **recommendations**, built from
 > facts verified against the codebase and primary sources in this session.
@@ -66,8 +66,10 @@ Not asserted — proven:
 - **AdaptiveEQ** steady-state gain matches the RBJ cookbook `|H(f)|` at filter
   centres to 0.001 dB (peak/shelf/LP/HP).
 - **TruePeakEstimator** characterized against an independent reference; prior
-  "±0.2 dBTP" claim refuted and corrected (12-tap prototype under-reads
-  near-Nyquist by ~25 dB).
+  "±0.2 dBTP" claim refuted and corrected. The old 12-tap prototype under-reads
+  near-Nyquist by ~25 dB. The current implementation uses a 4-phase × 64-tap
+  polyphase FIR upsampler (256-tap linear-phase Kaiser β=8.6 prototype, ~80 dB
+  stopband), tracking the reference to within ~0.02 dBTP (R3 fix, 2026-07-16).
 - **Real-time path:** seqlock + `atomic_thread_fence`, SPSC queue with
   `alignas(64)` indices, `noexcept` `processBlock` with `ScopedNoDenormals`.
 - **Latency/PDC:** all four components (hosted plugin + oversampling + FFT
@@ -147,7 +149,7 @@ versus what a certified/learned implementation would do:
 >   real model backend is loaded.
 > - Neural compressor inference is `unavailable`/`heuristic_fallback` unless a
 >   real inference backend is loaded.
-> - `VAEMorphEngine` is currently a **safe stub backend**.
+> The latent-space morphing path is not yet implemented in the current release.
 > — `README.md`, AI Claims section
 
 **The pricing page must follow the same rule:** each tier's stated capability

@@ -23,14 +23,20 @@ bool DefaultToolInvoker::consumeRateSlotLocked(const juce::String& agentId)
     if (rateLimit_ <= 0)
         return true;
     const auto t = nowMs();
-    // M1: opportunistic eviction. Drop buckets whose window expired so the map
-    // cannot grow unbounded across many distinct agent ids over a long session.
-    for (auto it = buckets_.begin(); it != buckets_.end(); )
+    // M-1 FIX: Evict expired buckets every kEvictionIntervalMs (10s) instead of
+    // scanning all buckets on every invocation. For a typical 7-agent system the
+    // map is tiny, but under adversarial conditions (thousands of spoofed agent ids
+    // hitting the dispatch) the per-call scan would be O(n) in bucket count.
+    if ((t - lastEvictionMs_) >= kEvictionIntervalMs)
     {
-        if (it->second.windowStartMs != 0 && (t - it->second.windowStartMs) >= 1000)
-            it = buckets_.erase(it);
-        else
-            ++it;
+        for (auto it = buckets_.begin(); it != buckets_.end(); )
+        {
+            if (it->second.windowStartMs != 0 && (t - it->second.windowStartMs) >= 1000)
+                it = buckets_.erase(it);
+            else
+                ++it;
+        }
+        lastEvictionMs_ = t;
     }
     auto& bucket = buckets_[agentId.toStdString()];
     if (bucket.windowStartMs == 0 || (t - bucket.windowStartMs) >= 1000)

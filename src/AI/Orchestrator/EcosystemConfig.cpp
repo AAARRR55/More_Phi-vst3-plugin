@@ -342,7 +342,11 @@ EcosystemConfig EcosystemConfig::createDefaults()
     EcosystemConfig cfg;
 
     cfg.mcp.port            = 30001;
-    cfg.mcp.authToken       = "changeme-in-production";
+    cfg.mcp.authToken       = {};
+    // SECURITY: authToken is intentionally empty in defaults.
+    // Callers must use createFromIdentity() which copies the live
+    // bearerToken from InstanceIdentity. A non-empty placeholder here
+    // would be a hardcoded fallback credential (Finding #13).
     cfg.mcp.maxConnections  = 4;
     cfg.mcp.idleTimeoutMs   = 30000;
     cfg.mcp.maxRequestBytes = 65536;

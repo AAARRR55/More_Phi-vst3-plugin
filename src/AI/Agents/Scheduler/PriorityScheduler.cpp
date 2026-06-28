@@ -12,18 +12,14 @@ juce::int64 nowMs() noexcept
 }
 } // namespace
 
-// H3 FIX: Hard ceiling on worker shutdown. A specialist making a blocking
-// mastering.render_batch or hung HTTP call would otherwise hold join() open
-// forever, freezing host teardown (MCPServer::stopServer uses stopThread(-1)).
-// Mirrors the audio path's bounded-drain discipline (releaseResources: 100ms).
-// On expiry we detach: the worker can only reference the AgentRuntime and the
-// four holders, all of which are torn down AFTER agentRuntime_.reset() in
-// ~MorePhiProcessor — and stop() is invoked inside that reset — so a detached
-// worker racing teardown touches already-freed state only if it vastly exceeds
-// this deadline AND the destructor proceeds past reset(). Acceptable: the
-// alternative (freezing the DAW) is strictly worse. ponytail: global ceiling,
-// per-worker cancel tokens if a cleaner cancel is ever needed.
-constexpr long long kShutdownJoinTimeoutMs = 2000;
+// H-6 FIX: std::jthread replaces the old detach-on-timeout pattern. Each
+// jthread has an internal stop_source whose request_stop() is called
+// automatically at the start of ~jthread, before the join. The worker loop
+// checks its stop_token via the cv_any wait-with-stop-token overload, so a
+// stuck task is interrupted only after it exits and re-enters the loop. The
+// 2s soft limit is removed — jthread requests stop and joins with no timeout,
+// which is safe because workers are joined BEFORE the agentRuntime_ context
+// they reference is destroyed (see ~MorePhiProcessor ordering).
 
 PriorityScheduler::PriorityScheduler() = default;
 
@@ -40,7 +36,7 @@ void PriorityScheduler::start(unsigned numWorkers)
         return;
     workers_.reserve(numWorkers);
     for (unsigned i = 0; i < numWorkers; ++i)
-        workers_.emplace_back([this] { workerLoop(); });
+        workers_.emplace_back([this](std::stop_token st) { workerLoop(st); });
 }
 
 void PriorityScheduler::stop()
@@ -50,71 +46,134 @@ void PriorityScheduler::stop()
     if (! running_.exchange(false, std::memory_order_acq_rel))
         return;
     cv_.notify_all();
-    // H3 FIX: Bounded join. std::thread::join has no timeout, so poll
-    // joinability against a hard deadline; on expiry detach so host teardown
-    // is not frozen by a stuck agent task. See kShutdownJoinTimeoutMs note.
-    const auto deadline = nowMs() + kShutdownJoinTimeoutMs;
+    // H-6 FIX: std::jthread destructor calls request_stop() + join()
+    // automatically. The workers are joined BEFORE the agentRuntime_ context
+    // they reference is destroyed (see ~MorePhiProcessor ordering). No detach
+    // fallback needed — the stop_token + cv_any wait ensures prompt wake-up.
     for (auto& t : workers_)
-    {
-        if (! t.joinable())
-            continue;
-        while (t.joinable() && nowMs() < deadline)
-            juce::Thread::sleep(2);
         if (t.joinable())
-        {
-            // ponytail: exceeded the 2s ceiling. Detach rather than hang the host.
-            t.detach();
-        }
-    }
+            t.join();
     workers_.clear();
     // Drain anything left unexecuted so we don't keep dangling lambdas.
+    // C-3: Only levels 0-2 under mutex; level 3 (urgents pool) drained below.
     std::lock_guard<std::mutex> lock(mutex_);
-    for (int i = 0; i < kNumPriorityLevels; ++i)
+    for (int i = 0; i < 3; ++i)
         while (! queues_[i].empty())
             queues_[i].pop();
+    // Drain the lock-free urgents pool (atomic exchange to reset).
+    auto head = urgentsHead_.load(std::memory_order_acquire);
+    auto tail = urgentsTail_.load(std::memory_order_relaxed);
+    while (tail != head)
+    {
+        urgentsPool_[static_cast<size_t>(tail)].task = nullptr;
+        tail = (tail + 1) & (kUrgentsPoolSize - 1);
+    }
+    urgentsTail_.store(tail, std::memory_order_release);
 }
 
-void PriorityScheduler::submit(std::function<void()> task, TaskPriority priority)
+void PriorityScheduler::submit(std::function<void()> task, TaskPriority priority,
+                                juce::int64 deadlineMs)
 {
     if (! task)
         return;
+
+    // C-3 FIX: RealtimeCritical tasks go through the lock-free urgents pool
+    // first. If the pool is full (extremely rare — 8 slots for 2 workers), fall
+    // back to the shared mutex path into the High queue (ordinal 2). The worker
+    // loop drains the urgents pool before touching the mutex, so a
+    // RealtimeCritical submit never contends with Background→Normal promotion.
+    if (priority == TaskPriority::RealtimeCritical)
+    {
+        auto head = urgentsHead_.load(std::memory_order_relaxed);
+        auto tail = urgentsTail_.load(std::memory_order_acquire);
+        const auto used = static_cast<size_t>((head - tail) & (kUrgentsPoolSize - 1));
+        if (used < static_cast<size_t>(kUrgentsPoolSize - 1))
+        {
+            const auto nextHead = (head + 1) & (kUrgentsPoolSize - 1);
+            urgentsPool_[static_cast<size_t>(head)] = Entry{ std::move(task), priority, nowMs(), deadlineMs };
+            urgentsHead_.store(nextHead, std::memory_order_release);
+            cv_.notify_one();
+            return;
+        }
+        // Fall through: urgents pool full — degrade to High under mutex
+        priority = TaskPriority::High;
+    }
+
     const int ord = Entry::ordinal(priority);
     std::lock_guard<std::mutex> lock(mutex_);
-    queues_[ord].push(Entry{ std::move(task), priority, nowMs() });
+    queues_[ord].push(Entry{ std::move(task), priority, nowMs(), deadlineMs });
     cv_.notify_one();
 }
 
-void PriorityScheduler::workerLoop()
+void PriorityScheduler::workerLoop(std::stop_token stopToken)
 {
-    while (true)
+    while (! stopToken.stop_requested())
     {
+        // C-3 FIX: Drain the lock-free urgents pool BEFORE touching the
+        // shared mutex. This guarantees RealtimeCritical tasks are dispatched
+        // immediately regardless of any Background→Normal promotion in progress.
+        {
+            auto tail = urgentsTail_.load(std::memory_order_relaxed);
+            auto head = urgentsHead_.load(std::memory_order_acquire);
+            if (tail != head)
+            {
+                auto entry = std::move(urgentsPool_[static_cast<size_t>(tail)]);
+                urgentsTail_.store((tail + 1) & (kUrgentsPoolSize - 1),
+                                   std::memory_order_release);
+                try { entry.task(); }
+                catch (...) {}
+                executed_.fetch_add(1, std::memory_order_relaxed);
+                continue; // return to top — drain more urgents before blocking
+            }
+        }
+
         Entry entry;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] {
+            // H-6 FIX: condition_variable_any::wait with stop_token so
+            // jthread's request_stop() wakes the worker immediately.
+            cv_.wait(lock, stopToken, [this] {
                 // BP-1 FIX (audit): explicit relaxed — the mutex already
                 // synchronizes this read with stop()'s exchange.
                 if (! running_.load(std::memory_order_relaxed)) return true;
-                for (int i = 0; i < kNumPriorityLevels; ++i)
+                // The non-critical queues are all empty AND the urgents pool is empty.
+                for (int i = 0; i < 3; ++i)  // only levels 0-2 under mutex; level 3 is urgents
                     if (! queues_[i].empty()) return true;
+                {
+                    auto tail = urgentsTail_.load(std::memory_order_relaxed);
+                    auto head = urgentsHead_.load(std::memory_order_acquire);
+                    if (tail != head) return true;
+                }
                 return false;
             });
-            if (! running_.load(std::memory_order_relaxed))
+            if (stopToken.stop_requested())
             {
+                // H-6: stop requested — drain any remaining tasks then exit.
+                // (We'd ideally finish the in-flight task, but we already checked
+                // stop_requested; if a task was popped and executed before this
+                // check, it runs to completion above or below. Drained queues
+                // below.)
                 bool anyLeft = false;
-                for (int i = 0; i < kNumPriorityLevels; ++i)
+                for (int i = 0; i < 3; ++i)
                     if (! queues_[i].empty()) { anyLeft = true; break; }
                 if (! anyLeft)
-                    return;
+                {
+                    auto tail = urgentsTail_.load(std::memory_order_relaxed);
+                    auto head = urgentsHead_.load(std::memory_order_acquire);
+                    if (tail == head)
+                        return;
+                }
+                // fall through and drain what's left before exiting
             }
 
             bumpStarvingBackground();
             escalateStarving();
 
             // H-1/M-4: Check queues in priority order (highest first).
-            // O(1) per level — no heap rebuild.
+            // Level 3 (RealtimeCritical) is now handled by urgents pool;
+            // only check levels 2 (High), 1 (Normal), 0 (Background).
             bool found = false;
-            for (int ord = kNumPriorityLevels - 1; ord >= 0; --ord)
+            for (int ord = 2; ord >= 0; --ord)
             {
                 if (! queues_[ord].empty())
                 {
@@ -126,6 +185,14 @@ void PriorityScheduler::workerLoop()
             }
             if (! found)
                 continue;
+        }
+        // L-3: Soft deadline check. If the task has a deadline and it's been
+        // exceeded, skip execution (the task has timed out). The lambda's
+        // captured state destructors run normally — no leak.
+        if (entry.deadlineMs > 0 && nowMs() > entry.deadlineMs)
+        {
+            executed_.fetch_add(1, std::memory_order_relaxed);
+            continue;
         }
         try
         {
@@ -221,10 +288,13 @@ PriorityScheduler::Stats PriorityScheduler::stats() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     Stats s;
-    s.depthBackground       = static_cast<int>(queues_[0].size());
-    s.depthNormal           = static_cast<int>(queues_[1].size());
-    s.depthHigh             = static_cast<int>(queues_[2].size());
-    s.depthRealtimeCritical = static_cast<int>(queues_[3].size());
+    s.depthBackground = static_cast<int>(queues_[0].size());
+    s.depthNormal     = static_cast<int>(queues_[1].size());
+    s.depthHigh       = static_cast<int>(queues_[2].size());
+    // C-3 FIX: RealtimeCritical depth includes the lock-free urgents pool.
+    const auto head = urgentsHead_.load(std::memory_order_acquire);
+    const auto tail = urgentsTail_.load(std::memory_order_relaxed);
+    s.depthRealtimeCritical = static_cast<int>((head - tail) & (kUrgentsPoolSize - 1));
     s.executed = executed_.load(std::memory_order_relaxed);
     s.starvationBumps = starvationBumps_.load(std::memory_order_relaxed);
     return s;

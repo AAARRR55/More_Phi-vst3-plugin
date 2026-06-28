@@ -16,7 +16,8 @@ namespace more_phi {
 
 class MorePhiProcessor;
 
-class DriftControlPanel : public juce::Component
+class DriftControlPanel : public juce::Component,
+                           private juce::Timer
 {
 public:
     explicit DriftControlPanel(MorePhiProcessor& proc);
@@ -25,6 +26,7 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
     void setupKnob(juce::Slider& knob, double min, double max,
                    double defaultVal, const juce::String& suffix);
     void drawSectionLabel(juce::Graphics& g, const juce::String& text,

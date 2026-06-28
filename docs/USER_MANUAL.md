@@ -2,8 +2,6 @@
 
 This manual is the definitive feature reference for More-Phi. Use it when you need to identify a control, understand a setting, troubleshoot behavior, or look up terminology.
 
-> Screenshot placeholder: `[Screenshot: Fully loaded More-Phi UI with numbered callouts for every major region]`
-
 ## Quick Navigation
 
 - [Product Summary](#product-summary)
@@ -86,7 +84,7 @@ AI Status Bar
 | Control | Description |
 |---|---|
 | More-Phi logo | Identifies the active plugin window. |
-| Version label | Displays the plugin version, currently `v3.3.0`. |
+| Version label | Displays the plugin version, currently `v3.4.1`. |
 | OUT meter | Shows approximate output level. Green indicates safe level, coral indicates elevated level, red indicates near-clipping. |
 
 ### Resizing
@@ -347,7 +345,7 @@ The AI status bar is always visible at the bottom of the editor.
 
 ## Agent Orchestration
 
-More-Phi v3.3.0 includes a multi-agent orchestration layer that supervises six built-in agents to carry out high-level sound-design goals. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
+More-Phi v3.4.1 includes a multi-agent orchestration layer that supervises six built-in agents to carry out high-level sound-design goals. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
 
 ### The Six Built-In Agents
 
@@ -462,28 +460,19 @@ Safety categories:
 
 ### Multi-Agent System
 
-The MCP server also exposes tools for the agent orchestration layer. These tools are available when the orchestrator is active and MCP is running.
+The MCP server also exposes tools for the multi-agent orchestration layer. These tools are available when the agent runtime is active and MCP is running.
 
 | Tool | Description |
 |---|---|
-| `orchestrator.describe_system_state` | Returns a JSON snapshot of the orchestrator, MCP server, agent roster, and scheduler statistics. |
-| `orchestrator.submit_user_goal` | Submits a high-level goal (e.g., "make this track louder and brighter") to the Conductor agent. |
-| `orchestrator.cancel_plan` | Interrupts the currently executing plan and returns all agents to idle. |
-| `orchestrator.get_agent_state` | Returns the detailed state of a single agent by name. |
-| `orchestrator.approve_proposal` | Approves a pending plan or action from the Creative or Optimization agent. |
-| `orchestrator.reject_proposal` | Rejects a pending plan and returns the agent to idle. |
+| `agents.list` | Lists all registered agents with status and capabilities. |
+| `agents.run_goal` | Submits a high-level goal (e.g., "make this track louder and brighter") to the Conductor agent for decomposition and delegation. |
+| `agents.run_task` | Submits a single task to a specific agent by name. |
+| `agents.run_status` | Queries the status of a running goal or task. |
+| `agents.run_cancel` | Cancels a running goal or task. |
+| `agents.blackboard.recent` | Returns recent blackboard events for a specific agent. |
+| `agents.set_autonomy` | Adjusts the agent autonomy level (`manual`, `assisted`, or `autonomous`). |
 
-**`orchestrator.describe_system_state` response fields:**
-
-| Field | Type | Description |
-|---|---|---|
-| `orchestratorRunning` | Bool | Whether the orchestrator thread is active. |
-| `mcpServerRunning` | Bool | Whether the MCP server is currently accepting connections. |
-| `mcpHealthy` | Bool | Whether the last MCP health check passed. |
-| `mcpPort` | Int | The local port the MCP server is listening on. |
-| `agentCount` | Int | Number of registered agents (always 6 for the built-in set). |
-| `agentStates` | Array | One object per agent with `name`, `state`, `lastTask`, and `pendingApproval`. |
-| `schedulerStats` | Object | `queueDepth`, `tasksCompleted`, and `averageLatencyMs`. |
+> **Note:** The earlier `orchestrator.*` tool names (`describe_system_state`, `submit_user_goal`, etc.) documented in prior revisions do not exist as MCP tools. Use the `agents.*` tools listed above instead.
 
 ## Configuration and Automation Parameters
 

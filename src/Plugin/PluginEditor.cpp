@@ -50,7 +50,7 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     }
 #endif
 
-    paramToggleBtn_.setButtonText("All Parameters \u25B8");
+    paramToggleBtn_.setButtonText("All Parameters >");
     paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");
     openPluginBtn_.setTooltip("Open the hosted plugin editor in a separate window.");
 
@@ -145,8 +145,8 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         paramPanel.setVisible(paramPanelVisible_);
         paramToggleBtn_.setButtonText(
         paramPanelVisible_
-            ? juce::String("\u25C2 All Parameters")
-            : juce::String("All Parameters \u25B8"));
+            ? juce::String("< All Parameters")
+            : juce::String("All Parameters >"));
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
@@ -692,10 +692,10 @@ void MorePhiEditor::refreshSonicMasterStatus()
         switch (engine.getStatus())
         {
             case SonicMasterAnalysisEngine::Status::Disabled:           text += "off"; break;
-            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += "listening\u2026"; break;
+            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += juce::String(juce::CharPointer_UTF8("listening\u2026")); break;
             case SonicMasterAnalysisEngine::Status::Applied:            text += "active #" + juce::String((int) engine.getLastPlanId()); break;
-            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += "waiting for clearer signal\u2026"; break;
-            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += "paused \u2014 check diagnostics"; break;
+            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += juce::String(juce::CharPointer_UTF8("waiting for clearer signal\u2026")); break;
+            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += juce::String(juce::CharPointer_UTF8("paused \u2014 check diagnostics")); break;
         }
     }
     sonicMasterStatus_.setText(text, juce::dontSendNotification);

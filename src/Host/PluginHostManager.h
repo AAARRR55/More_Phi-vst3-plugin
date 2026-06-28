@@ -167,6 +167,11 @@ private:
     // acquirePluginForUse()/releasePluginFromUse().
     mutable std::atomic<uint32_t> activePluginUsers_{0};
     mutable std::atomic<bool> exclusivePluginUseRequested_{false};
+    // L-1 FIX: WaitableEvent signaled by releasePluginFromUse() when the
+    // ref-count drops to zero. beginExclusivePluginUse() waits on this instead
+    // of Thread::sleep(1) spin — avoids 1 ms worst-case latency spikes and
+    // needless wake-ups when the audio thread releases promptly.
+    juce::WaitableEvent usersZeroEvent_;
 
     // C12 FIX: Use unsigned to prevent signed-overflow UB. Cap at MAX+1 to avoid
     // wrap-around which would falsely reset the suspension counter.

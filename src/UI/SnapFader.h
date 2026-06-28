@@ -42,6 +42,9 @@ private:
     float lastPaintedFaderPos_ = -1.0f;
     int lastPaintedMorphSource_ = -1;
     uint16_t lastSnapshotMask_ = 0xffff;
+    // H6: capture-flash overlay state
+    juce::String flashText_;
+    juce::uint32 flashEndMs_ = 0;
 };
 
 } // namespace more_phi

@@ -24,42 +24,49 @@ bool AgentRegistry::registerAgent(std::unique_ptr<IAgent> agent)
     if (! agent)
         return false;
     const auto role = agent->role();
-    for (const auto& slot : slots_)
-        if (slot.role == role)
-            return false;   // role already taken
-    slots_.push_back({ role, std::move(agent) });
+    const int ord = ordinal(role);
+    if (ord < 0 || ord >= static_cast<int>(agentsByRole_.size()))
+        return false;
+
+    // H-1 FIX: O(1) duplicate check via enum-indexed array.
+    if (agentsByRole_[static_cast<size_t>(ord)])
+        return false;   // role already taken
+
+    agentsByRole_[static_cast<size_t>(ord)] = std::move(agent);
+    order_.push_back({ role, ord });
     return true;
 }
 
 IAgent* AgentRegistry::find(AgentRole role) const noexcept
 {
-    for (const auto& slot : slots_)
-        if (slot.role == role)
-            return slot.agent.get();
-    return nullptr;
+    // H-1 FIX: O(1) array lookup, no iteration.
+    const int ord = ordinal(role);
+    if (ord < 0 || ord >= static_cast<int>(agentsByRole_.size()))
+        return nullptr;
+    return agentsByRole_[static_cast<size_t>(ord)].get();
 }
 
 std::vector<AgentRole> AgentRegistry::registeredRoles() const noexcept
 {
     std::vector<AgentRole> r;
-    r.reserve(slots_.size());
-    for (const auto& s : slots_)
+    r.reserve(order_.size());
+    for (const auto& s : order_)
         r.push_back(s.role);
     return r;
 }
 
 void AgentRegistry::prepareAll(const AgentContext& ctx)
 {
-    for (auto& slot : slots_)
-        if (slot.agent)
-            slot.agent->prepare(ctx);
+    for (auto& s : order_)
+        if (auto& agent = agentsByRole_[static_cast<size_t>(s.ordinal)])
+            agent->prepare(ctx);
 }
 
 void AgentRegistry::stopAll()
 {
-    for (auto& slot : slots_)
-        if (slot.agent)
-            slot.agent->stop();
+    for (auto& s : order_)
+        if (auto& agent = agentsByRole_[static_cast<size_t>(s.ordinal)])
+            agent->stop();
 }
 
 } // namespace more_phi::agents

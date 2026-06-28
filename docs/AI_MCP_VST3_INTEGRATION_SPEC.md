@@ -402,7 +402,7 @@ The neural mastering subsystem (`OzonePlanApplicator`) provides a second edit en
 
 **Additional neural path details:**
 - ONNX model embedded in binary via `BinaryData::getNamedResource()` — no runtime file I/O
-- Capture ring rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), lazily allocated
+- Capture ring rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), eagerly allocated in `prepare()` (CAPTURE-DECOUPLE fix, 2026-06-26)
 - Resampling uses `resamplePolyphase` (not linear interpolation)
 - Mono capture supported (`channelCount == 1`)
 - Plan application uses pending-plan atomic-flag pattern — stores in `pendingPlan_`, applies in `runCycle` on analysis thread (no `callAsync`)

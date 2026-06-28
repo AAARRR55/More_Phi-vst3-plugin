@@ -52,6 +52,9 @@ BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffa0a0b0));
     statusLabel_.setText("Snapshot genetics ready", juce::dontSendNotification);
 
+    // C2: update button enabled states every 2 seconds
+    startTimerHz(2);
+
     addAndMakeVisible(breedButton_);
     addAndMakeVisible(mutateButton_);
     addAndMakeVisible(randomizeButton_);
@@ -82,6 +85,19 @@ void BreedingPanel::resized()
     clearWaypoints_.setBounds(area.removeFromLeft(78));
     area.removeFromLeft(10);
     statusLabel_.setBounds(area);
+}
+
+void BreedingPanel::timerCallback()
+{
+    // C2: gate button enabled states so users don't click into silent no-ops
+    auto& bank = proc_.getSnapshotBank();
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    const int occupiedCount = bank.getOccupiedSlots(occupied);
+    const int wpCount = proc_.getWaypointEngine().getNumWaypoints();
+
+    breedButton_.setEnabled(occupiedCount >= 2);
+    mutateButton_.setEnabled(occupiedCount >= 1);
+    clearWaypoints_.setEnabled(wpCount > 1);  // default single waypoint always present
 }
 
 void BreedingPanel::breedSnapshots()

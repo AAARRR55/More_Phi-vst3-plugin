@@ -53,10 +53,66 @@ void AIStatusPanel::paint(juce::Graphics& g)
 void AIStatusPanel::timerCallback()
 {
     auto& mcp = proc_.getMCPServer();
-    bool running = mcp.isRunning();
+    const bool running = mcp.isRunning();
 
-    // L6: glyph prefix gives shape redundancy beyond colour (colorblind-safe).
-    statusLabel_.setText(running ? "\xE2\x97\x8F AI Ready" : "\xE2\x97\x8B AI Offline",
+    // H5: track pending transitions with timeout
+    const juce::int64 now = juce::Time::currentTimeMillis();
+    constexpr juce::int64 kTransitionTimeoutMs = 5000;
+
+    if (pendingStart_)
+    {
+        if (running)
+        {
+            pendingStart_ = false;
+            toggleBtn_.setEnabled(true);
+        }
+        else if (now - transitionStartMs_ > kTransitionTimeoutMs)
+        {
+            // Start timed out — surface error and reset
+            pendingStart_ = false;
+            toggleBtn_.setEnabled(true);
+            statusLabel_.setText("[!] Start Failed",
+                                 juce::dontSendNotification);
+            statusLabel_.setColour(juce::Label::textColourId,
+                                   juce::Colour(0xffe94560));  // coral-red
+            return;
+        }
+    }
+
+    if (pendingStop_)
+    {
+        if (!running)
+        {
+            pendingStop_ = false;
+            toggleBtn_.setEnabled(true);
+        }
+        else if (now - transitionStartMs_ > kTransitionTimeoutMs)
+        {
+            pendingStop_ = false;
+            toggleBtn_.setEnabled(true);
+        }
+    }
+
+    // Show transition state with ASCII glyph prefix (colorblind-safe shape + colour)
+    if (pendingStart_)
+    {
+        statusLabel_.setText(juce::CharPointer_UTF8("[~] Starting\u2026"),
+                             juce::dontSendNotification);
+        statusLabel_.setColour(juce::Label::textColourId,
+                               juce::Colour(0xfff9e596));  // amber
+        return;
+    }
+    if (pendingStop_)
+    {
+        statusLabel_.setText(juce::CharPointer_UTF8("[~] Stopping\u2026"),
+                             juce::dontSendNotification);
+        statusLabel_.setColour(juce::Label::textColourId,
+                               juce::Colour(0xfff9e596));
+        return;
+    }
+
+    // L6: ASCII glyph prefix gives shape redundancy beyond colour (colorblind-safe).
+    statusLabel_.setText(running ? "[*] AI Ready" : "[ ] AI Offline",
                          juce::dontSendNotification);
     statusLabel_.setColour(juce::Label::textColourId,
                            running ? juce::Colour(0xff34d399)  // green
@@ -77,10 +133,23 @@ void AIStatusPanel::buttonClicked(juce::Button* b)
 
     if (b == &toggleBtn_)
     {
+        if (pendingStart_ || pendingStop_)
+            return;  // debounce during transition (H5)
+
         if (mcp.isRunning())
+        {
+            pendingStop_ = true;
+            transitionStartMs_ = juce::Time::currentTimeMillis();
+            toggleBtn_.setEnabled(false);
             mcp.stopServer();
+        }
         else
+        {
+            pendingStart_ = true;
+            transitionStartMs_ = juce::Time::currentTimeMillis();
+            toggleBtn_.setEnabled(false);
             mcp.startServer(30001);
+        }
     }
     else if (b == &copyTokenBtn_)
     {

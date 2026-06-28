@@ -20,6 +20,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void visibilityChanged() override;
 
     // Intercept mouse events to prevent clicking components behind the overlay
     void mouseDown(const juce::MouseEvent& event) override { (void)event; }

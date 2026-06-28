@@ -709,6 +709,10 @@ private:
     // in prepareToPlay alongside the other scratch buffers — no audio-thread
     // allocation.
     juce::AudioBuffer<float> dryBuffer_;
+    // M-2 FIX: scratch gain arrays for the SIMD bypass crossfade.
+    // Resized in applyOutputGainAndMetering (analysis thread — not audio-critical).
+    std::vector<float> wetGainScratch_;
+    std::vector<float> dryGainScratch_;
     std::array<float*, OversamplingWrapper::kMaxChannels> osParamPtrs_{};
     std::array<float*, OversamplingWrapper::kMaxChannels> osBPtrs_{};
     // C-P3 FIX: Re-used MIDI buffer — retains capacity across clear() calls
@@ -733,6 +737,21 @@ private:
     int prevMorphSource_ = -1;
     int morphStableBlocks_ = 0;
     static constexpr int MORPH_STABLE_THRESHOLD = 2; // Skip after N identical blocks
+
+    // H-1 FIX: cached block-start timestamp (wall-clock ms). Computed once at the
+    // top of processBlock() from juce::Time::getMillisecondCounter() and passed to
+    // ParameterBridge's now-taking overloads — avoids repeated kernel syscalls on
+    // the audio thread. Relaxed ordering: only consumed within the same block
+    // invocation (no cross-thread sync needed).
+    std::atomic<juce::uint32> blockTimestampMs_{0};
+
+    // L-2 FIX: hosted-plugin wall-clock watchdog. Counts the number of blocks
+    // where hostManager.processBlock() took longer than a configurable threshold
+    // (default 10 ms — half a 128-sample block at 44.1 kHz). The MCP diagnostic
+    // tools can read this counter to flag plugins that exceed the real-time
+    // budget. Saturates at UINT64_MAX to avoid wrap-around.
+    std::atomic<uint64_t> hostedPluginOverrunCount_{0};
+    static constexpr int kHostedPluginOverrunThresholdMs = 10;
 
     // TEMPORARY: morph-health diagnostic probe tick counter (JUCE_DEBUG only).
     // See the probe block at the top of timerCallback(). Remove with the probe.
@@ -798,13 +817,14 @@ private:
 	    int drainParameterCommandQueue(int cachedParamCount,
 	                                   int maxCommands,
 	                                   juce::AudioPluginInstance* exclusivePlugin = nullptr,
-	                                   int* outOfRangeCount = nullptr) noexcept;
+	                                   int* outOfRangeCount = nullptr,
+	                                   juce::uint32 now = 0) noexcept;
 #if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
-	private:
+		private:
 #endif
-	    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands) noexcept;
+		    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands, juce::uint32 now) noexcept;
     void processMIDIAndSidechain(juce::MidiBuffer& midi, juce::AudioBuffer<float>& buffer) noexcept;
-    void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters) noexcept;
+    void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters, juce::uint32 now) noexcept;
     void applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer, bool isBypassed) noexcept;
     void requestFullStateRecallFromAudioThread(int slot) noexcept;
     // Named capacity constant (avoids magic number in queue declaration).

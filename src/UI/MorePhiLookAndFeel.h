@@ -22,10 +22,10 @@ public:
     static constexpr float kBaselineWidth = 920.0f;
 
     // Minimum font sizes — nothing goes below these, ever
-    static constexpr float kMinSectionLabel  = 9.0f;
+    static constexpr float kMinSectionLabel  = 10.0f;
     static constexpr float kMinControlLabel  = 10.0f;
-    static constexpr float kMinValueLabel    = 10.0f;
-    static constexpr float kMinSlotNumber    = 9.0f;
+    static constexpr float kMinValueLabel    = 11.0f;
+    static constexpr float kMinSlotNumber    = 10.0f;
     static constexpr float kMinModeLabel     = 10.0f;
 
     enum class FontRole
@@ -50,7 +50,7 @@ public:
     const juce::Colour accentCyanBright{0xff00e2ed};  // Cyan highlight
     const juce::Colour accentMagenta   {0xffe22edb};  // Secondary / bipolar negative
     const juce::Colour accentGreen     {0xff34d399};  // Status: online
-    const juce::Colour accentAmber     {0xfff9e596};  // Status: warning (warm gold)
+    const juce::Colour accentAmber     {0xffe8a040};  // Status: warning (distinct warm amber, was duplicate of goldBright)
 
     // Legacy aliases (kept so existing call sites compile) — remapped to brand.
     const juce::Colour accentCoral     {0xffe5c057};  // → gold (was Stitch coral)

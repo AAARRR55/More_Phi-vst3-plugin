@@ -110,7 +110,13 @@ void PluginHostManager::releasePluginFromUse() const noexcept
     {
         if (activePluginUsers_.compare_exchange_weak(expected, expected - 1,
                 std::memory_order_acq_rel, std::memory_order_acquire))
+        {
+            // L-1 FIX: signal the event when the last user releases, so
+            // beginExclusivePluginUse can wake immediately instead of polling.
+            if (expected == 1)  // was 1, now 0
+                usersZeroEvent_.signal();
             return;
+        }
         // expected refreshed by compare_exchange_weak on failure; loop.
     }
     // expected == 0 : underflow — nothing to release. Intentionally a no-op.
@@ -125,14 +131,20 @@ juce::AudioPluginInstance* PluginHostManager::beginExclusivePluginUse(int timeou
     const auto start = juce::Time::getMillisecondCounter();
     while (activePluginUsers_.load(std::memory_order_acquire) > 0)
     {
-        if (timeoutMs >= 0
-            && static_cast<int>(juce::Time::getMillisecondCounter() - start) >= timeoutMs)
+        const int elapsed = static_cast<int>(juce::Time::getMillisecondCounter() - start);
+        if (timeoutMs >= 0 && elapsed >= timeoutMs)
         {
             exclusivePluginUseRequested_.store(false, std::memory_order_release);
             return nullptr;
         }
 
-        juce::Thread::sleep(1);
+        // L-1 FIX: wait on the event instead of Thread::sleep(1). The event
+        // is signaled by releasePluginFromUse() when the count hits zero, so
+        // this wake-ups only when there's actually a state change, not every
+        // 1 ms. Remaining wait time is used as the timeout so we don't
+        // overshoot the caller's deadline.
+        const int waitRemaining = (timeoutMs >= 0) ? (timeoutMs - elapsed) : 100;
+        usersZeroEvent_.wait(std::max(waitRemaining, 1));
     }
 
     auto* plugin = hostedPluginPtr_.load(std::memory_order_acquire);

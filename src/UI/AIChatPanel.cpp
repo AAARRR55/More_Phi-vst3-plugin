@@ -258,9 +258,12 @@ AIChatPanel::AIChatPanel(MorePhiProcessor& processor)
     prompt_.setTextToShowWhenEmpty("Ask the assistant", juce::Colour(0xff8a93a3));
     prompt_.onReturnKey = [this]() { submitPrompt(); };
 
+    sendButton_.setTooltip("Send the prompt to the AI assistant (Enter).");
     sendButton_.onClick   = [this]() { submitPrompt(); };
+    cancelButton_.setTooltip("Cancel the current AI request in progress.");
     cancelButton_.onClick = [this]() { cancelChat(); };
     cancelButton_.setEnabled(false);
+    clearButton_.setTooltip("Clear conversation history, workflow state, and approval queue.");
     clearButton_.onClick = [this]()
     {
         transcript_.clearMessages();
@@ -949,7 +952,8 @@ void AIChatPanel::onChatReply(juce::String text, juce::String error, juce::Strin
 
     if (!error.isEmpty())
     {
-        transcript_.updateLastMessage("[Error] " + formatChatErrorForDisplay(error));
+        transcript_.replaceLastMessage(ChatDisplay::Role::Error,
+                                       formatChatErrorForDisplay(error));
         return;
     }
 

@@ -390,6 +390,47 @@ juce::String LLMChatClient::mcpToolsToAnthropicJson()
     }
 }
 
+// Gemini tool format: {"functionDeclarations": [{"name","description","parameters"}]}.
+// The wire shape we feed the request builder is a flat array of declaration
+// objects; buildGeminiRequestBody wraps it as {"functionDeclarations": [...]}.
+juce::String LLMChatClient::mcpToolsToGeminiJson()
+{
+    try
+    {
+        const auto toolListStr = MCPToolHandler::getToolList();
+        const auto root = json::parse(toolListStr.toRawUTF8());
+        if (!root.contains("tools") || !root["tools"].is_array())
+            return "[]";
+
+        json geminiDecls = json::array();
+        const auto& mappings = getCachedChatToolNameMap();
+        for (const auto& tool : root["tools"])
+        {
+            const auto name = tool.value("name", "");
+            const auto mapping = std::find_if(mappings.begin(), mappings.end(), [&](const ToolNameMapping& candidate) {
+                return candidate.originalName == name;
+            });
+            if (mapping == mappings.end())
+                continue;
+
+            const auto description = tool.value("description", "");
+            const auto inputSchema = tool.contains("inputSchema") ? tool["inputSchema"]
+                                                                    : json{{"type", "object"},
+                                                                            {"properties", json::object()}};
+            geminiDecls.push_back({
+                {"name", mapping->apiName},
+                {"description", description},
+                {"parameters", inputSchema}
+            });
+        }
+        return juce::String::fromUTF8(geminiDecls.dump().c_str());
+    }
+    catch (...)
+    {
+        return "[]";
+    }
+}
+
 juce::String LLMChatClient::resolveToolNameForTest(const juce::String& apiToolName)
 {
     return juce::String::fromUTF8(resolveApiToolNameToMcpName(std::string(apiToolName.toRawUTF8())).c_str());
@@ -415,6 +456,25 @@ juce::String LLMChatClient::systemPromptForTest()
 juce::String LLMChatClient::parseOpenAIResponseForTest(int statusCode, const juce::String& body)
 {
     const auto parsed = parseOpenAIResponse(statusCode, body);
+    json result;
+    result["text"] = std::string(parsed.textContent.toRawUTF8());
+    result["error"] = std::string(parsed.errorMessage.toRawUTF8());
+    json tcs = json::array();
+    for (const auto& tc : parsed.toolCalls)
+    {
+        tcs.push_back({
+            {"id",   std::string(tc.id.toRawUTF8())},
+            {"name", std::string(tc.name.toRawUTF8())},
+            {"arguments", std::string(tc.argumentsJson.toRawUTF8())}
+        });
+    }
+    result["tool_calls"] = tcs;
+    return juce::String::fromUTF8(result.dump().c_str());
+}
+
+juce::String LLMChatClient::parseGeminiResponseForTest(int statusCode, const juce::String& body)
+{
+    const auto parsed = parseGeminiResponse(statusCode, body);
     json result;
     result["text"] = std::string(parsed.textContent.toRawUTF8());
     result["error"] = std::string(parsed.errorMessage.toRawUTF8());
@@ -561,6 +621,9 @@ juce::String LLMChatClient::authHeadersFor(LLMProviderId id, const juce::String&
         return "x-api-key: " + apiKey
                + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\n";
 
+    if (id == LLMProviderId::Gemini)
+        return "x-goog-api-key: " + apiKey + "\r\ncontent-type: application/json\r\n";
+
     return "Authorization: Bearer " + apiKey + "\r\ncontent-type: application/json\r\n";
 }
 
@@ -569,7 +632,14 @@ LLMHttpRequest LLMChatClient::buildHttpRequest(LLMProviderId id,
                                                 const juce::String& body)
 {
     const auto base    = baseUrlFor(id, ps);
-    const auto path    = (id == LLMProviderId::Anthropic) ? "/v1/messages" : "/chat/completions";
+    juce::String path;
+    if (id == LLMProviderId::Gemini)
+        path = "/models/" + ps.selectedModel.trim() + ":generateContent";
+    else if (id == LLMProviderId::Anthropic)
+        path = "/v1/messages";
+    else
+        path = "/chat/completions";
+
     const auto headers = authHeadersFor(id, ps.apiKey.trim());
     const int  timeout = (id == LLMProviderId::NVIDIA) ? kTimeoutMsNvidia : kTimeoutMs;
     return {LLMHttpMethod::Post, base + path, headers, body, timeout};
@@ -639,6 +709,132 @@ juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings&
 
         if (!toolsArray.empty())
             body["tools"] = toolsArray;
+
+        return juce::String::fromUTF8(body.dump().c_str());
+    }
+    catch (...)
+    {
+        return "{}";
+    }
+}
+
+// Gemini request builder. Translates the OpenAI-style message history kept by
+// the agent loop into Gemini's {"contents":[{role,parts}]} + systemInstruction
+// shape. Tool results from prior turns become a "user" turn whose parts hold
+// {"functionResponse":{name,response}} objects; assistant tool calls become a
+// "model" turn whose parts hold {"functionCall":{name,args}} objects. The model
+// field does NOT go in the body — buildHttpRequest puts it in the URL path.
+//
+// The OpenAI "tool" role carries only tool_call_id (not the function name), so
+// we maintain an id→apiName map by scanning prior assistant tool_calls as we go.
+juce::String LLMChatClient::buildGeminiRequestBody(const LLMProviderSettings& /*ps*/,
+                                                    const juce::String& /*model*/,
+                                                    const std::string& messagesJson,
+                                                    const nlohmann::json& toolsArray)
+{
+    try
+    {
+        const auto messages = json::parse(messagesJson);
+        std::string systemText;
+        json contents = json::array();
+        std::map<std::string, std::string> toolCallIdToName; // id -> apiName
+
+        for (std::size_t i = 0; i < messages.size(); ++i)
+        {
+            const auto& msg = messages[i];
+            const auto role = msg.value("role", "");
+
+            if (role == "system")
+            {
+                if (msg.contains("content") && msg["content"].is_string())
+                {
+                    if (!systemText.empty()) systemText += "\n";
+                    systemText += msg["content"].get<std::string>();
+                }
+            }
+            else if (role == "user")
+            {
+                json parts = json::array();
+                if (msg.contains("content") && msg["content"].is_string())
+                    parts.push_back({{"text", msg["content"].get<std::string>()}});
+                if (!parts.empty())
+                    contents.push_back({{"role", "user"}, {"parts", parts}});
+            }
+            else if (role == "assistant")
+            {
+                json parts = json::array();
+                if (msg.contains("content") && msg["content"].is_string()
+                    && !msg["content"].get<std::string>().empty())
+                {
+                    parts.push_back({{"text", msg["content"].get<std::string>()}});
+                }
+                if (msg.contains("tool_calls") && msg["tool_calls"].is_array())
+                {
+                    for (const auto& tc : msg["tool_calls"])
+                    {
+                        const auto funcName = tc.contains("function") ? tc["function"].value("name", std::string{}) : std::string{};
+                        const auto callId = tc.value("id", std::string{});
+                        if (!callId.empty() && !funcName.empty())
+                            toolCallIdToName[callId] = funcName;
+
+                        json args = json::object();
+                        if (tc.contains("function") && tc["function"].contains("arguments"))
+                        {
+                            const auto argStr = tc["function"].value("arguments", std::string{});
+                            if (!argStr.empty())
+                            {
+                                try { args = json::parse(argStr); }
+                                catch (...) { args = json::object(); }
+                            }
+                        }
+                        parts.push_back({
+                            {"functionCall", {{"name", funcName}, {"args", args}}}
+                        });
+                    }
+                }
+                if (!parts.empty())
+                    contents.push_back({{"role", "model"}, {"parts", parts}});
+            }
+            else if (role == "tool")
+            {
+                json parts = json::array();
+                while (i < messages.size() && messages[i].value("role", "") == "tool")
+                {
+                    const auto& t = messages[i];
+                    const auto callId = t.value("tool_call_id", std::string{});
+                    const auto nameIt = toolCallIdToName.find(callId);
+                    const auto funcName = (nameIt != toolCallIdToName.end()) ? nameIt->second : std::string{"unknown"};
+
+                    json responseContent = json::object();
+                    if (t.contains("content") && t["content"].is_string())
+                    {
+                        try { responseContent = json::parse(t["content"].get<std::string>()); }
+                        catch (...) { responseContent = {{"result", t["content"].get<std::string>()}}; }
+                    }
+                    parts.push_back({
+                        {"functionResponse",
+                         {{"name",     funcName},
+                          {"response", responseContent}}}
+                    });
+                    ++i;
+                }
+                --i; // outer loop's ++i
+                if (!parts.empty())
+                    contents.push_back({{"role", "user"}, {"parts", parts}});
+            }
+        }
+
+        json body;
+        body["contents"] = contents;
+        if (!systemText.empty())
+            body["systemInstruction"] = {{"parts", json::array({{{"text", systemText}}})}};
+        body["generationConfig"] = {{"maxOutputTokens", kMaxTokens}};
+
+        if (!toolsArray.empty() && toolsArray.is_array())
+        {
+            json toolWrapper = {{"functionDeclarations", toolsArray}};
+            body["tools"] = json::array({toolWrapper});
+        }
 
         return juce::String::fromUTF8(body.dump().c_str());
     }
@@ -880,6 +1076,86 @@ LLMChatClient::parseAnthropicResponse(int statusCode, const juce::String& body)
     catch (const std::exception& e)
     {
         return {{}, {}, "Failed to parse Anthropic response: " + juce::String(e.what())};
+    }
+}
+
+LLMChatClient::ParsedResponse
+LLMChatClient::parseGeminiResponse(int statusCode, const juce::String& body)
+{
+    if (statusCode == 401 || statusCode == 403)
+        return {{}, {}, "Authentication failed. Check your API key in LLM Settings."};
+    if (statusCode <= 0)
+        return {{}, {}, body.isNotEmpty() ? body : "Network timeout or connection refused."};
+    if (statusCode < 200 || statusCode >= 300)
+    {
+        juce::String detail;
+        try
+        {
+            const auto root = json::parse(body.toRawUTF8());
+            if (root.contains("error") && root["error"].is_object())
+                detail = juce::String::fromUTF8(root["error"].value("message", "").c_str());
+        }
+        catch (...) {}
+        return {{}, {}, "LLM request failed (HTTP " + juce::String(statusCode) + ")"
+                             + (detail.isEmpty() ? "" : ": " + detail)};
+    }
+
+    try
+    {
+        const auto root = json::parse(body.toRawUTF8());
+        if (!root.contains("candidates") || !root["candidates"].is_array()
+            || root["candidates"].empty())
+        {
+            return {{}, {}, "No candidates in Gemini response."};
+        }
+
+        const auto& candidate = root["candidates"].front();
+        juce::String textContent;
+        std::vector<ToolCall> toolCalls;
+
+        if (candidate.contains("content") && candidate["content"].contains("parts")
+            && candidate["content"]["parts"].is_array())
+        {
+            for (const auto& part : candidate["content"]["parts"])
+            {
+                if (!part.is_object()) continue;
+                if (part.contains("text") && part["text"].is_string())
+                    textContent += juce::String(part["text"].get<std::string>());
+                else if (part.contains("functionCall") && part["functionCall"].is_object())
+                {
+                    const auto& fc = part["functionCall"];
+                    ToolCall call;
+                    call.name = juce::String(fc.value("name", ""));
+                    if (fc.contains("args") && !fc["args"].is_null())
+                        call.argumentsJson = juce::String(fc["args"].dump());
+                    else
+                        call.argumentsJson = "{}";
+                    // Gemini does not return a call id; synthesize a stable one
+                    // so the agent loop's tool_call_id bookkeeping stays unique.
+                    call.id = "gemini_tc_" + juce::String(toolCalls.size());
+                    if (!call.name.isEmpty())
+                        toolCalls.push_back(std::move(call));
+                }
+            }
+        }
+
+        if (toolCalls.empty() && textContent.trim().isEmpty())
+        {
+            const juce::String finishReason = candidate.value("finishReason", "");
+            if (finishReason == "MAX_TOKENS" || finishReason == "RECITATION")
+            {
+                return {{}, {}, "Response truncated: the model exhausted its token budget or "
+                                 "hit a safety filter (finishReason=" + finishReason +
+                                 "). Increase maxOutputTokens in LLM settings or rephrase the prompt."};
+            }
+            return {{}, {}, "The model returned no visible content and no tool calls."};
+        }
+
+        return {textContent, std::move(toolCalls), {}};
+    }
+    catch (const std::exception& e)
+    {
+        return {{}, {}, "Failed to parse Gemini response: " + juce::String(e.what())};
     }
 }
 
@@ -1134,7 +1410,19 @@ void LLMChatClient::chat(const LLMSettings& settings,
     }
 
     const auto providerId      = *settings.activeProvider;
-    const auto providerSettings = settings.getProvider(providerId);
+    auto providerSettings = settings.getProvider(providerId);
+
+    // COW-CORRUPT fix (2026-06-27): getProvider() returns a copy, but the
+    // juce::String apiKey inside it shares its heap buffer with the caller's
+    // settings (copy-on-write). Before this struct is captured into the
+    // background thread (where zeroizeApiKey() will memset it), force a real
+    // detach so the captured copy owns a private buffer. This prevents the
+    // background zeroization from wiping the caller's in-memory API key
+    // (the "LLM provider API key removes itself after a chat" bug).
+    providerSettings.apiKey = juce::String::fromUTF8(
+        providerSettings.apiKey.toRawUTF8(),
+        static_cast<int>(providerSettings.apiKey.getNumBytesAsUTF8()));
+
     const auto model            = providerSettings.selectedModel.trim();
 
     if (providerSettings.apiKey.trim().isEmpty())
@@ -1155,7 +1443,10 @@ void LLMChatClient::chat(const LLMSettings& settings,
     }
 
     const bool isAnthropic  = (providerId == LLMProviderId::Anthropic);
-    const juce::String toolsStr = isAnthropic ? mcpToolsToAnthropicJson() : mcpToolsToOpenAIJson();
+    const bool isGemini     = (providerId == LLMProviderId::Gemini);
+    const juce::String toolsStr = isAnthropic ? mcpToolsToAnthropicJson()
+                                  : isGemini  ? mcpToolsToGeminiJson()
+                                              : mcpToolsToOpenAIJson();
     json toolsArray;
     try { toolsArray = filterToolsForChat(json::parse(toolsStr.toRawUTF8()), isAnthropic); }
     catch (...) { toolsArray = json::array(); }
@@ -1172,6 +1463,7 @@ void LLMChatClient::chat(const LLMSettings& settings,
                  userMessage,
                  toolsArray,
                  isAnthropic,
+                 isGemini,
                  callback,
                  progress, this]() mutable
     {
@@ -1236,7 +1528,9 @@ void LLMChatClient::chat(const LLMSettings& settings,
                 const juce::String body =
                     isAnthropic
                         ? buildAnthropicRequestBody(providerSettings, model, messagesStr, toolsForRequest)
-                        : buildOpenAIRequestBody   (providerSettings, model, messagesStr, toolsForRequest);
+                        : isGemini
+                            ? buildGeminiRequestBody(providerSettings, model, messagesStr, toolsForRequest)
+                            : buildOpenAIRequestBody   (providerSettings, model, messagesStr, toolsForRequest);
 
                 if (body == "{}")
                 {
@@ -1274,7 +1568,9 @@ void LLMChatClient::chat(const LLMSettings& settings,
 
                 parsed = isAnthropic
                              ? parseAnthropicResponse(response.statusCode, response.body)
-                             : parseOpenAIResponse(response.statusCode, response.body);
+                             : isGemini
+                                 ? parseGeminiResponse(response.statusCode, response.body)
+                                 : parseOpenAIResponse(response.statusCode, response.body);
 
                 // Hard error (auth, HTTP 4xx/5xx, malformed body) — never retry.
                 // Detected by an error message that is NOT the empty-200 phrase.
@@ -1424,6 +1720,17 @@ void LLMChatClient::chat(const LLMSettings& settings,
         }
 
         if (!*alive) return;
+
+        // SECURITY: Zeroize the API key in this captured copy now that all
+        // HTTP requests are complete. (Finding #4: memory zeroization.)
+        // NOTE (COW-CORRUPT fix, 2026-06-27): providerSettings was captured by
+        // value, but juce::String is copy-on-write, so the captured apiKey
+        // SHARED its buffer with the caller's LLMSettings until a write detaches
+        // it. zeroizeApiKey() now forces a real detach before memset, so this
+        // wipe only ever touches our private copy — it can no longer zero out
+        // the panel's in-memory llmSettings_ (the "API key removes itself" bug).
+        providerSettings.zeroizeApiKey();
+
         const juce::String updatedHistory = juce::String::fromUTF8(messages.dump().c_str());
 
         // ── Post result to message thread ───────────────────────────────

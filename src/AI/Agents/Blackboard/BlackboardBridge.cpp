@@ -26,11 +26,15 @@ juce::String BlackboardBridge::publish(const juce::String& source,
 
 void BlackboardBridge::subscribe(const juce::String& agentId,
                                  const std::vector<juce::String>& eventTypes,
-                                 Callback callback)
+                                 RawCallback callback)
 {
+    // H-3 FIX: Wrap in shared_ptr to avoid copying the std::function on poll
+    // (from subscribers_ into the local matches vector). The shared_ptr copy
+    // is a single atomic ref-count increment, not a deep copy of the lambda.
+    auto shared = std::make_shared<RawCallback>(std::move(callback));
     std::lock_guard<std::mutex> lock(subscribersMutex_);
     for (const auto& t : eventTypes)
-        subscribers_[t.toStdString()].push_back({ agentId.toStdString(), std::move(callback) });
+        subscribers_[t.toStdString()].push_back({ agentId.toStdString(), std::move(shared) });
 }
 
 void BlackboardBridge::unsubscribe(const juce::String& agentId)
@@ -146,17 +150,22 @@ void BlackboardBridge::poll()
         const juce::String source = juce::String(ev.value("source", std::string{}));
         const nlohmann::json payload = ev.value("payload", nlohmann::json::object());
 
+        // H-3 FIX: Copy shared_ptrs (cheap — single ref-count inc each) instead
+        // of deep-copying the std::function objects. Invoke through the shared_ptr.
         std::vector<std::pair<std::string, Callback>> matches;
         {
             std::lock_guard<std::mutex> lock(subscribersMutex_);
             auto it = subscribers_.find(type.toStdString());
             if (it != subscribers_.end())
-                matches = it->second;  // copy under lock
+                matches = it->second;
         }
-        for (const auto& [agentId, cb] : matches)
+        for (const auto& [agentId, sharedCb] : matches)
         {
-            try { cb(type, payload, source); }
-            catch (...) { /* a subscriber fault must not break the pump */ }
+            if (sharedCb && *sharedCb)
+            {
+                try { (*sharedCb)(type, payload, source); }
+                catch (...) {}
+            }
         }
 
         // Advance the cursor past this event. We read the field defensively;

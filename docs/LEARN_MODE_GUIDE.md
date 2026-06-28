@@ -1,6 +1,6 @@
 # More-Phi Learn Mode - Implementation Guide
 
-> **Version**: 3.3.0  
+> **Version**: 3.4.1  
 > **Feature**: AI Parameter Exposure Control & Token Optimization  
 > **Related**: Multi-Agent Orchestration (`docs/ECOSYSTEM.md`) — the orchestration layer uses Learn Mode's `ParameterClassifier` and `TokenOptimizer` to determine which parameters each agent can safely access and modify.
 
@@ -175,7 +175,7 @@ comparison.suggestions;             // Human-readable advice
 
 ## MCP Tools Reference
 
-### Extended Tools (New in 3.3.0)
+### Extended Tools (New in 3.4.0+)
 
 | Tool | Purpose | Video Reference |
 |------|---------|-----------------|

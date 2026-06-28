@@ -29,11 +29,12 @@ OnboardingOverlay::OnboardingOverlay(MorePhiProcessor& proc) : proc_(proc)
         },
         {
             "Physics Modes & Smoothing",
-            "Choose a physics mode in the Mode bar:\n"
-            "\u2022 Direct — cursor drives morph instantly\n"
-            "\u2022 Elastic — spring physics with momentum\n"
-            "\u2022 Drift — Perlin-noise wandering\n\n"
-            "The Smoothing slider blends between morph positions for gliding transitions.",
+            juce::CharPointer_UTF8(
+                "Choose a physics mode in the Mode bar:\n"
+                "\u2022 Direct \u2014 cursor drives morph instantly\n"
+                "\u2022 Elastic \u2014 spring physics with momentum\n"
+                "\u2022 Drift \u2014 Perlin-noise wandering\n\n"
+                "The Smoothing slider blends between morph positions for gliding transitions."),
             {}
         },
         {
@@ -70,6 +71,9 @@ OnboardingOverlay::OnboardingOverlay(MorePhiProcessor& proc) : proc_(proc)
     addAndMakeVisible(stepCounter_);
 
     showStep(0);
+
+    // Auto-focus the Next button when the onboarding overlay appears
+    nextBtn_.grabKeyboardFocus();
 }
 
 void OnboardingOverlay::paint(juce::Graphics& g)

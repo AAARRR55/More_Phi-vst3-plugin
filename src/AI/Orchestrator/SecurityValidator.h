@@ -54,15 +54,6 @@ public:
     bool validateRequestJson(const nlohmann::json& j, juce::String& outError);
 
     /**
-     * Constant-time bearer token comparison.
-     *
-     * Uses bitwise XOR accumulation to avoid timing side-channels.
-     * Length mismatch is an immediate rejection (leaks only length info).
-     */
-    bool validateAuthToken(const juce::String& token,
-                           const juce::String& expectedToken) const;
-
-    /**
      * Per-client sliding-window rate limiting.
      *
      * Tracks request timestamps per clientId. Returns false if the client

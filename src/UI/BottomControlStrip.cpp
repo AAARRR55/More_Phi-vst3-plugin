@@ -243,7 +243,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
     g.drawText("SAFETY", 10, 3, divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 12, juce::Justification::centredLeft);
-    g.drawText("SIDE", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
+        g.drawText("SIDECHAIN", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
 }
 
 void BottomControlStrip::resized()

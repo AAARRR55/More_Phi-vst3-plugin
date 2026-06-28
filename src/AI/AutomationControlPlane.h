@@ -4,7 +4,6 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -311,7 +310,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<AutomationTransaction> transactions_;
 };
 
@@ -339,7 +338,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     AutonomyLevel autonomyLevel_ = AutonomyLevel::Assist;
     std::vector<ApprovalRequest> approvals_;
 };
@@ -364,7 +363,7 @@ public:
 
 private:
     size_t capacity_ = 256;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<IntegrationEvent> events_;
     uint64_t revision_ = 0;
     uint64_t sequenceCounter_ = 0;   // gap-free; advanced under mutex_ in publish()
@@ -395,7 +394,7 @@ private:
     juce::File directory_;
     juce::File file_;
 
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<WorkflowRun> runs_;
 };
 
@@ -429,7 +428,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<MemoryRecord> records_;
 };
 

@@ -100,7 +100,7 @@ Local microbenchmark gates pass in the Release benchmark executable (`build/wind
 | **Core Math RT Load (48kHz/256)** | PhysicsEngine + InterpolationEngine only | **0.00699% simulated** | **< 2%** |
 | **Core Math RT Load (44.1kHz/64)** | PhysicsEngine + InterpolationEngine only | **0.0207% simulated** | **< 2%** |
 
-**Memory Footprint Note**: The memory estimate sums `sizeof(SnapshotBank)` inline members plus heap-allocated slot data (12 slots × 2048-float `ParameterState`) plus morph/smoothing buffers. It excludes JUCE overhead, hosted plugin memory, MCP server, modulation matrix, and audio-domain/mastering engine allocations. Runtime heap profiling is a separate release gate.
+**Memory Footprint Note**: The memory estimate sums `sizeof(SnapshotBank)` inline members plus heap-allocated slot data (12 slots × 4096-float `ParameterState`) plus morph/smoothing buffers. It excludes JUCE overhead, hosted plugin memory, MCP server, modulation matrix, and audio-domain/mastering engine allocations. Runtime heap profiling is a separate release gate.
 
 **Core Math RT Load Note**: These percentages measure only `PhysicsEngine::updateElastic()` + `InterpolationEngine::compute2D()` per audio buffer. The full `processBlock()` pipeline includes MIDI routing, snapshot bank, morph processor, modulation, audio-domain engines, mastering chain, and hosted plugin processing. Full-plugin CPU load requires DAW-hosted profiling.
 
@@ -110,17 +110,17 @@ External DAW profiling, `pluginval`, and Steinberg `vst3_validator` remain separ
 
 ## Test Coverage
 
-Current `build/windows-msvc-release` CTest discovery lists 492+ tests. All tests pass successfully.
+Current CTest discovery lists 95+ test cases across the full suite (exact count varies by build configuration and platform). All tests pass successfully.
 
 ### Test Matrix Summary
 | Scope | Result |
 |-------|--------|
-| Full current Release CTest suite | 492/492 passed |
-| Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | 40/40 passed |
-| Dataset-filtered integration/schema tests | 8/8 passed |
-| Release benchmark executable gates | 9/9 passed |
+| Full CTest suite (Release) | All passed |
+| Latency, metering, spectrum, stereo field, LUFS, true peak, and analysis metadata | All passed |
+| Dataset-filtered integration/schema tests | All passed |
+| Release benchmark executable gates | All passed |
 
-### Core DSP and Thread-Safety Regression Tests (v3.3.0)
+### Core DSP and Thread-Safety Regression Tests (v3.4.0+)
 The hardening sprint added three key regression test categories to verify DSP correctness and audio thread safety under the `[production]` tag:
 
 1. **Discrete Parameter Step Snapping (`[discrete][production]`):**
@@ -135,12 +135,12 @@ The hardening sprint added three key regression test categories to verify DSP co
    - **Target:** `SpectralMorphEngine`
    - **Assertion:** Verifies that transient detection is channel-coherent. Validates that modified morph alphas calculated on channel 0 are successfully cached and shared with channel 1, preventing stereo field collapse or asymmetric channel offsets.
 
-### Multi-Agent Orchestration Tests (v3.3.0)
+### Multi-Agent Orchestration Tests (v3.4.0+)
 Four new test suites verify the AgentOrchestrator, MCP protocol, ecosystem configuration, and security validation:
 
 1. **TestAgentOrchestrator (`[ai][orchestrator]`):** 5 test cases
    - **Target:** `AgentOrchestrator::start()`, `stop()`, `submitGoal()`, agent lifecycle
-   - **Assertion:** Validates that all six agents initialize, register, and teardown cleanly without blocking the audio thread.
+   - **Assertion:** Validates that all seven agents (Conductor + 6 specialists) initialize, register, and teardown cleanly without blocking the audio thread.
 
 2. **TestMcpProtocol (`[ai][mcp][protocol]`):** 11 test cases
    - **Target:** `McpProtocol::send()`, `receive()`, `handleRequest()`, JSON-RPC 2.0 framing
@@ -206,86 +206,88 @@ External VST3-validator and DAW-host results should be attached as separate rele
 
 ## 6. Multi-Agent Orchestration
 
-**Purpose:** Coordinates six specialized AI agents for autonomous plugin management, real-time audio control, creative exploration, and cross-instance ecosystem collaboration.
+**Purpose:** Coordinates seven specialized AI agents for autonomous plugin management, real-time audio control, creative exploration, and safety verification.
 
 ### Location
-`src/AI/Orchestrator/`
+`src/AI/Agents/` — Runtime, Registry, Scheduler, and agent implementations.
 
-### The 6 Agents
+### The 7 Agents
 
 | Agent | Role | Responsibility |
 |-------|------|----------------|
-| **RealtimeControl** | Safety & dynamics | Monitors audio levels (clipping, LUFS, true peak) and applies corrective parameter adjustments in real time. |
-| **Creative** | Exploration | Generates novel snapshot combinations and suggests morph trajectories using the genetic engine. Requires user approval before applying changes. |
-| **MIDI** | Routing intelligence | Optimizes MIDI routing, note-to-snapshot mappings, and CC-to-parameter assignments based on learned patterns. |
-| **Preset** | Memory management | Manages meta-preset organization, auto-tagging, and intelligent recall sequencing. |
-| **System** | Health monitoring | Watches plugin health, resource usage, and subsystem integrity. Reports anomalies and recommends maintenance. |
-| **Collaboration** | Ecosystem sync | Interfaces with the MCP server to enable inter-plugin communication and shared morph spaces across instances. |
+| **Conductor** | Goal decomposition | The ONLY agent that may delegate follow-ups. Uses an `ILlmClient` (either `RestLlmClient` when a provider API key is configured, or `DeterministicFallbackLlmClient` as the offline heuristic). |
+| **Analysis** | Audio analysis | Analyzes spectral content, LUFS, dynamics, and other measurable audio characteristics. |
+| **Optimization** | Parameter optimization | Searches for optimal parameter combinations (e.g., `mastering.render_batch` candidates scored by `lufs_error`). |
+| **Creative** | Exploration | Generates novel snapshot combinations and suggests morph trajectories. |
+| **RealtimeControl** | Safety & dynamics | Monitors audio levels (clipping, LUFS, true peak) and applies corrective parameter adjustments in real time through `LockFreeQueue`. |
+| **QualitySafety** | Quality & safety | Validates audio quality and safety constraints on agent-driven changes. |
+| **Memory** | Long-term context | Manages cross-session memory and agent interaction history. |
 
-### APVTS Parameters
+### Infrastructure
 
-| ID | Type | Default | Description |
-|----|------|---------|-------------|
-| `agentOrchestratorEnabled` | Bool | `false` | Master toggle enabling the multi-agent system |
-| `agentRealtimeControl` | Bool | `true` | Enable RealtimeControl agent |
-| `agentCreative` | Bool | `true` | Enable Creative agent |
-| `agentMIDI` | Bool | `true` | Enable MIDI agent |
-| `agentPreset` | Bool | `true` | Enable Preset agent |
-| `agentSystem` | Bool | `true` | Enable System agent |
-| `agentCollaboration` | Bool | `true` | Enable Collaboration agent |
-| `aiGoalInput` | Text | `""` | User-submitted goal description for AI processing |
+| Component | Role |
+|-----------|------|
+| `AgentRuntime` | Container: registers agents, owns 2-worker pool, manages blackboard event fan-out |
+| `AgentRegistry` | Agent lookup and lifecycle management |
+| `PriorityScheduler` | 4-level multi-queue with O(1) push/pop/starvation-promotion (1000ms guard). 2 worker threads execute agent tasks (sync only — never on audio thread). |
+| `BlackboardBridge` | Typed pub/sub integrated over `IntegrationEventBus`; a pump thread (50ms interval) drains + fans out to agent subscribers |
+| `DefaultToolInvoker` | Wraps `MCPToolHandler::handle`; enforces per-agent capability scope (fail-closed) + rate budget + attribution |
+| `ConductorAgent` | Goal decomposition via `WorkflowOrchestrator` + `ILlmClient`. The only agent that may delegate `followUp` tasks. |
+| `StructuredAgentLogger` | JSONL file logging with in-memory ring fallback |
 
-### Configuration Options
+### LLM Transport
 
-`EcosystemConfig` provides per-instance configuration:
+The agent layer supports two LLM strategies:
 
-```cpp
-struct EcosystemConfig {
-    bool mcpEnabled = true;          // Enable MCP server integration
-    int mcpBasePort = 30001;          // Starting port for MCP server (auto-increments per instance)
-    int maxAgents = 6;                // Maximum concurrent agents
-    bool requireApproval = true;      // Creative agent changes require manual approval
-    float clippingThreshold = -0.1f; // dBFS threshold for RealtimeControl intervention
-    bool quarantineMode = false;     // Isolate experimental agents from production audio path
-};
-```
+| Strategy | When Used | Transport |
+|----------|-----------|-----------|
+| `RestLlmClient` | Provider API key is **configured** (non-empty key + model selected) in LLM settings | OpenAI/Anthropic/OpenAI-compatible REST API |
+| `DeterministicFallbackLlmClient` | No provider API key is configured | Offline heuristic: Analysis→Memory→Optimization path with warm/bright/sparkle keyword flags |
+
+**Note:** Selection gates on *configured*, not *validated* — a live `LLMConnectionValidator::testConnectionAsync` round-trip is not performed at startup (it would risk stalling MCP server init on a network call). A configured-but-invalid key wires `RestLlmClient` and fails lazily on the first `complete()`.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    AgentOrchestrator                     │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-│  │Realtime  │ │ Creative │ │  MIDI    │ │ Preset   │   │
-│  │ Control  │ │  Agent   │ │  Agent   │ │ Agent    │   │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘   │
-│  ┌────┴──────────┴──────────┴──────────┴──────────┐      │
-│  │           SecurityValidator                     │      │
-│  └────────────────────┬──────────────────────────┘      │
-│                       │                                   │
-│  ┌────────────────────┴──────────────────────────┐      │
-│  │              McpProtocol                      │      │
-│  │     (JSON-RPC 2.0 / localhost)              │      │
-│  └─────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────┘
+│                    AgentRuntime                          │
+│  │ BlackboardBridge (50ms pump)                        │
+│  └──────────┬──────────────────────────────────────────┘
+│             │ event fan-out
+│  ┌──────────▼──────────────────────────────────────────┐
+│  │            PriorityScheduler (2 workers)             │
+│  │   4 queues: RealtimeCritical > Interactive >        │
+│  │              Normal > Background                    │
+│  └──────────┬──────────────────────────────────────────┘
+│             │ task dispatch
+│  ┌──────────▼──────────────────────────────────────────┐
+│  │     Conductor  Analysis  Optimization  Creative      │
+│  │     Realtime  QualitySafety  Memory                  │
+│  └──────────┬──────────────────────────────────────────┘
+│             │ tool calls via DefaultToolInvoker
+│  ┌──────────▼──────────────────────────────────────────┐
+│  │              MCPToolHandler::handle                  │
+│  │         (permission + rate-limit + attribution)      │
+│  └──────────┬──────────────────────────────────────────┘
+│             │ enqueue param changes
+│  ┌──────────▼──────────────────────────────────────────┐
+│  │              LockFreeQueue → Audio Thread            │
+│  └─────────────────────────────────────────────────────┘
 ```
 
+### MCP Surface (7 tools)
+
+`agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy` — dispatched in `MCPToolHandler::handle`.
+
 ### How to Use It
-1. Enable the orchestrator via the `agentOrchestratorEnabled` toggle in the AI settings panel.
-2. Submit goals through the AI goal input field in the UI.
-3. Monitor agent status in the AI status panel.
-4. Approve or reject Creative agent suggestions via the approval dialog.
-5. Configure per-instance MCP port behavior in `EcosystemConfig`.
+1. Connect an MCP client to the embedded MCP server.
+2. Call `agents.run_goal` with a high-level goal (e.g., "make this track punchier").
+3. The Conductor agent decomposes the goal and delegates subtasks.
+4. Monitor agent status with `agents.run_status`.
+5. Adjust autonomy with `agents.set_autonomy`.
 
-### Security
-All agent actions pass through `SecurityValidator`, which enforces:
-- Audio-thread safety (no blocking operations from agents)
-- Parameter bounds checking
-- Approval gates for destructive/creative changes
-- Sandboxed execution for experimental agents
-
-### State Persistence
-Agent configuration is serialized as `<AGENT_ORCHESTRATOR enabled="true" requireApproval="true"><AGENT name="realtime" enabled="true"/>...</AGENT_ORCHESTRATOR>` in the plugin's XML state.
+### Thread Safety
+All agents execute on scheduler worker threads ONLY — never on the audio thread. `RealtimeCritical` priority jumps the *agent* queue only, not the audio thread. `RealtimeControlAgent` writes corrections through `LockFreeQueue` / `DefaultToolInvoker` → `MCPToolHandler::handle`, exactly like the UI/MCP paths.
 
 ---
 
@@ -330,21 +332,11 @@ Written from `processBlock()` after morph computation. DAWs can record these as 
 
 ---
 
-## 10. Meta Preset Manager
+## 10. Preset Library & Serialization
 
-**Purpose:** Bank/preset navigation with JSON serialization.
+**Purpose:** Preset management via `PresetLibrary`, `PresetSerializer`, and `PresetSerializerV2` with JSON roundtrip support for snapshot bank, APVTS state, and version tags. Preset entries are modeled in `PresetEntry.h`.
 
-### API (`MetaPresetManager.h`)
-```cpp
-void switchBank(int bank);      // 0–15
-void switchPreset(int preset);  // 0–127
-void switchToNext();            // Wraps across banks
-void switchToPrev();
-String getPresetName(int bank, int preset) const;
-```
-
-### Serialization (`PresetSerializer`)
-Full JSON roundtrip: snapshot bank (12 slots) + APVTS state + version tag.
+> **Note:** The earlier `MetaPresetManager` class documented in prior revisions does not exist in the current codebase. Preset management is handled by `PresetLibrary` (`src/Preset/PresetLibrary.h/cpp`) and the serializer classes.
 
 
-_Updated 2026-06-21._
+_Updated 2026-06-27._

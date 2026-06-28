@@ -2,8 +2,6 @@
 
 Welcome to More-Phi, an AI-ready parameter morphing engine for sound design, performance, and exploratory mixing. This guide teaches workflows: start with a hosted plugin, capture sounds, morph between them, and use advanced tools when you are ready.
 
-> Screenshot placeholder: `[Screenshot: More-Phi loaded in a DAW with a hosted synth or effect]`
-
 ## Quick Navigation
 
 - [First-Time Setup](#first-time-setup)
@@ -45,7 +43,6 @@ You need:
    - Bottom tab section.
    - AI status bar.
 
-> Screenshot placeholder: `[Screenshot: Empty More-Phi instance before loading a hosted plugin]`
 
 ### Success Check
 
@@ -343,11 +340,11 @@ For collaborative AI-driven sound design, use the new **Agent Orchestration** sy
 
 ## Use Multi-Agent Orchestration
 
-More-Phi v3.3.0 introduces a multi-agent orchestration layer that lets you describe high-level musical goals and watch a team of specialized agents collaborate to achieve them. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
+More-Phi v3.4.1 introduces a multi-agent orchestration layer that lets you describe high-level musical goals and watch a team of specialized agents collaborate to achieve them. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
 
-### Meet the Six Built-In Agents
+### Meet the Seven Built-In Agents
 
-When you submit a goal, the **Conductor** agent automatically activates and delegates tasks to the other five agents.
+When you submit a goal, the **Conductor** agent automatically activates and delegates tasks to the other six agents.
 
 | Agent | Role | Default Behavior |
 |---|---|---|
@@ -357,6 +354,7 @@ When you submit a goal, the **Conductor** agent automatically activates and dele
 | **Creative** | Generates novel snapshot ideas, suggests unconventional parameter combinations, and explores variations. | Always requires your explicit approval before applying changes, regardless of autonomy settings. |
 | **RealtimeControl** | Manages time-critical adjustments such as gain staging or limiting during playback. | Operates automatically on **RealtimeCritical** priority; does not wait for manual approval. |
 | **QualitySafety** | Monitors every proposed change against safety policies and clamps or rejects dangerous values. | Runs automatically in the background. |
+| **Memory** | Persists and recalls cross-session learning — genre profiles, user preferences, and successful parameter plans. | Stores context in the blackboard for reuse by other agents. |
 
 ### Submit a Goal
 
@@ -465,4 +463,4 @@ If nothing changes when you morph:
 5. Check that audio or MIDI is reaching the track.
 
 
-_Updated 2026-06-18._
+_Updated 2026-06-27._

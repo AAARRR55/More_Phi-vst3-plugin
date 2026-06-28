@@ -1,7 +1,7 @@
 # More-Phi Dataset Generation Guide
 
-**Version:** 3.3.0  
-**Last Updated:** March 2026
+**Version:** 3.4.1  
+**Last Updated:** June 2026
 
 ---
 
@@ -529,7 +529,7 @@ output_path/
 
 ### Standard Build
 ```bash
-cmake -B build -S . -DMORE_PHI_ENABLE_DATASET_V3=OFF
+cmake -B build -S .
 cmake --build build --config Release
 ```
 

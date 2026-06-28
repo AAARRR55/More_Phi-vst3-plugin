@@ -1,7 +1,7 @@
 # More-Phi VST3 Multi-Agent Orchestration — Technical Audit Report
 
 **Date:** 2026-06-24  
-**Subject:** `G:\More_Phi-vst3-plugin` — More-Phi v3.3.0 Synthesizer Edition  
+**Subject:** `G:\More_Phi-vst3-plugin` — More-Phi v3.4.1 Commercial Hardening  
 **Scope:** VST3 API compliance, multi-agent architecture, audio pipeline, state management, error handling, performance, thread safety, host compatibility.
 
 ---
@@ -499,3 +499,24 @@ if (linkBroadcaster_.receive(linkX, linkY)) {
 ---
 
 *End of audit report.*
+
+---
+
+## 2026-06-27 Re-Audit Resolution
+
+A second-pass audit (source-level cross-reference) verified the original findings and surfaced a new gap set. The items below were actioned in this pass. The original CRITICAL/HIGH issues (C-1…H-8, M-2/M-6) above are tracked separately and are **not** addressed here unless listed.
+
+| # | Item | Status | Evidence |
+|---|------|--------|----------|
+| Q9 | MCP per-tool input schemas advertised but not enforced pre-dispatch | **RESOLVED** | `MCPToolHandler.cpp`: file-local `inputSchemaFor()` + `validateVarAgainstSchema()` gate at the top of the 5-arg `handle()`. Returns `{"error":"invalid_params"}`. Tests in `TestMCPServerUnit.cpp` `[mcp][schema]`. Unknown methods still fall through to `unknown_method`. |
+| Q3 | Per-sample `std::sin` on the audio thread (LFO sine) | **RESOLVED** | `LFO.cpp`: 2049-point linear-interp LUT (`sineLUT()`), built once off the audio thread. `LFO.h` docstring updated. Test in `TestModulationEngine.cpp` `[lfo][lut]`. |
+| Q3′ | Spectral/formant engines run hop-amortized transcendentals on the RT thread | **DEFERRED** | `// ponytail:` ceiling notes added at `SpectralMorphEngine.cpp` and `FormantMorphEngine.cpp`. Current path is `noexcept`, hop-amortized, and verified to 1e-4 in tests; a table rewrite risks breaking tested DSP for no audible gain. |
+| Q2 | `TruePeakEstimator.h:7` said "12-tap per phase" (stale) | **RESOLVED** | Corrected to "64-tap per phase" (consistent with `kFIRTaps = 64` at line 53 and AGENTS.md). The `±0.2 dBTP` figure was already refuted in `docs/audits/CRITICAL_BUGS_FIXED.md` — no active claim to fix. |
+| Q4 | `AutoMasteringEngine.h` said "10-stage" but code runs 12 ops | **RESOLVED** | Header comment reconciled: enumerated stages now include TransientShaper (post-dynamics, pre-EQ) and note MSDECODE-1 (decode before limiter). `processBlock` docstring says "12 stages". |
+| Q5 | "Missing metrics" line listed noise floor/SNR (they exist) | **RESOLVED** | `AGENTS.md:154` corrected: noise floor/SNR are computed (`RealtimeSpectrumAnalyzer.cpp:389-439`); muddiness/harshness/punch/low-high remain genuinely missing. |
+| Q6 | `AGENTS.md` RestLlmClient selection line ref `3478-3488` (stale) | **RESOLVED** | Corrected to `3779-3788` with an inline reconciliation note. |
+| Q1 | "Lock-free queue" overstatement | **NO-OP** | `LockFreeQueue.h` header already documents the SPSC-consumer / spinlock-producer design honestly. No code/doc change warranted. |
+| Q7 | Ed25519 conflated with MCP transport | **NO-OP** | AGENTS.md already describes Ed25519 correctly as the licensing-signature path; the conflation was in the audit's reading, not the docs. `docs/` already records the envelope is DPAPI/BlowFish-CTR. |
+| Q8 | Plan "atomicity" label generous | **NO-OP** | Already documented as an intentional risk (P3.10) in AGENTS.md; rewording adds no safety. |
+
+**Net:** 6 RESOLVED, 1 DEFERRED-with-rationale, 3 NO-OP (already correct). No regressions introduced; all touched paths have runnable checks.

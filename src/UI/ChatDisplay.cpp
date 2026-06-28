@@ -24,6 +24,7 @@ static juce::String roleLabel(ChatDisplay::Role role)
         case ChatDisplay::Role::System:    return "System";
         case ChatDisplay::Role::User:      return "You";
         case ChatDisplay::Role::Assistant: return "Assistant";
+        case ChatDisplay::Role::Error:     return juce::String::charToString(0x2715) + " Error";
     }
     return {};
 }
@@ -35,6 +36,7 @@ static juce::Colour roleLabelColour(ChatDisplay::Role role)
         case ChatDisplay::Role::System:    return juce::Colour(0xff7a8492);
         case ChatDisplay::Role::User:      return juce::Colour(0xff80bfff);
         case ChatDisplay::Role::Assistant: return juce::Colour(0xffffb870);
+        case ChatDisplay::Role::Error:     return juce::Colour(0xffe94560); // coral-red
     }
     return juce::Colours::white;
 }
@@ -46,6 +48,7 @@ static juce::Colour roleBubbleColour(ChatDisplay::Role role)
         case ChatDisplay::Role::System:    return juce::Colour(0x00000000); // transparent
         case ChatDisplay::Role::User:      return juce::Colour(0xff1e2635);
         case ChatDisplay::Role::Assistant: return juce::Colour(0xff1a2030);
+        case ChatDisplay::Role::Error:     return juce::Colour(0x18e94560); // coral-red at ~10% alpha
     }
     return juce::Colour(0xff1a2030);
 }
@@ -113,7 +116,8 @@ void ChatDisplay::Canvas::rebuildEditors()
         // Editors tint per role so bubbles still read visually.
         ed->setColour(juce::TextEditor::textColourId,
                       msg.role == Role::User ? juce::Colour(0xffcfe4ff)
-                                             : juce::Colour(0xffe6e9ef));
+                      : msg.role == Role::Error ? juce::Colour(0xfff0b0b0)
+                                                : juce::Colour(0xffe6e9ef));
         addAndMakeVisible(*ed);
     }
 }
@@ -224,6 +228,15 @@ void ChatDisplay::updateLastMessage(juce::String text)
 {
     if (canvas_.messages.empty())
         return;
+    canvas_.messages.back().text = text.trim();
+    pushAndScroll();
+}
+
+void ChatDisplay::replaceLastMessage(Role role, juce::String text)
+{
+    if (canvas_.messages.empty())
+        return;
+    canvas_.messages.back().role = role;
     canvas_.messages.back().text = text.trim();
     pushAndScroll();
 }

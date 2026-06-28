@@ -332,10 +332,16 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
 	    interleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
 	    decision_.fill(0.0f);
 
-	    // AUDIT-FIX (P2, 2026-06-27): size the on-demand scratch buffers alongside
-	    // the shared set so requestDecisionNow() can run without holding inferMutex_
-	    // across the resample/normalize stages. Sized identically to the shared set.
-	    onDemandL_.assign(hostFrames, 0.0f);
+		    // AUDIT-FIX (P2, 2026-06-27): size the on-demand scratch buffers alongside
+		    // the shared set so requestDecisionNow() can run without holding inferMutex_
+		    // across the resample/normalize stages. Sized identically to the shared set.
+		    // M-3 AUDIT-NOTE: The duplication of these buffers (shared + onDemand) is
+		    // intentional and necessary for concurrency. requestDecisionNow() runs on
+		    // the MCP thread while runCycle() runs on the analysis thread; merging them
+		    // would require a mutex across the expensive resample stage, deserializing
+		    // inference requests. The ~160 KB cost (5 buffers × ~32 KB each) is
+		    // acceptable for a thread-safety guarantee.
+		    onDemandL_.assign(hostFrames, 0.0f);
 	    onDemandR_.assign(hostFrames, 0.0f);
 	    onDemandModelL_.assign(kSonicMasterSegmentFrames, 0.0f);
 	    onDemandModelR_.assign(kSonicMasterSegmentFrames, 0.0f);
@@ -345,6 +351,10 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     consecutiveFailures_.store(0, std::memory_order_relaxed);
     lastPlanId_ = 0;
     nextPlanId_ = 1;
+    // AUDIT-FIX (P4 regression): a fresh prepare is the initial-fill state —
+    // the first capture sequence must NOT arm the transition guard.
+    capturedSinceLastFlush_.store(0, std::memory_order_relaxed);
+    everCapturedFullWindow_.store(false, std::memory_order_relaxed);
     // DIAGNOSTIC (2026-06-26): clear any rejection detail from a prior session so a
     // stale snapshot can't be misread after re-prepare. Safe to touch here — the
     // analysis thread is joined (release() was called at the top of prepare).
@@ -417,17 +427,34 @@ void SonicMasterAnalysisEngine::release() noexcept
 	    // source change mid-block won't be caught here, but the explicit
 	    // notifyAudioSourceChanged path (called from PluginProcessor::reset) plus
 	    // the paramChangePending_ check in runCycle cover the common cases.
-	    if (capturedSinceLastFlush_.load(std::memory_order_relaxed) == 0u && n > 0)
+	    //
+	    // AUDIT-FIX (P4 regression): the original implementation armed the guard
+	    // whenever capturedSinceLastFlush_ == 0, which includes the INITIAL fill
+	    // right after prepare(). That made the first analysis cycle always discard
+	    // its window (InsufficientAudio) — a hard failure for one-shot tests and
+	    // a one-cycle latency hit on every fresh playback start. Gate the arming
+	    // on everCapturedFullWindow_ so only a genuine mid-session flush (after we
+	    // have already built a window) arms the guard.
+	    if (everCapturedFullWindow_.load(std::memory_order_relaxed)
+	        && capturedSinceLastFlush_.load(std::memory_order_relaxed) == 0u && n > 0)
 	    {
-	        // Ring was empty (just flushed). Arm the transition guard so the
-	        // analysis thread discards the next capture window.
+	        // Ring was empty (just flushed mid-session). Arm the transition guard so
+	        // the analysis thread discards the next capture window.
 	        paramChangePending_.store(true, std::memory_order_relaxed);
 	        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
 	            std::chrono::steady_clock::now().time_since_epoch()).count();
 	    }
 
 	    ring->write(left, right, n);
-	    capturedSinceLastFlush_.store(n, std::memory_order_relaxed);
+	    const std::size_t prev = capturedSinceLastFlush_.load(std::memory_order_relaxed);
+	    capturedSinceLastFlush_.store(prev + n, std::memory_order_relaxed);
+	    // Once we've captured at least one full analysis window worth of audio,
+	    // a subsequent flush counts as a genuine source change (not the initial fill).
+	    if (!everCapturedFullWindow_.load(std::memory_order_relaxed)
+	        && (prev + n) >= captureL_.size())
+	    {
+	        everCapturedFullWindow_.store(true, std::memory_order_relaxed);
+	    }
 	}
 
 void SonicMasterAnalysisEngine::flushCaptureRing() noexcept

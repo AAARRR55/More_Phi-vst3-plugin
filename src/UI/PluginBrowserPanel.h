@@ -43,7 +43,7 @@ private:
 
     juce::TextButton loadBtn_{"Load Plugin..."};
     juce::TextButton showBtn_{"Show Editor"};
-    juce::TextButton captureBtn_{"Capture \u2192"};
+    juce::TextButton captureBtn_{"Capture >"};
     juce::Label pluginNameLabel_;
 
     std::unique_ptr<HostedPluginWindow> pluginWindow_;

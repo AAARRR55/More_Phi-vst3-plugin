@@ -34,6 +34,11 @@ LicenseManager::LicenseManager(LicenseRuntimeState& runtimeState,
     // plugin. The string form ("dev-signature") is what the decoded signature
     // bytes are compared against by the default verifier in LicenseVerifier.cpp.
 #if ! defined(NDEBUG)
+    // SECURITY (Finding #7): visible warning so dev builds can't be accidentally
+    // shipped as production. Log to DBG (release builds are silent).
+    DBG("[LicenseManager] WARNING: development signature bypass is ACTIVE in this "
+        "Debug build. Any payload signed with keyId=dev-key / signature=dev-signature "
+        "will validate as a real license. Never ship a Debug binary.");
     verifier_.addTrustedDevelopmentSignature("dev-key", "dev-signature");
 #endif
 }

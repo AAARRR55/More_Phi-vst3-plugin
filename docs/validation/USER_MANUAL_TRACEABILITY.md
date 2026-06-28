@@ -116,7 +116,7 @@ Last refreshed: `2026-06-17`. Current validation evidence is summarized in `docs
 | Manual item | Expected GUI | Backend/subsystem | Source reference | Existing coverage | Status | Notes |
 |---|---|---|---|---|---|---|
 | Presets tab | `V2PresetBrowserPanel` | `PresetLibrary`, `PresetSerializer` | `src/Plugin/PluginEditor.cpp:78`, `src/UI/V2PresetBrowserPanel.*` | Preset library tests | Pass | Visible preset browser exists. |
-| Banks 16 / presets 128 | Banked preset workflow | `MetaPresetManager` | `src/Preset/MetaPresetManager.*` | State/preset tests | Mismatch | Visible tab appears library/search based, not 16x128 bank UI. |
+| Banks 16 / presets 128 | Banked preset workflow | `PresetLibrary` / `PresetSerializer` | `src/Preset/PresetLibrary.*`, `src/Preset/PresetSerializer.*` | State/preset tests | Mismatch | Visible tab appears library/search based, not 16x128 bank UI. `MetaPresetManager` does not exist in the codebase. |
 | Save/load/import/export/delete | Buttons | `PresetLibrary` | `src/UI/V2PresetBrowserPanel.*`, `src/Preset/PresetLibrary.*` | Preset unit tests | Needs automated test | Needs integration round trip coverage. |
 | APVTS + snapshots serialization | Preset serializer | `PresetSerializer` | `src/Preset/PresetSerializer.*` | State persistence tests | Needs automated test | Manual-specific coverage needed. |
 
@@ -215,5 +215,5 @@ The summary table at the top of this matrix aggregates high-level areas; the det
 | P1 | Manual lists `morphFader`, while APVTS uses `faderPos`. | Mismatch | Report and decide doc alias vs implementation rename later. |
 | P1 | Manual classifies `morphSource` as "Choice/internal"; it is registered as an APVTS `AudioParameterChoice` and is host-visible. | Mismatch | Clarify manual wording to reflect host-visible automation parameter. |
 | P1 | Macro knobs are documented as assignable, but current implementation maps first 8 hosted parameters. | Mismatch | Report; do not fix in validation pass. |
-| P1 | Presets manual describes banked 16x128 behavior; visible tab uses preset library/search workflow. | Mismatch | Report and trace both `PresetLibrary` and `MetaPresetManager`. |
+| P1 | Presets manual describes banked 16x128 behavior; visible tab uses preset library/search workflow. | Mismatch | Report and trace `PresetLibrary` and `PresetSerializer`. (`MetaPresetManager` does not exist in the codebase.) |
 | P2 | GUI-only visuals such as movement trail, labels, clipboard token copy, hosted plugin editor, real DAW automation lanes, and audible hosted-plugin recall/morph behavior need manual QA. | Needs manual host verification | Include in release/manual-host QA checklist. |

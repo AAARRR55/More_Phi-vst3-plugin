@@ -1,12 +1,8 @@
 # More-Phi Technical Documentation
 
-> Updated 2026-06-25. **Technical Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete audit.
+> Updated 2026-06-27. **Technical Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete audit.
 
-More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.3.0 architecture includes a **Multi-Agent Orchestration Layer** (7 specialist agents: Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory), an `AgentOrchestrator` facade, embedded MCP server with 30+ tools, ONNX-based neural mastering (preview — model embedded in binary via JUCE `BinaryData`, rate-proportional capture ring, polyphase resampling, pending-plan application pattern, mono capture support), and comprehensive licensing with Ed25519 signatures.
-
-> Screenshot placeholder: `[Screenshot: More-Phi main interface with MorphPad, plugin browser, tab bar, and AI status panel]`
->
-> Diagram placeholder: `[Diagram: High-level module architecture from DAW host to hosted plugin and MCP clients]`
+More-Phi is an advanced parameter morphing engine for VST3/AU workflows. It hosts third-party plugins, captures parameter snapshots, morphs between them in real time, and exposes a local MCP interface for AI-assisted control. The v3.4.1 architecture includes a **Multi-Agent Orchestration Layer** (7 specialist agents: Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory), an `AgentOrchestrator` facade, embedded MCP server with 30+ tools, ONNX-based neural mastering with genre-conditioned priors (preview — model embedded in binary via JUCE `BinaryData`, rate-proportional capture ring eagerly allocated in `prepare()`, polyphase resampling, pending-plan application pattern, mono capture support, pluggable ONNX genre classifier), and comprehensive licensing with Ed25519 signatures.
 
 ## Quick Navigation
 
@@ -93,9 +89,9 @@ Key primitives:
 - Hosted plugin exclusive access via `PluginHostManager`.
 - `PerformanceProfiler` uses a pre-allocated circular buffer with atomic index — no allocations on audio thread.
 
-### Recent DSP Correctness and Safety Fixes (v3.3.0)
+### Recent DSP Correctness and Safety Fixes (v3.4.0+)
 
-A set of structural audio thread safety fixes were implemented in version 3.3.0 to enforce strict real-time boundaries and mathematical precision:
+A set of structural audio thread safety fixes were implemented in version 3.4.0 to enforce strict real-time boundaries and mathematical precision:
 
 1. **Real-time Safe Envelope Tracking (`EnvelopeFollower`):**
    - **Pre-computed Coefficients:** Attack and release coefficients are calculated and converted to log bases on the message thread during parameter updates (`setAttack()` and `setRelease()`).
@@ -110,7 +106,7 @@ A set of structural audio thread safety fixes were implemented in version 3.3.0 
 
 ## Agent Orchestration Layer
 
-Introduced in v3.3.0, the **Agent Orchestration Layer** lives in `src/AI/Orchestrator/` and provides a single-initialization facade that wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer`. All files compile into the `MorePhi` shared-code target.
+Introduced in v3.4.0, the **Agent Orchestration Layer** lives in `src/AI/Orchestrator/` and provides a single-initialization facade that wires `MorePhiProcessor` → `AgentRuntime` → `MCPServer`. All files compile into the `MorePhi` shared-code target.
 
 ### Components
 
@@ -221,9 +217,9 @@ Common CMake options:
 | `MORE_PHI_ENABLE_SANITIZERS` | `OFF` | Enables ASAN/UBSAN where supported. |
 | `MORE_PHI_SAFE_BUILD_MODE` | `ON` | Uses conservative Windows linker/build settings. |
 | `MORE_PHI_ENABLE_LTO` | `OFF` | Enables release LTO for CI/release use. |
-| `MORE_PHI_ENABLE_DATASET_V3` | `OFF` (deprecated/no-op) | Dataset V3 sources are always compiled. |
+| `MORE_PHI_ENABLE_DATASET_V3` | Always ON (hardcoded to `1`) | Dataset V3 sources are always compiled; the flag is retained as a no-op for compatibility. |
 | `MORE_PHI_MSVC_MP` | Host core count (VS generator) | MSVC `/MP` process count; `0` disables. Ignored under Ninja. |
-| `MORE_PHI_ENABLE_ONNX` | `ON` | Enables ONNX runtime for neural mastering inference. |
+| `MORE_PHI_ENABLE_ONNX` | `OFF` | Enables ONNX runtime for neural mastering inference. |
 
 ## Codebase Structure
 
@@ -252,7 +248,7 @@ The project is structured into distinct layers with clear architectural responsi
 - `MorePhiProcessor`: Main APVTS controller and root plugin instance connecting GUI scopes with Real-time processing engines synchronously. Ensures cross-subsystem containment without global singleton dependencies.
 - `MorePhiEditor`: Principal modern JUCE 8 Tab system connecting user interactions through atomic components avoiding event blocking. 
 - `MorphPad`: Circular UX interaction element built on rendering loops retaining local circular tracking vectors directly optimized without heap fragmentation constraints over continuous drawing cycles.
-- `OzoneHeadlessHost` (`src/Tools/`): Creates a fabricated dummy framework to satisfy iZotope integrations which require virtual Message Thread cycles simulating a real DAW without requiring explicit standard process hooks.
+- `HeadlessHost` (`src/Tools/HeadlessHost/`): Creates a fabricated dummy framework to satisfy iZotope integrations which require virtual Message Thread cycles simulating a real DAW without requiring explicit standard process hooks.
 
 ```text
 src/
@@ -488,7 +484,7 @@ The multi-agent layer exposes 7 tools for goal-driven agent orchestration, dispa
 The neural mastering subsystem (`SonicMasterAnalysisEngine`) provides an alternative edit entry point alongside the MCP `set_parameter` path. Both funnel through `LockFreeQueue` → audio-thread drain → `ParameterBridge` with aligned safety properties:
 
 - **ONNX model** embedded in binary via `BinaryData::getNamedResource("masteringbrain_v2_decision_onnx")` — no runtime file I/O
-- **Capture ring** is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), lazily allocated
+- **Capture ring** is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`), eagerly allocated in `prepare()` (CAPTURE-DECOUPLE fix, 2026-06-26). `ensureRing()` remains as a defensive idempotent allocator for tests that skip `prepare()`.
 - **Resampling** uses `resamplePolyphase` (not linear interpolation)
 - **Mono capture** supported (`channelCount == 1` downmix path)
 - **Plan application** uses pending-plan atomic-flag pattern — stores in `pendingPlan_`, applies in `runCycle` on the analysis thread (no `callAsync`)

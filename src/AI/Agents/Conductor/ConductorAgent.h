@@ -26,13 +26,25 @@ public:
 
     AgentResult execute(const AgentTask& task) override;
     AgentState state() const noexcept override { return state_.load(); }
-    void stop() override { state_.store(AgentState::Stopped); }
+    void stop() override;
+    // H-4 FIX: Callback for submitting follow-ups asynchronously. Wired by
+    // AgentRuntime. When the async LLM decomposition completes, the conductor
+    // calls this on the scheduler worker to enqueue specialist subtasks.
+    void setSubmitCallback(std::function<void(std::vector<AgentTask>)> cb) { submitCallback_ = std::move(cb); }
+    // H-4: Called periodically by the runtime's pump to check if any pending
+    // async decompositions have completed. If so, submits follow-ups via callback.
+    void checkPendingDecompositions();
 
 private:
     nlohmann::json decomposeGoal(const juce::String& intent);
 
     const AgentContext* ctx_ = nullptr;
     std::atomic<AgentState> state_{ AgentState::Idle };
+
+    // H-4: In-flight async decompositions. Keyed by task.id.
+    std::mutex pendingMutex_;
+    std::unordered_map<std::string, std::pair<AgentTask, std::future<nlohmann::json>>> pendingDecompositions_;
+    std::function<void(std::vector<AgentTask>)> submitCallback_;
 };
 
 } // namespace more_phi::agents

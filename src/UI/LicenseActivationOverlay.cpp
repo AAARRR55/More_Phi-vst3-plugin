@@ -18,8 +18,8 @@ LicenseActivationOverlay::LicenseActivationOverlay(MorePhiProcessor& processor)
     titleLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(titleLabel_);
 
-    descLabel_.setText("Please enter your More-Phi license key to unlock the plugin.\n"
-                       "Obtain your license key from your account dashboard on the website and paste it here.", juce::dontSendNotification);
+    descLabel_.setText("Enter your license key to activate premium AI features, or continue in demo mode\n"
+                       "with full audio processing. Obtain a key from your account dashboard and paste it here.", juce::dontSendNotification);
     descLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(descLabel_);
 
@@ -34,18 +34,22 @@ LicenseActivationOverlay::LicenseActivationOverlay(MorePhiProcessor& processor)
     addAndMakeVisible(statusLabel_);
 
     // Configure Buttons
+    activateBtn_.setTooltip("Validate the entered license key online and unlock premium AI features.");
     activateBtn_.onClick = [this] { onActivateClicked(); };
     addAndMakeVisible(activateBtn_);
 
+    buyBtn_.setTooltip("Open the More-Phi store page in your browser to purchase a license key.");
     buyBtn_.onClick = [this] { onBuyClicked(); };
     addAndMakeVisible(buyBtn_);
 
     // Refresh (shown when licensed-but-grace/expired by refreshStateCopy)
+    refreshBtn_.setTooltip("Re-validate the existing license online without re-entering the key.");
     refreshBtn_.onClick = [this] { onRefreshClicked(); };
     addChildComponent(refreshBtn_);
 
     // Offline activation entry — for air-gapped machines that obtained a
     // signed certificate elsewhere.
+    offlineBtn_.setTooltip("Import a signed certificate file for offline activation on air-gapped machines.");
     offlineBtn_.onClick = [this] { onOfflineClicked(); };
     addAndMakeVisible(offlineBtn_);
 
@@ -314,6 +318,19 @@ void LicenseActivationOverlay::refreshStateCopy()
             keyInput_.setVisible(true);
             activateBtn_.setVisible(true);
             break;
+    }
+}
+
+void LicenseActivationOverlay::visibilityChanged()
+{
+    if (isVisible())
+    {
+        // Auto-focus the key input when the overlay appears.
+        if (auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            focused == nullptr || !focused->isVisible())
+        {
+            keyInput_.grabKeyboardFocus();
+        }
     }
 }
 

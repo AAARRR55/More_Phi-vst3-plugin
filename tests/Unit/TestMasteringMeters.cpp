@@ -185,7 +185,7 @@ TEST_CASE("THD is non-trivial and finite for an off-bin fundamental + harmonic (
         generated += n;
     }
 
-    SpectrumSnapshot snap;
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot snap;
     REQUIRE(analyzer.getSnapshot(snap));
     REQUIRE(snap.frameIndex > 0);
     INFO("Off-bin THD%: " << snap.thdPercent);
@@ -207,7 +207,7 @@ TEST_CASE("THD is near-floor for a pure off-bin sine (F1.4 no false positives)",
     analyzer.prepare(kSampleRate, kBlockSize);
     feedSineStereo(analyzer, 1000.0f, static_cast<int>(kSampleRate) * 1, 0.9f);
 
-    SpectrumSnapshot snap;
+    RealtimeSpectrumAnalyzer::SpectrumSnapshot snap;
     REQUIRE(analyzer.getSnapshot(snap));
     REQUIRE(snap.frameIndex > 0);
     REQUIRE(std::isfinite(snap.thdPercent));

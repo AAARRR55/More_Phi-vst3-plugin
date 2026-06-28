@@ -5,6 +5,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include <deque>
 #include <fstream>
 #include <mutex>
 
@@ -53,7 +54,9 @@ private:
     mutable std::mutex    mutex_;
     int                   flushed_ = 0;
     // Ring buffer of JSONL strings used when the file is unavailable.
-    std::vector<juce::String> ring_;
+    // ponytail: deque, not vector — pop_front is O(1). vector::erase(begin)
+    // memoved 255 juce::String per push past the cap.
+    std::deque<juce::String> ring_;
 };
 
 } // namespace more_phi::agents

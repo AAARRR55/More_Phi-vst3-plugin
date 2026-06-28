@@ -541,7 +541,9 @@ TEST_CASE("AUDIT-2.1: applyValidatedPlan falls back to normalized pair without c
     plan.sourcePlanId = 601;
     plan.appliedMask.dynamics = true;
     plan.hasCompParams = false;
-    // threshold value 0.5 -> -20 + 0.5*8 = -16; ratio value 1.0 -> 2.5 + 1.0*1.5 = 4.0
+    // threshold value 0.5 -> -20 + 0.5*8 = -16; ratio value 1.0 -> 3.5 + 1.0*2.5 = 6.0
+    // (engine fallback maps ratio over [1,6]: center=3.5, scale=2.5, matching
+    // kSonicMasterCompRatioMax=6.0; clamped to [1,6])
     plan.projectedTargets.dynamics[0] = 0.5f;
     plan.projectedTargets.dynamics[1] = 1.0f;
 
@@ -549,7 +551,7 @@ TEST_CASE("AUDIT-2.1: applyValidatedPlan falls back to normalized pair without c
 
     const auto p0 = engine.getDynamics().getBandParams(0);
     CHECK(p0.thresholdDB == Approx(-16.0f).margin(1e-3f));
-    CHECK(p0.ratio       == Approx(  4.0f).margin(1e-3f));
+    CHECK(p0.ratio       == Approx(  6.0f).margin(1e-3f));
 }
 
 TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[processor][analysis][mcp]")

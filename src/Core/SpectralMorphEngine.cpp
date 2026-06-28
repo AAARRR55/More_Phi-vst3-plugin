@@ -515,6 +515,13 @@ void SpectralMorphEngine::computeMagnitudePhase(const float* real, const float* 
 }
 
 // ─── interpolateMagnitude() ───────────────────────────────────────────────────
+// ponytail: per-bin std::log/std::exp run on the audio thread here (and per-bin
+// std::sqrt/std::atan2 in extractMagPhase above). This is intentional and bounded:
+// the work is hop-amortized (1/4 of FFT size), noexcept, and verified to ~1e-4 in
+// TestSpectralMorphEngine. A magnitude LUT / fast-log approximation would remove
+// the transcendentals but risks breaking the tested geometric-mean blend for no
+// audible gain at sub-audible morph rates. Revisit if FFT sizes grow or CPU-saver
+// is off under heavy load.
 
 void SpectralMorphEngine::interpolateMagnitude(const float* magA, const float* magB,
                                                 float* magOut,

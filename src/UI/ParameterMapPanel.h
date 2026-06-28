@@ -55,6 +55,7 @@ private:
     std::vector<std::unique_ptr<ParameterRow>> rows_;
     juce::Label headerLabel_;
     juce::TextEditor searchField_;
+    juce::Label emptyLabel_;
     juce::String filterText_;
     int lastParamCount_ = 0;
 };

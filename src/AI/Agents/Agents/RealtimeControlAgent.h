@@ -54,7 +54,18 @@ public:
     { return { "analysis.clipping_detected", "analysis.lufs_breach" }; }
 
     void setConfig(Config c);
-    void prepare(const AgentContext& ctx) override { ctx_ = &ctx; }
+    void prepare(const AgentContext& ctx) override
+    {
+        ctx_ = &ctx;
+        // C-4: alias-construct a shared_ptr with no-op deleter from the raw
+        // tools pointer, then store a weak_ptr. The shared_ptr ref-count lives
+        // as long as ctx_->tools is valid (owned by Processor::agentTools_,
+        // which outlives agentRuntime_). The weak_ptr provides graceful
+        // degradation if teardown ordering ever changes.
+        auto shared = std::shared_ptr<IToolInvoker>(std::shared_ptr<IToolInvoker>{},
+                                                      ctx_->tools);
+        weakTools_ = shared;
+    }
 
     // Driven by the blackboard pump.
     void onEvent(const juce::String& type,
@@ -77,10 +88,18 @@ private:
     const AgentContext* ctx_ = nullptr;
     Config config_;
     std::atomic<AgentState> state_{ AgentState::Idle };
+    // C-4 FIX: shared liveness flag + weak tool invoker. The liveness flag
+    // guards against message-thread callbacks touching `this` after stop();
+    // the weak tool invoker ensures ctx_->tools remains valid for the duration
+    // of invoke() even if AgentRuntime::stop() runs mid-pump-cycle and the
+    // DefaultToolInvoker is destroyed (locks fail gracefully). The shared_ptr
+    // backing the weak_ptr is a static no-op deleter pointing to the real
+    // DefaultToolInvoker, kept alive by the Processor's agentTools_ member.
     // M5 FIX: shared liveness flag. Captured by value into the callAsync lambda
     // (heap-allocated, outlives the agent). Cleared in stop(). Lets a queued
     // message-thread callback detect that the agent is gone without capturing `this`.
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
+    std::weak_ptr<IToolInvoker> weakTools_;
 
     struct RateBucket { juce::int64 windowStartMs = 0; int count = 0; };
     mutable std::mutex mutex_;

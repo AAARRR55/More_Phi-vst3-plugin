@@ -41,6 +41,10 @@ private:
     };
     std::mutex mutex_;
     std::unordered_map<std::string, RateBucket> buckets_;
+    // M-1 FIX: Throttle bucket eviction to once every 10s instead of scanning
+    // all buckets on every rate check. Avoids O(n) scan per tool invoke.
+    juce::int64 lastEvictionMs_ = 0;
+    static constexpr juce::int64 kEvictionIntervalMs = 10000;
 };
 
 } // namespace more_phi::agents

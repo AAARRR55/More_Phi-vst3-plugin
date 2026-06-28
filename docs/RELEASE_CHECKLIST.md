@@ -1,4 +1,4 @@
-# Pre-Release Checklist — More-Phi v1.0.0
+# Pre-Release Checklist — More-Phi v3.4.1
 
 **Status:** Draft — executable, not advisory.
 **Scope:** Turns the "B3 acceptance gate" named in
@@ -12,13 +12,12 @@ steps that the audit doc does not cover but which block any clean tag/release.
 - Per-DAW manual smoke steps → `docs/audits/QA-Manual-Checklist-{FLStudio,Ableton,Logic}.md`.
 - Version history (Keep-a-Changelog) → [`CHANGELOG.md`](../CHANGELOG.md).
 
-**Verified ground state at time of writing (2026-06-19):**
-- Branch `chore/ponytail-dead-code-cleanup` is **16 commits ahead of `main`, 0 behind** → fast-forward merge is possible.
-- `main` is an ancestor of the branch → no merge commit required *if* working tree is clean.
-- **Working tree is NOT clean:** 14 tracked files modified (incl. `src/AI/MCPServer.cpp`, `MCPToolHandler.cpp`, `Core/LUFSMeter.cpp`, `TruePeakEstimator.h`, `GranularMorphEngine.cpp`, 3 test files). This WIP must be reconciled before any merge.
-- **567 Catch2 cases registered** (audit doc cites **520 / 87,445 assertions**; the 520 figure is post-filter runnable count, not registration count — both are valid, do not "correct" one to the other).
-- `pluginval` is **not installed** on this host.
-- `MORE_PHI_ENABLE_SANITIZERS` is **Clang/GCC-only** — this Windows host is MSVC/MinGW, so the ASan pass must run on Linux or a Clang runner.
+**Current ground state (2026-06-27):**
+- Branch: `feature/multi-agent-layer`.
+- Working tree: Modified tracked files include all documentation files from the ongoing docs audit.
+- Test suite: Registered test cases in the 500+ range. Update count before releasing.
+- `pluginval` is **not installed** on this host — install before final validation pass.
+- `MORE_PHI_ENABLE_SANITIZERS` is **Clang/GCC-only** — Windows MSVC builds must use a Clang runner or Linux CI for the ASAN pass.
 
 ---
 
@@ -45,21 +44,20 @@ discard — **this checklist does not do it for you.**
 ```bash
 # 1. Review what's modified and decide per-file:
 git status
-git diff --stat src/ tests/
-git diff src/AI/MCPServer.cpp            # inspect, don't blind-accept
+git diff --stat src/ tests/ docs/
 
 # 2a. Commit the WIP (if it's intended work):
-git add src/ tests/ docs/
-git commit -m "chore(ponytail): finalize <topic>"
+git add -A
+git commit -m "chore: finalize <topic>"
 
 # 2b. OR stash it (if it's exploratory):
-git stash push -m "pre-release-wip" src/ tests/ docs/
+git stash push -m "pre-release-wip"
 
 # 3. Verify clean:
-git status --porcelain src/ tests/        # must be empty
+git status --porcelain       # must be empty
 ```
 
-**Exit criterion:** `git status --porcelain src/ tests/` returns nothing.
+**Exit criterion:** `git status --porcelain` returns nothing.
 
 ---
 
@@ -67,47 +65,20 @@ git status --porcelain src/ tests/        # must be empty
 
 ### 1a. Remove confirmed junk files
 
-These were inspected on 2026-06-19 and are not referenced by any source/test
-script. All are untracked, so `rm` is safe — no history impact.
+Inspect your working tree for untracked test artifacts, debug output, and
+generated temp files that do not belong in the repo. Common suspects include:
 
-```bash
-# [CONFIRM] — junk debug/test output
-rm -f nul                                # 51-byte Windows null-device artifact
-rm -f signup_console_errors.txt          # landing-page debug output
-rm -f signup_127_console_errors.txt      # landing-page debug output
-rm -f mcp_integration_test_output.txt    # 0-byte MCP test capture
-```
+- `*.txt` debug output from testing sessions
+- `nul` Windows null-device artifacts
+- Generated model weights or test audio files
 
 ### 1b. DO NOT delete these (verified referenced)
 
 | File | Why it stays |
 |------|-------------|
-| `pink_noise.wav` (960 KB) | Referenced by `src/AI/Dataset/fl_studio_dataset_generator.py` and `scripts/generate_test_audio.py` |
-| `store-backend/` (306 MB) | **Decide, don't delete.** See §1c. |
-
-### 1c. `store-backend/` and `landing-page/` — verified NOT a problem (2026-06-19)
-
-Earlier drafts of this checklist flagged `store-backend/` as a "306 MB ship blocker."
-**That was wrong.** Verified ground state:
-
-- `store-backend/` is **57 tracked files, ~422 KB** of source — it is the project's
-  actual purchasing/licensing backend (`.env.example`, refresh-token logic, audit fixes).
-  The 306 MB is untracked `node_modules/` and build artifacts sitting in the directory;
-  **none of it entered git history.**
-- It is **already on `main`** (3 commits, incl. `feat(store): import existing
-  purchasing/licensing backend` and `fix(store): revoke consumed refresh tokens`).
-- Conclusion: it **belongs in the repo** as the product's commerce layer. No action needed.
-
-`landing-page/` is **0 tracked files** — genuinely local-only marketing site. It is
-already effectively ignored by virtue of never having been `git add`ed; no `.gitignore`
-entry is required, but adding one is harmless:
-
-```bash
-# Optional — landing-page/ is untracked and never staged; this just makes it explicit.
-echo "landing-page/" >> .gitignore
-```
-
-**Exit criterion:** none required. Both directories are in their correct state.
+| `pink_noise.wav` (960 KB) | Referenced by dataset generation scripts |
+| `store-backend/` | Project's purchasing/licensing backend source (tracked). Build artifacts in this directory are untracked and not in git history. |
+| `landing-page/` | Local-only marketing site; untracked and never staged. No `.gitignore` entry required but harmless to add.
 
 ---
 
@@ -117,19 +88,19 @@ Fast-forward is possible because `main` is an ancestor of the branch.
 
 ```bash
 # 1. Confirm branch is still ahead and clean:
-git checkout chore/ponytail-dead-code-cleanup
+git checkout feature/multi-agent-layer
 git status --porcelain                     # must be empty
 git rev-list --left-right --count main...HEAD   # expect "0   16"
 
 # 2. [CONFIRM] — fast-forward main to branch tip
 git checkout main
-git merge --ff-only chore/ponytail-dead-code-cleanup
+git merge --ff-only feature/multi-agent-layer
 
 # 3. [CONFIRM] — push
 git push origin main
 
 # 4. Optional cleanup (only after CI green on main):
-# git branch -d chore/ponytail-dead-code-cleanup
+# git branch -d <feature-branch>
 ```
 
 **Exit criterion:** `main` HEAD == branch tip; CI green on `main`.
@@ -177,8 +148,7 @@ ctest --test-dir build --build-config Release --output-on-failure --parallel 4
 ctest --test-dir build-asan --build-config Debug --output-on-failure --parallel 4
 ```
 
-**Expected:** **520 test cases / 87,445 assertions, all green** (per 2026-06-19
-audit). Registration count is 567 — the delta is filtered/skipped cases, not failures.
+**Expected:** All registered test cases passing. Run `ctest --output-on-failure` to verify the exact count before releasing — test count grows with each feature branch.
 
 ### 3c. pluginval (NOT installed — install first)
 
@@ -255,7 +225,7 @@ discipline must govern the product page. At launch:
 - ⚠️ **Neural mastering, genre classifier, VAE morph** → must be labeled as
   heuristic/stub/fallback *exactly as the code reports them*
   (`heuristic_rule_engine`, `default_fallback`, "safe stub backend").
-- ❌ Do not market "$199 — AI-powered mastering" while `VAEMorphEngine`
+- ❌ Do not market "$199 — AI-powered mastering" while the neural mastering feature
   returns stub output.
 
 **Exit criterion:** product page copy audited against

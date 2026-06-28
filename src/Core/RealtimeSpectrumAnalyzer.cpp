@@ -38,6 +38,7 @@ void RealtimeSpectrumAnalyzer::prepare(double sampleRate, int /*maxBlockSize*/)
     inputBuffer_.assign(static_cast<size_t>(fftSize_), 0.0f);
     linearFrame_.assign(static_cast<size_t>(fftSize_), 0.0f);
     rawFrame_.assign(static_cast<size_t>(fftSize_), 0.0f);
+    dcRemovedFrame_.assign(static_cast<size_t>(fftSize_), 0.0f);
     fftScratch_.assign(static_cast<size_t>(fftSize_ * 2), 0.0f);
     rawMagnitude_.assign(static_cast<size_t>(numBins_), 0.0f);
     previousMagnitudeDb_.assign(static_cast<size_t>(numBins_), kMinDB);
@@ -136,6 +137,14 @@ bool RealtimeSpectrumAnalyzer::getSnapshot(SpectrumSnapshot& out) const noexcept
 
 void RealtimeSpectrumAnalyzer::processFrame() noexcept
 {
+    // H-2 FIX: FFT requires that prepare() has been called (allocates fft_,
+    // window_, linearFrame_, rawFrame_, fftScratch_, inputBuffer_). If this
+    // fires, processBlock was called before prepare() — the early-out guard in
+    // processBlock checks fft_ != nullptr, but the per-frame path here could
+    // theoretically be reached via a subclass override. The jassert is
+    // debug-only (zero cost in Release).
+    jassert(fft_ != nullptr && fftSize_ > 0 && !window_.empty());
+
     // JUCE's performRealOnlyForwardTransform expects fftSize_ contiguous real
     // samples as input (not interleaved). The output is packed in JUCE's
     // real-only format: output[0]=DC, output[1]=real[1], output[2]=imag[1],
@@ -180,16 +189,22 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     // frame. The previous code used linearFrame_ (= raw * Hann), which biases
     // the reported peak down by up to -6 dB whenever the true peak does not sit
     // at the window centre, and skews RMS by the window's mean gain.
-    float peak = 0.0f;
-    double rmsSum = 0.0;
+    // M-1 FIX: Use FloatVectorOperations for peak detection (SIMD) instead of
+    // scalar per-sample abs+compare. RMS still needs a scalar sum (JUCE has no
+    // vectorized sum-of-squares), but the dominant per-sample abs cost is removed.
+    // This code runs on the analysis thread, so the dcRemovedFrame_ member is safe.
+    const auto n = static_cast<size_t>(fftSize_);
+    dcRemovedFrame_.resize(n);
+    for (size_t i = 0; i < n; ++i)
+        dcRemovedFrame_[static_cast<size_t>(i)] = rawFrame_[i] - frameMean;
 
-    for (int i = 0; i < fftSize_; ++i)
-    {
-        const float s = rawFrame_[static_cast<size_t>(i)] - frameMean;
-        const float a = std::abs(s);
-        if (a > peak) peak = a;
-        rmsSum += static_cast<double>(s) * static_cast<double>(s);
-    }
+    const auto range = juce::FloatVectorOperations::findMinAndMax(dcRemovedFrame_.data(),
+                                                                  fftSize_);
+    const float peak = std::max(std::abs(range.getStart()), std::abs(range.getEnd()));
+
+    double rmsSum = 0.0;
+    for (size_t i = 0; i < n; ++i)
+        rmsSum += static_cast<double>(dcRemovedFrame_[i]) * static_cast<double>(dcRemovedFrame_[i]);
 
     int fluxCount = 0;
     for (int bin = 0; bin < numBins_; ++bin)

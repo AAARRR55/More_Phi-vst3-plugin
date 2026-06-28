@@ -58,6 +58,8 @@ juce::String authHeadersFor(LLMProviderId id, const juce::String& apiKey)
     if (id == LLMProviderId::Anthropic)
         return "x-api-key: " + apiKey
                + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json\r\n";
+    if (id == LLMProviderId::Gemini)
+        return "x-goog-api-key: " + apiKey + "\r\ncontent-type: application/json\r\n";
     return "Authorization: Bearer " + apiKey + "\r\ncontent-type: application/json\r\n";
 }
 
@@ -155,16 +157,33 @@ bool validateSteps(const json& steps, json& clean) noexcept
 LLMHttpRequest RestLlmClient::buildRequest_(const CompletionRequest& request) const
 {
     const auto base    = baseUrlFor(provider_, providerSettings_);
-    const auto path    = (provider_ == LLMProviderId::Anthropic) ? "/v1/messages" : "/chat/completions";
-    const auto headers = authHeadersFor(provider_, providerSettings_.apiKey.trim());
     const auto model   = providerSettings_.selectedModel.trim();
     const int  maxTok  = request.maxTokens > 0 ? request.maxTokens : 1024;
+
+    juce::String path;
+    if (provider_ == LLMProviderId::Gemini)
+        path = "/models/" + model + ":generateContent";
+    else if (provider_ == LLMProviderId::Anthropic)
+        path = "/v1/messages";
+    else
+        path = "/chat/completions";
+
+    const auto headers = authHeadersFor(provider_, providerSettings_.apiKey.trim());
 
     json body;
     std::string bodyStr;
     try
     {
-        if (provider_ == LLMProviderId::Anthropic)
+        if (provider_ == LLMProviderId::Gemini)
+        {
+            json contents = json::array();
+            contents.push_back({ { "parts", json::array({ { { "text", request.userPrompt.toStdString() } } }) } });
+            body["contents"] = contents;
+            if (request.systemPrompt.isNotEmpty())
+                body["systemInstruction"] = { { "parts", json::array({ { { "text", request.systemPrompt.toStdString() } } }) } };
+            body["generationConfig"] = { { "maxOutputTokens", maxTok } };
+        }
+        else if (provider_ == LLMProviderId::Anthropic)
         {
             json messages = json::array();
             messages.push_back({ { "role",    "user" },
@@ -270,7 +289,29 @@ ILlmClient::CompletionResponse RestLlmClient::complete(const CompletionRequest& 
                 tokensUsed = totIt->get<int>();
         }
 
-        if (provider_ == LLMProviderId::Anthropic)
+        if (provider_ == LLMProviderId::Gemini)
+        {
+            // {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+            if (parsed.contains("candidates") && parsed["candidates"].is_array()
+                && !parsed["candidates"].empty()
+                && parsed["candidates"][0].contains("content")
+                && parsed["candidates"][0]["content"].contains("parts")
+                && parsed["candidates"][0]["content"]["parts"].is_array()
+                && !parsed["candidates"][0]["content"]["parts"].empty()
+                && parsed["candidates"][0]["content"]["parts"][0].contains("text"))
+            {
+                text = juce::String::fromUTF8(parsed["candidates"][0]["content"]["parts"][0]["text"].get<std::string>().c_str());
+            }
+            // Gemini uses usageMetadata.totalTokenCount instead of usage.total_tokens
+            const auto usageMdIt = parsed.find("usageMetadata");
+            if (usageMdIt != parsed.end() && usageMdIt->is_object())
+            {
+                const auto totIt = usageMdIt->find("totalTokenCount");
+                if (totIt != usageMdIt->end() && totIt->is_number_integer())
+                    tokensUsed = totIt->get<int>();
+            }
+        }
+        else if (provider_ == LLMProviderId::Anthropic)
         {
             // {"content":[{"type":"text","text":"..."}]}
             if (parsed.contains("content") && parsed["content"].is_array()

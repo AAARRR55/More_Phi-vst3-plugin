@@ -34,7 +34,7 @@ private:
 
     juce::Label titleLabel_;
     juce::TextEditor bodyEditor_;
-    juce::TextButton nextBtn_ { "Next \u25B6" };
+    juce::TextButton nextBtn_ { "Next >" };
     juce::TextButton dismissBtn_ { "Dismiss" };
     juce::Label stepCounter_;
 

@@ -17,6 +17,7 @@
 #include <vector>
 #include <array>
 #include <cmath>
+#include <span>
 
 namespace more_phi {
 
@@ -33,25 +34,25 @@ public:
     static std::array<juce::Point<float>, 12> getClockPositions(float radius = 1.0f);
 
     // 1D: faderPos ∈ [0,1] → linearly segments across occupied snapshots
-    // noexcept: Only arithmetic on pre-allocated output vector
+    // noexcept: Only arithmetic on pre-allocated output span
     static void compute1D(float faderPos,
                           const SnapshotBank& bank,
-                          std::vector<float>& output) noexcept;
+                          std::span<float> output) noexcept;
 
     // 2D: cursorXY ∈ [-1,1] → inverse-distance weighted blend
-    // noexcept: Only arithmetic on pre-allocated output vector
+    // noexcept: Only arithmetic on pre-allocated output span
     static void compute2D(float cursorX, float cursorY,
                           const SnapshotBank& bank,
-                          std::vector<float>& output) noexcept;
+                          std::span<float> output) noexcept;
 
     // 2D Voronoi/NNI: Natural Neighbor Interpolation via Delaunay triangulation.
     // Only the snapshots whose Voronoi cells are adjacent to the cursor contribute.
     // Falls back to compute2D (IDW) when <3 occupied slots or cursor outside hull.
-    // noexcept: No allocations; pure arithmetic on pre-allocated vectors.
+    // noexcept: No allocations; pure arithmetic on pre-allocated span.
     static void compute2D_Voronoi(float cursorX, float cursorY,
                                   const SnapshotBank& bank,
                                   const VoronoiMorphEngine& engine,
-                                  std::vector<float>& output) noexcept;
+                                  std::span<float> output) noexcept;
 
     // SIMD batch interpolation - processes 8 floats at once (AVX), 4 (SSE), or 4 (NEON)
     // noexcept: Pure pointer arithmetic, no allocations

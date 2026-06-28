@@ -2,9 +2,12 @@
 #include "AI/Agents/Conductor/ConductorAgent.h"
 
 #include "AI/AutomationControlPlane.h"
+#include "AI/Agents/Blackboard/BlackboardBridge.h"
 #include "AI/Agents/Llm/DeterministicFallbackLlmClient.h"
 
 #include <juce_core/juce_core.h>
+
+#include <future>
 
 namespace more_phi::agents {
 
@@ -26,6 +29,34 @@ TaskPriority followUpPriority(AgentRole r)
          : r == AgentRole::Optimization    ? TaskPriority::High
          : TaskPriority::Normal;
 }
+
+// Build follow-up tasks from the decomposed plan.
+std::vector<AgentTask> buildSubtasks(const AgentTask& original, const nlohmann::json& plan)
+{
+    std::vector<AgentTask> subtasks;
+    for (const auto& step : plan["steps"])
+    {
+        const auto role = roleFromName(step.value("agent", ""));
+        if (role == AgentRole::Custom)
+            continue;
+        AgentTask sub;
+        sub.id = original.id + "-" + step.value("agent", std::string());
+        sub.runId = original.id;
+        sub.targetRole = role;
+        sub.intent = juce::String(step.value("intent", ""));
+        sub.priority = followUpPriority(role);
+        sub.origin = "conductor-1";
+        if (step.contains("payload"))
+            sub.payload = step["payload"];
+        subtasks.push_back(std::move(sub));
+    }
+    return subtasks;
+}
+
+bool isErrorPlan(const nlohmann::json& plan)
+{
+    return plan.contains("error");
+}
 } // namespace
 
 nlohmann::json ConductorAgent::decomposeGoal(const juce::String& intent)
@@ -45,8 +76,6 @@ nlohmann::json ConductorAgent::decomposeGoal(const juce::String& intent)
                 if (tc.contains("arguments") && tc["arguments"].contains("steps"))
                     return tc["arguments"];
             }
-            // All tool calls were examined but none contained "steps" — log the count
-            // so operators can diagnose LLM response formatting issues.
             if (ctx_->logger)
                 ctx_->logger->log(id(), "warn",
                     "decomposeGoal: examined " + juce::String(static_cast<int>(foundCount))
@@ -56,6 +85,60 @@ nlohmann::json ConductorAgent::decomposeGoal(const juce::String& intent)
         }
     }
     return DeterministicFallbackLlmClient::decomposeIntent(intent);
+}
+
+void ConductorAgent::stop()
+{
+    state_.store(AgentState::Stopped);
+    // Cancel any pending async decompositions (the futures become unavailable).
+    std::lock_guard<std::mutex> lock(pendingMutex_);
+    pendingDecompositions_.clear();
+}
+
+void ConductorAgent::checkPendingDecompositions()
+{
+    // H-4: Called periodically (e.g. from the blackboard pump thread). Checks
+    // if any async LLM decomposition has completed and submits the follow-ups
+    // via submitCallback_.
+    if (! submitCallback_)
+    {
+        // No callback wired yet — nothing to do.
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(pendingMutex_);
+    for (auto it = pendingDecompositions_.begin(); it != pendingDecompositions_.end(); )
+    {
+        auto& [task, future] = it->second;
+        if (future.valid() && future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
+            auto plan = future.get();
+            it = pendingDecompositions_.erase(it);
+
+            if (isErrorPlan(plan) || ! plan.contains("steps") || ! plan["steps"].is_array())
+            {
+                if (ctx_ && ctx_->logger)
+                    ctx_->logger->log(id(), "warn", "async decomposition failed or had no steps",
+                                      { { "taskId", task.id.toStdString() }, { "plan", plan } });
+                state_.store(AgentState::Idle);
+                continue;
+            }
+
+            auto subtasks = buildSubtasks(task, plan);
+            if (! subtasks.empty())
+                submitCallback_(std::move(subtasks));
+
+            if (ctx_ && ctx_->blackboard)
+                ctx_->blackboard->publish(id(), "conductor.plan",
+                    { { "runId", task.id.toStdString() }, { "plan", plan } });
+
+            state_.store(AgentState::Idle);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 AgentResult ConductorAgent::execute(const AgentTask& task)
@@ -74,7 +157,31 @@ AgentResult ConductorAgent::execute(const AgentTask& task)
     }
     r.findings["runId"] = runId.toStdString();
 
-    // 2. Decompose intent into specialist subtasks.
+    // 2. H-4 FIX: When an LLM is wired, defer the (potentially-blocking HTTP)
+    //    decomposition to a std::async thread so the scheduler worker is not
+    //    blocked. Returns immediately with a "deferred" result. The follow-ups
+    //    are submitted asynchronously via checkPendingDecompositions() when the
+    //    future is ready, using submitCallback_ (wired by AgentRuntime).
+    if (ctx_ && ctx_->llm)
+    {
+        auto planFuture = std::async(std::launch::async, [this, intent = task.intent]() -> nlohmann::json {
+            try { return decomposeGoal(intent); }
+            catch (...) { return nlohmann::json{ { "error", "decompose_async_exception" } }; }
+        });
+
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            pendingDecompositions_[task.id.toStdString()] = { task, std::move(planFuture) };
+        }
+
+        r.success = true;
+        r.telemetry["decomposedVia"] = "async-llm";
+        r.telemetry["async"] = true;
+        state_.store(AgentState::Idle);
+        return r;
+    }
+
+    // 3. Synchronous path (no LLM — deterministic fallback is instant).
     auto plan = decomposeGoal(task.intent);
     if (! plan.contains("steps") || ! plan["steps"].is_array())
     {
@@ -84,37 +191,13 @@ AgentResult ConductorAgent::execute(const AgentTask& task)
         return r;
     }
 
-    std::vector<AgentTask> subtasks;
-    for (const auto& step : plan["steps"])
-    {
-        const auto role = roleFromName(step.value("agent", ""));
-        if (role == AgentRole::Custom)
-            continue;
-        AgentTask sub;
-        sub.id = task.id + "-" + step.value("agent", std::string());
-        // H4: correlate subtasks back to the originating GOAL task id (task.id) so
-        // AgentRuntime can tell when the run is truly complete and rewrite the goal
-        // result. (The workflow runId is still captured in findings["runId"] above
-        // for auditability; it is not the correlation key.)
-        sub.runId = task.id;
-        sub.targetRole = role;
-        sub.intent = juce::String(step.value("intent", ""));
-        sub.priority = followUpPriority(role);
-        sub.origin = id();
-        if (step.contains("payload"))
-            sub.payload = step["payload"];
-        subtasks.push_back(sub);
-    }
-
-    // 3. Delegate: emit followUps (only Conductor's are honored by the runtime).
+    // 4. Build and delegate follow-ups.
+    auto subtasks = buildSubtasks(task, plan);
     r.followUps = std::move(subtasks);
     r.findings["plan"] = plan;
     r.findings["delegatedCount"] = static_cast<int>(r.followUps.size());
     r.emitEvents.push_back({ "conductor.plan", { { "runId", runId.toStdString() }, { "plan", plan } } });
 
-    // 4. The specialist results arrive asynchronously (via followUps). The conductor
-    //    task is "complete" once delegation is issued; a future conductor-with-barrier
-    //    would await sub-results. For Phase 2 we mark success = delegation issued.
     r.success = true;
     r.telemetry["decomposedVia"] = plan.value("source", "deterministic-fallback");
     state_.store(AgentState::Idle);

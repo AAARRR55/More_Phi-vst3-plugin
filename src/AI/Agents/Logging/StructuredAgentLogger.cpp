@@ -43,8 +43,8 @@ void StructuredAgentLogger::log(const juce::String& agentId,
     // File unavailable → keep the most recent kRingCapacity JSONL lines in memory
     // so a later flush (or a test) can still inspect the trail.
     if (static_cast<int>(ring_.size()) >= kRingCapacity)
-        ring_.erase(ring_.begin());
-    ring_.push_back(line);
+        ring_.pop_front();
+    ring_.push_back(std::move(line));
 }
 
 juce::File StructuredAgentLogger::activeFile() const

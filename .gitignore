@@ -107,6 +107,10 @@ melodic_techno_production_guide.md
 .env.local
 .env.*.local
 
+# Security audit: MCP config with bearer token + test credentials
+docs/mcp_config.json
+memory/test_credentials.md
+
 # Misc temp
 temp_processor.h
 *.db

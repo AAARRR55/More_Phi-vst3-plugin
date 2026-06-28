@@ -327,6 +327,11 @@ void FormantMorphEngine::computeHannWindow() noexcept
 }
 
 // ─── extractFormantEnvelope() ────────────────────────────────────────────────
+// ponytail: per-bin std::sqrt/std::log (here) and the later std::exp in the
+// reconstruction run on the audio thread. Bounded by hop-amortization (frame-rate,
+// not per-sample), noexcept, and DSP-correct per the homomorphic-deconvolution
+// contract. A fast-log LUT would cut the transcendentals but risks altering the
+// cepstral lifter behavior that the formant tests pin. Defer unless profiled hot.
 
 void FormantMorphEngine::extractFormantEnvelope(const float* real, const float* imag,
                                                  float* envelope,

@@ -1,20 +1,23 @@
 /*
  * More-Phi — Core/AutoMasteringEngine.h
  *
- * Top-level orchestrator for the 10-stage automated mastering chain.
+ * Top-level orchestrator for the automated mastering chain.
  *
- * Stage order:
- *   [1]  MSMatrix::encode         L/R → M/S
- *   [2]  MultibandSplitter        4-band Linkwitz-Riley (80/250/5kHz)
- *   [3]  MultibandDynamicsProcessor  per-band VCA compressor
- *   [4]  Band summation           4 bands → stereo M/S
- *   [5]  AdaptiveEQ               32-band parametric EQ
- *   [6]  StereoImager             freq-dependent M/S width
- *   [7]  HarmonicExciter          optional tanh soft-sat
- *   [8]  BrickwallLimiter         4ms lookahead, ISP detection
- *   [9]  LUFSMeter                integrated LUFS measurement
- *   [10] LoudnessNormalizer       LUFS → target correction gain
- *   [11] MSMatrix::decode         M/S → L/R
+ * Stage order (matches processBlock; AUDIT Q4 reconciliation, 2026-06-27):
+ *   [1]  MSMatrix::encode           L/R → M/S
+ *   [2]  MultibandSplitter          4-band Linkwitz-Riley (80/250/5kHz)
+ *   [3]  MultibandDynamicsProcessor per-band VCA compressor
+ *   [4]  Band summation             4 bands → stereo M/S
+ *   [5]  TransientShaper            fast 3ms / slow 150ms ratio (post-dynamics, pre-EQ)
+ *   [6]  AdaptiveEQ                 32-band parametric EQ
+ *   [7]  StereoImager               freq-dependent M/S width
+ *   [8]  HarmonicExciter            optional tanh soft-sat
+ *   [9]  LoudnessNormalizer         LUFS → target correction gain
+ *   [10] MSMatrix::decode           M/S → L/R  (MSDECODE-1: decode BEFORE the
+ *                                               limiter so the brickwall sees
+ *                                               the true stereo signal)
+ *   [11] BrickwallLimiter           4ms lookahead, ISP detection
+ *   [12] Meters                     LUFS / true-peak / crest readout
  *
  * Intelligence (timers on the message thread):
  *   - EQParameterTranslator applies genre warm-start to EQ bands 0–7
@@ -56,6 +59,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -136,7 +140,20 @@ struct ApplyVerification
     }
 };
 
-
+// AUDIT-FIX (R8, Phase 3b): per-cycle composite quality score. Computed
+// in applyValidatedPlan() from the readback verification, delta-clamp count,
+// and the plan's target reasonableness. Stored atomically and surfaced via
+// getLastQualityScore() so callers (the AI assistant, the background cycle)
+// have an explicit numeric signal for "did this apply improve things?"
+// This is an INFORMATIONAL signal — not a gate. Scores are [0..1] where
+// 1.0 = perfect apply with conservative deltas and reasonable targets.
+struct CompositeQualityScore
+{
+    float verificationFraction = 0.0f;
+    std::size_t deltaClampCount   = 0;
+    float loudnessReasonableness = 0.0f;
+    float composite              = 0.0f;
+};
 
 class AutoMasteringEngine : public juce::Timer
 {
@@ -165,7 +182,7 @@ public:
     // ── Audio thread ──────────────────────────────────────────────────────────
 
     /**
-     * Process audio through all 10 mastering stages.
+     * Process audio through all 12 mastering stages (see file header).
      * If !isActive() returns immediately — zero processing cost.
      * noexcept — all sub-modules are noexcept.
      */
@@ -270,6 +287,11 @@ public:
     // streaming-safe guarantee is observable without exposing the private limiter.
     [[nodiscard]] float getLastAppliedCeilingDbtp() const noexcept { return lastAppliedCeilingDbtp_.load(std::memory_order_relaxed); }
 
+    // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
+    // Returns a zeroed struct before the first apply. Read from any thread.
+    [[nodiscard]] CompositeQualityScore getLastQualityScore() const noexcept
+    { return lastQualityScore_; }
+
     // P2.5 (AUDIT): wire the ActionLedger so neural mastering writes (which bypass
     // MCPToolHandler::handle and were therefore NOT recorded) become auditable. Pass
     // nullptr to detach. The processor wires this after the MCP server's
@@ -339,6 +361,16 @@ private:
     juce::AudioBuffer<float> bandBuffers_[MultibandSplitter::kNumBands];
 
     std::atomic<bool> active_ { false };
+    // M-4 FIX: member arrays replacing static thread_local in getSnapshot().
+    // thread_local triggers a hidden malloc on first access per thread on MSVC;
+    // member arrays avoid that cost and are trivially safe for the single-threaded
+    // analysis path. These are only read/written in getSnapshot() (analysis thread)
+    // and the snapshot-return path, so no synchronization is needed.
+    // mutable: getSnapshot() is const, but these are scratch buffers (like bandBuffers_
+    // above) — logically const, physically mutated to fill the snapshot.
+    mutable std::array<float, kNeuralMasteringSpectralBandCount> memberSpectralBands_ {};
+    mutable std::array<float, kNeuralMasteringStereoBandCount> memberCorrelation_ {};
+    mutable std::array<float, kNeuralMasteringStereoBandCount> memberMidSideRatio_ {};
     // THREADSWEEP-2026-06: sampleRate_/blockSize_ are written by prepare()
     // (message thread) and read by updateAnalysisWindow()/analyzeBlock() (audio
     // thread). Safe only under the JUCE contract that prepare runs with playback
@@ -355,6 +387,8 @@ private:
     ApplyVerification lastApplyVerification_ {};
     // AUDIT-FIX (Fix 2/6): partial-apply flag (see lastApplyWasPartial()).
     std::atomic<bool> lastApplyWasPartial_ { false };
+    // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
+    CompositeQualityScore lastQualityScore_ {};
     // P2.5: optional ledger for auditing neural writes. Set by the processor after
     // the MCP server's AutomationRuntime exists. nullptr when not wired (tests).
     ActionLedger* actionLedger_ = nullptr;
@@ -369,19 +403,25 @@ private:
     int tickCount_            = 0;
     int plannerUpdateInterval_= 300;  // ~30s at 10Hz timer
     float smoothedSpectralTilt_ = 0.0f;
+    int genreClassifyTimer_    = 0;   // classify every 30th tick
+    int monoCheckTimer_        = 0;   // check mono every 1st tick
+    int chainPlanTimer_        = 0;   // re-plan every 300 ticks
+    int loudnessCorrectionTimer_ = 0; // update normalizer every tick
+
+    // Neural mastering state (message thread only)
+    // AUDIT-8: the last safe neural mastering plan. Used by the heuristic
+    // ChainPlanExecutor as a warm-start (the heuristic defers to this plan's
+    // values on any stage the neural plan contested). Also used as the baseline
+    // for the safety policy's per-cycle delta caps (F4.1).
     ValidatedNeuralMasteringPlan lastSafeNeuralPlan_ {};
     bool hasLastSafeNeuralPlan_ = false;
-    // AUDIT-FIX (F4.1): apply-time delta-cap guard. validate() runs these caps
-    // at decode time, but applyValidatedPlan can be reached by a direct
-    // in-process caller that bypasses validate(); this instance closes that gap
-    // so the 0.6 LU/cycle slew limit is invariant regardless of entry point.
-    NeuralMasteringSafetyPolicy applyGuardPolicy_ { NeuralMasteringSafetyPolicy::defaultConfig() };
+    // AUDIT-F4.1: number of clamped dimensions from the most recent apply.
     std::atomic<std::size_t> lastApplyDeltaClamps_ { 0 };
-    // AUDIT-F4.2: post-clamp limiter ceiling stamp (<= kStreamingSafeCeilingDBTP).
+    // AUDIT-F4.2: the streaming-safe-clamped ceiling from the most recent apply.
     std::atomic<float> lastAppliedCeilingDbtp_ { -1.0f };
-    // AUDIT CRITICAL-7: count of hosted-plugin parameters written by the last
-    // neural→Ozone bridge apply. -1 = no applicator / not yet applied.
+    // AUDIT CRITICAL-7: count of hosted-plugin params applied last cycle.
     std::atomic<int> lastOzoneAppliedCount_ { -1 };
+    NeuralMasteringSafetyPolicy applyGuardPolicy_ { NeuralMasteringSafetyPolicy::defaultConfig() };
 };
 
 } // namespace more_phi

@@ -141,7 +141,7 @@ The CLI usage string is `morephi-dataset --plugin <path.vst3> --input <dry.wav> 
 | `src/AI/` | `MCPServer`, `MCPToolHandler`, `MCPToolsExtended`, `AIAssistant`, `TokenOptimizer`, Ozone/LLM/dataset classes | Embedded TCP MCP server, AI tools, LLM settings, Ozone Track Assistant integration, dataset generation |
 | `src/AI/StandaloneMcp/` | `StandaloneMcpServer`, `OzonePluginBackend`, `IZotopeIPCDiscovery`, `JsonRpc` | Stdio MCP executable for standalone Ozone/iZotope workflows |
 | `src/MIDI/` | `MIDIRouter` | Snapshot note triggers and CC morph routing |
-| `src/Preset/` | `MetaPresetManager`, `PresetSerializer`, `PresetLibrary`, `CloudSyncClient` | Meta-preset and preset-library persistence |
+| `src/Preset/` | `PresetSerializer`, `PresetSerializerV2`, `PresetLibrary`, `PresetEntry` | Preset persistence and serialization |
 | `src/UI/` | `MorphPad`, `SnapFader`, `SnapshotRing`, panels | JUCE editor components and message-thread interaction |
 
 ### Audio Processing Pipeline

@@ -636,7 +636,7 @@ void MorphPad::paint(juce::Graphics& g)
     float modeFontSize = juce::jlimit(10.0f, 13.0f, bounds.getHeight() * 0.08f);
     g.setColour(textDim().withAlpha(0.8f));
     g.setFont(modeFontSize);
-    g.drawText(juce::String(sourceNames[srcIdx]) + " \u00B7 " + juce::String(physNames[physIdx]),
+    g.drawText(juce::String(sourceNames[srcIdx]) + juce::String(juce::CharPointer_UTF8(" \u00B7 ")) + juce::String(physNames[physIdx]),
                bounds.toNearestInt().withHeight(20).translated(8, 4),
                juce::Justification::centredLeft);
 

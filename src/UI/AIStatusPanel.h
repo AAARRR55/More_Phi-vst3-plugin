@@ -29,6 +29,9 @@ private:
     juce::Label clientsLabel_;
     juce::TextButton toggleBtn_{"Start MCP"};
     juce::TextButton copyTokenBtn_{"Copy Token"};
+    bool pendingStart_ = false;
+    bool pendingStop_ = false;
+    juce::int64 transitionStartMs_ = 0;
 };
 
 } // namespace more_phi

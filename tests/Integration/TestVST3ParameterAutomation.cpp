@@ -153,6 +153,10 @@ TEST_CASE("VST3 parameter automation applies output gain during processing", "[i
     MorePhiProcessor processor;
     processor.prepareToPlay(48000.0, 256);
 
+    // outputProtect engages the lookahead brickwall limiter (≈192-sample delay),
+    // which silences sample[0]. Bypass it to measure gain at sample[0]. The
+    // limiter is exercised by its own dedicated tests.
+    setNormalizedWithGesture(requireRangedParameter(processor, "outputProtect"), 0.0f);
     setNormalizedWithGesture(requireRangedParameter(processor, "outputGain"), 0.25f);
 
     auto buffer = makeConstantStereoBuffer(0.25f, -0.25f);

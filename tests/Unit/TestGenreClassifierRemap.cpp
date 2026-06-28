@@ -67,7 +67,11 @@ TEST_CASE("remapGenreProbs: non-identity remap shuffles slots correctly",
 
     REQUIRE(slot == 2);
     CHECK(out[2] == Catch::Approx(0.60f).margin(1e-5f));
-    CHECK(out[7] == Catch::Approx(0.0f).margin(1e-5f));   // class 0 wasn't the argmax
+    // The remaining probability (1-0.6)/11 is distributed across all other 11
+    // slots, including slot 7 (which class 0 maps to). Slot 7 is NOT zero — it
+    // receives its share of the residual. (Class 0's own 0.30 probability does
+    // not route to slot 7; only the argmax slot gets the confidence.)
+    CHECK(out[7] == Catch::Approx((1.0f - 0.60f) / 11.0f).margin(1e-5f));
 }
 
 TEST_CASE("remapGenreProbs: confidence clamps to [0,1]",

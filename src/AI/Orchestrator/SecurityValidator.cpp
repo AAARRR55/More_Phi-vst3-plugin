@@ -68,30 +68,6 @@ bool SecurityValidator::validateRequestJson(const nlohmann::json& j, juce::Strin
 }
 
 //==============================================================================
-bool SecurityValidator::validateAuthToken(const juce::String& token,
-                                            const juce::String& expectedToken) const
-{
-    const int lenA = token.length();
-    const int lenB = expectedToken.length();
-
-    if (lenA != lenB)
-        return false;
-
-    if (lenA == 0)
-        return false;
-
-    int diff = 0;
-    for (int i = 0; i < lenA; ++i)
-    {
-        // XOR each character; accumulate into diff so the compiler cannot
-        // short-circuit the loop on the first mismatch.
-        diff |= (static_cast<int>(token[i]) ^ static_cast<int>(expectedToken[i]));
-    }
-
-    return diff == 0;
-}
-
-//==============================================================================
 bool SecurityValidator::checkRateLimit(const juce::String& clientId)
 {
     const juce::int64 nowMs = juce::Time::currentTimeMillis();

@@ -269,7 +269,7 @@ static void computeWithRetry(const SnapshotBank& bank, Fn&& fn) noexcept
 
 void InterpolationEngine::compute1D(float faderPos,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output) noexcept
+                                     std::span<float> output) noexcept
 {
     // FIX C7: NaN guard — NaN faderPos would otherwise produce UB in jlimit/index math.
     if (!std::isfinite(faderPos))
@@ -337,7 +337,7 @@ void InterpolationEngine::compute1D(float faderPos,
 
 void InterpolationEngine::compute2D(float cursorX, float cursorY,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output) noexcept
+                                     std::span<float> output) noexcept
 {
     // FIX C8: NaN guard — NaN cursor coordinates would poison all IDW weights.
     if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
@@ -435,7 +435,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
                                              const SnapshotBank& bank,
                                              const VoronoiMorphEngine& engine,
-                                             std::vector<float>& output) noexcept
+                                             std::span<float> output) noexcept
 {
     if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
     {

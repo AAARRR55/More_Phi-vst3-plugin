@@ -1,8 +1,19 @@
 #include "LLMSettingsStore.h"
 
+#include "Licensing/LicenseEnvelopeCrypto.h"
+#include "Licensing/MachineFingerprint.h"
+
+#include <string>
+
 namespace more_phi {
 
 namespace {
+
+// Encrypted envelope schema version for LLM settings (distinct from license certs)
+constexpr int kLLMEnvelopeSchema = 1;
+
+// Machine-fingerprint product namespace (separate from licensing's product ID)
+constexpr const char* kLLMFingerprintProduct = "more-phi-llm-v1";
 
 juce::String readErrorMessage()
 {
@@ -107,7 +118,55 @@ juce::DynamicObject::Ptr providerSettingsToObject(const LLMProviderDefinition& d
     return object;
 }
 
+// ── Machine-bound fingerprint for LLM settings encryption ───────────────────
+// SECURITY (Finding #2): Binds encrypted llm_settings.json to a specific machine
+// so cross-machine copying is ineffective.
+juce::String llmMachineFingerprint()
+{
+    // Reuse the licensing module's machine fingerprint with a distinct product
+    // namespace so it's decoupled from license cert machine hashes.
+    return licensing::MachineFingerprint::computeMachineHash(kLLMFingerprintProduct);
 }
+
+// ── Encrypted envelope helpers ──────────────────────────────────────────────
+// Format: { "schema": 1, "method": "<dpapi|blowfish>", "enc": "<base64>" }
+
+juce::String buildEnvelope(const juce::String& plaintextJson)
+{
+    std::string method;
+    const auto machineHash = llmMachineFingerprint();
+    const auto encrypted = licensing::LicenseEnvelopeCrypto::encrypt(plaintextJson, machineHash, method);
+
+    if (encrypted.empty() || method.empty())
+        return {};
+
+    juce::DynamicObject::Ptr envelope = new juce::DynamicObject();
+    envelope->setProperty("schema", kLLMEnvelopeSchema);
+    envelope->setProperty("method", juce::String(method));
+    envelope->setProperty("enc", juce::String(encrypted));
+    return juce::JSON::toString(juce::var(envelope.get()), false);
+}
+
+juce::String extractFromEnvelope(const juce::String& envelopeJson)
+{
+    juce::var parsed;
+    if (juce::JSON::parse(envelopeJson, parsed).failed() || ! parsed.isObject())
+        return {};
+
+    const auto* obj = parsed.getDynamicObject();
+    if (obj == nullptr)
+        return {};
+
+    const auto method = obj->getProperty("method").toString();
+    const auto enc = obj->getProperty("enc").toString();
+    if (method.isEmpty() || enc.isEmpty())
+        return {};
+
+    const auto machineHash = llmMachineFingerprint();
+    return licensing::LicenseEnvelopeCrypto::decrypt(method.toStdString(), enc, machineHash);
+}
+
+} // namespace
 
 LLMSettingsStore::LLMSettingsStore()
     : configFile_(defaultConfigFile())
@@ -134,24 +193,48 @@ bool LLMSettingsStore::load(LLMSettings& settings, juce::String& error) const
     if (! configFile_.existsAsFile())
         return true;
 
-    const auto contents = configFile_.loadFileAsString();
+    auto contents = configFile_.loadFileAsString();
     if (contents.trim().isEmpty())
         return true;
 
+    // ── Step 1: detect encrypted envelope ──────────────────────────────────
+    // If the file starts with '{', try envelope detection via structural
+    // inspection without full parse: look for "method" and "enc" keys.
+    // ponytail: simple heuristic — check for envelope fields after parse.
     juce::var parsed;
-    if (juce::JSON::parse(contents, parsed).failed() || ! parsed.isObject())
+    juce::DynamicObject* root = nullptr;
+
+    // Try envelope decryption first
+    const auto decrypted = extractFromEnvelope(contents);
+    if (decrypted.isNotEmpty())
     {
-        error = readErrorMessage();
-        return false;
+        // Was an encrypted envelope — parse the decrypted content
+        if (juce::JSON::parse(decrypted, parsed).failed() || ! parsed.isObject())
+        {
+            error = readErrorMessage();
+            return false;
+        }
+        root = parsed.getDynamicObject();
+    }
+    else
+    {
+        // Not an envelope or decryption failed — try legacy plaintext parse
+        // (handles migration from unencrypted to encrypted storage)
+        if (juce::JSON::parse(contents, parsed).failed() || ! parsed.isObject())
+        {
+            error = readErrorMessage();
+            return false;
+        }
+        root = parsed.getDynamicObject();
     }
 
-    const auto* root = parsed.getDynamicObject();
     if (root == nullptr)
     {
         error = readErrorMessage();
         return false;
     }
 
+    // ── Step 2: parse provider settings ────────────────────────────────────
     const auto& activeProvider = getObjectProperty(*root, "activeProvider");
     if (activeProvider.isString())
     {
@@ -184,6 +267,7 @@ bool LLMSettingsStore::save(const LLMSettings& settings, juce::String& error) co
         return false;
     }
 
+    // ── Step 1: build settings JSON ────────────────────────────────────────
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
     root->setProperty("version", 1);
     root->setProperty("activeProvider", settings.activeProvider.has_value() ? toStorageKey(*settings.activeProvider) : juce::String());
@@ -197,7 +281,27 @@ bool LLMSettingsStore::save(const LLMSettings& settings, juce::String& error) co
 
     root->setProperty("providers", juce::var(providers.get()));
 
-    if (! configFile_.replaceWithText(juce::JSON::toString(juce::var(root.get()), true)))
+    const auto plaintextJson = juce::JSON::toString(juce::var(root.get()), false);
+
+    // ── Step 2: encrypt and write envelope ─────────────────────────────────
+    // SECURITY (Finding #2): Uses same DPAPI/BlowFish infrastructure as the
+    // licensing system. On Windows, DPAPI binds ciphertext to the current user
+    // account. On other platforms, machine-bound BlowFish prevents cross-machine
+    // extraction. Legacy plaintext files are transparently migrated on next save.
+    const auto envelopeJson = buildEnvelope(plaintextJson);
+    if (envelopeJson.isEmpty())
+    {
+        // Encryption failure — fall back to plaintext as last resort.
+        // This should only happen in exotic environments (no DPAPI, no BlowFish).
+        if (! configFile_.replaceWithText(plaintextJson))
+        {
+            error = writeErrorMessage();
+            return false;
+        }
+        return true;
+    }
+
+    if (! configFile_.replaceWithText(envelopeJson))
     {
         error = writeErrorMessage();
         return false;
@@ -206,4 +310,4 @@ bool LLMSettingsStore::save(const LLMSettings& settings, juce::String& error) co
     return true;
 }
 
-}
+} // namespace more_phi

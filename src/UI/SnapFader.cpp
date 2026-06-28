@@ -83,6 +83,18 @@ void SnapFader::paint(juce::Graphics& g)
     g.fillRoundedRectangle(trackX - 10, thumbY - 5, 20, 10, 5.0f);
     g.setColour(juce::Colour(0xffe5c057));
     g.fillRoundedRectangle(trackX - 6, thumbY - 1.5f, 12, 3, 1.5f);
+
+    // H6: capture-confirmation flash overlay
+    const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+    if (flashEndMs_ > nowMs && flashText_.isNotEmpty())
+    {
+        const float age = static_cast<float>(flashEndMs_ - nowMs) / 2000.0f;
+        const float alpha = juce::jlimit(0.0f, 1.0f, age * 2.0f);  // fade in first 500ms, hold, fade last 500ms
+        g.setColour(juce::Colour(0xffe5c057).withAlpha(alpha * 0.9f));
+        g.setFont(juce::jmax(bounds.getWidth() * 0.11f, 9.0f));
+        g.drawText(flashText_, bounds.toNearestInt(),
+                   juce::Justification::centredBottom);
+    }
 }
 
 void SnapFader::mouseDown(const juce::MouseEvent& e)
@@ -211,6 +223,24 @@ uint16_t SnapFader::getOccupiedSnapshotMask() const
 
 void SnapFader::timerCallback()
 {
+    // H6: detect snapshot captures (mask change) and show a brief flash
+    const uint16_t currentMask = getOccupiedSnapshotMask();
+    if (currentMask != lastSnapshotMask_)
+    {
+        // Find which slot was newly occupied (compare bit by bit)
+        for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+        {
+            const uint16_t bit = uint16_t{1} << i;
+            if ((currentMask & bit) != 0 && (lastSnapshotMask_ & bit) == 0)
+            {
+                flashText_ = "Slot " + juce::String(i + 1) + " < capture";
+                flashEndMs_ = juce::Time::getMillisecondCounter() + 2000;
+                break;
+            }
+        }
+        lastSnapshotMask_ = currentMask;
+    }
+
     if (hasExternalStateChanged())
         repaint();
 }

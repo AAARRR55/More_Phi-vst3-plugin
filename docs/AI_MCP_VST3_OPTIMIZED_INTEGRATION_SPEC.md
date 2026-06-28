@@ -1,6 +1,6 @@
 # Optimized AI → MCP → VST3 Integration — Technical Specification
 
-**Project:** More-Phi v3.3.0 (JUCE 8 VST3/AU host + morph engine)
+**Project:** More-Phi v3.4.1 (JUCE 8 VST3/AU host + morph engine)
 **Scope:** Low-latency, verified AI control of a hosted VST3 instance through an embedded Model Context Protocol (MCP) server.
 **Status:** Implementation-accurate. Every identifier, constant, port, queue capacity, and error code below is sourced from the current `src/` tree (file:line citations in §9). Optimization layers marked **[EXISTING]** are already implemented; those marked **[SPEC]** are proposed extensions.
 
@@ -29,7 +29,7 @@
  │                                                                                                 │              │
  │  ┌───────────────────────────────────── TOOL SELECTION LAYER ────────────────────────────┐     │              │
  │  │ AgentOrchestrator (facade)                                                             │     │              │
- │  │   • start() → registers 6 agents, starts MCPServer, loads EcosystemConfig               │     │              │
+ │  │   • start() → registers 7 agents, starts MCPServer, loads EcosystemConfig               │     │              │
  │  │   • describeSystemState() → JSON {orchestrator, MCP, agents, scheduler}               │     │              │
  │  │   • submitUserGoal() → routes to Conductor agent                                        │     │              │
  │  │          │                                                                              │     │              │
@@ -246,7 +246,7 @@ if !v.verified: v.corrective_action = suggestedActionForError(error_reason)
 
 | Method | Behaviour | Thread |
 |--------|-----------|--------|
-| `start(EcosystemConfig)` | Loads config, constructs `SecurityValidator`, registers all 6 agents (Conductor + 5 workers), starts `MCPServer`, and publishes the instance descriptor. | Message thread |
+| `start(EcosystemConfig)` | Loads config, constructs `SecurityValidator`, registers all 7 agents (Conductor + 6 specialists), starts `MCPServer`, and publishes the instance descriptor. | Message thread |
 | `stop()` | Graceful shutdown: stops `MCPServer`, drains async jobs, joins agent threads, flushes `ActionLedger`. | Message thread |
 | `describeSystemState()` | Returns JSON with keys: `orchestrator` (health, uptime), `mcp` (port, connectedClients, healthy), `agents` (agent name → status map), `scheduler` (pendingGoals, activeWorkers). | Message thread |
 | `submitUserGoal(intent, context)` | Wraps the intent in a `Goal` object and submits it to the Conductor agent's priority queue. Returns a `goalId` that can be polled. | Message thread |

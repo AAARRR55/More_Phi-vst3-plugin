@@ -2246,6 +2246,224 @@ static json parseSchema(const char* schemaText)
     }
 }
 
+// ── Per-tool input-schema validation (AUDIT Q9 fix, 2026-06-27) ───────────────
+// The tool tables advertise JSON schemas in tools/list but handle() previously
+// routed params straight to each handler's ad-hoc checks. This gate enforces
+// the advertised contract (required keys, per-property type, enum, min/max)
+// uniformly before dispatch. It intentionally ALLOWS unknown/extra properties —
+// no schema declares additionalProperties:false, and alias keys like
+// parameter_id/parameterId/id must keep working. Returns nullptr for methods
+// with no schema table entry (fail-open → existing unknown_method path).
+//
+// ponytail: subset validator only — implements exactly what the in-tree tool
+// schemas use (type/required/enum/minimum/maximum/properties/items), not a
+// full JSON-Schema engine. Upgrade path: pull in a real validator if a schema
+// ever needs oneOf/pattern/exclusiveMinimum etc.
+
+// juce::var lacks an isNumber(); this covers int/int64/double.
+static bool varIsNumber(const juce::var& v)
+{
+    return v.isDouble() || v.isInt() || v.isInt64();
+}
+
+static bool validateVarAgainstSchema(const juce::var& value, const json& schema,
+                                     juce::String& outError);
+
+static bool validateProperty(const juce::var& value, const json& propSchema,
+                             juce::String& outError)
+{
+    const auto tIt = propSchema.find("type");
+    if (tIt == propSchema.end() || ! tIt->is_string())
+        return true; // no type constraint → accept anything
+
+    const std::string type = tIt->get<std::string>();
+
+    if (type == "object")
+    {
+        if (! value.isObject())
+        {
+            outError = "expected object";
+            return false;
+        }
+        return validateVarAgainstSchema(value, propSchema, outError);
+    }
+    if (type == "array")
+    {
+        if (! value.isArray())
+        {
+            outError = "expected array";
+            return false;
+        }
+        const auto itemsIt = propSchema.find("items");
+        if (itemsIt != propSchema.end() && itemsIt->is_object())
+        {
+            juce::Array<juce::var>* arr = value.getArray();
+            for (int i = 0; i < arr->size(); ++i)
+            {
+                juce::String e;
+                if (! validateProperty((*arr)[i], *itemsIt, e))
+                {
+                    outError = "array[" + juce::String(i) + "]: " + e;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    if (type == "string")
+    {
+        if (! value.isString())
+        {
+            outError = "expected string";
+            return false;
+        }
+    }
+    else if (type == "number")
+    {
+        // juce::var quirk: an integer literal still satisfies "number".
+        if (! varIsNumber(value))
+        {
+            outError = "expected number";
+            return false;
+        }
+    }
+    else if (type == "integer")
+    {
+        if (! (value.isInt() || value.isInt64()))
+        {
+            outError = "expected integer";
+            return false;
+        }
+    }
+    else if (type == "boolean")
+    {
+        if (! value.isBool())
+        {
+            outError = "expected boolean";
+            return false;
+        }
+    }
+
+    // enum constraint. Handles BOTH string enums ("mode":["fast","full"]) and
+    // numeric enums ("resolution":[32,64,128,256]). The prior version only
+    // matched string entries, so every tool with a numeric enum (e.g.
+    // analysis.get_spectrum's resolution) was rejected at the schema gate and
+    // never reached its handler — surfaced as a missing "success" field.
+    const auto enumIt = propSchema.find("enum");
+    if (enumIt != propSchema.end() && enumIt->is_array())
+    {
+        bool matched = false;
+        for (const auto& allowed : *enumIt)
+        {
+            if (allowed.is_string())
+            {
+                if (value.isString()
+                    && juce::String(allowed.get<std::string>()) == value.toString())
+                {
+                    matched = true;
+                    break;
+                }
+            }
+            else if (allowed.is_number() && varIsNumber(value)
+                     && allowed.get<double>() == static_cast<double>(value))
+            {
+                matched = true;
+                break;
+            }
+        }
+        if (! matched)
+        {
+            outError = "value '" + value.toString() + "' not in enum";
+            return false;
+        }
+    }
+
+    // minimum / maximum (numeric)
+    if (varIsNumber(value))
+    {
+        const auto minIt = propSchema.find("minimum");
+        if (minIt != propSchema.end() && minIt->is_number()
+            && static_cast<double>(value) < minIt->get<double>())
+        {
+            outError = "value below minimum";
+            return false;
+        }
+        const auto maxIt = propSchema.find("maximum");
+        if (maxIt != propSchema.end() && maxIt->is_number()
+            && static_cast<double>(value) > maxIt->get<double>())
+        {
+            outError = "value above maximum";
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool validateVarAgainstSchema(const juce::var& value, const json& schema,
+                                     juce::String& outError)
+{
+    // Top-level schema should be an object schema.
+    const auto tIt = schema.find("type");
+    if (tIt != schema.end() && tIt->is_string() && tIt->get<std::string>() == "object")
+    {
+        // An empty/null juce::var (the common "no params" call, e.g.
+        // get_plugin_info / sonicmaster_decision with no arguments) is treated
+        // as an empty object: it satisfies any object schema that declares no
+        // required keys. Matches the pre-gate dispatch behavior where handlers
+        // received juce::var() and treated it as {}.
+        const bool isEmpty = value.isVoid()
+                             || (value.isObject() && value.getDynamicObject() == nullptr);
+        if (! value.isObject() && ! isEmpty)
+        {
+            outError = "params must be an object";
+            return false;
+        }
+        // required[]
+        const auto reqIt = schema.find("required");
+        if (reqIt != schema.end() && reqIt->is_array())
+        {
+            auto* obj = isEmpty ? nullptr : value.getDynamicObject();
+            for (const auto& key : *reqIt)
+            {
+                if (! (obj != nullptr && obj->hasProperty(juce::String(key.get<std::string>()))))
+                {
+                    outError = "missing required parameter: " + juce::String(key.get<std::string>());
+                    return false;
+                }
+            }
+        }
+        // per-property checks (extra properties intentionally allowed; empty params
+        // have no properties to check)
+        const auto propsIt = schema.find("properties");
+        if (propsIt != schema.end() && propsIt->is_object() && ! isEmpty)
+        {
+            auto* obj = value.getDynamicObject();
+            if (obj != nullptr)
+            {
+                for (const auto& [name, propSchema] : propsIt->items())
+                {
+                    const juce::Identifier id(name);
+                    if (! obj->hasProperty(id))
+                        continue;
+                    juce::String e;
+                    if (! validateProperty(obj->getProperty(id), propSchema, e))
+                    {
+                        outError = juce::String(name) + ": " + e;
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// Lazily-built name → parsed inputSchema map. handle() is MCP-thread; the
+// std::call_once build is one-time and message-thread-light.
+// NOTE: definition is moved below kCoreTools/kExtendedTools declarations to
+// avoid a forward-reference to an array of unknown size.
+static const json* inputSchemaFor(const juce::String& method);
+
 static const ToolDefinition kCoreTools[] = {
     {"heartbeat", "Liveness probe. Requires authentication but does NOT consume a rate-limit slot, so an idle client can keep the connection alive without starving tool traffic. Returns server time, uptime, queue depth, connected clients, and health.", R"({"type":"object","properties":{"client_clock_ms":{"type":"integer","description":"Optional client-side epoch millis for RTT estimation."}}})"},
     {"get_plugin_info", "Return More-Phi and hosted plugin identity information.", R"({"type":"object","properties":{}})"},
@@ -2266,7 +2484,7 @@ static const ToolDefinition kCoreTools[] = {
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
     {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-	    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements, AUDIT-FIX-R2): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk). NOTE (fallback_to_heuristic, 2026-06-27): bool, default true. When true AND the neural model REFUSES (safety_rejected/low_confidence/target_out_of_range — common on already-loud or out-of-distribution material, since the model is loudness-blind), the tool automatically runs the measurement-driven RuleBasedMasteringResolver (which DOES see the measured input LUFS) and APPLIES its plan, returning a success-shaped result with path='heuristic_fallback' and the original neural_refusal_reason preserved. Default true because a measurement-driven heuristic plan is always better than a flat failure on material the model cannot assess. The result's top-level `path` field reports which path ran: 'neural' (model produced the plan) or 'heuristic_fallback' (model refused, heuristic took over). Set false to see the raw model refusal instead of the automatic fallback. fallback_target_lufs (default -14) sets the heuristic's loudness target independently of target_lufs.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false},"fallback_to_heuristic":{"type":"boolean","default":true},"fallback_target_lufs":{"type":"number","default":-14.0,"minimum":-23,"maximum":-8}}})"},
+	    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. CRITICAL NOTE (loudness-blind model): The ONNX model input is peak-normalized to -1 dBFS before inference. The model CANNOT measure absolute input loudness. The 'lufs' value in projected_plan is the TARGET loudness the model recommends, not a measurement of the input. For genuine input loudness, always use live_measurements.lufs_integrated which reports BS.1770-4 gated integrated loudness. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. Check mapping_status.mapped_slot_count and mapping_status.ozone_mapped to confirm the hosted plugin's parameters are mapped — a plan with zero mapped slots applies nothing to the hosted plugin. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk). NOTE (fallback_to_heuristic): bool, default true. When true AND the neural model REFUSES (safety_rejected/low_confidence/target_out_of_range — common on already-loud or out-of-distribution material, since the model is loudness-blind), the tool automatically runs the measurement-driven RuleBasedMasteringResolver (which DOES see the measured input LUFS) and APPLIES its plan, returning a success-shaped result with path='heuristic_fallback' and the original neural_refusal_reason preserved. Default true because a measurement-driven heuristic plan is always better than a flat failure on material the model cannot assess. The result's top-level `path` field reports which path ran: 'neural' (model produced the plan) or 'heuristic_fallback' (model refused, heuristic took over). Set false to see the raw model refusal instead of the automatic fallback. fallback_target_lufs (default -14) sets the heuristic's loudness target independently of target_lufs.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false},"fallback_to_heuristic":{"type":"boolean","default":true},"fallback_target_lufs":{"type":"number","default":-14.0,"minimum":-23,"maximum":-8}}})"},
     {"mastering.neural_apply", "One-click neural Master Assistant: run the ONNX decision on the last ~6s of captured audio AND apply it to the hosted plugin in a single call. Composes requestDecisionNow + applyValidatedPlan. Returns applied=true with the per-slot breakdown (enqueued/skipped/unmapped) via mapping_status. This is the COMMIT door — sonicmaster_decision stays decision-only for preview; this writes hosted-plugin parameters. Requires a hosted plugin whose parameters are mapped (check mapping_status.ozone_mapped); if no plugin is hosted or the map is all-stubs, the apply is a no-op and the response explains why. Params: target_lufs (float, default -14, overrides the model's loudness recommendation), apply_limiter_ceiling (bool, default false). The user should play audio for ~6s before calling.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
     {"morephi_ipc_attach", "Attach read-only to a named IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
     {"morephi_ipc_detach", "Detach from the currently mapped IPC segment.", R"({"type":"object","properties":{}})"},
@@ -2380,6 +2598,38 @@ static const ToolDefinition kCoreTools[] = {
      "Retrieve the final result of a completed async_tool.submit job.",
      R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"}
 };
+
+// Definition of inputSchemaFor (forward-declared above). Now that kCoreTools
+// and kExtendedTools are fully defined, the SchemaTable ctor can iterate them.
+static const json* inputSchemaFor(const juce::String& method)
+{
+    struct SchemaTable
+    {
+        std::unordered_map<std::string, json> byName;
+        SchemaTable()
+        {
+            auto add = [this](const char* name, const char* schemaText)
+            {
+                byName.emplace(name, parseSchema(schemaText));
+            };
+            for (const auto& tool : kCoreTools)
+                add(tool.name, tool.inputSchema);
+            for (int i = 0; i < kExtendedToolCount; ++i)
+                add(kExtendedTools[i].name, kExtendedTools[i].schema);
+            // agents.* tools (declared inline in getToolList, not in a table)
+            add("agents.list", R"({"type":"object","properties":{}})");
+            add("agents.run_goal", R"({"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]})");
+            add("agents.run_task", R"({"type":"object","properties":{"agent":{"type":"string"},"intent":{"type":"string"}},"required":["agent"]})");
+            add("agents.run_status", R"({"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"]})");
+            add("agents.run_cancel", R"({"type":"object","properties":{}})");
+            add("agents.blackboard.recent", R"({"type":"object","properties":{}})");
+            add("agents.set_autonomy", R"({"type":"object","properties":{"level":{"type":"string","enum":["manual","assist","copilot","autopilot"]}},"required":["level"]})");
+        }
+    };
+    static SchemaTable table;
+    const auto it = table.byName.find(method.toStdString());
+    return (it != table.byName.end()) ? &it->second : nullptr;
+}
 
 static json plannerInputsToJson(int genreIndex,
                                 float dynamicRange,
@@ -3349,6 +3599,27 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (auto cached = getCachedToolResult(method, params, p); cached.isNotEmpty())
         return cached;
 
+    // AUDIT Q9: enforce the advertised input schema before dispatch. Fail-closed
+    // for declared tools; unknown methods fall through to unknown_method. Schemas
+    // using compound keywords (allOf/anyOf/oneOf) are beyond this subset
+    // validator's scope — we fail OPEN for them (return no schema) and let the
+    // handler's own ad-hoc validation run, since over-rejecting on a partially-
+    // understood schema would break lenient handler behavior (e.g. the
+    // feedback_status normalizer). ponytail: upgrade to a real JSON-Schema
+    // validator if compound schemas become common.
+    if (const json* schema = inputSchemaFor(method))
+    {
+        const bool isCompound = schema->contains("allOf")
+                                || schema->contains("anyOf")
+                                || schema->contains("oneOf");
+        if (! isCompound)
+        {
+            juce::String schemaError;
+            if (! validateVarAgainstSchema(params, *schema, schemaError))
+                return toJString(json{{"error", "invalid_params"}, {"message", schemaError.toStdString()}});
+        }
+    }
+
     juce::String result;
 
     if (method == "get_plugin_info")      result = getPluginInfo(p);
@@ -4025,15 +4296,77 @@ juce::String MCPToolHandler::sweepParameter(const juce::var& params, MorePhiProc
     steps = juce::jlimit(2, 64, steps);
     const int captureMs = juce::jlimit(10, 5000, static_cast<int>(params.getProperty("capture_ms", 250)));
 
+    // AUDIT-FIX (SWEEP-2): safe-mode parameter exclusion. When safe_only=true
+    // (default), reject parameters whose names contain known-dangerous tokens
+    // (bypass, mute, solo, etc.) so the AI cannot accidentally sweep destructive
+    // controls. The caller can pass safe_only=false to bypass this check, or
+    // provide an explicit exclude_names array for custom exclusions.
+    const bool safeOnly = params.getProperty("safe_only", true);
+    if (safeOnly)
+    {
+        auto* hosted = p.getHostManager().getPlugin();
+        if (hosted && idx >= 0 && idx < static_cast<int>(hosted->getParameters().size()))
+        {
+            const juce::String paramName = hosted->getParameters()[static_cast<std::size_t>(idx)]->getName(64);
+            const juce::String lower = paramName.toLowerCase();
+            // Danger patterns: structural/bypass controls, dynamics killers,
+            // routing, oversampling, latency, metering.
+            const bool dangerous = lower.contains("bypass") || lower.contains("mute")
+                || lower.contains("solo") || lower.contains("phase") || lower.contains("invert")
+                || lower.contains("latency") || lower.contains("oversampl")
+                || lower.contains("analyzer") || lower.contains("meter")
+                || lower.contains("lookahead") || lower.contains("stereo placement")
+                || lower.contains("speaker") || lower.contains("side chain")
+                || lower.contains("external") || lower.contains("routing");
+            if (dangerous)
+                return toJString(json{{"success", false},
+                    {"error", "parameter_excluded_for_safety"},
+                    {"param_name", paramName.toStdString()},
+                    {"index", idx},
+                    {"hint", "Set safe_only=false to sweep this parameter, or add "
+                             "it to exclude_names together with safe_only=false."}});
+        }
+    }
+
+    // AUDIT-FIX (SWEEP-2/4b): explicit exclusion list. The caller can pass an
+    // array of name substrings; the sweep is rejected if the resolved parameter
+    // name contains any exclusion token. This gives the AI fine-grained control
+    // without disabling safe_only entirely.
+    {
+        const auto excludeNames = params.getProperty("exclude_names", juce::var());
+        if (auto* arr = excludeNames.getArray())
+        {
+            const juce::String resolvedName = bridge.getParameterName(idx).toLowerCase();
+            for (const auto& ex : *arr)
+            {
+                if (resolvedName.contains(ex.toString().toLowerCase()))
+                    return toJString(json{{"success", false},
+                        {"error", "parameter_excluded_by_name"},
+                        {"param_name", resolvedName.toStdString()},
+                        {"index", idx}});
+            }
+        }
+    }
+
+    // AUDIT-FIX (SWEEP-7): spacing mode. "linear" (default) generates evenly-
+    // spaced values across [from, to]. "log" generates exponentially-spaced
+    // values, which is perceptually uniform for frequency, Q, and other
+    // log-scale parameters. Log mode requires from > 0.0f and to > 0.0f;
+    // falls back to linear when either endpoint is non-positive.
+    const juce::String spacing = params.getProperty("spacing", "linear").toString().toLowerCase();
+    const bool useLogSpacing = (spacing == "log" && from > 0.0f && to > 0.0f);
+
     json results = json::array();
     int capturedSteps = 0;
 
     for (int step = 0; step < steps; ++step)
     {
-        // Linear interpolation across [from, to]; inclusive of both endpoints
-        // when steps >= 2.
         const float t = (steps <= 1) ? 0.0f : static_cast<float>(step) / static_cast<float>(steps - 1);
-        const float value = juce::jlimit(0.0f, 1.0f, from + t * (to - from));
+        float value;
+        if (useLogSpacing)
+            value = juce::jlimit(0.0f, 1.0f, from * std::pow(to / from, t));
+        else
+            value = juce::jlimit(0.0f, 1.0f, from + t * (to - from));
 
         // Enqueue + flush through the same verified write path as set_parameter.
         if (! p.enqueueParameterSet(idx, value, MorePhiProcessor::ParameterEditSource::MCP, true))
@@ -6726,6 +7059,13 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     // an audible path (internal chain active OR Ozone bridge wrote params),
     // using engine.lastApplyReachedAudioPath() instead of isActive() directly.
     result["applied_to_audio_path"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+    // AUDIT-FIX (VERIFY-4): convenience top-level fields mirroring the detailed
+    // mapping_status block below, so callers that only need "did the last plan
+    // actually reach audio?" have a flat boolean + count without parsing the
+    // nested object. plan_reached_audio is an alias for applied_to_audio_path
+    // that reads naturally in the "decision → apply" flow.
+    result["plan_reached_audio"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+    result["ozone_applied_count"] = p.getAutoMasteringEngine().getLastOzoneAppliedCount();
     result["application_target"] = "more_phi_internal_mastering_chain_not_hosted_plugin";
     // Item 7 relabel: the loudness slot semantics are already disclosed in
     // engineMapping.loudness; echo the discriminator at top level for clients

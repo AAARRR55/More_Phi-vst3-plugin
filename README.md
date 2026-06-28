@@ -1,4 +1,4 @@
-# More-Phi v3.3.0
+# More-Phi v3.4.1
 
 **Advanced Parameter Morphing Engine** — A VST3/AU plugin that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, multi-agent AI orchestration, and realtime neural mastering.
 
@@ -24,13 +24,13 @@
 - **Formant Preservation** — Cepstral liftering for vocal/instrument character preservation during morphing
 - **Hybrid Blend** — Equal-power SIMD mixing of parameter, spectral, and granular outputs
 
-### Built-in Mastering Chain (11 stages)
-- M/S encode → 4-band Linkwitz-Riley split → per-band VCA dynamics → 32-band adaptive EQ → stereo imager → harmonic exciter (4× oversampled tanh) → loudness normalizer → M/S decode → brickwall limiter (ISP-aware with true-peak cache) → LUFS meter (BS.1770-4 verified) + true-peak estimator (96-tap Kaiser FIR)
+### Built-in Mastering Chain (12 stages)
+- M/S encode → 4-band Linkwitz-Riley split → per-band VCA dynamics → band summation → transient shaper (post-dynamics, pre-EQ) → 32-band adaptive EQ → stereo imager → harmonic exciter (4× oversampled tanh) → loudness normalizer → M/S decode → brickwall limiter (ISP-aware with true-peak cache) → LUFS meter (BS.1770-4 verified) + true-peak estimator (4×64-tap polyphase Kaiser β=8.6, 256-tap prototype)
 
 ### AI & Automation
 - **Embedded MCP Server** — JSON-RPC 2.0 on localhost:30001+ with per-instance bearer token auth, 30s idle timeout, rate limiting, batch request support, 30+ tools
 - **7-Agent AI Orchestration** — Conductor (goal decomposition) + Analysis/Optimization/Creative/RealtimeControl/QualitySafety/Memory specialists with O(1) priority scheduler, 2-tier starvation prevention, 3-layer fault isolation
-- **Realtime Neural Mastering (Preview)** — ONNX in-process inference with HTTP fallback, 3-thread model (audio capture → analysis → message thread handoff), safety policy clamping
+- **Realtime Neural Mastering (Preview)** — ONNX in-process inference with HTTP fallback, 3-thread model (audio capture → analysis → message thread handoff), safety policy clamping, genre-conditioned priors (target LUFS + tonal-balance residual), pluggable ONNX genre model
 - **Learn Mode** — AI parameter classification, importance scoring, token optimization with cost models for Claude/GPT
 - **iZotope Ozone Integration** — Parameter mapping, plan application, Track Assistant IPC bridge
 
@@ -124,7 +124,7 @@ More-Phi includes a built-in MCP (Model Context Protocol) server with 30+ tools 
 More-Phi's analysis tools expose deterministic DSP measurements. They are useful for comparison and metering but are not certified laboratory instruments:
 
 - Loudness: Lightweight BS.1770-style rolling estimates — not formal reference-vector certification
-- True peak: 96-tap Kaiser β=9 polyphase FIR estimate (≈±0.2 dBTP)
+- True peak: 4×64-tap polyphase FIR upsampler (256-tap linear-phase Kaiser β=8.6, ~80 dB stopband), measurement-grade per ITU-R BS.1770-4 (≈±0.02–0.1 dBTP)
 - Spectrum: Hann-window FFT mono sum — anti-phase stereo may cancel
 - Stereo field: Mid/side energy analysis with banded correlation
 - Mastering plans: Deterministic heuristic rule engine with rule IDs — not learned model predictions
@@ -236,23 +236,27 @@ cmake --build --preset windows-safe --parallel
 
 ```
 src/
-├── Plugin/          MorePhiProcessor (878-line header, 45 APVTS params), MorePhiEditor (V2 tabbed, 920×760)
-├── Core/            InterpolationEngine (SIMD IDW+Voronoi), PhysicsEngine (3 modes, sub-stepping),
-│                    SnapshotBank (12-slot seqlock), MorphProcessor, GeneticEngine,
-│                    SpectralMorphEngine (STFT, periodic Hann COLA), GranularMorphEngine (Hann² normalized),
-│                    FormantMorphEngine (cepstral liftering), AutoMasteringEngine (11-stage M/S chain),
-│                    AdaptiveEQ (32-band), BrickwallLimiter (ISP-aware), LUFSMeter (BS.1770-4),
-│                    TruePeakEstimator (96-tap FIR), ModulationEngine, ModulationMatrix (128 routes),
-│                    LFO (6 shapes), StepSequencer (4 dirs), DiscreteParameterHandler (5 strategies),
-│                    WaypointEngine, HybridBlend, PerformanceProfiler, ThreadPool
-├── Host/            PluginHostManager (SEH+C++ guard, ref-counted leasing, deferred doom),
-│                    ParameterBridge (withPlugin template, batch ops, exception counting)
-├── AI/              MCPServer (JSON-RPC 2.0, 30+ tools), MCPToolHandler, MCPToolsExtended (18 tools)
-│   ├── Agents/      AgentRuntime, ConductorAgent, 6 specialist agents, PriorityScheduler (O(1) 4-level),
-│   │                BlackboardBridge (sequence-cursor), DefaultToolInvoker (fail-closed)
-│   ├── Dataset/     DatasetGeneratorV2, DatasetGeneratorV3, ParameterSampler, ValidationEngine
-│   ├── StandaloneMcp/ StandaloneMcpServer (stdio JSON-RPC), OzonePluginBackend
-│   └── Orchestrator/ AgentOrchestrator, SecurityValidator
+	├── Plugin/          MorePhiProcessor, MorePhiEditor (V2 tabbed, 920×760), SonicMasterEmbeddedAnchor,
+	│                    OnnxRuntimeDelayLoadHook (Windows DLL-shadowing fix)
+	├── Core/            InterpolationEngine (SIMD IDW+Voronoi), PhysicsEngine (3 modes, sub-stepping),
+	│                    SnapshotBank (12-slot seqlock), MorphProcessor, GeneticEngine,
+	│                    SpectralMorphEngine (STFT, periodic Hann COLA), GranularMorphEngine (Hann² normalized),
+	│                    FormantMorphEngine (cepstral liftering), AutoMasteringEngine (12-stage M/S chain),
+	│                    AdaptiveEQ (32-band), BrickwallLimiter (ISP-aware), LUFSMeter (BS.1770-4),
+	│                    TruePeakEstimator (256-tap polyphase FIR), ModulationEngine, ModulationMatrix (128 routes),
+	│                    LFO (6 shapes), StepSequencer (4 dirs), DiscreteParameterHandler (5 strategies),
+	│                    WaypointEngine, HybridBlend, TransientShaper, MultibandSplitter,
+	│                    PerformanceProfiler, ThreadPool, ABCompareEngine
+	├── Host/            PluginHostManager (SEH+C++ guard, ref-counted leasing, deferred doom),
+	│                    ParameterBridge (withPlugin template, batch ops, exception counting)
+	├── AI/              MCPServer (JSON-RPC 2.0, 30+ tools), MCPToolHandler, MCPToolsExtended
+	│   ├── Agents/      AgentRuntime, ConductorAgent, 6 specialist agents, PriorityScheduler (O(1) 4-level),
+	│   │                BlackboardBridge (sequence-cursor), DefaultToolInvoker (fail-closed)
+	│   │                StructuredAgentLogger, RestLlmClient, DeterministicFallbackLlmClient
+	│   ├── Dataset/     DatasetGeneratorV2, DatasetGeneratorV3, ParameterSampler, ValidationEngine,
+	│   │                NeuralMasteringFeatureExtractor
+	│   ├── StandaloneMcp/ StandaloneMcpServer (stdio JSON-RPC), MorePhiIPCAssistant, MorePhiPluginBackend
+	│   └── Orchestrator/ AgentOrchestrator, EcosystemConfig, SecurityValidator, McpProtocol
 ├── MIDI/            MIDIRouter (256-event pre-allocated, channel filter, sidechain)
 ├── Preset/          PresetSerializer (V1+V2), PresetLibrary (CRUD, search, tags, ratings)
 ├── Licensing/       LicenseManager (Ed25519), LicenseVerifier, SecureLicenseStore, ActivationClient
@@ -275,13 +279,11 @@ src/
 - [Dataset Generation](docs/DATASET_GENERATION.md) — V2 and V3 pipeline documentation
 - [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) — AI parameter optimization
 - [Audio Engine Specification](docs/AudioEngineSpec_v2.md) — Audio processing details
-- [Ozone IPC Assistant Capabilities](docs/OZONE_IPC_ASSISTANT_CAPABILITIES.md) — Verified assistant workflows
-- [iZotope IPC Research Methodology](docs/OZONE_IPC_RESEARCH_METHODOLOGY.md) — IPC transport and schema research
 
 ### Agent Documentation
 - [Multi-Agent Orchestration Layer Design](docs/superpowers/specs/2026-06-21-multi-agent-orchestration-layer-design.md)
 - [SonicMaster Realtime Integration Design](docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md)
-- [Neural Mastering Roadmap](specs/003-neural-mastering-roadmap/plan.md)
+- [Neural Mastering Roadmap](docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md)
 
 ---
 
@@ -311,8 +313,7 @@ src/
 - Use Full Recall mode for plugins that store internal state (Kontakt, wavetable synths)
 
 ### Plugin Disconnects During Export or Close/Reopen
-- Fixed in v3.3.0+ with robust state restoration and Timer-deferred plugin reloading
-- See [TROUBLESHOOTING_PLUGIN_DISCONNECTION.md](docs/TROUBLESHOOTING_PLUGIN_DISCONNECTION.md)
+- Fixed in v3.4.0+ with robust state restoration and Timer-deferred plugin reloading
 
 ### Poor Performance
 - Enable **CPU Saver** mode (halves audio-domain FFT, caps oversampling)
@@ -367,5 +368,5 @@ If you distribute binary builds, you must either release under AGPLv3 or purchas
 ## Credits
 
 Built with [JUCE](https://juce.com/) 8.0.4  
-Version 3.3.0 — Synthesizer Edition  
+Version 3.4.1 — Commercial Hardening  
 Technical audit score: **7.9/10** — [full report](VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)

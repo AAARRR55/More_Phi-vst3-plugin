@@ -496,13 +496,40 @@ NeuralMasteringValidationResult NeuralMasteringSafetyPolicy::validate(const Neur
         return result;
     }
 
+    // AUDIT-FIX (AI-4, Phase 3a): confidence-weighted delta caps. When the plan's
+    // confidence is below 1.0 but above minConfidence (i.e., confidence was high
+    // enough to pass the LowConfidence gate above), scale the per-cycle delta caps
+    // by the confidence factor so lower-confidence plans are more conservatively
+    // applied. The weight bottoms out at config_.minConfidence so even a
+    // borderline plan (confidence = 0.75) still gets 75% of the normal delta
+    // envelope — never zero. A full-confidence plan (confidence = 1.0) gets the
+    // full envelope unchanged. This is a soft constraint applied only at the
+    // projection step, not a hard reject — the plan still runs.
+    NeuralMasteringSafetyPolicyConfig effectiveConfig = config_;
+    if (std::isfinite(candidate.confidence)
+        && candidate.confidence >= config_.minConfidence
+        && candidate.confidence < 1.0f)
+    {
+        const float scale = std::max(config_.minConfidence, candidate.confidence);
+        auto scaleArray = [scale](auto& arr)
+        {
+            for (auto& v : arr) v *= scale;
+        };
+        scaleArray(effectiveConfig.maxDeltaPerPlan.eq);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.dynamics);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.stereo);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.harmonic);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.limiter);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.loudness);
+    }
+
     MasteringTargetVector previous {};
     if (hasLastSafePlan_)
         previous = lastSafePlan_.projectedTargets;
 
     bool projected = false;
     MasteringTargetVector projectedTargets {};
-    projectMaskedTargets(projectedTargets, previous, candidate, config_, projected);
+    projectMaskedTargets(projectedTargets, previous, candidate, effectiveConfig, projected);
     if (projected)
         result.addIssue(NeuralMasteringValidationIssue::MaxDeltaProjected);
 

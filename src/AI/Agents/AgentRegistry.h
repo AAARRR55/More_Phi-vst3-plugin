@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <memory>
+#include <array>
 #include <vector>
 
 namespace more_phi::agents {
@@ -30,6 +31,7 @@ public:
     // Pre-seal only — see class doc.
     bool registerAgent(std::unique_ptr<IAgent> agent);
 
+    // H-1 FIX: O(1) enum-indexed array lookup rather than O(n) linear scan.
     IAgent* find(AgentRole role) const noexcept;
     std::vector<AgentRole> registeredRoles() const noexcept;
 
@@ -44,13 +46,17 @@ public:
     void seal() noexcept { sealed_.store(true, std::memory_order_release); }
 
 private:
-    struct Slot
-    {
-        AgentRole role = AgentRole::Custom;
-        std::unique_ptr<IAgent> agent;
-    };
-    std::vector<Slot> slots_;
+    // H-1: maps AgentRole ordinal → agent pointer. O(1) find(). Role count
+    // matches the enum range (Conductor=0 … Custom=7). Unused slots are null.
+    std::array<std::unique_ptr<IAgent>, 8> agentsByRole_;
+
+    // Preserves registration order for iteration in prepareAll/stopAll.
+    struct Slot { AgentRole role = AgentRole::Custom; int ordinal = 0; };
+    std::vector<Slot> order_;
+
     std::atomic<bool> sealed_{ false };
+
+    static constexpr int ordinal(AgentRole r) noexcept { return static_cast<int>(r); }
 };
 
 } // namespace more_phi::agents

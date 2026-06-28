@@ -12,7 +12,7 @@ namespace more_phi {
 class ChatDisplay final : public juce::Component
 {
 public:
-    enum class Role { System, User, Assistant };
+    enum class Role { System, User, Assistant, Error };
 
     struct Message
     {
@@ -25,6 +25,8 @@ public:
     void addMessage(Role role, juce::String text);
     /** Replace the text of the last message. No-op if no messages exist. */
     void updateLastMessage(juce::String text);
+    /** Replace both role and text of the last message. No-op if no messages exist. */
+    void replaceLastMessage(Role role, juce::String text);
     void clearMessages();
 
     void resized() override;

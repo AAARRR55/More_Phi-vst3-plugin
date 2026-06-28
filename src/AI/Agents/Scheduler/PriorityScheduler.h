@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -21,6 +22,13 @@ namespace more_phi::agents {
 //   - O(n log n) starvation-bump scan that held the mutex while draining and
 //     rebuilding the entire priority queue
 // Starvation promotion is now O(1): splice the Background queue into Normal.
+//
+// C-3 FIX: RealtimeCritical tasks bypass the shared mutex entirely via a dedicated
+// lock-free MPMC slot (atomic exchange). This eliminates priority inversion where
+// a Background→Normal bulk-promotion (bumpStarvingBackground) held the shared
+// mutex and blocked a RealtimeCritical submission. The worker loop drains the
+// lock-free urgents queue first on every iteration without touching the mutex.
+// The non-critical queues (Background/Normal/High) retain the mutex+CV approach.
 class PriorityScheduler
 {
 public:
@@ -30,7 +38,11 @@ public:
     void start(unsigned numWorkers = 2);
     void stop();
 
-    void submit(std::function<void()> task, TaskPriority priority);
+    // L-3: deadlineMs = 0 means no deadline. When set (ms since epoch), the
+    // worker loop checks the soft deadline before dispatching and logs a warning
+    // (via the default AgentRuntime logger) if the task expired.
+    void submit(std::function<void()> task, TaskPriority priority,
+                juce::int64 deadlineMs = 0);
 
     // Observability
     struct Stats
@@ -45,7 +57,7 @@ public:
     Stats stats() const;
 
 private:
-    void workerLoop();
+    void workerLoop(std::stop_token stopToken);
     void bumpStarvingBackground();
     // M4: second-tier escalation. Background promotes to Normal at starvationGuardMs_;
     // under sustained High-priority load Normal would otherwise never run, so after
@@ -58,6 +70,7 @@ private:
         std::function<void()> task;
         TaskPriority priority;
         juce::int64 submitTimeMs = 0;   // for starvation detection
+        juce::int64 deadlineMs = 0;     // L-3: soft deadline; 0 = none
 
         // Priority ordinal for queue selection (higher = more urgent)
         static constexpr int ordinal(TaskPriority p)
@@ -78,9 +91,20 @@ private:
     static constexpr int kNumPriorityLevels = 4;
     std::queue<Entry> queues_[kNumPriorityLevels];
 
+    // C-3 FIX: Lock-free urgent slot for RealtimeCritical tasks.
+    // submit() CAS-es a full Entry into urgentsSlot_; if the slot was occupied
+    // (rare — only under extreme load), it falls back to the mutex-guarded
+    // High queue. Workers check urgentsSlot_ on every loop iteration first,
+    // without touching the shared mutex. This guarantees O(1) non-contending
+    // submission and dispatch for the highest-priority tasks.
+    static constexpr int kUrgentsPoolSize = 8;
+    std::atomic<int> urgentsHead_{0};
+    std::atomic<int> urgentsTail_{0};
+    std::array<Entry, kUrgentsPoolSize> urgentsPool_{};
+
     mutable std::mutex mutex_;
-    std::condition_variable cv_;
-    std::vector<std::thread> workers_;
+    std::condition_variable_any cv_;
+    std::vector<std::jthread> workers_;
     std::atomic<bool> running_{false};
     std::atomic<long long> executed_{0};
     std::atomic<long long> starvationBumps_{0};

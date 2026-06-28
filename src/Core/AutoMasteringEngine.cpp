@@ -295,29 +295,29 @@ NeuralMasteringAnalysisSnapshot AutoMasteringEngine::getSnapshot() const noexcep
     {
         const auto binsToCopy = std::min(static_cast<std::size_t>(spectrum.binCount),
                                           kNeuralMasteringSpectralBandCount);
-        static thread_local std::array<float, kNeuralMasteringSpectralBandCount> sSpectralBands {};
-        std::fill(sSpectralBands.begin(), sSpectralBands.end(), 0.0f);
+        // M-4 FIX: use member array instead of static thread_local. Avoids the
+        // hidden malloc that MSVC emits on first thread_local access per thread.
+        std::fill(memberSpectralBands_.begin(), memberSpectralBands_.end(), 0.0f);
         for (std::size_t i = 0; i < binsToCopy; ++i)
-            sSpectralBands[i] = spectrum.magnitudeDB[i];
-        snapshot.spectralBands = sSpectralBands.data();
+            memberSpectralBands_[i] = spectrum.magnitudeDB[i];
+        snapshot.spectralBands = memberSpectralBands_.data();
     }
 
     StereoFieldAnalyzer::StereoFieldSnapshot stereo;
     if (stereoFieldAnalyzer_.getSnapshot(stereo) && stereo.frameIndex > 0)
     {
-        static thread_local std::array<float, kNeuralMasteringStereoBandCount> sCorrelation {};
-        static thread_local std::array<float, kNeuralMasteringStereoBandCount> sMidSideRatio {};
-        std::fill(sCorrelation.begin(), sCorrelation.end(), 0.0f);
-        std::fill(sMidSideRatio.begin(), sMidSideRatio.end(), 0.0f);
+        // M-4 FIX: same as above — member arrays, no thread_local.
+        std::fill(memberCorrelation_.begin(), memberCorrelation_.end(), 0.0f);
+        std::fill(memberMidSideRatio_.begin(), memberMidSideRatio_.end(), 0.0f);
         const auto bandsToCopy = std::min(static_cast<std::size_t>(StereoFieldAnalyzer::kNumBands),
                                            kNeuralMasteringStereoBandCount);
         for (std::size_t i = 0; i < bandsToCopy; ++i)
         {
-            sCorrelation[i] = stereo.correlation[i];
-            sMidSideRatio[i] = stereo.msEnergyRatio[i];
+            memberCorrelation_[i] = stereo.correlation[i];
+            memberMidSideRatio_[i] = stereo.msEnergyRatio[i];
         }
-        snapshot.stereoCorrelation = sCorrelation.data();
-        snapshot.midSideRatio = sMidSideRatio.data();
+        snapshot.stereoCorrelation = memberCorrelation_.data();
+        snapshot.midSideRatio = memberMidSideRatio_.data();
     }
 
     return snapshot;

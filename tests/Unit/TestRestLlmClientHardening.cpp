@@ -223,3 +223,93 @@ TEST_CASE("RestLlmClient providerName is rest-prefixed", "[agents][llm]")
     auto client = makeClient(std::make_shared<ScriptedHttpClient>());
     REQUIRE(client.providerName().startsWith("rest-"));
 }
+
+// ── Gemini provider coverage ───────────────────────────────────────────────
+// Mirrors the OpenAI cases but against Gemini's response shape
+// ({"candidates":[{"content":{"parts":[{"text":"..."}]}}], "usageMetadata":{...}}).
+
+LLMProviderSettings geminiSettings()
+{
+    LLMProviderSettings ps;
+    ps.apiKey = "AIza-test-key";
+    ps.selectedModel = "gemini-2.0-flash";
+    return ps;
+}
+
+juce::String geminiSuccessBody(const std::string& content, int totalTokens)
+{
+    json body;
+    body["candidates"] = json::array({
+        json::object({
+            { "content", json::object({ { "parts", json::array({ json::object({ { "text", content } }) }) } }) }
+        })
+    });
+    body["usageMetadata"] = { { "totalTokenCount", totalTokens } };
+    return juce::String(body.dump());
+}
+
+TEST_CASE("RestLlmClient parses Gemini response text + usageMetadata", "[agents][llm][gemini]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, geminiSuccessBody("plain text plan", 99).toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Gemini, geminiSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content == "plain text plan");
+    REQUIRE(resp.tokensUsed == 99);
+}
+
+TEST_CASE("RestLlmClient promotes validated steps from Gemini content", "[agents][llm][gemini]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    const auto plan = R"({"steps":[{"agent":"analysis","goal":"analyse spectrum"}]})";
+    http->responses = { { 200, geminiSuccessBody(plan, 50).toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Gemini, geminiSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.tokensUsed == 50);
+    REQUIRE(resp.toolCalls.is_array());
+    REQUIRE(resp.toolCalls.size() == 1);
+}
+
+TEST_CASE("RestLlmClient reports network_error for Gemini when statusCode 0", "[agents][llm][gemini]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 0, "", "" }, { 0, "", "" }, { 0, "", "" } };
+
+    RestLlmClient client{ LLMProviderId::Gemini, geminiSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE_FALSE(resp.ok);
+    REQUIRE(resp.errorCode == "network_error");
+}
+
+TEST_CASE("RestLlmClient fails fast on Gemini 4xx", "[agents][llm][gemini]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 403, "forbidden", "" } };
+
+    RestLlmClient client{ LLMProviderId::Gemini, geminiSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE_FALSE(resp.ok);
+    REQUIRE(resp.errorCode == "http_403");
+    REQUIRE(http->callCount == 1);
+}
+
+TEST_CASE("RestLlmClient Gemini providerName is rest-Google Gemini", "[agents][llm][gemini]")
+{
+    RestLlmClient client{ LLMProviderId::Gemini, geminiSettings(), std::make_shared<ScriptedHttpClient>() };
+    CHECK(client.providerName() == "rest-Google Gemini");
+}
+
+TEST_CASE("RestLlmClient isConfigured works for Gemini settings", "[agents][llm][gemini]")
+{
+    REQUIRE(RestLlmClient::isConfigured(geminiSettings()));
+    LLMProviderSettings empty;
+    REQUIRE_FALSE(RestLlmClient::isConfigured(empty));
+}

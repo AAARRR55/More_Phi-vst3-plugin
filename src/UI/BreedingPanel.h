@@ -10,7 +10,8 @@ namespace more_phi {
 
 class MorePhiProcessor;
 
-class BreedingPanel : public juce::Component
+class BreedingPanel : public juce::Component,
+                       private juce::Timer
 {
 public:
     explicit BreedingPanel(MorePhiProcessor& processor);
@@ -19,6 +20,7 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
     void breedSnapshots();
     void mutateSnapshot();
     void randomizeMorphPosition();
@@ -29,7 +31,7 @@ private:
     juce::TextButton mutateButton_ { "Mutate" };
     juce::TextButton randomizeButton_ { "Randomize" };
     juce::TextButton waypointStartStop_ { "Waypoints" };
-    juce::TextButton clearWaypoints_ { "Clear WP" };
+    juce::TextButton clearWaypoints_ { "Clear Wpts" };
     juce::Label statusLabel_;
     juce::Random random_;
 

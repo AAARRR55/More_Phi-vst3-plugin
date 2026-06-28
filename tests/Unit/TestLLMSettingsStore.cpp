@@ -88,18 +88,29 @@ TEST_CASE("LLM settings store omits custom base URLs for fixed providers", "[uni
     juce::String error;
     REQUIRE(store.save(settings, error));
 
-    const auto parsed = juce::JSON::parse(configFile.loadFileAsString());
-    REQUIRE(parsed.isObject());
-    const auto providers = parsed.getProperty("providers", juce::var());
-    REQUIRE(providers.isObject());
+    // SECURITY (Finding #2): the saved file is now an encrypted envelope, not
+    // plaintext JSON. The on-disk content must NOT contain the customBaseUrl
+    // value in cleartext, and must NOT parse as a plaintext providers object.
+    const auto onDisk = configFile.loadFileAsString();
+    CHECK_FALSE(onDisk.contains("https://ignored.example.test"));
+    CHECK_FALSE(onDisk.contains("https://kept.example.test/v1"));
 
-    const auto anthropic = providers.getProperty("anthropic", juce::var());
-    REQUIRE(anthropic.isObject());
-    CHECK_FALSE(anthropic.hasProperty("customBaseUrl"));
+    // The envelope structure is visible (schema/method/enc) but the inner
+    // providers object is encrypted — parsing the envelope as a flat providers
+    // tree should NOT yield a providers field.
+    const auto parsed = juce::JSON::parse(onDisk);
+    if (parsed.isObject())
+    {
+        const auto providers = parsed.getProperty("providers", juce::var());
+        CHECK_FALSE(providers.isObject()); // plaintext providers must not be present
+    }
 
-    const auto compatible = providers.getProperty("openai_compatible", juce::var());
-    REQUIRE(compatible.isObject());
-    CHECK(compatible.getProperty("customBaseUrl", juce::var()).toString() == "https://kept.example.test/v1");
+    // Round-trip through the store still preserves the customBaseUrl rule:
+    // Anthropic's customBaseUrl is dropped on save; OpenAICompatible's is kept.
+    auto loaded = LLMSettings::createDefault();
+    REQUIRE(store.load(loaded, error));
+    CHECK(loaded.getProvider(LLMProviderId::Anthropic).customBaseUrl.isEmpty());
+    CHECK(loaded.getProvider(LLMProviderId::OpenAICompatible).customBaseUrl == "https://kept.example.test/v1");
 
     cleanupConfigFile(configFile);
 }

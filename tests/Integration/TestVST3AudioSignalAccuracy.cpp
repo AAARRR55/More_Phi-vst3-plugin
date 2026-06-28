@@ -128,6 +128,11 @@ TEST_CASE("VST3 audio signal accuracy applies output gain at 0 dB and nonzero ga
 
         MorePhiProcessor processor;
         processor.prepareToPlay(48000.0, 256);
+        // outputProtect engages a lookahead brickwall limiter that delays the
+        // signal by ~192 samples (see BrickwallLimiter). That latency is correct
+        // and PDC-reported, but it makes sample[0] silent — so to measure gain
+        // accuracy at sample[0] we bypass the limiter and isolate the gain stage.
+        setNormalizedWithGesture(requireParameter(processor, "outputProtect"), 0.0f);
         setNormalizedWithGesture(requireParameter(processor, "outputGain"), testCase.normalized);
 
         auto buffer = makeStereoConstantBuffer(0.05f, -0.05f);
@@ -281,7 +286,15 @@ TEST_CASE("VST3 neural mastering plan transitions keep signal bounded and mono-c
     setNormalizedWithGesture(requireParameter(processor, "bypass"), 1.0f);
     auto bypassed = makeStereoSineBuffer();
     const auto bypassBefore = copySamples(bypassed);
-    processOneBlock(processor, bypassed);
+    // The C-6 bypass crossfade ramps wet→dry over kBypassRampBlocks (32) blocks
+    // for a click-free transition. A single block after the gesture is still
+    // mid-fade (wet bleed), so the bit-transparent invariant only holds once the
+    // ramp has settled. Run enough blocks to complete it, then assert.
+    for (int ramp = 0; ramp < 40; ++ramp)
+    {
+        bypassed = makeStereoSineBuffer();
+        processOneBlock(processor, bypassed);
+    }
     const auto bypassAfter = copySamples(bypassed);
     REQUIRE(bypassAfter.size() == bypassBefore.size());
     for (size_t i = 0; i < bypassBefore.size(); ++i)

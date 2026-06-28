@@ -24,7 +24,7 @@ private:
     MorePhiProcessor& processor;
 
     // Safety mode selectors
-    juce::TextButton sanityToggle_{"Sanity"};
+    juce::TextButton sanityToggle_{"Safety"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> sanityAttach_;
 
     // RecallMode selector
@@ -33,7 +33,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> recallAttach_;
 
     // Sidechain controls
-    juce::ToggleButton sidechainToggle_{"SC"};
+    juce::ToggleButton sidechainToggle_{"Side"};
     juce::Slider       thresholdKnob_;
     juce::Label        thresholdLabel_{"", "Threshold"};
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> scEnableAttach_;

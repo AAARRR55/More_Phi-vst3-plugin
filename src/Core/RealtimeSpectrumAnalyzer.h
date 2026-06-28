@@ -100,6 +100,9 @@ private:
     // peak / RMS must be computed on the raw signal, not the Hann-windowed
     // linearFrame_ (the window biases peak down by up to −6 dB and skews RMS).
     std::vector<float> rawFrame_;
+    // M-1 FIX: DC-removed scratch buffer for SIMD peak detection in processFrame().
+    // Allocated once in prepare(), reused every frame on the analysis thread.
+    std::vector<float> dcRemovedFrame_;
     std::vector<float> fftScratch_;
     std::vector<float> rawMagnitude_;
     std::vector<float> previousMagnitudeDb_;

@@ -7,28 +7,10 @@
 
 using namespace more_phi::orchestrator;
 
-TEST_CASE("SecurityValidator validateAuthToken with matching tokens", "[orchestrator][security]")
-{
-    auto cfg = EcosystemConfig::createDefaults();
-    SecurityValidator validator(cfg);
-    REQUIRE(validator.validateAuthToken("my-secret-token", "my-secret-token"));
-}
-
-TEST_CASE("SecurityValidator validateAuthToken with mismatched tokens", "[orchestrator][security]")
-{
-    auto cfg = EcosystemConfig::createDefaults();
-    SecurityValidator validator(cfg);
-    REQUIRE_FALSE(validator.validateAuthToken("my-secret-token", "different-token"));
-}
-
-TEST_CASE("SecurityValidator validateAuthToken with empty tokens", "[orchestrator][security]")
-{
-    auto cfg = EcosystemConfig::createDefaults();
-    SecurityValidator validator(cfg);
-    REQUIRE_FALSE(validator.validateAuthToken("", ""));
-    REQUIRE_FALSE(validator.validateAuthToken("token", ""));
-    REQUIRE_FALSE(validator.validateAuthToken("", "token"));
-}
+// NOTE (Finding #14): the dead SecurityValidator::validateAuthToken() method was
+// removed — bearer token auth validation is implemented in MCPServer::validateAuth
+// (covered by TestMCPServerUnit.cpp) using a fully constant-time comparison with
+// no length-side-channel. Tests for the removed method are deleted here.
 
 TEST_CASE("SecurityValidator checkRateLimit allows requests under limit", "[orchestrator][security]")
 {

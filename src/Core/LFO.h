@@ -4,7 +4,7 @@
  *
  * noexcept guarantee: All process/math methods are noexcept because:
  * - Pure arithmetic on primitive types (no allocations)
- * - std::fmod, std::sin, std::fabs are noexcept
+ * - Sine uses a prebuilt LUT (no per-sample std::sin); std::fmod/std::fabs noexcept
  * - S&H state is a plain float updated inline
  *
  * Phase convention: phase_ ∈ [0.0, 1.0) (wraps at 1.0, not 2π).

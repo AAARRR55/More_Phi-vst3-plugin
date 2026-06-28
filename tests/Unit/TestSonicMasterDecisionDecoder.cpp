@@ -130,9 +130,11 @@ TEST_CASE("decodeSonicMasterDecision fills the 3-band compressor block",
 
     REQUIRE(plan.appliedMask.dynamics);
     // AUDIT-3: paired layout — dynamics[2*band]=threshold value, [2*band+1]=ratio value.
-    // threshold=-20 -> 0.0, ratio=2.5 -> 0.0.
+    // threshold=-20 -> (-20+20)/8 = 0.0; ratio=2.5 -> (2.5-3.5)/2.5 = -0.4
+    // (decoder maps ratio over [1,6]: center=3.5, scale=2.5, matching
+    // kSonicMasterCompRatioMax=6.0)
     CHECK_THAT(plan.projectedTargets.dynamics[0], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
-    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(0.0f, 1e-3f));
+    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(-0.4f, 1e-3f));
 
     // AUDIT-2.1: full real-unit sidecar carries all six params per band.
     REQUIRE(plan.hasCompParams);
@@ -218,12 +220,14 @@ TEST_CASE("decodeSonicMasterDecision decodes threshold and ratio independently",
     more_phi::ValidatedNeuralMasteringPlan plan {};
     REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
 
-    // Band 0: threshold -12 -> (-12+20)/8 = 1.0; ratio 1.5 -> (1.5-2.5)/1.5 = -0.667
+    // Band 0: threshold -12 -> (-12+20)/8 = 1.0; ratio 1.5 -> (1.5-3.5)/2.5 = -0.8
+    // (decoder maps ratio over [1,6]: center=3.5, scale=2.5, matching
+    // kSonicMasterCompRatioMax=6.0 which the DSP clamps to)
     CHECK_THAT(plan.projectedTargets.dynamics[0], Catch::Matchers::WithinAbs(1.0f, 1e-3f));
-    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(-0.6667f, 1e-3f));
-    // Band 1: threshold -16 -> 0.5; ratio 4.0 -> 1.0
+    CHECK_THAT(plan.projectedTargets.dynamics[1], Catch::Matchers::WithinAbs(-0.8f, 1e-3f));
+    // Band 1: threshold -16 -> (-16+20)/8 = 0.5; ratio 4.0 -> (4.0-3.5)/2.5 = 0.2
     CHECK_THAT(plan.projectedTargets.dynamics[2], Catch::Matchers::WithinAbs(0.5f, 1e-3f));
-    CHECK_THAT(plan.projectedTargets.dynamics[3], Catch::Matchers::WithinAbs(1.0f, 1e-3f));
+    CHECK_THAT(plan.projectedTargets.dynamics[3], Catch::Matchers::WithinAbs(0.2f, 1e-3f));
 }
 
 TEST_CASE("decodeSonicMasterDecision coerces NaN to neutral without throwing",

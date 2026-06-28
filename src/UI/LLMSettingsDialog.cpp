@@ -19,6 +19,9 @@ LLMSettingsDialog::LLMSettingsDialog(LLMSettings initialSettings,
     loadProviderIntoControls(initialProvider);
 
     setSize(520, 360);
+
+    // Auto-focus the API key field when the dialog opens
+    apiKeyEditor_.grabKeyboardFocus();
 }
 
 juce::StringArray LLMSettingsDialog::providerNamesForMenu()
@@ -103,7 +106,7 @@ void LLMSettingsDialog::populateProviderCombo()
 
 LLMProviderId LLMSettingsDialog::selectedProviderId() const
 {
-    const auto index = juce::jlimit(0, 5, providerCombo_.getSelectedId() - 1);
+    const auto index = juce::jlimit(0, static_cast<int>(llmProviderCount) - 1, providerCombo_.getSelectedId() - 1);
     return getLLMProviderDefinitions()[static_cast<std::size_t>(index)].id;
 }
 

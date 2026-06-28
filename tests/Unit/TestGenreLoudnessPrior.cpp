@@ -81,7 +81,18 @@ float oneCycleAppliedLufs(more_phi::SonicMasterAnalysisEngine& eng,
                           more_phi::AutoMasteringEngine& engine)
 {
     feedSilence(eng, hostWindowFrames(48000.0) + 1024);
-    REQUIRE(eng.runOneCycleForTest());
+    const bool ok = eng.runOneCycleForTest();
+    if (!ok)
+    {
+        // DIAGNOSTIC: surface the structured skip reason so the failure message
+        // identifies which gate tripped instead of a bare false.
+        const auto fail = eng.getLastCycleFailure();
+        const auto sr = eng.getLastSafetyRejection();
+        INFO("runOneCycleForTest failed: DecisionFailure=" << static_cast<int>(fail)
+             << " safetyRejectionValid=" << (sr.valid ? 1 : 0)
+             << " primaryIssue=" << static_cast<int>(sr.primaryIssue));
+        REQUIRE(ok);
+    }
     REQUIRE(engine.hasLastSafeNeuralMasteringPlan());
     const auto& applied = engine.getLastSafeNeuralMasteringPlan();
     return -14.0f + applied.projectedTargets.loudness[0] * 6.0f;

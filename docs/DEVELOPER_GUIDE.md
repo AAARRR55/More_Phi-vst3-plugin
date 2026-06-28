@@ -103,16 +103,21 @@ cmake --build build --config RelWithDebInfo
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `MORE_PHI_TRACK_ALLOCATIONS` | OFF | Enable allocation tracking in debug |
 | `MORE_PHI_BUILD_TESTS` | ON | Build Catch2 test executable |
 | `MORE_PHI_BUILD_BENCHMARKS` | OFF | Build benchmark suite |
-| `MORE_PHI_ENABLE_DATASET_V3` | OFF (deprecated/no-op) | Compatibility flag; Dataset V3 pipeline sources are always compiled |
-| `MORE_PHI_ENABLE_ORCHESTRATOR` | ON (implicit) | AgentOrchestrator layer sources in `src/AI/Orchestrator/` are always compiled into the shared-code target |
+| `MORE_PHI_ENABLE_DATASET_V3` | ON (always enabled) | Compatibility flag (no-op); Dataset V3 pipeline sources are always compiled |
 | `MORE_PHI_ENABLE_SANITIZERS` | OFF | Enables ASAN + UBSAN (Clang/GCC only) |
 | `MORE_PHI_MSVC_MP` | Host core count | MSVC `/MP` process count; `0` disables; ignored under Ninja |
 | `MORE_PHI_COPY_PLUGIN_AFTER_BUILD` | OFF | Copies plugin to system plugin folder after build |
-| `MORE_PHI_ENABLE_ONNX` | ON | Enables ONNX runtime for neural mastering inference |
+| `MORE_PHI_ENABLE_ONNX` | OFF | Enables ONNX Runtime for neural mastering inference (default OFF; requires download) |
 | `MORE_PHI_ENABLE_LTO` | OFF | Enables release LTO for CI/release use |
+| `MORE_PHI_SAFE_BUILD_MODE` | ON | Conservative build settings for local stability |
+| `MORE_PHI_ENABLE_MCP_SERVER` | ON (Debug), OFF (Release) | Embedded MCP server and VST3 IPC bridge |
+| `MORE_PHI_ENABLE_PROFILING` | OFF | Performance profiler instrumentation + diagnostics |
+| `MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK` | OFF | Allow SonicMaster HTTP inference fallback |
+| `MORE_PHI_BUILD_AAX` | OFF | Build AAX (Pro Tools) plugin format |
+| `MORE_PHI_BUILD_HEADLESS_RENDER` | OFF | Build ctypes-callable headless mastering render harness |
+| `MORE_PHI_PROD_ED25519_KEY_HEX` | (empty) | Production Ed25519 public key (CI-injected, 64 hex chars) |
 
 ```bash
 cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_TRACK_ALLOCATIONS=ON
@@ -148,42 +153,103 @@ morephi/
 │   │   ├── PluginProcessor.h/cpp
 │   │   └── PluginEditor.h/cpp
 │   ├── Version.cpp         # Build-time version strings
-│   ├── Core/               # Audio engine components
-│   │   ├── ParameterState.h
-│   │   ├── SnapshotBank.h/cpp
-│   │   ├── InterpolationEngine.h/cpp
-│   │   ├── PhysicsEngine.h/cpp
-│   │   ├── GeneticEngine.h/cpp
-│   │   ├── MorphProcessor.h/cpp
-│   │   ├── LockFreeQueue.h
-│   │   └── AllocationTracker.h
-│   ├── Host/               # Plugin hosting
-│   │   ├── PluginHostManager.h/cpp
-│   │   └── ParameterBridge.h/cpp
-│   ├── AI/                 # Embedded MCP Server & Core AI Integrations
-│   │   ├── MCPServer.h/cpp
-│   │   ├── MCPToolHandler.h/cpp
-│   │   ├── StandaloneMcp/    # Isolated STDIO workflows bridging headless contexts
-│   │   ├── Agents/           # Multi-agent orchestration layer
-│   │   │   ├── AgentRuntime.h/cpp, AgentRegistry.h/cpp, PriorityScheduler.h/cpp
-│   │   │   ├── Conductor/     # ConductorAgent
-│   │   │   ├── Agents/       # 6 specialist agents (Analysis, Optimization, Creative, etc.)
-│   │   │   ├── Blackboard/   # BlackboardBridge (typed pub/sub)
-│   │   │   ├── Tooling/      # DefaultToolInvoker
-│   │   │   ├── Logging/      # StructuredAgentLogger, NullAgentLogger
-│   │   │   └── Llm/          # ILlmClient, RestLlmClient, DeterministicFallbackLlmClient
-│   │   ├── Dataset/          # Machine learning pipeline tools
-│   │   └── Orchestrator/     # Agent orchestration facade
-│   │       ├── AgentOrchestrator.h/cpp
-│   │       ├── EcosystemConfig.h/cpp
-│   │       ├── SecurityValidator.h/cpp
-│   │       └── McpProtocol.h/cpp
-│   ├── MIDI/               # MIDI processing (wait-free CC routing)
-│   │   └── MIDIRouter.h/cpp
-│   ├── Preset/             # State persistence and encryption validations
-│   │   ├── MetaPresetManager.h/cpp
-│   │   └── PresetSerializer.h/cpp
-│   └── UI/                 # User interface
+    │   ├── Core/               # Audio engine components
+    │   │   ├── ParameterState.h
+    │   │   ├── SnapshotBank.h/cpp
+    │   │   ├── InterpolationEngine.h/cpp
+    │   │   ├── PhysicsEngine.h/cpp
+    │   │   ├── GeneticEngine.h/cpp
+    │   │   ├── MorphProcessor.h/cpp
+    │   │   ├── LockFreeQueue.h
+    │   │   ├── SpectralMorphEngine.h/cpp     # FFT overlap-add vocoder
+    │   │   ├── GranularMorphEngine.h/cpp     # Grain pool morphing
+    │   │   ├── FormantMorphEngine.h/cpp       # Formant-preserving spectral morph
+    │   │   ├── VoronoiMorphEngine.h/cpp       # Voronoi-based morph
+    │   │   ├── HybridBlend.h                  # Multi-engine blend coordinator
+    │   │   ├── SpectralTypes.h                # Shared spectral types
+    │   │   ├── ModulationEngine.h/cpp         # LFO/envelope/sequencer driver
+    │   │   ├── ModulationMatrix.h/cpp         # Double-buffered route matrix (128 routes)
+    │   │   ├── ModulationTypes.h              # Modulation route types
+    │   │   ├── LFO.h/cpp                      # LFO with prebuilt sine LUT
+    │   │   ├── StepSequencer.h/cpp            # Step sequencer mod source
+    │   │   ├── EnvelopeFollower.h/cpp         # Envelope follower mod source
+    │   │   ├── WaypointEngine.h               # Waypoint interpolation
+    │   │   ├── GrainPool.h                    # Grain allocator
+    │   │   ├── AutoMasteringEngine.h/cpp      # 12-stage mastering chain
+    │   │   ├── MultibandSplitter.h/cpp        # 4-band LR splitter
+    │   │   ├── MultibandDynamicsProcessor.h/cpp  # Per-band dynamics
+    │   │   ├── AdaptiveEQ.h/cpp               # 32-band adaptive EQ
+    │   │   ├── StereoImager.h/cpp             # Stereo image processor
+    │   │   ├── HarmonicExciter.h/cpp          # Harmonic exciter
+    │   │   ├── LoudnessNormalizer.h/cpp       # LUFS-targeted normalizer
+    │   │   ├── BrickwallLimiter.h/cpp         # True-peak brickwall limiter
+    │   │   ├── TransientShaper.h/cpp          # Transient/sustain shaper
+    │   │   ├── TruePeakEstimator.h/cpp        # 4×64-tap polyphase FIR
+    │   │   ├── LUFSMeter.h/cpp                # BS.1770-4 LUFS meter
+    │   │   ├── MeterWindowAccumulator.h/cpp   # Sliding window for meters
+    │   │   ├── MSMatrix.h                     # Mid/Side encode/decode
+    │   │   ├── StereoFieldAnalyzer.h/cpp      # Stereo field analysis
+    │   │   ├── TonalBalanceExtractor.h        # 8-band EQ balance extraction
+    │   │   ├── RealtimeSpectrumAnalyzer.h/cpp # Real-time FFT analysis
+    │   │   ├── AudioCaptureRing.h             # Rate-proportional capture ring
+    │   │   ├── LatencyManager.h               # Latency compensation
+    │   │   ├── OversamplingWrapper.h          # Polyphase oversampling
+    │   │   ├── SIMDAudio.h/cpp                # SIMD operations
+    │   │   ├── ThreadPool.h/cpp               # General thread pool
+    │   │   ├── PerformanceProfiler.h/cpp      # RAII section profiler
+    │   │   ├── MorePhiDiagnostics.h/cpp      # 250ms watchdog timer
+    │   │   ├── UndoRedoManager.h/cpp          # Undo/redo stack
+    │   │   ├── AudioBufferPool.h/cpp          # Pre-allocated buffer pool
+    │   │   ├── ABCompareEngine.h/cpp          # A/B compare
+    │   │   ├── MonoCompatibilityChecker.h     # Mono compatibility check
+    │   │   ├── ParameterDistributionStore.h   # Param distribution tracking
+    │   │   ├── ParameterClassifier.h/cpp     # Param type classification
+    │   │   ├── DiscreteParameterHandler.h/cpp # Discrete param snapping
+    │   │   ├── TransientDetector.h            # Transient detection
+    │   │   └── NeuralMastering*.{h,cpp}       # Neural mastering types/safety
+    │   ├── Host/               # Plugin hosting
+    │   │   ├── PluginHostManager.h/cpp
+    │   │   └── ParameterBridge.h/cpp
+    │   ├── AI/                 # Embedded MCP Server & Core AI Integrations
+    │   │   ├── MCPServer.h/cpp
+    │   │   ├── MCPToolHandler.h/cpp
+    │   │   ├── StandaloneMcp/    # Isolated STDIO workflows bridging headless contexts
+    │   │   ├── Agents/           # Multi-agent orchestration layer
+    │   │   │   ├── AgentRuntime.h/cpp, AgentRegistry.h/cpp, PriorityScheduler.h/cpp
+    │   │   │   ├── Conductor/     # ConductorAgent
+    │   │   │   ├── Agents/       # 6 specialist agents (Analysis, Optimization, Creative, RealtimeControl, QualitySafety, Memory)
+    │   │   │   ├── Blackboard/   # BlackboardBridge (typed pub/sub)
+    │   │   │   ├── Tooling/      # DefaultToolInvoker
+    │   │   │   ├── Logging/      # StructuredAgentLogger, NullAgentLogger
+    │   │   │   └── Llm/          # ILlmClient, RestLlmClient, DeterministicFallbackLlmClient
+    │   │   ├── Dataset/          # Machine learning pipeline tools
+    │   │   ├── SonicMaster/     # Neural mastering analysis/decode/runner
+    │   │   └── Orchestrator/     # Agent orchestration facade
+    │   │       ├── AgentOrchestrator.h/cpp
+    │   │       ├── EcosystemConfig.h/cpp
+    │   │       ├── SecurityValidator.h/cpp
+    │   │       └── McpProtocol.h/cpp
+    │   ├── MIDI/               # MIDI processing (wait-free CC routing)
+    │   │   └── MIDIRouter.h/cpp
+    │   ├── Preset/             # State persistence
+    │   │   ├── PresetSerializer.h/cpp
+    │   │   ├── PresetSerializerV2.h/cpp
+    │   │   ├── PresetLibrary.h/cpp
+    │   │   └── PresetEntry.h
+    │   ├── Licensing/          # License key management & verification
+    │   │   ├── LicenseManager.h/cpp
+    │   │   ├── LicenseVerifier.h/cpp
+    │   │   ├── LicenseKey.h/cpp
+    │   │   ├── LicenseTypes.h/cpp
+    │   │   ├── LicenseEnvelopeCrypto.h/cpp
+    │   │   ├── Ed25519Verifier.h/cpp
+    │   │   ├── ActivationClient.h/cpp
+    │   │   ├── MachineFingerprint.h/cpp
+    │   │   ├── SecureLicenseStore.h/cpp
+    │   │   └── SigningKeys.h/cpp
+    │   ├── Tools/              # Headless host & utilities
+    │   │   └── HeadlessHost/HeadlessHostMain.cpp
+    │   └── UI/                 # User interface
 │       ├── MorePhiLookAndFeel.h/cpp
 │       ├── MorphPad.h/cpp
 │       ├── SnapFader.h/cpp
@@ -272,7 +338,7 @@ More-Phi follows strict real-time audio guidelines:
                     └─────────────────┘
 ```
 
-> **AgentOrchestrator** (v3.3.0): A single-initialization facade in `src/AI/Orchestrator/` that coordinates the wiring between `PluginProcessor`, the agent runtime, and `MCPServer`. It loads `EcosystemConfig` (unified JSON configuration), sets up `SecurityValidator` (message sanitization, auth, rate limiting), and registers `McpProtocol` explicit JSON-RPC 2.0 schemas (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`). All orchestrator components are compiled into the `MorePhi` shared-code target.
+> **AgentOrchestrator** (v3.4.0+): A single-initialization facade in `src/AI/Orchestrator/` that coordinates the wiring between `PluginProcessor`, the agent runtime, and `MCPServer`. It loads `EcosystemConfig` (unified JSON configuration), sets up `SecurityValidator` (message sanitization, auth, rate limiting), and registers `McpProtocol` explicit JSON-RPC 2.0 schemas (`McpRequest`, `McpResponse`, `McpNotification`, `McpError`). All orchestrator components are compiled into the `MorePhi` shared-code target.
 
 ### Data Flow
 
@@ -406,20 +472,12 @@ Enable debug logging:
 
 ### Allocation Tracking
 
-Enable in build:
+Per-process-block allocations are prevented at compile time by the zero-alloc
+contract. To verify no heap operations occur during audio processing, enable
+profiling and check the `processBlock_total` section:
+
 ```bash
-cmake -B build -S . -DMORE_PHI_TRACK_ALLOCATIONS=ON
-```
-
-Use in code:
-```cpp
-#include "Core/AllocationTracker.h"
-
-void processBlock(...)
-{
-    ScopedAudioCallback guard;  // Tracks allocations
-    // ... audio processing
-}
+cmake -B build -S . -DMORE_PHI_ENABLE_PROFILING=ON
 ```
 
 ### Common Issues
@@ -579,11 +637,11 @@ Refs: #issue-number
 
 ---
 
-## What's New in v3.3.0
+## What's New in v3.4.1
 
-### Agent Orchestration Layer
+### Multi-Agent Orchestration Layer
 
-The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/AI/Orchestrator/` that provides structured initialization, configuration, and security mediation between the audio processor and the MCP server.
+The v3.4.1 release builds on the Agent Orchestration Layer introduced in v3.4.0, located in `src/AI/Agents/` and `src/AI/Orchestrator/`. These provide structured initialization, configuration, and security mediation between the audio processor and the MCP server, along with a full multi-agent runtime.
 
 **New components:**
 
@@ -599,8 +657,8 @@ The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/
 
 **Neural mastering improvements (SonicMaster):**
 - ONNX model embedded in binary via JUCE `BinaryData` — no runtime file I/O
-- Capture ring now rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and lazily allocated
-- Resampling changed from `resampleLinear` to `resamplePolyphase`
+- Capture ring now rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and **eagerly allocated** in `prepare()` (CAPTURE-DECOUPLE fix)
+- Resampling uses `resamplePolyphase` (not linear interpolation)
 - Mono capture support (`channelCount == 1`)
 - Plan application uses pending-plan atomic-flag pattern (no `callAsync`)
 - Neural path verification via `OzonePlanApplicator` read-back + plan boundary markers
@@ -609,6 +667,8 @@ The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/
 - Action ledger cap raised to 4096 (`kLedgerMaxTransactions`)
 - `mastering.render_batch` dry-run populates real `lufs_error` per candidate
 - `flushCaptureRing()` on hosted plugin load
+- Genre-conditioned priors: target LUFS + tonal-balance residual via `GenreMasteringProfile` / `TonalBalanceExtractor`
+- Pluggable ONNX genre model: `GenreClassifier::loadModel()` with heuristic fallback
 
 **Agent layer improvements:**
 - 7 MCP tools: `agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy`
@@ -630,4 +690,4 @@ The v3.3.0 release introduces a dedicated **Agent Orchestration Layer** in `src/
 
 ---
 
-*Updated 2026-06-25.*
+*Updated 2026-06-27.*

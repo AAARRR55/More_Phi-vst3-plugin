@@ -29,9 +29,13 @@ namespace more_phi::agents {
 class BlackboardBridge
 {
 public:
-    using Callback = std::function<void(const juce::String& type,
-                                        const nlohmann::json& payload,
-                                        const juce::String& source)>;
+    using RawCallback = std::function<void(const juce::String& type,
+                                           const nlohmann::json& payload,
+                                           const juce::String& source)>;
+    // H-3 FIX: Store callbacks by shared_ptr so copying the subscriber list
+    // (done on every pump poll) copies a single ref-count rather than the
+    // entire RawCallback (which may heap-allocate for lambda captures).
+    using Callback = std::shared_ptr<RawCallback>;
 
     explicit BlackboardBridge(IntegrationEventBus& bus);
 
@@ -44,7 +48,7 @@ public:
 
     void subscribe(const juce::String& agentId,
                    const std::vector<juce::String>& eventTypes,
-                   Callback callback);
+                   RawCallback callback);
 
     void unsubscribe(const juce::String& agentId);
     void unsubscribeAll();

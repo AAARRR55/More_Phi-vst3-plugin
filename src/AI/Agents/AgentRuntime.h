@@ -8,6 +8,7 @@
 #include "AI/Agents/Blackboard/BlackboardBridge.h"
 #include "AI/Agents/Tooling/DefaultToolInvoker.h"
 #include "AI/Agents/Logging/NullAgentLogger.h"
+#include "AI/Agents/Conductor/ConductorAgent.h"
 
 #include <juce_core/juce_core.h>
 #include <nlohmann/json.hpp>

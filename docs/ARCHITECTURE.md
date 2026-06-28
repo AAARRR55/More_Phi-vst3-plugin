@@ -1,7 +1,7 @@
 # More-Phi - Architecture Document
 
-**Date:** 2026-06-25
-**Version:** 3.3.0
+**Date:** 2026-06-27
+**Version:** 3.4.1
 **Audit Score:** 7.9/10 — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)
 **Type:** Desktop Audio Plugin (VST3/AU)
 **Pattern:** Layered plugin architecture with strict thread-domain separation
@@ -51,7 +51,7 @@ More-Phi follows a **layered plugin architecture** where:
 │ ModEng   │          │ Dataset  │ PresetBrowser    │
 ├──────────┴──────────┴───────────┴────────────────┤
 │              MIDI Layer + Preset Layer             │
-│         MIDIRouter  │  MetaPresetManager          │
+│         MIDIRouter  │  PresetSerializer            │
 └─────────────────────┴─────────────────────────────┘
 ```
 
@@ -188,10 +188,12 @@ The neural mastering subsystem (`SonicMasterAnalysisEngine` → `AutoMasteringEn
 
 **SonicMaster key implementation details:**
 - ONNX model embedded in binary via JUCE `BinaryData::getNamedResource()` — no runtime file I/O
-- Capture ring is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and lazily allocated
+- Capture ring is rate-proportional (`8.0 * sampleRate`, clamped `[2×44100, 32×192000]`) and **eagerly allocated** in `prepare()` (CAPTURE-DECOUPLE fix, 2026-06-26). `ensureRing()` remains as a defensive idempotent allocator for tests that skip `prepare()`.
 - Resampling uses `resamplePolyphase` (not linear interpolation)
 - Mono capture supported (`channelCount == 1`)
 - Plan application uses pending-plan atomic-flag pattern (stores in `pendingPlan_`, applies in `runCycle`) — no `callAsync`
+- Genre-conditioned priors: target LUFS prior from `GenreMasteringProfile` + tonal-balance residual from `TonalBalanceExtractor`, fed via `setGenreTargetLufs()` on the message-thread timer
+- Pluggable ONNX genre model: `GenreClassifier::loadModel()` searches `%APPDATA%/MorePhi/models/genre_classifier.onnx` or alongside the plugin binary; always falls back to time-domain heuristic if absent
 
 ### Agent MCP Surface
 
@@ -212,8 +214,8 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 ## Key Subsystem Details
 
 ### SnapshotBank (Seqlock Pattern)
-- 12 slots, each holding a `ParameterState` (fixed `std::array<float, 2048>`)
-- Heap-allocated slot array (~384 KB) to avoid stack overflow
+- 12 slots, each holding a `ParameterState` (fixed `std::array<float, 4096>`)
+- Heap-allocated slot array (~197 KB) to avoid stack overflow
 - Audio thread reads via seqlock (retry on torn read). `paramNames_` and `stateChunks_` are read under their respective SpinLocks (`writeLock_` and `chunksLock_`) **before** the seqlock read of the primary payload
 - UI/MCP writes serialize via SpinLock + sequence counter increment
 - `toXml()` reads `name`/`count` under lock first, then seqlock-protected values, with retry on `seq1 != seq2`
@@ -228,13 +230,13 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 - `SanityConfig` protects dangerous parameters (Volume, Pitch, Bypass)
 - `smartRandomize()` only mutates user-learned parameters
 
-### Parameter Classification (v3.3.0)
+### Parameter Classification (v3.4.0+)
 - `ParameterClassifier` categorizes: Continuous, Discrete, Binary, Frequency, Decibel, Enumeration
 - `DiscreteParameterHandler` snaps discrete/binary params to valid steps during morphing
 - `TokenOptimizer` manages AI token budgets by selecting which parameters to expose
 
 ### ModulationMatrix (Double-Buffer)
-- Two `RouteBuffer` instances (up to 64 routes each)
+- Two `RouteBuffer` instances (up to 128 routes each, `MAX_ROUTES = 128`)
 - Message thread mutates write buffer, then publishes via `readIndex_.store(release)`
 - Audio thread reads from `readIndex_.load(acquire)` — never writes
 - After publish, write buffer is mirrored from the just-published state
@@ -243,7 +245,6 @@ Plugin reload on state restore uses Timer-based deferred loading with retry logi
 - **SpectralMorphEngine:** FFT-based overlap-add vocoder with magnitude/phase interpolation
 - **GranularMorphEngine:** Grain pool with position/size/density randomization
 - **FormantMorphEngine:** Formant-preserving spectral envelope morphing
-- **VAEMorphEngine:** Safe stub backend for latent-space API surface (ONNX runtime integration deferred)
 - **HybridBlend:** Coordinates multiple engines with configurable blend weights
 
 ## Testing Strategy

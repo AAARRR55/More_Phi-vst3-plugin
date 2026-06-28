@@ -63,6 +63,9 @@ DriftControlPanel::DriftControlPanel(MorePhiProcessor& proc)
         addAndMakeVisible(knobLabels_[i]);
     }
 
+    // C1: hide panel when physics mode != Drift; check every 2 seconds
+    startTimerHz(2);
+
     knobs_[0].setTooltip(
         "Drift Speed: how fast the cursor wanders across the morph surface. "
         "Higher values = more active movement.");
@@ -114,6 +117,16 @@ void DriftControlPanel::resized()
         knobs_[i].setBounds(cx - knobW / 2, startY, knobW, knobH);
         knobLabels_[i].setBounds(cx - knobW / 2, startY + knobH + 2, knobW, labelH);
     }
+}
+
+void DriftControlPanel::timerCallback()
+{
+    // C1: only show Drift controls when physics mode is Drift (2).
+    // Matches the ModeBar pattern where Elastic preset combo hides when not Elastic.
+    constexpr int kDriftMode = 2;
+    const bool shouldBeVisible = (proc_.getPhysicsMode() == kDriftMode);
+    if (isVisible() != shouldBeVisible)
+        setVisible(shouldBeVisible);
 }
 
 void DriftControlPanel::setupKnob(juce::Slider& knob, double min, double max,
