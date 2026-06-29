@@ -60,6 +60,13 @@ public:
     // Drain new events since the last poll and fan out to matching subscribers.
     void poll();
 
+    // O4 (2026-06-29): optional hook invoked after every successful publish, so an
+    // external pump (AgentRuntime) can wake its condition_variable immediately
+    // instead of waiting for the next fixed-interval poll. Set to nullptr to
+    // disable. Called on the publishing thread (agent worker / MCP thread), so the
+    // callback MUST be thread-safe and non-blocking (e.g. cv.notify_one).
+    void setOnPublishHook(std::function<void()> hook) { onPublish_ = std::move(hook); }
+
     // H3: curated, agent-only recent events (newest-first), with payloads replaced
     // by a safe summary. Filters the raw bus down to events whose source/type look
     // agent-originated, so an MCP consumer can observe agent activity without seeing
@@ -70,6 +77,8 @@ private:
     IntegrationEventBus& bus_;
     std::mutex subscribersMutex_;
     std::unordered_map<std::string, std::vector<std::pair<std::string, Callback>>> subscribers_;
+    // O4: optional publish hook (see setOnPublishHook). Invoked from publish().
+    std::function<void()> onPublish_;
     // M2 FIX: written by the blackboard pump thread in poll() and read by MCP
     // connection threads via recentAgentEvents()/hasNewEvents(). A plain
     // uint64_t was a data race (and a torn read on 32-bit). relaxed ops: the

@@ -20,6 +20,15 @@ echo Deploying fixed binary to "%DST%"
 copy /Y "%SRC%\MorePhi.vst3" "%DST%\MorePhi.vst3" || goto :needadmin
 copy /Y "%SRC%\onnxruntime.dll" "%DST%\onnxruntime.dll" || goto :needadmin
 copy /Y "%SRC%\onnxruntime_providers_shared.dll" "%DST%\onnxruntime_providers_shared.dll" || goto :needadmin
+REM CRASH-DIAG (2026-06-29): copy the PDB next to the installed .vst3 so FL
+REM crash dumps (%LOCALAPPDATA%\CrashDumps\FL64.exe.*.dmp) resolve to source
+REM lines when opened in a debugger. The PDB is matched by GUID + age, so it
+REM must be the exact one produced with this binary — re-deploy after every
+REM rebuild or the dump won't symbolicate. Optional: delete the .pdb here for a
+REM stripped install, at the cost of un-diagnosable crashes.
+if exist "%SRC%\..\..\MorePhi.pdb" (
+    copy /Y "%SRC%\..\..\MorePhi.pdb" "%DST%\MorePhi.pdb" || echo [warn] PDB copy failed (non-fatal — crashes just won't symbolicate)
+)
 echo.
 echo [OK] Deployed. You can now open FL Studio and load MorePhi.
 dir "%DST%"

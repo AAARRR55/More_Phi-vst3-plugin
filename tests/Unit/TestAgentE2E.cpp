@@ -89,6 +89,8 @@ TEST_CASE("AgentRuntime E2E: goal then Conductor decomposes then specialists exe
     DefaultToolInvoker::CapabilityFn cap = [](const juce::String&) {
         // Allow every tool the agents reference; this test is about orchestration,
         // not capability enforcement (covered by TestAgentRuntimeCore + per-agent tests).
+        // O1 (2026-06-29): include the neural mastering tools OptimizationAgent and
+        // AnalysisAgent now reference (mastering.neural_apply, sonicmaster_decision).
         return std::vector<juce::String>{
             "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field",
             "analysis.capture_window", "analysis.compare_render",
@@ -96,7 +98,8 @@ TEST_CASE("AgentRuntime E2E: goal then Conductor decomposes then specialists exe
             "mastering.select_candidate", "hosted_plugin.info", "hosted_plugin.set_parameter",
             "hosted_plugin.set_parameters", "plugin_profile.describe_semantics",
             "workflow.submit", "workflow.execute", "workflow.cancel",
-            "memory.list", "memory.store", "memory.recall"
+            "memory.list", "memory.store", "memory.recall",
+            "mastering.neural_apply", "sonicmaster_decision"
         };
     };
     DefaultToolInvoker invoker{dispatch, cap};

@@ -124,6 +124,50 @@ void SnapshotBank::recallFast(int slot, IParameterBridge& bridge) const
         bridge.applyParameterState(tlsScratch.data(), parameterCount);
 }
 
+void SnapshotBank::recallWithParameterMapping(int slot, IParameterBridge& bridge) const
+{
+    if (slot < 0 || slot >= NUM_SLOTS) return;
+
+    // 1) Copy snapshot values under seqlock
+    int snapshotCount = 0;
+    if (!copySlotValues(slot, tlsScratch.data(), snapshotCount))
+        return;
+
+    // 2) Read snapshot parameter names (protected by writeLock_)
+    juce::StringArray names;
+    {
+        const juce::SpinLock::ScopedLockType lock(writeLock_);
+        names = paramNames_[slot];
+    }
+
+    // If no names were captured, fall back to index-based recall
+    if (names.isEmpty() || names.size() < snapshotCount)
+    {
+        if (snapshotCount > 0)
+            bridge.applyParameterState(tlsScratch.data(), snapshotCount);
+        return;
+    }
+
+    // 3) For each stored parameter, look up its current index by name and write
+    //    the corresponding stored value. Parameters whose names cannot be found
+    //    in the current hosted plugin are skipped.
+    for (int i = 0; i < snapshotCount; ++i)
+    {
+        const juce::String& paramName = names[i];
+        if (paramName.isEmpty())
+            continue;  // No name stored for this parameter — can't remap
+
+        int currentIndex = bridge.findParameterIndex(paramName);
+        if (currentIndex >= 0)
+        {
+            bridge.setParameterNormalized(currentIndex, tlsScratch.data()[i]);
+        }
+        // If the name is not found, the parameter is silently skipped — this is
+        // the correct behavior for a parameter that no longer exists in the
+        // hosted plugin.
+    }
+}
+
 bool SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin)
 {
     if (slot < 0 || slot >= NUM_SLOTS || plugin == nullptr) return false;
@@ -152,7 +196,11 @@ bool SnapshotBank::captureStateChunk(int slot, juce::AudioPluginInstance* plugin
     // Phase 7: cache the plugin UID from the hosted plugin description
     // Lock order: WriteScope (writeLock_) → chunksLock_ (consistent with fromXml).
     const juce::PluginDescription& desc = plugin->getPluginDescription();
-    const juce::String uid = desc.name + "|" + desc.manufacturerName;
+    // AUDIT-FIX (C4): Include version and format name for stronger plugin UID
+    // discrimination. Previously only name+manufacturer were used, which could
+    // falsely match different plugins from the same vendor with the same name.
+    const juce::String uid = desc.name + "|" + desc.manufacturerName + "|"
+                           + desc.version + "|" + desc.pluginFormatName;
 
     WriteScope write(*this);
     {

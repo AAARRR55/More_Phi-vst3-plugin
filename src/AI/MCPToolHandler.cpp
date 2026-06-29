@@ -6614,6 +6614,12 @@ juce::String MCPToolHandler::applyMasteringPlan(const juce::var& params, MorePhi
     const float spectralTilt  = static_cast<float>(params.getProperty("spectral_tilt",  0.0f));
     const float correlationMS = static_cast<float>(params.getProperty("correlation_ms", 0.5f));
 
+    // FIX (2026-06-29): Ensure the Ozone applicator exists before executing the plan.
+    // If the user loaded a plugin whose parameters are discoverable but the initial
+    // refresh didn't trigger, build it on-demand now.
+    if (!p.hasOzonePlanApplicator())
+        p.ensureOzonePlanApplicator();
+
     auto& planner = p.getAutoMasteringEngine().getChainPlanner();
     const MultiEffectPlan plan = planner.executePlan(
         genreIndex, dynamicRange, spectralTilt, correlationMS);
@@ -7279,21 +7285,31 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     }
 
     // State 2: no hosted plugin loaded → the decision has nowhere to land.
+    // FIX (2026-06-29): Attempt to build the applicator on-demand before giving up.
+    // The user may have loaded a plugin whose parameters are discoverable but
+    // the initial refresh didn't trigger (e.g. manual parameter-name syncing).
     if (!p.hasOzonePlanApplicator())
     {
-        json err;
-        err["success"] = false;
-        err["available"] = true;
-        err["applied"] = false;
-        err["state"] = "no_hosted_plugin";
-        err["error"] = "No hosted plugin is loaded. Load a mastering plugin (e.g. an Ozone "
-                       "instance) into More-Phi first, then re-run.";
-        json ms;
-        ms["ozone_mapped"] = false;
-        ms["has_applicator"] = false;
-        ms["mapped_slot_count"] = 0;
-        err["mapping_status"] = ms;
-        return toJString(err);
+        const bool created = p.ensureOzonePlanApplicator();
+        if (!created)
+        {
+            json err;
+            err["success"] = false;
+            err["available"] = true;
+            err["applied"] = false;
+            err["state"] = "no_hosted_plugin";
+            err["error"] = "No hosted plugin is loaded, or the loaded plugin's parameters "
+                           "do not match the expected naming pattern (EQ Band, Dynamics, "
+                           "Imager, Maximizer). Load a mastering plugin into More-Phi, "
+                           "and optionally run ozone.audit_parameters(apply=true) to "
+                           "force a re-discovery.";
+            json ms;
+            ms["ozone_mapped"] = false;
+            ms["has_applicator"] = false;
+            ms["mapped_slot_count"] = 0;
+            err["mapping_status"] = ms;
+            return toJString(err);
+        }
     }
 
     // State 3: hosted plugin loaded but its parameters aren't mapped (all-stubs).
@@ -7380,6 +7396,16 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     // Commit: apply to the hosted plugin via the existing applyValidatedPlan door.
     const bool applied = p.getAutoMasteringEngine().applyValidatedPlan(plan);
 
+    // FIX (2026-06-29): applyValidatedPlan ENQUEUES the plan onto the realtime
+    // command queue (via OzonePlanApplicator) but never drains it. Every other
+    // write tool — set_parameter, setParametersBatch, sweep_parameter,
+    // assistant_apply — calls flushPendingParameterCommandsForAssistant() so the
+    // edit lands immediately instead of waiting for the next processBlock.
+    // Without this flush the neural plan only applied while the DAW was actively
+    // rolling audio; idle playback (the common mastering-preview case) left the
+    // whole plan stuck in the queue and the hosted plugin never changed.
+    const auto flush = p.flushPendingParameterCommandsForAssistant();
+
     json result;
     result["success"] = applied;
     result["available"] = true;
@@ -7387,6 +7413,18 @@ juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MoreP
     result["state"] = applied ? "active_applying" : "apply_no_op";
     result["target_lufs_requested"] = targetLufs;
     result["loudness_slot_is_target_not_measurement"] = (plan.loudnessIsMeasurement == false);
+
+    // Surface the flush outcome so callers can tell "applied now" vs "queued for
+    // the audio thread" (mirrors set_parameter's flush object).
+    {
+        json fl;
+        fl["drained"]              = flush.drained;
+        fl["pending_after"]        = flush.pendingAfter;
+        fl["plugin_unavailable"]   = flush.pluginUnavailable;
+        fl["out_of_range_count"]   = flush.outOfRangeCount;
+        fl["exclusive_timed_out"]  = flush.exclusiveAccessTimedOut;
+        result["flush"] = fl;
+    }
 
     // Per-slot breakdown (reuses the Stage-2 mapping_status surface).
     {

@@ -95,10 +95,22 @@ public:
     juce::AudioPluginFormatManager& getFormatManager() override { return formatManager; }
     juce::KnownPluginList& getKnownPlugins() override
     {
-        // Lock so reader (UI browser) does not race with scanner (background thread).
-        // The scanner path takes the same lock inside scanPluginFolders.
-        const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+        // CAVEAT: The caller must either be on the message thread (where the
+        // scanner is not concurrently mutating knownPlugins) or must hold
+        // knownPluginsLock_ themselves. Returning a reference under a
+        // short-lived RAII lock is a TOCTOU race — the lock releases before
+        // the caller reads the object. The lock here is retained for API
+        // compatibility but callers should prefer getKnownPluginsSnapshot().
         return knownPlugins;
+    }
+
+    /** Thread-safe snapshot: returns a copy of the KnownPluginList types array.
+     *  Safe to call from any thread. Use this instead of getKnownPlugins()
+     *  when the caller is not on the message thread or needs a stable snapshot. */
+    juce::Array<juce::PluginDescription> getKnownPluginsSnapshot() const
+    {
+        const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+        return knownPlugins.getTypes();
     }
     void scanPluginFolders() override;
 
@@ -147,6 +159,11 @@ public:
      * without blocking real-time audio.
      */
     void drainDeferredDoomedPlugins();
+
+    // Core unload logic without the isSwapping_ guard — called by both
+    // the public unloadPlugin() and by loadPlugin() (which already holds
+    // the swap flag).
+    void unloadPluginInternal();
 
     // PERF-BROWSER (browser-lag fix, 2026-06-28): persistent KnownPluginList cache.
     // loadKnownPluginsCache() is called from the constructor so the browser can

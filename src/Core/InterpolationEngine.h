@@ -80,6 +80,13 @@ private:
     static void interpolateBatch_Scalar(
         const float* srcA, const float* srcB,
         float* dest, float t, size_t count) noexcept;
+
+    // AUDIT-FIX (C1): SIMD-accelerated weighted accumulation.
+    // Performs output[p] += src[p] * weight for all p, using AVX/SSE/NEON
+    // where available. Extracted from compute2D and compute2D_Voronoi
+    // to eliminate copy-paste and allow unified optimization.
+    static void accumulateWeighted_SIMD(
+        float* output, const float* src, float weight, size_t count) noexcept;
 };
 
 } // namespace more_phi

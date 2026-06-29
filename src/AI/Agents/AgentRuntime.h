@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -154,6 +155,13 @@ private:
     long long blackboardPumpIntervalMs_ = 50;
     std::atomic<bool> blackboardPumpRunning_{false};
     std::thread blackboardPumpThread_;
+    // O4 (2026-06-29): event-driven pump wake. publish() (via the BlackboardBridge
+    // onPublish_ hook) notifies this cv so events fan out immediately instead of
+    // waiting up to blackboardPumpIntervalMs_. The wait_for retains the interval as
+    // a fallback so a missed notify can't stall the pump and the Conductor
+    // decomposition poll still runs periodically.
+    std::mutex blackboardPumpMutex_;
+    std::condition_variable blackboardPumpCv_;
 
     // Tracks which agent ids have already been wired into the blackboard so that
     // start() after stop() doesn't subscribe the same instance twice.

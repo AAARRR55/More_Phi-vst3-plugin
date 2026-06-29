@@ -9,6 +9,7 @@
  * disrupting real-time audio while allowing it to recover if it can.
  */
 #include "PluginHostManager.h"
+#include "SafePluginCreate.h"
 #include <exception>
 
 #if defined(_MSC_VER)
@@ -24,6 +25,27 @@ static inline bool safePluginProcessBlock(juce::AudioPluginInstance* plugin,
     __try
     {
         plugin->processBlock(buffer, midi);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+// SEH-guarded plugin initialisation (enableAllBuses + prepareToPlay). Returns
+// true on success, false on a C++ or hardware exception. Standalone for the
+// same MSVC no-mixing reason as above (must not contain objects requiring
+// unwinding inside __try; this helper only uses raw pointers).
+static inline bool safeInitialisePlugin(juce::AudioPluginInstance* plugin,
+                                        juce::AudioPlayHead* playHead,
+                                        double sampleRate, int blockSize)
+{
+    __try
+    {
+        plugin->setPlayHead(playHead);
+        plugin->enableAllBuses();
+        plugin->prepareToPlay(sampleRate, blockSize);
         return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -256,27 +278,62 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         ~SwapGuard() { flag.store(false, std::memory_order_release); }
     } swapGuard{ isSwapping_ };
 
-    // M-5 FIX: Some VST3 plugins require the MessageManagerLock during
+    // M-5 FIX (revised): Some VST3 plugins require the MessageManagerLock during
     // creation (especially when hosted from a plugin context like FL Studio).
-    // Acquire it if a MessageManager is available.
+    // However, when loadPlugin() is called FROM the message thread (the normal
+    // UI path: PopupMenu callback → performPluginLoad → loadPlugin), constructing
+    // a MessageManagerLock on the message thread causes a self-deadlock or returns
+    // lockWasGained()==false in JUCE 8, after which createPluginInstance() runs
+    // without the lock and crashes plugins that need the message pump during init
+    // (COM initialization, window creation, etc.).
+    //
+    // When already on the message thread, the lock is unnecessary — we already have
+    // exclusive access to the message pump. Skip it entirely. Only acquire the
+    // MessageManagerLock when called from a background thread (e.g. state-restore
+    // timer that dispatches to a worker).
     std::unique_ptr<juce::MessageManagerLock> mmLock;
-    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
+    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+    const bool onMessageThread = (mm != nullptr && mm->isThisTheMessageThread());
+
+    if (!onMessageThread && mm != nullptr)
     {
         mmLock = std::make_unique<juce::MessageManagerLock>(
             juce::Thread::getCurrentThread());
         if (!mmLock->lockWasGained())
         {
-            DBG("loadPlugin: Failed to acquire MessageManagerLock");
+            DBG("loadPlugin: Failed to acquire MessageManagerLock (background thread)");
             mmLock.reset();
-            // Continue anyway — many plugins don't need it
+            // Continue anyway — many plugins don't need it, but those that do
+            // may fail or crash. The on-message-thread path avoids this problem.
         }
     }
 
     // Create the new instance BEFORE destroying the old one.
     // If creation fails, the current plugin remains untouched.
     juce::String errorMessage;
-    auto newPlugin = formatManager.createPluginInstance(
-        desc, currentSampleRate, currentBlockSize, errorMessage);
+    std::unique_ptr<juce::AudioPluginInstance> newPlugin;
+#if defined(_MSC_VER)
+    // FL-Studio FIX (SEH): createPluginInstance calls into the VST3 COM
+    // factory (GetFactory/createInstance/initialize). Some third-party plugins
+    // fault there with an access violation. Under /EHsc a C++ catch(...) does
+    // NOT catch SEH, so safeCreatePluginInstance (compiled with /EHa) is used
+    // to convert such a hardware exception into a graceful load failure
+    // instead of crashing the host (FL Studio) the moment the user picks the
+    // plugin from the dropdown.
+    newPlugin = safeCreatePluginInstance(
+        formatManager, desc, currentSampleRate, currentBlockSize, errorMessage);
+#else
+    try
+    {
+        newPlugin = formatManager.createPluginInstance(
+            desc, currentSampleRate, currentBlockSize, errorMessage);
+    }
+    catch (...)
+    {
+        newPlugin.reset();
+        errorMessage = "Exception during plugin creation";
+    }
+#endif
 
     // Release the lock before initialization (init doesn't need it)
     mmLock.reset();
@@ -291,12 +348,27 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         return false;
     }
 
+#if defined(_MSC_VER)
+    // FL-Studio FIX (SEH): guard enableAllBuses + prepareToPlay. These call
+    // IComponent::activateBus / setupProcessing which can fault in buggy
+    // third-party VST3s. Under /EHsc a C++ catch(...) does NOT catch SEH
+    // (access violation), so without this guard the host (FL Studio) would
+    // crash the moment the user picks that plugin. The SEH __except converts
+    // it into a graceful load failure instead. For bridged plugins (yabridge),
+    // disabling buses can cause Wine-side shared-memory layout mismatches that
+    // crash during processBlock, so we enable all buses before preparing.
+    if (!safeInitialisePlugin(newPlugin.get(),
+                              playHead_.load(std::memory_order_acquire),
+                              currentSampleRate, currentBlockSize))
+    {
+        DBG("loadPlugin: plugin threw a hardware/C++ exception during init");
+        return false;
+    }
+#else
     try
     {
         // Enable all buses first so the plugin can configure its full I/O layout,
-        // then prepare. For bridged plugins (yabridge), disabling buses can cause
-        // mismatches between the host-side channel expectations and the Wine-side
-        // shared memory layout, leading to memcpy crashes during processBlock.
+        // then prepare.
         newPlugin->setPlayHead(playHead_.load(std::memory_order_acquire));
         newPlugin->enableAllBuses();
         newPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
@@ -313,9 +385,13 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         DBG("Unknown exception during plugin initialization");
         return false;
     }
+#endif
 
-    // New plugin is valid — now swap it in.
-    unloadPlugin();
+    // New plugin is valid — now swap it in. Use the internal unload path
+    // because we already hold the isSwapping_ flag — the public unloadPlugin()
+    // would CAS-fail and skip the unload entirely, leaving hostedPluginPtr_
+    // dangling after the unique_ptr assignment below (FL Studio crash).
+    unloadPluginInternal();
 
     // Before swapping, drain any deferred plugins to prevent memory bloat
     // when rapidly cycling plugins.
@@ -346,6 +422,7 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         constexpr size_t kMaxDescriptionHistory = 16;
         while (descriptionHistory_.size() > kMaxDescriptionHistory)
             descriptionHistory_.erase(descriptionHistory_.begin());
+        descriptionHistory_.push_back(std::move(snapshot));
         descriptionSnapshot_.store(raw, std::memory_order_release);
     }
 
@@ -370,10 +447,11 @@ void PluginHostManager::unloadPlugin()
         ~SwapGuard() { flag.store(false, std::memory_order_release); }
     } swapGuard{ isSwapping_ };
 
-    // DAW-M2: Execute directly without message-thread dispatch.
-    // The callFunctionOnMessageThread dispatch was removed to prevent
-    // re-entrancy and lifetime issues when called from destructors or
-    // state-restore paths.
+    unloadPluginInternal();
+}
+
+void PluginHostManager::unloadPluginInternal()
+{
     if (hostedPlugin)
     {
         // H-3 FIX: Bounded wait for an in-flight exclusive state capture/restore.
@@ -382,10 +460,25 @@ void PluginHostManager::unloadPlugin()
         // endExclusivePluginUse() — which hangs the DAW on track removal. After a
         // 200 ms grace window (exclusive ops are sub-millisecond in practice),
         // force-release the flag and proceed. NOTE: the activePluginUsers_ wait
-        // below is intentionally still unbounded — proceeding past a live audio
+        // below is intentionally still bounded — proceeding past a live audio
         // lease would be a use-after-free, so we must wait for audio to drain.
+        //
+        // FL-Studio FIX: When called on the message thread (the normal path when
+        // swapping plugins from the UI), Thread::sleep(1) blocks the DAW's message
+        // pump, causing FL Studio to consider the plugin unresponsive and terminate
+        // it. On the message thread, yield the timeslice instead — this allows
+        // other message-thread work (including DAW paint/timer events) to run
+        // between checks without fully blocking. On background threads, sleep(1)
+        // is fine.
+        auto* mmWait = juce::MessageManager::getInstanceWithoutCreating();
+        const bool waitOnMessageThread = (mmWait != nullptr && mmWait->isThisTheMessageThread());
         for (int i = 0; i < 200 && exclusivePluginUseRequested_.load(std::memory_order_acquire); ++i)
-            juce::Thread::sleep(1);
+        {
+            if (waitOnMessageThread)
+                juce::Thread::yield();    // message thread: don't block the pump
+            else
+                juce::Thread::sleep(1);   // background thread: full sleep is fine
+        }
         exclusivePluginUseRequested_.store(false, std::memory_order_release);
 
         hostedPluginPtr_.store(nullptr, std::memory_order_release);
@@ -398,13 +491,18 @@ void PluginHostManager::unloadPlugin()
         // UI to close the window before this point when possible.
 
         // FIX C2/C1: Bounded wait for active audio-thread leases. An unbounded
-        // spin here can hang the DAW forever if a lease holder is stalled. After
-        // a 500 ms grace window we detach the plugin from live use
+        // spin here can hang the DAW forever if a lease holder is stalled. After a
+        // 500 ms grace window we detach the plugin from live use
         // (hostedPluginPtr_ is already nulled above, so new acquirePluginForUse()
         // calls return nullptr) but we do NOT destroy it while a lease is held —
         // that would be a use-after-free. Instead we move it to the deferred-doom
         // queue, which the message-thread maintenance timer drains once
         // activePluginUsers_ returns to zero (see drainDeferredDoomedPlugins).
+        //
+        // FL-Studio FIX: When on the message thread, Thread::sleep(1) blocks the
+        // DAW message pump making FL Studio consider the plugin unresponsive.
+        // Use yield() on the message thread instead; on background threads,
+        // Thread::sleep(1) is fine.
         const auto waitStart = juce::Time::getMillisecondCounter();
         const bool leasesDrained = [&, this]() {
             while (activePluginUsers_.load(std::memory_order_acquire) > 0)
@@ -414,7 +512,10 @@ void PluginHostManager::unloadPlugin()
                     DBG("PluginHostManager::unloadPlugin — timeout waiting for audio thread lease; deferring destruction");
                     return false;
                 }
-                juce::Thread::sleep(1);
+                if (waitOnMessageThread)
+                    juce::Thread::yield();    // message thread: don't block the pump
+                else
+                    juce::Thread::sleep(1);   // background thread: full sleep is fine
             }
             return true;
         }();

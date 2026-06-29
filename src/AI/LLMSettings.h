@@ -17,6 +17,7 @@ enum class LLMProviderId
     Anthropic,
     OpenRouter,
     Gemini,
+    ZAI,
     OpenAICompatible
 };
 
@@ -80,7 +81,7 @@ struct LLMProviderSettings
     juce::String validationMessage;
 };
 
-constexpr std::size_t llmProviderCount = 7;
+constexpr std::size_t llmProviderCount = 8;
 
 const std::array<LLMProviderDefinition, llmProviderCount>& getLLMProviderDefinitions();
 const LLMProviderDefinition& getLLMProviderDefinition(LLMProviderId id);

@@ -18,9 +18,14 @@ void DAWTransportForwarder::updateFromAudioThread(const juce::AudioPlayHead* pla
 
     // Begin write: mark sequence odd so a concurrent reader retries.
     // Single-producer (audio thread) is the only writer. fetch_add(1) flips an
-    // even sequence to odd (write in progress); the store below flips it to the
-    // next even value and releases the payload to readers.
-    const uint32_t seqBegin = sequence_.fetch_add(1, std::memory_order_acquire);
+    // even sequence to odd (write in progress). Use relaxed since no data
+    // is being published yet — we just need to mark the start.
+    const uint32_t seqBegin = sequence_.fetch_add(1, std::memory_order_relaxed);
+
+    // Compiler barrier: prevent the payload writes from being reordered before
+    // the sequence increment above. On x86-64 the hardware won't reorder, but
+    // the compiler might. atomic_thread_fence is sufficient.
+    std::atomic_thread_fence(std::memory_order_release);
 
     state_.bpm = info.getBpm().orFallback(120.0);
     if (const auto ts = info.getTimeSignature())
@@ -40,21 +45,33 @@ void DAWTransportForwarder::updateFromAudioThread(const juce::AudioPlayHead* pla
     state_.version       = seqBegin / 2 + 1;   // monotonic per publish
 
     // End write: mark sequence even again (release — payload visible to reader).
-    sequence_.store(seqBegin + 2, std::memory_order_release);
+    // A full release store ensures that all payload writes above are visible
+    // to any thread that observes the new even sequence value.
+    std::atomic_thread_fence(std::memory_order_release);
+    sequence_.store(seqBegin + 2, std::memory_order_relaxed);
 }
 
 std::optional<TransportState> DAWTransportForwarder::getSnapshot() const noexcept
 {
-    for (int attempts = 0; attempts < 4; ++attempts)
+    for (int attempts = 0; attempts < 16; ++attempts)
     {
-        const uint32_t seq1 = sequence_.load(std::memory_order_acquire);
+        const uint32_t seq1 = sequence_.load(std::memory_order_relaxed);
         if ((seq1 & 1u) != 0u)
             continue;   // write in progress — retry
 
-        // Copy payload (reads are ordered after the acquire load above).
+        // Acquire fence: ensure the payload copy below is ordered after
+        // the sequence read. Without this, the compiler or CPU could
+        // reorder the struct copy to happen before we read the sequence,
+        // producing a torn read even when seq1 == seq2.
+        std::atomic_thread_fence(std::memory_order_acquire);
+
+        // Copy payload.
         TransportState copy = state_;
 
-        const uint32_t seq2 = sequence_.load(std::memory_order_acquire);
+        // Second acquire fence: ensure seq2 load happens after the copy.
+        std::atomic_thread_fence(std::memory_order_acquire);
+
+        const uint32_t seq2 = sequence_.load(std::memory_order_relaxed);
         if (seq1 != seq2)
             continue;   // changed under us — retry
 

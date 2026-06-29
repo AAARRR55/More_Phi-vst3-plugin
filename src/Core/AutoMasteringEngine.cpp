@@ -73,6 +73,7 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     analysisSamplesSinceWindowSample_ = 0;
     analysisSumSquares_ = 0.0;
     analysisSampleCount_ = 0;
+    spectrumSubThrottleCounter_ = 0;   // PERF-CPU (2026-06-29)
     analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
 
     // Pre-allocate band buffers
@@ -139,6 +140,7 @@ void AutoMasteringEngine::reset() noexcept
     analysisSamplesSinceWindowSample_ = 0;
     analysisSumSquares_ = 0.0;
     analysisSampleCount_ = 0;
+    spectrumSubThrottleCounter_ = 0;   // PERF-CPU (2026-06-29)
     analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
     // P1.2: clear verification so it can't be read as a stale "last apply" result
     // across a prepare/reset cycle.
@@ -335,14 +337,27 @@ void AutoMasteringEngine::analyzeBlock(const juce::AudioBuffer<float>& buf) noex
     // advisory read on the analysis thread.
     analyzedSamples_.fetch_add(static_cast<std::uint64_t>(ns), std::memory_order_relaxed);
 
+    // LUFS + true-peak are cheap and safety-relevant (the meters the assistant
+    // reads to detect clipping/LUFS breaches). Run them every analyzeBlock call.
     lufs_.processBlock(buf.getArrayOfReadPointers(), nch, ns);
     analysisTruePeak_.processBlock(buf);
-    spectrumAnalyzer_.processBlock(buf);
-    stereoFieldAnalyzer_.processBlock(buf);
-    // ponytail: feed the genre classifier here (the only place we have a full
-    // audio buffer on a non-RT message-thread path). Without this the classifier
-    // starves and the whole AI decision chain is stuck on the default genre.
-    genreClassifier_.feedAudio(buf, sampleRate_);
+
+    // PERF-CPU (2026-06-29): the FFT spectrum + stereo-field + genre feedAudio are
+    // the expensive part of this tap. The downstream consumers (genre EQ prior,
+    // MCP spectrum tools) only act every ~30 s, so a ~30 ms metering lag is
+    // imperceptible. Run them only every kSpectrumSubThrottle'th analyzeBlock call
+    // (every 4 calls → 32*4=128 blocks at the processor's ANALYSIS_THROTTLE_BLOCKS).
+    if (++spectrumSubThrottleCounter_ >= kSpectrumSubThrottle)
+    {
+        spectrumSubThrottleCounter_ = 0;
+        spectrumAnalyzer_.processBlock(buf);
+        stereoFieldAnalyzer_.processBlock(buf);
+        // ponytail: feed the genre classifier here (the only place we have a full
+        // audio buffer on a non-RT message-thread path). Without this the classifier
+        // starves and the whole AI decision chain is stuck on the default genre.
+        genreClassifier_.feedAudio(buf, sampleRate_);
+    }
+
     updateAnalysisWindow(buf);
 }
 

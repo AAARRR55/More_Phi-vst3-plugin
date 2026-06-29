@@ -269,10 +269,18 @@ public:
     // is a no-op and the analysis thread sleeps. DSP params are HELD, not reset.
     // PERF-MEM: First activation lazily allocates the rate-proportional capture
     // ring (~4 MiB at 48 kHz, ~16 MiB at 192 kHz — see SonicMasterAnalysisEngineConfig).
+    // PERF-IDLE (2026-06-29): first activation ALSO spawns the analysis cycle
+    // thread. prepare() no longer spawns it unconditionally, so the background
+    // auto-apply loop (and its 3 s refreshProbe polling) only exists while the
+    // feature is genuinely enabled.
     void setActive(bool active) noexcept
     {
         active_.store(active, std::memory_order_relaxed);
-        if (active) ensureRing();
+        if (active)
+        {
+            ensureRing();
+            ensureAnalysisThreadStarted();
+        }
     }
     [[nodiscard]] bool isActive() const noexcept { return active_.load(std::memory_order_relaxed); }
 
@@ -476,6 +484,18 @@ private:
     // Idempotent — no-op if the ring already exists or prepare() hasn't been called.
     void ensureRing() noexcept;
 
+    // PERF-IDLE (2026-06-29): idempotently spawns the analysis cycle thread on
+    // first activation. Called from setActive(true). No-op if already started or
+    // not prepared. Safe to re-call; the thread is joined in release().
+    void ensureAnalysisThreadStarted() noexcept;
+
+    // PERF-MEM (2026-06-29): idempotently sizes the on-demand scratch buffers
+    // (onDemandL_/R_/ModelL_/ModelR_/Interleaved_) on first requestDecisionNow
+    // call. Called from the message thread (MCP tool caller), never the audio
+    // thread. Sizes mirror the shared set. Saves ~6.3 MiB at 44.1 kHz when the
+    // on-demand tool is never invoked.
+    void ensureOnDemandBuffers(std::size_t hostFrames) noexcept;
+
     // DIAGNOSTIC (2026-06-26): copy the specific rejection issues from a validate()
     // verdict into lastSafetyRejection_ so getLastSafetyRejection() can surface
     // them. Must be called under inferMutex_ (the caller — runCycle or
@@ -554,6 +574,15 @@ private:
     std::atomic<bool> active_ { false };
     std::atomic<bool> stopRequested_ { false };
     std::atomic<bool> prepared_ { false };
+    // PERF-IDLE (2026-06-29): tracks whether the analysis cycle thread has been
+    // spawned. prepare() no longer spawns the thread unconditionally — the cycle
+    // loop is only needed when the background auto-apply feature is active
+    // (setActive(true)) or explicitly run via the test hook. requestDecisionNow
+    // (on-demand, sonicmaster_decision MCP tool) runs on the caller's thread and
+    // never touches the cycle thread, so deferring the spawn does not regress the
+    // CAPTURE-DECOUPLE on-demand path. Guarded by mutex_ (setActive/prepare/release
+    // all serialize on the message thread). Read in analysisLoop via joinability.
+    bool analysisThreadStarted_ { false };
     std::atomic<Status> status_ { Status::Disabled };
     // F2/AUDIT: set true only when applyRamped targeted an active app engine.
     std::atomic<bool> lastApplyReachedAudioPath_ { false };

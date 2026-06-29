@@ -18,7 +18,10 @@ public:
     {
         return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field",
                  "ozone.track.analyze", "get_mastering_state",
-                 "analysis.capture_window", "analysis.compare_render" };
+                 "analysis.capture_window", "analysis.compare_render",
+                 // O1 (2026-06-29): dry-run neural mastering preview so the analysis
+                 // agent can surface a model decision alongside live measurements.
+                 "sonicmaster_decision" };
     }
     std::vector<juce::String> subscribedEventTypes() const override { return { "audio.transport_changed" }; }
 

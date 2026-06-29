@@ -143,6 +143,7 @@ const std::set<std::string>& chatRelevantTools()
         "plugin_profile.describe_semantics", "plugin_profile.describe_semantic_map",
         "plugin_profile.apply_safe_action", "plugin_profile.restore_safe_snapshot",
         "get_mastering_state", "apply_mastering_plan",
+        "mastering.neural_apply",
         "sonicmaster_decision",
         "get_queue_health",
     };
@@ -197,9 +198,17 @@ std::vector<ToolNameMapping> buildChatToolNameMap()
 
 const std::vector<ToolNameMapping>& getCachedChatToolNameMap()
 {
-    static std::once_flag flag;
+    // FIX (2026-06-29): std::call_once cached the map permanently. If the first
+    // build ran when getToolList() transiently returned empty/threw, the resolver
+    // was poisoned with an empty map forever — every chat tool call returned
+    // unknown_tool_alias and every AI edit silently dropped. Rebuild while empty
+    // so a transient miss self-heals on the next resolve. getToolList() is a
+    // static schema, so in practice this still builds exactly once.
     static std::vector<ToolNameMapping> cached;
-    std::call_once(flag, [] { cached = buildChatToolNameMap(); });
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+    if (cached.empty())
+        cached = buildChatToolNameMap();
     return cached;
 }
 
@@ -212,9 +221,68 @@ std::string resolveApiToolNameToMcpName(const std::string& apiToolName)
     return {};
 }
 
+// AUDIT-FIX (D, 2026-06-29): the transport-error remediation hint is produced
+// by the test-visible static member LLMChatClient::transportErrorHintForTest,
+// defined at file scope below (after this anonymous namespace closes). The
+// chat() call site invokes it directly by qualified name.
+
 
 
 } // namespace
+
+// AUDIT-FIX (D, 2026-06-29): extract a remediation hint from a WinHTTP transport
+// error body. The body is produced by winHttpFailure() (LLMConnectionValidator)
+// in the shape "WinHTTP <stage> failed with error <code> [<gloss>]." on Windows;
+// on other platforms it's the JUCE URL error string or empty. We look for the
+// numeric code (12002/12007/12029/12175 are the ones winHttpFriendlyText glosses)
+// and return a short, actionable suffix. Empty body or unrecognized code → no hint.
+//
+// Kept fail-soft: any parse miss just yields an empty string and the caller
+// falls back to its existing message. This never throws and never overrides the
+// provider-specific friendly preamble in chat(). Defined at file scope (not in
+// the anonymous namespace) because it is a class member.
+juce::String LLMChatClient::transportErrorHintForTest(const juce::String& transportErrorBody)
+{
+    if (transportErrorBody.trim().isEmpty())
+        return {};
+
+    // First numeric run in the string is the WinHTTP error code (the body starts
+    // "WinHTTP ... failed with error 12002 ..."). getIntValue would do, but a
+    // manual scan tolerates leading non-digits without allocating substrings.
+    int code = 0;
+    bool foundCode = false;
+    for (int i = 0; i < transportErrorBody.length(); ++i)
+    {
+        const auto ch = transportErrorBody[i];
+        if (ch >= '0' && ch <= '9')
+        {
+            code = transportErrorBody.substring(i).getIntValue();
+            foundCode = true;
+            break;
+        }
+    }
+    if (! foundCode)
+        return {};
+
+    switch (code)
+    {
+        case 12002: // ERROR_WINHTTP_TIMEOUT — receive window exhausted mid-generation
+            return " Suggested fix: the request took longer than the timeout — if the model "
+                   "is cold-starting or is a large/reasoning model, retry (the endpoint warms "
+                   "up), or pick a smaller non-reasoning model in LLM Settings.";
+        case 12007: // ERROR_WINHTTP_NAME_NOT_RESOLVED
+            return " Suggested fix: the host name could not be resolved — check your DNS / "
+                   "internet connection and that the provider Base URL is correct in LLM Settings.";
+        case 12029: // ERROR_WINHTTP_CANNOT_CONNECT
+            return " Suggested fix: could not connect to the server — check the Base URL, your "
+                   "firewall, and any corporate proxy that may block the provider endpoint.";
+        case 12175: // ERROR_WINHTTP_SECURE_FAILURE
+            return " Suggested fix: the TLS/SSL handshake failed — check the system clock, root "
+                   "certificates, and any TLS-intercepting proxy.";
+        default:
+            return {};
+    }
+}
 
 // ── System prompt ──────────────────────────────────────────────────────────
 
@@ -265,10 +333,22 @@ const char* const LLMChatClient::kSystemPrompt =
     "character). This is your PRIMARY mastering source.\n"
     "- sonicmaster_decision does NOT apply anything — it returns the decision for "
     "you to act on. Summarize it to the user (e.g. \"the model suggests cutting "
-    "10 kHz by 4.6 dB, and chose a -14 LUFS mastering target\"), then either call "
-    "apply_mastering_plan to apply the built-in chain, or map the decision onto "
-    "the hosted plugin's parameters with set_parameters_batch. Ask the user before "
-    "applying if the moves are large (>6 dB EQ, or >3 dB loudness change).\n"
+    "10 kHz by 4.6 dB, and chose a -14 LUFS mastering target\").\n"
+    "  To actually APPLY the neural decision to the hosted plugin, call "
+    "mastering_neural_apply. (Remember: all tool names use underscores only, as "
+    "stated above — never a dotted form.) This is the one-click commit door — it "
+    "analyzes the last ~6s of audio, runs the ONNX model, decodes the decision, "
+    "and applies it to the hosted plugin with safety checks. You do NOT need to "
+    "call sonicmaster_decision first; you can call mastering_neural_apply directly. "
+    "If you only need a preview without applying, call sonicmaster_decision. "
+    "Ask the user before applying if the moves are large (>6 dB EQ, or >3 dB "
+    "loudness change).\n"
+    "  mastering_neural_apply uses the embedded in-process ONNX model (no server "
+    "needed). If it returns available=false, the ONNX model is not loaded; tell the "
+    "user they should restart the plugin or rebuild with MORE_PHI_ENABLE_ONNX=ON. "
+    "If available=true but success=false, the user needs to play audio for ~6s first. "
+    "Fall back to apply_mastering_plan (heuristic, non-neural) only if the neural "
+    "model is unavailable and the user explicitly accepts a heuristic result.\n"
     "- AUDIT-7 / labeling: the decision's `target_lufs` is the MASTERING TARGET the "
     "model picked for the caller-supplied target_lufs input — NOT a measurement of "
     "the input audio's loudness. The model sees only the last ~6s, peak-normalized "
@@ -278,15 +358,9 @@ const char* const LLMChatClient::kSystemPrompt =
     "use the analyze_audio / ozone.track.analyze tools (real ITU-R BS.1770 meter), "
     "not sonicmaster_decision. Likewise, frame EQ/dynamics moves as the model's "
     "recommendation on a ~6s window, not a whole-track verdict.\n"
-    "- sonicmaster_decision requires the SonicMaster inference server running on "
-    "127.0.0.1:8765. If it returns success=false with available=false, tell the user "
-    "to start it (`python tools/inference_server/server.py --package <package>`); if "
-    "available=true but success=false, the user needs to play audio for ~6s first. "
-    "Fall back to apply_mastering_plan (heuristic) only if the server is unavailable "
-    "and the user explicitly accepts a heuristic result.\n"
     "- Never invent EQ gains, LUFS targets, or compressor settings yourself. Always "
-    "ground mastering moves in a sonicmaster_decision result or, as a documented "
-    "fallback, an apply_mastering_plan result.\n"
+    "ground mastering moves in a sonicmaster_decision result, apply them via "
+    "mastering_neural_apply, or as a documented fallback, an apply_mastering_plan result.\n"
     "\n"
     "Everything else is fair game - perform direct edits and keep the user informed.";
 
@@ -1287,19 +1361,23 @@ void LLMChatClient::chat(const LLMSettings& settings,
         {
             const auto paramId = juce::String(match[1].str()).trim().toLowerCase();
             const double value = std::stod(match[2].str());
-            toolName = "more_phi.set_parameter";
+            // FIX (2026-06-29): executeTool → dispatchToolInProcess resolves the
+            // UNDERSCORED api-name (more_phi_set_parameter), not the dotted MCP
+            // name. The dotted literal returned unknown_tool_alias and the edit
+            // never applied. resolveToolNameForTest pins this contract.
+            toolName = "more_phi_set_parameter";
             toolArgs = "{\"parameter_id\":\"" + paramId + "\",\"value\":" + juce::String(value, 6) + "}";
             verificationText = "Set more-phi " + paramId + " to " + juce::String(value) + ".";
         }
         else if (std::regex_match(userMsgStr, match, kBypassOn))
         {
-            toolName = "more_phi.set_parameter";
+            toolName = "more_phi_set_parameter";
             toolArgs = "{\"parameter_id\":\"bypass\",\"value\":1.0}";
             verificationText = "Bypass enabled.";
         }
         else if (std::regex_match(userMsgStr, match, kBypassOff))
         {
-            toolName = "more_phi.set_parameter";
+            toolName = "more_phi_set_parameter";
             toolArgs = "{\"parameter_id\":\"bypass\",\"value\":0.0}";
             verificationText = "Bypass disabled.";
         }
@@ -1548,6 +1626,13 @@ void LLMChatClient::chat(const LLMSettings& settings,
                     // Surface a friendly, actionable message FIRST and append the raw
                     // platform detail (e.g. "WinHTTP receive response failed with error 12002")
                     // in parentheses so users have something to share when reporting issues.
+                    //
+                    // AUDIT-FIX (D, 2026-06-29): the raw WinHTTP detail string already
+                    // carries the numeric code + a one-line friendly gloss (see
+                    // winHttpFriendlyText in LLMConnectionValidator), but it doesn't tell
+                    // the user what to DO. Map the well-known codes to a phase-specific
+                    // remediation hint and append it, so a 12002 (timeout) says "raise the
+                    // timeout or pick a smaller/warmer model" rather than just "timed out".
                     const juce::String friendly = (providerId == LLMProviderId::NVIDIA)
                         ? juce::String("NVIDIA chat request failed at the transport layer. "
                                        "The selected NVIDIA model may be cold-starting, may not support "
@@ -1559,10 +1644,11 @@ void LLMChatClient::chat(const LLMSettings& settings,
                         : juce::String("Chat request failed at the transport layer (network/TLS/timeout). "
                                        "Check your internet connection, base URL, API key, and any "
                                        "corporate proxy, then retry.");
-                    const juce::String detail = response.body.trim();
+                    const auto detail = response.body.trim();
+                    const auto hint   = transportErrorHintForTest(response.body);
                     errorText = detail.isNotEmpty()
-                        ? friendly + " (" + detail + ")"
-                        : friendly;
+                        ? friendly + " (" + detail + ")" + hint
+                        : friendly + hint;
                     break;
                 }
 

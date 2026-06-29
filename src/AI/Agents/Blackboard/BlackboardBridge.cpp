@@ -21,6 +21,9 @@ juce::String BlackboardBridge::publish(const juce::String& source,
     ev.timestamp = juce::Time::getCurrentTime();
     const auto eventId = ev.eventId;
     bus_.publish(std::move(ev));   // publish stamps ev.sequence
+    // O4 (2026-06-29): wake any event-driven pump so the event fans out
+    // immediately instead of waiting up to the next fixed-interval poll.
+    if (onPublish_) onPublish_();
     return eventId;
 }
 

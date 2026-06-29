@@ -44,6 +44,10 @@ public:
     // Plugin discovery
     virtual juce::AudioPluginFormatManager& getFormatManager() = 0;
     virtual juce::KnownPluginList& getKnownPlugins() = 0;
+    /** Thread-safe snapshot: returns a copy of the known plugin types array.
+     *  Safe to call from any thread. Prefer this over getKnownPlugins() when
+     *  the caller needs a stable snapshot or is not on the message thread. */
+    virtual juce::Array<juce::PluginDescription> getKnownPluginsSnapshot() const { return {}; }
     virtual void scanPluginFolders() = 0;
     
     // Parameter metadata (0 = continuous)
@@ -96,6 +100,22 @@ public:
     virtual juce::String getParameterStableID(int index) const = 0;
     virtual int getParameterNumSteps(int index) const = 0;
     virtual int getNumSteps(int index) const { return getParameterNumSteps(index); }
+
+    // AUDIT-FIX (C6): Parameter remapping support. Look up a parameter by name
+    // and return its current index. Returns -1 if not found. Enables forward
+    // compatibility when hosted plugin parameter order changes between versions.
+    virtual int findParameterIndex(const juce::String& name) const
+    {
+        // Default implementation: linear search by parameter name.
+        // ParameterBridge overrides with a more efficient implementation.
+        const int count = getParameterCount();
+        for (int i = 0; i < count; ++i)
+        {
+            if (getParameterName(i) == name)
+                return i;
+        }
+        return -1;
+    }
 };
 
 } // namespace more_phi

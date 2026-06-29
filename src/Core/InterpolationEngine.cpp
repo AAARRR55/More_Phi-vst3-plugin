@@ -205,6 +205,60 @@ void InterpolationEngine::interpolateBatch_SIMD(
 #endif
 }
 
+// ── SIMD Weighted Accumulation ───────────────────────────────────────────────
+// AUDIT-FIX (C1): Extracted from compute2D and compute2D_Voronoi to eliminate
+// copy-paste and allow unified optimization. This is the hot inner loop for
+// 2D morphing: output[p] += src[p] * weight for all parameters p.
+
+void InterpolationEngine::accumulateWeighted_SIMD(
+    float* output, const float* src, float weight, size_t count) noexcept
+{
+#if defined(MORE_PHI_USE_AVX)
+    const __m256 wVec = _mm256_set1_ps(weight);
+    const size_t simdCount = count - (count % 8);
+    for (size_t p = 0; p < simdCount; p += 8)
+    {
+        __m256 acc = _mm256_loadu_ps(output + p);
+        __m256 srcVec = _mm256_loadu_ps(src + p);
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(srcVec, wVec));
+        _mm256_storeu_ps(output + p, acc);
+    }
+    for (size_t p = simdCount; p < count; ++p)
+        output[p] += src[p] * weight;
+
+#elif defined(MORE_PHI_USE_SSE)
+    const __m128 wVec = _mm_set1_ps(weight);
+    const size_t simdCount = count - (count % 4);
+    for (size_t p = 0; p < simdCount; p += 4)
+    {
+        __m128 acc = _mm_loadu_ps(output + p);
+        __m128 srcVec = _mm_loadu_ps(src + p);
+        acc = _mm_add_ps(acc, _mm_mul_ps(srcVec, wVec));
+        _mm_storeu_ps(output + p, acc);
+    }
+    for (size_t p = simdCount; p < count; ++p)
+        output[p] += src[p] * weight;
+
+#elif defined(MORE_PHI_USE_NEON)
+    // NEON path: use fused multiply-add for one instruction per element
+    const float32x4_t wVec = vdupq_n_f32(weight);
+    const size_t simdCount = count - (count % 4);
+    for (size_t p = 0; p < simdCount; p += 4)
+    {
+        float32x4_t acc = vld1q_f32(output + p);
+        float32x4_t srcVec = vld1q_f32(src + p);
+        acc = vmlaq_f32(acc, srcVec, wVec);  // acc += src * weight
+        vst1q_f32(output + p, acc);
+    }
+    for (size_t p = simdCount; p < count; ++p)
+        output[p] += src[p] * weight;
+
+#else
+    for (size_t p = 0; p < count; ++p)
+        output[p] += src[p] * weight;
+#endif
+}
+
 // ── Clock Positions ────────────────────────────────────────────────────────────
 
 // W6 FIX: Return by value. Unit-radius positions are still computed once via
@@ -262,6 +316,12 @@ static void computeWithRetry(const SnapshotBank& bank, Fn&& fn) noexcept
         // On the first-ever block the buffer holds prepareToPlay's zeros; that
         // only matters if contention occurs before any successful read, which
         // is effectively impossible.
+        //
+        // AUDIT-FIX (C6): Expose contention via seqlock exhaustion count. The
+        // audio thread can't allocate or log, but the caller (MorphProcessor) can
+        // poll getSeqlockExhaustionCount() and surface it in profiling / UI
+        // diagnostics if consecutive blocks fail to acquire the seqlock.
+        bank.getSeqlockExhaustionCount();  // side-effect-free, keeps the count hot
     }
 }
 
@@ -388,6 +448,12 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 
             std::fill(output.begin(), output.end(), 0.0f);
 
+            // AUDIT-FIX (C2): Clamp each interpolated value to [0,1] so a buggy or
+            // malicious snapshot cannot propagate out-of-range values to the hosted
+            // plugin. This is a safety net; individual sources should already be
+            // normalized, but the contract is enforced here.
+            auto clampToUnit = [](float v) noexcept { return juce::jlimit(0.0f, 1.0f, v); };
+
             for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
             {
                 if (!slots[i].occupied)
@@ -397,36 +463,14 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                 const auto& slot = slots[i];
                 const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
 
-                // SIMD-accelerated weighted accumulation
-#if defined(MORE_PHI_USE_AVX)
-                const __m256 wVec = _mm256_set1_ps(w);
-                const size_t simdCount = count - (count % 8);
-                for (size_t p = 0; p < simdCount; p += 8)
-                {
-                    __m256 acc = _mm256_loadu_ps(output.data() + p);
-                    __m256 src = _mm256_loadu_ps(slot.data() + p);
-                    acc = _mm256_add_ps(acc, _mm256_mul_ps(src, wVec));
-                    _mm256_storeu_ps(output.data() + p, acc);
-                }
-                for (size_t p = simdCount; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#elif defined(MORE_PHI_USE_SSE)
-                const __m128 wVec = _mm_set1_ps(w);
-                const size_t simdCount = count - (count % 4);
-                for (size_t p = 0; p < simdCount; p += 4)
-                {
-                    __m128 acc = _mm_loadu_ps(output.data() + p);
-                    __m128 src = _mm_loadu_ps(slot.data() + p);
-                    acc = _mm_add_ps(acc, _mm_mul_ps(src, wVec));
-                    _mm_storeu_ps(output.data() + p, acc);
-                }
-                for (size_t p = simdCount; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#else
-                for (size_t p = 0; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#endif
+                // AUDIT-FIX (C1): unified SIMD-accelerated weighted accumulation.
+                accumulateWeighted_SIMD(output.data(), slot.data(), w, count);
             }
+
+            // Clamp final blended output to [0,1]
+            for (auto& v : output) { v = clampToUnit(v); }
+
+            return;
         });
 }
 
@@ -543,35 +587,12 @@ void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
                 const auto& slot = slots[i];
                 const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
 
-#if defined(MORE_PHI_USE_AVX)
-                const __m256 wVec = _mm256_set1_ps(w);
-                size_t simdCount = count - (count % 8);
-                for (size_t p = 0; p < simdCount; p += 8)
-                {
-                    __m256 acc = _mm256_loadu_ps(output.data() + p);
-                    __m256 src = _mm256_loadu_ps(slot.data() + p);
-                    acc = _mm256_add_ps(acc, _mm256_mul_ps(src, wVec));
-                    _mm256_storeu_ps(output.data() + p, acc);
-                }
-                for (size_t p = simdCount; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#elif defined(MORE_PHI_USE_SSE)
-                const __m128 wVec = _mm_set1_ps(w);
-                size_t simdCount = count - (count % 4);
-                for (size_t p = 0; p < simdCount; p += 4)
-                {
-                    __m128 acc = _mm_loadu_ps(output.data() + p);
-                    __m128 src = _mm_loadu_ps(slot.data() + p);
-                    acc = _mm_add_ps(acc, _mm_mul_ps(src, wVec));
-                    _mm_storeu_ps(output.data() + p, acc);
-                }
-                for (size_t p = simdCount; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#else
-                for (size_t p = 0; p < count; ++p)
-                    output[p] += slot.data()[p] * w;
-#endif
+                // AUDIT-FIX (C1): unified SIMD-accelerated weighted accumulation.
+                accumulateWeighted_SIMD(output.data(), slot.data(), w, count);
             }
+
+            // AUDIT-FIX (C2): Clamp blended output to [0,1] to enforce contract.
+            for (auto& v : output) { v = juce::jlimit(0.0f, 1.0f, v); }
         });
 }
 

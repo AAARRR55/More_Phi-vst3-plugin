@@ -87,6 +87,18 @@ void AgentRuntime::start(unsigned numWorkers)
         }
     }
 
+    // O4 (2026-06-29): wire the blackboard's publish hook so the pump wakes
+    // immediately on publish instead of waiting up to blackboardPumpIntervalMs_.
+    // Captures `this` — the hook is cleared in stop() before the pump thread is
+    // joined, so the capture never dangles. Called from publish() on agent worker
+    // / MCP threads; cv.notify_one is thread-safe.
+    blackboard_.setOnPublishHook([this] {
+        // notify_one is cheap and safe to call without holding the mutex; holding
+        // it would be a (minor) contention point under burst publish. The
+        // predicate-based wait_for avoids lost-wakeup races regardless.
+        blackboardPumpCv_.notify_one();
+    });
+
     scheduler_.start(numWorkers);
 
     // Blackboard pump thread: periodically fans out new events to subscribers.
@@ -111,7 +123,14 @@ void AgentRuntime::start(unsigned numWorkers)
             } catch (...) {
                 logger_.log("runtime", "error", "blackboard pump threw unknown exception");
             }
-            juce::Thread::sleep(static_cast<int>(blackboardPumpIntervalMs_));
+            // O4: wait for either a publish notify OR the interval fallback. The
+            // interval is retained so a missed notify can't stall the pump and the
+            // Conductor decomposition poll still runs periodically. Re-checks
+            // running_ on wake so stop() unblocks promptly.
+            std::unique_lock<std::mutex> lock(blackboardPumpMutex_);
+            blackboardPumpCv_.wait_for(lock,
+                std::chrono::milliseconds(blackboardPumpIntervalMs_),
+                [this] { return ! blackboardPumpRunning_.load(std::memory_order_relaxed); });
         }
     });
 }
@@ -120,7 +139,14 @@ void AgentRuntime::stop()
 {
     if (! running_.exchange(false))
         return;
-    blackboardPumpRunning_.store(false);
+    // O4: clear the publish hook FIRST so no further notify lands on a cv whose
+    // owner is about to be joined. Then signal the pump to wake immediately.
+    blackboard_.setOnPublishHook(nullptr);
+    {
+        std::lock_guard<std::mutex> lock(blackboardPumpMutex_);
+        blackboardPumpRunning_.store(false);
+    }
+    blackboardPumpCv_.notify_all();
     if (blackboardPumpThread_.joinable())
         blackboardPumpThread_.join();
     scheduler_.stop();

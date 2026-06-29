@@ -3468,13 +3468,45 @@ void MorePhiProcessor::refreshHostedMasteringApplicators(const juce::PluginDescr
 {
     clearHostedMasteringApplicators();
 
-    if (!OzoneParameterMap::isOzone11(desc.name))
-        return;
-
+    // FIX (2026-06-29): Removed the hard isOzone11 check. The buildFromHostedPlugin
+    // function does generic name-based discovery ("EQ Band", "Dynamics", "Imager",
+    // etc.) and will match any plugin with similarly named parameters — not just
+    // iZotope Ozone 11. We always attempt to build the map, then only register the
+    // applicator if at least one parameter was mapped (ready check).
     ozoneParamMap_ = std::make_unique<OzoneParameterMap>(OzoneParameterMap::buildFromHostedPlugin(paramBridge));
+
+    if (!ozoneParamMap_->hasAnyMapping())
+    {
+        DBG("refreshHostedMasteringApplicators: no mapped parameters found for '"
+            + desc.name + "' — OzonePlanApplicator NOT registered. "
+            "Run ozone.audit_parameters(apply=true) explicitly if you want to "
+            "attempt mapping, or check that the hosted plugin exposes standard "
+            "parameter names (EQ Band X, Dynamics, Imager, Maximizer).");
+        ozoneParamMap_.reset();
+        return;
+    }
+
     ozonePlanApplicator_ = std::make_unique<OzonePlanApplicator>(*this, *ozoneParamMap_);
     autoMasteringEngine_.getChainPlanner().setOzonePlanApplicator(ozonePlanApplicator_.get());
-    DBG("refreshHostedMasteringApplicators: Ozone 11 detected — OzonePlanApplicator registered");
+    DBG("refreshHostedMasteringApplicators: OzonePlanApplicator registered for '"
+        + desc.name + "' (mapped " + juce::String(ozoneParamMap_->mappedSlotCount())
+        + " slots).");
+}
+
+bool MorePhiProcessor::ensureOzonePlanApplicator()
+{
+    if (ozoneMappingReady())
+        return true;
+
+    auto* plugin = getHostManager().getPlugin();
+    if (plugin == nullptr)
+        return false;
+
+    // Construct a temporary PluginDescription for the refresh call
+    juce::PluginDescription desc;
+    desc.name = plugin->getName();
+    refreshHostedMasteringApplicators(desc);
+    return ozoneMappingReady();
 }
 
 bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& desc)
@@ -3756,8 +3788,14 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
         [](const juce::String& agentId) -> std::vector<juce::String> {
             const auto id = agentId.toLowerCase();
             if (id.startsWith("conductor"))    return { "workflow.submit", "workflow.execute", "workflow.cancel", "hosted_plugin.info", "analysis.get_summary" };
-            if (id.startsWith("analysis"))     return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field", "analysis.capture_window", "analysis.compare_render" };
-            if (id.startsWith("optimization")) return { "mastering.plan_preview", "mastering.render_batch", "mastering.render_status", "mastering.select_candidate", "hosted_plugin.set_parameter" };
+            // O1 (2026-06-29): analysis agents may pull a dry-run neural decision
+            // (sonicmaster_decision) alongside live measurements for mastering intents.
+            if (id.startsWith("analysis"))     return { "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field", "analysis.capture_window", "analysis.compare_render", "sonicmaster_decision" };
+            // O1 (2026-06-29): optimization agents prefer the neural one-shot apply
+            // (mastering.neural_apply) for mastering goals, falling back to the
+            // heuristic batch. sonicmaster_decision is granted for preview/preview-then-apply
+            // flows. These must match OptimizationAgent::allowedTools().
+            if (id.startsWith("optimization")) return { "mastering.plan_preview", "mastering.render_batch", "mastering.render_status", "mastering.select_candidate", "hosted_plugin.set_parameter", "mastering.neural_apply", "sonicmaster_decision" };
             // H1 FIX: CreativeAgent::execute calls find_related_parameters and
             // suggest_intermediate_snapshots (CreativeAgent.cpp:22-24). Granting
             // only mastering.plan_preview / plugin_profile.describe_semantics left

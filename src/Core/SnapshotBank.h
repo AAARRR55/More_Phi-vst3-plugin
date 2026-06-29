@@ -75,6 +75,13 @@ public:
     // Used when Recall Toggle is off to sustain notes during snapshot switches.
     void recallFast(int slot, IParameterBridge& bridge) const;
 
+    // AUDIT-FIX (C6): Parameter remapping recall. When a hosted plugin's
+    // parameter order has changed (e.g. after a version update), the snapshot's
+    // stored parameter names are used to find the correct current index for each
+    // parameter. Parameters whose names cannot be found are silently skipped.
+    // Falls back to the supplied slot values if no names are captured.
+    void recallWithParameterMapping(int slot, IParameterBridge& bridge) const;
+
     // Full mode: capture/recall opaque VST3 state chunks alongside parameters
     bool captureStateChunk(int slot, juce::AudioPluginInstance* plugin);
     void captureStateChunk(int slot, const juce::MemoryBlock& chunk);
@@ -158,6 +165,7 @@ public:
     std::unique_ptr<juce::XmlElement> toXml() const
     {
         auto xml = std::make_unique<juce::XmlElement>("SNAPSHOT_BANK");
+        xml->setAttribute("version", "1");
 
         for (int i = 0; i < NUM_SLOTS; ++i)
         {
@@ -258,6 +266,11 @@ public:
         std::array<juce::MemoryBlock, NUM_SLOTS> tmpChunks;
         std::array<juce::String, NUM_SLOTS> tmpUIDs;
         std::array<juce::StringArray, NUM_SLOTS> tmpNames;
+
+        // AUDIT-FIX (C5): Check XML version for forward compatibility.
+        // Version 1 (or absent) = current format. Future versions can branch here.
+        const int xmlVersion = xml.getIntAttribute("version", 1);
+        juce::ignoreUnused(xmlVersion);  // reserved for future schema changes
 
         for (auto* child : xml.getChildIterator())
         {

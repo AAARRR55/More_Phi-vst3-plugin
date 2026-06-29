@@ -133,6 +133,58 @@ TEST_CASE("LLM chat client exposes API-safe runtime MCP tool names with full too
     CHECK(LLMChatClient::resolveToolNameForTest("hosted_plugin.load").isEmpty());
 }
 
+TEST_CASE("AI chat fast-path tool names resolve (dotted-name regression)",
+          "[unit][ai][llm][chat][regression]")
+{
+    // Regression for the Tier-1 fast-path bug: the deterministic pre-parser
+    // (bypass on/off, "set more-phi X to Y") built the DOTTED MCP name
+    // "more_phi.set_parameter" and handed it to executeTool, which resolves the
+    // UNDERSCORED api-name only. The dotted literal resolved to empty -> the edit
+    // was dropped as unknown_tool_alias. Pin both halves of the contract so it
+    // cannot regress: the dotted form MUST be unresolvable, the underscored form
+    // MUST resolve, and the resolver map MUST be populated (the call_once cache
+    // previously could be seeded empty and never recover).
+    CHECK(LLMChatClient::resolveToolNameForTest("more_phi.set_parameter").isEmpty());
+    CHECK(LLMChatClient::resolveToolNameForTest("more_phi_set_parameter")
+          == "more_phi.set_parameter");
+
+    // The cache must be non-empty: every chat-relevant tool's underscored form
+    // must round-trip back to its dotted MCP name.
+    CHECK_FALSE(LLMChatClient::resolveToolNameForTest("set_parameter").isEmpty());
+    CHECK_FALSE(LLMChatClient::resolveToolNameForTest("hosted_plugin_set_parameter").isEmpty());
+}
+
+TEST_CASE("AI chat mastering apply tool resolves underscored, prompt uses underscored",
+          "[unit][ai][llm][chat][regression]")
+{
+    // REGRESSION (2026-06-29): "AI assistant mastering edits are not applied to
+    // the hosted plugin." The system prompt's "Mastering decisions" section told
+    // the LLM to call mastering.neural_apply with a DOTTED name, but
+    // resolveApiToolNameToMcpName only matches the UNDERSCORED api-name — so the
+    // call resolved to empty and dispatchToolInProcess returned unknown_tool_alias,
+    // silently dropping the mastering edit before it ever reached the hosted
+    // plugin. Same class of bug as the more_phi.set_parameter fast-path regression
+    // above. Pin both halves: the dotted form MUST be unresolvable, the
+    // underscored form MUST round-trip to the dotted MCP method, and the system
+    // prompt MUST instruct the LLM to call the underscored form (never dotted).
+    CHECK(LLMChatClient::resolveToolNameForTest("mastering.neural_apply").isEmpty());
+    CHECK(LLMChatClient::resolveToolNameForTest("mastering_neural_apply")
+          == "mastering.neural_apply");
+
+    const juce::String prompt = LLMChatClient::systemPromptForTest();
+    REQUIRE_FALSE(prompt.isEmpty());
+
+    // The prompt must tell the LLM the underscored form — that is the only form
+    // resolveApiToolNameToMcpName will accept. If the prompt only references the
+    // dotted form, the LLM emits the dotted form and the edit is dropped.
+    CHECK(prompt.contains("mastering_neural_apply"));
+
+    // The dotted form must NOT appear in the prompt. (chatRelevantTools() and the
+    // MCP schema legitimately use the dotted name, but the prompt — which the LLM
+    // copies verbatim into its tool-call name — must not.)
+    CHECK_FALSE(prompt.contains("mastering.neural_apply"));
+}
+
 TEST_CASE("LLM chat client exposes hosted and More-Phi edit tools to Anthropic", "[unit][ai][llm][chat]")
 {
     const auto tools = nlohmann::json::parse(LLMChatClient::mcpToolsToAnthropicJson().toStdString());
@@ -529,6 +581,42 @@ TEST_CASE("AI chat panel formats raw WinHTTP timeout errors", "[unit][ai][llm][c
     const auto alreadyFriendly = AIChatPanel::formatChatErrorForTest(
         "NVIDIA chat request failed at the transport layer. (WinHTTP receive response failed with error 12002.)");
     CHECK(alreadyFriendly.startsWith("NVIDIA chat request failed at the transport layer"));
+}
+
+// AUDIT-FIX (D, 2026-06-29): transportErrorHintForTest maps the WinHTTP code
+// embedded in a transport-failure body to a phase-specific remediation suffix.
+// Pins the contract so a regression in the numeric scan silently drops the hint.
+TEST_CASE("LLMChatClient transportErrorHint maps WinHTTP codes to remediation",
+          "[unit][ai][llm][chat][transport]")
+{
+    using H = LLMChatClient;
+
+    // 12002 — the code that motivated this fix (NVIDIA cold-start receive timeout)
+    {
+        const auto hint = H::transportErrorHintForTest(
+            "WinHTTP receive response failed with error 12002 (request timed out).");
+        CHECK(hint.contains("Suggested fix"));
+        CHECK(hint.contains("cold-starting"));
+    }
+
+    // 12007 — DNS resolution failure
+    CHECK(H::transportErrorHintForTest(
+        "WinHTTP session open failed with error 12007").contains("host name"));
+
+    // 12029 — cannot connect (firewall/proxy)
+    CHECK(H::transportErrorHintForTest(
+        "WinHTTP connect failed with error 12029").contains("firewall"));
+
+    // 12175 — TLS handshake failure
+    CHECK(H::transportErrorHintForTest(
+        "WinHTTP receive response failed with error 12175").contains("TLS"));
+
+    // Unrecognized code → no hint (caller keeps its existing message verbatim)
+    CHECK(H::transportErrorHintForTest("WinHTTP failed with error 99999").isEmpty());
+
+    // Empty body → no hint
+    CHECK(H::transportErrorHintForTest({}).isEmpty());
+    CHECK(H::transportErrorHintForTest("   ").isEmpty());
 }
 
 TEST_CASE("parseOpenAIResponse extracts NVIDIA inline tool-call tokens", "[unit][ai][llm][chat][nvidia]")

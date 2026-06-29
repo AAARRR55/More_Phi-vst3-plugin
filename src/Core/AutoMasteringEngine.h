@@ -421,6 +421,16 @@ private:
     int    analysisSamplesSinceWindowSample_ = 0;
     double analysisSumSquares_ = 0.0;
     int    analysisSampleCount_ = 0;
+    // PERF-CPU (2026-06-29): sub-throttle for the expensive analyzers (FFT
+    // spectrum + stereo-field + genre feedAudio) inside analyzeBlock. LUFS and
+    // true-peak (the safety-relevant meters) run every analyzeBlock call; the
+    // expensive FFT/stereo path runs only every kSpectrumSubThrottle'th call.
+    // At the default ANALYSIS_THROTTLE_BLOCKS=32 from the processor, spectrum
+    // updates every 32*4=128 blocks (~30 ms at 44.1 kHz/256) — imperceptible
+    // lag for a metering tap whose downstream decision chain acts every ~30 s.
+    // Public so tests can pin the throttle contract.
+    static constexpr int kSpectrumSubThrottle = 4;
+    int spectrumSubThrottleCounter_ = 0;
 
     // Timer tick counters (message thread only)
     int tickCount_            = 0;

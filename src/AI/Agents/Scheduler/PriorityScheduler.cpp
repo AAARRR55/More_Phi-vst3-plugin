@@ -167,7 +167,15 @@ void PriorityScheduler::workerLoop(std::stop_token stopToken)
             }
 
             bumpStarvingBackground();
-            escalateStarving();
+            // O3 (2026-06-29): escalateStarving() does a FIFO scan of Normal and
+            // High on every call. Skip it entirely when both are empty — the scan
+            // can find nothing to promote. bumpStarvingBackground() already has
+            // this guard internally; escalateStarving() now matches. The two
+            // .empty() checks are O(1) and run under the already-held mutex.
+            constexpr int kNormalOrd = Entry::ordinal(TaskPriority::Normal);
+            constexpr int kHighOrd   = Entry::ordinal(TaskPriority::High);
+            if (! queues_[kNormalOrd].empty() || ! queues_[kHighOrd].empty())
+                escalateStarving();
 
             // H-1/M-4: Check queues in priority order (highest first).
             // Level 3 (RealtimeCritical) is now handled by urgents pool;
