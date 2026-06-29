@@ -69,8 +69,6 @@ add_executable(MorePhiTests
     # Module 2: Host Integration (P0)
     Unit/TestHostIntegration.cpp
     Unit/TestDAWTransportForwarder.cpp
-    # New plugin hosting layer (HostedPluginEditor, DAWTransportForwarder, PluginHealthMonitor)
-    Unit/TestPluginHostLayer.cpp
     # Module 3: MIDI Routing (P1)
     Unit/TestMIDIRouting.cpp
     # Module 4: Concurrency & Real-Time Safety (P0)

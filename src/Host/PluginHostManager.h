@@ -11,6 +11,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "IPluginHostManager.h"
+#include "DAWTransportForwarder.h"
+#include "PluginHealthMonitor.h"
 #include <atomic>
 #include <array>
 #include <memory>
@@ -72,17 +74,23 @@ public:
         return exclusivePluginUseRequested_.load(std::memory_order_acquire);
     }
     
-    /** C3 FIX: Set a callback that will be invoked (async on message thread) when the plugin is unloaded.
-     *  Used by the editor to close any open hosted plugin window before the instance is destroyed. */
-    void setWindowCloseCallback(std::function<void()> cb) { windowCloseCallback_ = std::move(cb); }
-    
     const juce::PluginDescription* getLastDescription() const override;
 
     // Parameter metadata (delegates to hosted plugin)
     int getNumSteps(int index) const noexcept override;
 
     /** Number of processing exceptions since last successful load. */
-    int getExceptionCount() const { return exceptionCount_.load(std::memory_order_relaxed); }
+    int getExceptionCount() const { return healthMonitor_.getConsecutiveFailureCount(); }
+
+    /** Set a callback invoked (async on the message thread) when the plugin is
+     *  unloaded, so the UI can close any open hosted-plugin editor window
+     *  before the instance is destroyed. The UI-owned HostedPluginWindow holds
+     *  a ref-counted lease that guarantees editor-dies-before-instance. */
+    void setWindowCloseCallback(std::function<void()> cb) { windowCloseCallback_ = std::move(cb); }
+
+    /** Report the runtime health of the hosted plugin. */
+    PluginHealthState getHealthState() const { return healthMonitor_.getState(); }
+    PluginHealthMonitor::Snapshot getHealthSnapshot() const { return healthMonitor_.getSnapshot(); }
 
     juce::AudioPluginFormatManager& getFormatManager() override { return formatManager; }
     juce::KnownPluginList& getKnownPlugins() override
@@ -140,6 +148,19 @@ public:
      */
     void drainDeferredDoomedPlugins();
 
+    // PERF-BROWSER (browser-lag fix, 2026-06-28): persistent KnownPluginList cache.
+    // loadKnownPluginsCache() is called from the constructor so the browser can
+    // show a previously-discovered plugin list INSTANTLY on GUI open without
+    // re-instantiating every installed VST3. saveKnownPluginsCache() is called at
+    // the end of scanPluginFolders() after a successful scan. Uses JUCE's built-in
+    // KnownPluginList::createXml()/recreateFromXml(). Cache file lives under the
+    // user app-data "MorePhi/" folder (same convention as the genre-classifier
+    // model path). Stale-cache fallback: if load fails or the file is absent, the
+    // browser falls back to the slow background scan as before.
+    juce::File getKnownPluginsCacheFile() const;
+    void loadKnownPluginsCache();
+    void saveKnownPluginsCache() const;
+
 private:
     // Suspend (bypass audio) a misbehaving plugin after this many consecutive
     // exceptions. Raised from 5 to tolerate short DAW reconfiguration bursts.
@@ -173,29 +194,10 @@ private:
     // needless wake-ups when the audio thread releases promptly.
     juce::WaitableEvent usersZeroEvent_;
 
-    // C12 FIX: Use unsigned to prevent signed-overflow UB. Cap at MAX+1 to avoid
-    // wrap-around which would falsely reset the suspension counter.
-    std::atomic<uint32_t> exceptionCount_{0};
-
-    // When true, plugin is suspended (audio bypassed) but NOT destroyed.
-    // Recovery is attempted automatically when processBlock succeeds.
-    std::atomic<bool> suspended_{false};
-
     // C-1 FIX: Guards against concurrent load/unload calls. Set during
     // loadPlugin() and unloadPlugin(), checked by callers to prevent
     // UI-initiated swaps from racing with state restoration.
     std::atomic<bool> isSwapping_{false};
-
-    // m-5 FIX: Grace period after recovery — requires this many consecutive
-    // successful processBlock calls before fully re-enabling the plugin.
-    // Prevents immediate re-suspend from burst exceptions.
-    std::atomic<int> recoveryGracePeriod_{0};
-
-    // RT-safe exception tracking — audio thread increments, message thread reads
-    std::atomic<int> lastExceptionCode_{0};  // 0=none, 1=std::exception, 2=unknown
-    static constexpr int MAX_EXCEPTION_LOG_ENTRIES = 4;
-    std::atomic<int> exceptionLogCursor_{0};
-    std::array<std::atomic<const char*>, MAX_EXCEPTION_LOG_ENTRIES> exceptionLog_{};
     std::atomic<juce::AudioPlayHead*> playHead_{nullptr};
     juce::AudioPlayHead* lastPlayHeadSent_ = nullptr;  // H9 FIX: cache to avoid per-block setPlayHead
 
@@ -212,11 +214,22 @@ private:
     // Smooth gain factor to prevent clicks during preset recalls / bypass switches
     float currentGain_{1.0f};
 
-    // H12 FIX: Deduplicated exception-handling grace-period logic
-    bool applyExceptionGracePeriod(juce::AudioBuffer<float>& buffer) noexcept;
+    // ------------------------------------------------------------------------
+    //  New: Plugin Health Monitor — state-machine driven crash isolation
+    // ------------------------------------------------------------------------
+    PluginHealthMonitor healthMonitor_;
 
-    // C3 FIX: Callback invoked when plugin is unloaded so editor can close UI windows
+    // Window-close callback: invoked (async on the message thread) when the
+    // plugin is unloaded, so the UI can tear down its editor window before the
+    // instance is destroyed. The UI-owned HostedPluginWindow holds a lease that
+    // guarantees editor-dies-before-instance; this is the out-of-band teardown
+    // hook for plugin swaps not initiated by the editor UI.
     std::function<void()> windowCloseCallback_;
+
+    // ------------------------------------------------------------------------
+    //  New: DAW Transport Forwarder — lock-free audio→message thread relay
+    // ------------------------------------------------------------------------
+    DAWTransportForwarder transportForwarder_;
 
     // C1 FIX: Plugin instances detached from live use but not yet destroyed
     // because audio-thread leases were held at unload time. Drained from the
