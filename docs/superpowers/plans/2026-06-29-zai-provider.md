@@ -334,64 +334,89 @@ git commit -m "test(llm): assert Z.AI provider in definitions table (index 6, /v
 
 ---
 
-## Task 5: Add the `CapturingHttpClient` test double and ZAI behaviour test
+## Task 5: Extend the existing `CapturingHttpClient` and add the ZAI behaviour test
 
 **Files:**
-- Modify: `tests/Unit/TestRestLlmClientHardening.cpp` (add to the anonymous namespace helpers ~line 31-87; add new `TEST_CASE`s at end of file)
+- Modify: `tests/Unit/TestRestLlmClientHardening.cpp` (the existing `CapturingHttpClient` class near end of file; add `zaiSettings()` helper; add new `TEST_CASE`s at end of file)
 
-This task adds a capturing HTTP fake (the existing `ScriptedHttpClient` discards the request, so it cannot observe the built URL/headers) and a behaviour test proving ZAI parses an OpenAI-shape response through `RestLlmClient`.
+> **IMPORTANT — pre-existing `CapturingHttpClient`:** This file already contains a `CapturingHttpClient` class (added by the uncommitted "transport-timeout" audit work). That class captures `timeoutMs` only:
+> ```cpp
+> class CapturingHttpClient final : public ILLMHttpClient
+> {
+> public:
+>     LLMHttpResponse execute(const LLMHttpRequest& request) override
+>     {
+>         lastTimeoutMs = request.timeoutMs;
+>         ++callCount;
+>         return { 200, openAiSuccessBody("ok", 1).toStdString(), "" };
+>     }
+>     std::atomic<int> lastTimeoutMs{ 0 };
+>     std::atomic<int> callCount{ 0 };
+> };
+> ```
+> Do NOT add a second `CapturingHttpClient` — that would be a duplicate-definition compile error. Instead, **extend the existing one** to also capture `url` + `extraHeaders` and to serve scripted responses, so the existing transport tests still pass and the new ZAI tests can inspect the request shape.
 
-- [ ] **Step 1: Add the `CapturingHttpClient` after the existing `ScriptedHttpClient`**
+This task extends the existing capturing fake (the existing `ScriptedHttpClient` discards the request, and the existing `CapturingHttpClient` only captures `timeoutMs`) so it can also observe the built URL/headers, then adds a behaviour test proving ZAI parses an OpenAI-shape response through `RestLlmClient`.
 
-In `tests/Unit/TestRestLlmClientHardening.cpp`, the existing fake is at ~line 35-50:
+- [ ] **Step 1: Extend the existing `CapturingHttpClient` to also capture URL + headers and serve scripted responses**
 
-```cpp
-// Fake HTTP client that returns a scripted sequence of responses. Records the
-// number of execute() calls so retry behaviour is observable.
-class ScriptedHttpClient final : public ILLMHttpClient
-{
-public:
-    LLMHttpResponse execute(const LLMHttpRequest& /*request*/) override
-    {
-        ++callCount;
-        const auto idx = static_cast<size_t>(callCount - 1);
-        if (idx < responses.size())
-            return responses[idx];
-        // Default to a generic failure if the script runs out.
-        return { 599, "script exhausted", "" };
-    }
-
-    std::vector<LLMHttpResponse> responses;
-    std::atomic<int> callCount{ 0 };
-};
-```
-
-Immediately after that class (still inside the anonymous `namespace {` block, before `openAiSettings()`), add:
+In `tests/Unit/TestRestLlmClientHardening.cpp`, locate the existing `CapturingHttpClient` (near the end of the file, under the `// ── AUDIT-FIX (transport-timeout, 2026-06-29)` comment). Change it from:
 
 ```cpp
-// Capturing fake: records the last request's URL + headers so the ZAI
-// endpoint (/v4) and Bearer auth can be asserted. Returns a scripted
-// response so complete() still resolves. Used by the ZAI request-shape test.
+// Capturing variant of the fake client: records the timeoutMs of the last
+// request so the per-provider selection is observable without a real network.
 class CapturingHttpClient final : public ILLMHttpClient
 {
 public:
     LLMHttpResponse execute(const LLMHttpRequest& request) override
     {
+        lastTimeoutMs = request.timeoutMs;
         ++callCount;
+        // Return a minimal 200 so complete() succeeds and doesn't retry.
+        return { 200, openAiSuccessBody("ok", 1).toStdString(), "" };
+    }
+
+    std::atomic<int> lastTimeoutMs{ 0 };
+    std::atomic<int> callCount{ 0 };
+};
+```
+
+to:
+
+```cpp
+// Capturing variant of the fake client: records the timeoutMs, URL, and
+// headers of the last request so the per-provider selection and routing
+// are observable without a real network. Serves a scripted response list
+// (falling back to a minimal 200 so complete() succeeds and doesn't retry
+// when no script is set — preserves the original transport-test behaviour).
+class CapturingHttpClient final : public ILLMHttpClient
+{
+public:
+    LLMHttpResponse execute(const LLMHttpRequest& request) override
+    {
+        lastTimeoutMs = request.timeoutMs;
         lastUrl = request.url;
         lastHeaders = request.extraHeaders;
+        ++callCount;
         const auto idx = static_cast<size_t>(callCount - 1);
         if (idx < responses.size())
             return responses[idx];
-        return { 599, "script exhausted", "" };
+        // Default to a minimal 200 so complete() succeeds and doesn't retry
+        // (preserves the existing transport-timeout tests' expectations).
+        return { 200, openAiSuccessBody("ok", 1).toStdString(), "" };
     }
 
     std::vector<LLMHttpResponse> responses;
+    std::atomic<int> lastTimeoutMs{ 0 };
     std::atomic<int> callCount{ 0 };
     juce::String lastUrl;
     juce::String lastHeaders;
 };
 ```
+
+Notes:
+- The two existing transport tests set `http->callCount`/`lastTimeoutMs` directly and rely on the default 200 fallback. That fallback is preserved (the `responses` vector is empty for them), so they keep passing unchanged.
+- `lastTimeoutMs` and `callCount` remain `std::atomic<int>` (unchanged); `lastUrl`/`lastHeaders` are plain `juce::String` (only written/read on the test thread).
 
 - [ ] **Step 2: Add a `zaiSettings()` helper after `geminiSettings()`**
 
@@ -419,9 +444,14 @@ Place `zaiSettings()` at file scope (not inside the anonymous namespace), matchi
 
 - [ ] **Step 3: Add the ZAI behaviour `TEST_CASE` at the end of the file**
 
-Append at the very end of `tests/Unit/TestRestLlmClientHardening.cpp` (after the last existing `TEST_CASE`, outside the anonymous namespace — the namespace closes before the tests begin, matching the existing file structure where `TEST_CASE`s are at file scope):
+Append at the very end of `tests/Unit/TestRestLlmClientHardening.cpp` (after the last existing `TEST_CASE`, at file scope):
 
 ```cpp
+// ── Z.AI provider coverage ─────────────────────────────────────────────────
+// Z.AI (Zhipu GLM Coding Plan) exposes an OpenAI-compatible /v4 endpoint and
+// rides the generic OpenAI-style branch in RestLlmClient::buildRequest_. These
+// tests pin that routing and the OpenAI response parsing.
+
 TEST_CASE("RestLlmClient parses Z.AI OpenAI-shape response + providerName", "[agents][llm][zai]")
 {
     auto http = std::make_shared<CapturingHttpClient>();
@@ -450,19 +480,19 @@ build-ninja.bat target MorePhiTests
 ```
 Expected: builds without error.
 
-- [ ] **Step 5: Run the ZAI behaviour test and verify it passes**
+- [ ] **Step 5: Run the ZAI behaviour test AND the pre-existing transport tests, verify all pass**
 
 Run:
 ```bash
-build-ninja.bat testonly -R "Z.AI OpenAI-shape" --output-on-failure
+build-ninja.bat testonly -R "\[zai\]|\[transport\]" --output-on-failure
 ```
-Expected: PASS. (The `-R` filter matches the substring of the Catch2 test name. If the filter is too narrow, broaden to `-R "\[zai\]"`.)
+Expected: PASS for all. This runs the new ZAI behaviour test plus the two pre-existing transport-timeout tests — confirming the `CapturingHttpClient` extension did not regress the transport contract. (If the filter is too narrow on your ctest, broaden to `-R "RestLlmClient"`.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add tests/Unit/TestRestLlmClientHardening.cpp
-git commit -m "test(llm): Z.AI RestLlmClient behaviour + CapturingHttpClient double"
+git commit -m "test(llm): Z.AI RestLlmClient behaviour; extend CapturingHttpClient to capture URL+headers"
 ```
 
 ---
