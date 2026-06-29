@@ -4069,6 +4069,10 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
     };
     std::vector<BatchVerificationItem> verificationItems;
     verificationItems.reserve(static_cast<size_t>(requested));
+    std::vector<MorePhiProcessor::ParamCommand> batchCommands;
+    std::vector<int> batchVerificationIndices;
+    batchCommands.reserve(static_cast<size_t>(requested));
+    batchVerificationIndices.reserve(static_cast<size_t>(requested));
 
     const auto t0 = std::chrono::steady_clock::now();
 
@@ -4106,18 +4110,14 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
             // AUDIT-FIX 4.1: capture discrete info during enqueue for per-item tolerance.
             vi.isDiscrete = bridge.isDiscrete(resolution.index);
             vi.numSteps = bridge.getParameterNumSteps(resolution.index);
-            if (p.enqueueParameterSet(resolution.index, value,
-                                      MorePhiProcessor::ParameterEditSource::MCP,
-                                      true))
-            {
-                ++applied;
-                vi.enqueued = true;
-            }
-            else
-            {
-                ++queueFailures;
-                vi.failureCode = "queue_full";
-            }
+            batchCommands.push_back(MorePhiProcessor::ParamCommand{
+                resolution.index,
+                value,
+                false, -1,
+                MorePhiProcessor::ParameterEditSource::MCP,
+                true
+            });
+            batchVerificationIndices.push_back(static_cast<int>(verificationItems.size()));
         }
         else
         {
@@ -4125,6 +4125,41 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
             vi.failureCode = resolution.error.isEmpty() ? "unresolved_parameter" : resolution.error;
         }
         verificationItems.push_back(std::move(vi));
+    }
+
+    if (!batchCommands.empty())
+    {
+        const bool hasSpaceForAtomicBatch =
+            batchCommands.size() <= p.getCommandQueueFreeSpaceApprox();
+        const bool queuedAtomically = hasSpaceForAtomicBatch
+            && p.enqueueParameterBatch(batchCommands);
+
+        if (queuedAtomically)
+        {
+            applied = static_cast<int>(batchCommands.size());
+            for (const int viIndex : batchVerificationIndices)
+                verificationItems[static_cast<size_t>(viIndex)].enqueued = true;
+        }
+        else
+        {
+            for (std::size_t i = 0; i < batchCommands.size(); ++i)
+            {
+                auto& vi = verificationItems[static_cast<size_t>(batchVerificationIndices[i])];
+                if (p.enqueueParameterSet(batchCommands[i].paramIndex,
+                                          batchCommands[i].value,
+                                          batchCommands[i].source,
+                                          batchCommands[i].holdAgainstMorph))
+                {
+                    ++applied;
+                    vi.enqueued = true;
+                }
+                else
+                {
+                    ++queueFailures;
+                    vi.failureCode = "queue_full";
+                }
+            }
+        }
     }
 
     auto& optimizer = p.getTokenOptimizer();

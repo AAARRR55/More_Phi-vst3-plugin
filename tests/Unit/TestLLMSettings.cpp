@@ -8,7 +8,7 @@ TEST_CASE("LLM provider definitions are exactly the approved providers", "[unit]
 {
     const auto& providers = getLLMProviderDefinitions();
 
-    REQUIRE(providers.size() == 7);
+    REQUIRE(providers.size() == 8);
     CHECK(providers[0].id == LLMProviderId::NVIDIA);
     CHECK(providers[0].displayName == "NVIDIA");
     CHECK(providers[1].id == LLMProviderId::DeepSeek);
@@ -21,8 +21,10 @@ TEST_CASE("LLM provider definitions are exactly the approved providers", "[unit]
     CHECK(providers[4].displayName == "OpenRouter");
     CHECK(providers[5].id == LLMProviderId::Gemini);
     CHECK(providers[5].displayName == "Google Gemini");
-    CHECK(providers[6].id == LLMProviderId::OpenAICompatible);
-    CHECK(providers[6].displayName == "OpenAI Compatible");
+    CHECK(providers[6].id == LLMProviderId::ZAI);
+    CHECK(providers[6].displayName == "Z.AI");
+    CHECK(providers[7].id == LLMProviderId::OpenAICompatible);
+    CHECK(providers[7].displayName == "OpenAI Compatible");
 }
 
 TEST_CASE("Known providers have fixed base URLs and OpenAI Compatible is editable", "[unit][ai][llm]")
@@ -47,6 +49,7 @@ TEST_CASE("Known providers have fixed base URLs and OpenAI Compatible is editabl
     CHECK(getLLMProviderDefinition(LLMProviderId::Anthropic).fixedBaseUrl == "https://api.anthropic.com");
     CHECK(getLLMProviderDefinition(LLMProviderId::OpenRouter).fixedBaseUrl == "https://openrouter.ai/api/v1");
     CHECK(getLLMProviderDefinition(LLMProviderId::Gemini).fixedBaseUrl == "https://generativelanguage.googleapis.com/v1beta");
+    CHECK(getLLMProviderDefinition(LLMProviderId::ZAI).fixedBaseUrl == "https://api.z.ai/api/coding/paas/v4");
 }
 
 TEST_CASE("Default LLM settings have no active provider", "[unit][ai][llm]")

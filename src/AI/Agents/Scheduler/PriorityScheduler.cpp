@@ -46,13 +46,19 @@ void PriorityScheduler::stop()
     if (! running_.exchange(false, std::memory_order_acq_rel))
         return;
     cv_.notify_all();
-    // H-6 FIX: std::jthread destructor calls request_stop() + join()
-    // automatically. The workers are joined BEFORE the agentRuntime_ context
-    // they reference is destroyed (see ~MorePhiProcessor ordering). No detach
-    // fallback needed — the stop_token + cv_any wait ensures prompt wake-up.
+    // H-6 FIX (revised): std::jthread's destructor calls request_stop()+join()
+    // automatically, but that runs only at ~jthread — AFTER the manual join
+    // below. The worker loop exits on stopToken.stop_requested(), and without an
+    // explicit request_stop() here the workers never observe it (they busy-spin
+    // on the now-true running_ predicate and the join deadlocks). Request stop
+    // explicitly before joining so the workers exit promptly. The workers are
+    // still joined BEFORE the agentRuntime_ context they reference is destroyed.
     for (auto& t : workers_)
+    {
+        t.request_stop();
         if (t.joinable())
             t.join();
+    }
     workers_.clear();
     // Drain anything left unexecuted so we don't keep dangling lambdas.
     // C-3: Only levels 0-2 under mutex; level 3 (urgents pool) drained below.

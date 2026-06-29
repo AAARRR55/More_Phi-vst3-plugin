@@ -22,25 +22,31 @@ using namespace more_phi;
 using Catch::Approx;
 using Catch::Matchers::WithinAbs;
 
-// ── AUDIT-FIX-3: decoder ratio clamp must match the engine's [1,4] ────────────
+// ── AUDIT-FIX-3: decoder ratio clamp must match the engine's [1,6] ────────────
 // Before the fix the decoder accepted ratio up to 20 but applyValidatedPlan
 // re-clamped to 6 — telemetry lied by up to 3.3x. Both bounds must agree now.
-// AUDIT-FIX (A6): the band tightened [1,6] → [1,4] so every decoded ratio maps
-// into the safety policy's normalized [-1,+1] dynamics bound (the old 6.0 max
-// produced normalized +2.33 and was silently rejected by the safety gate).
+// AUDIT-FIX (A6→P5): the band was briefly tightened [1,6]→[1,4] in A6 so every
+// decoded ratio mapped into the safety policy's normalized [-1,+1] dynamics
+// bound. It was widened back to [1,6] in P5 after confirming the CompNorm
+// center=3.5 / halfRange=2.5 maps [1,6] EXACTLY onto [-1,+1] (ratio=6→+1,
+// ratio=1→-1), and the safety policy's maxDeltaPerPlan.dynamics was widened
+// (0.12→0.20) to accommodate the wider range. Raise ALL THREE bounds together
+// (CompNorm ratio center/halfRange, kSonicMasterCompRatioMax, and the safety
+// delta cap) before widening further — a decoder ratio the CompNorm mapping
+// can't represent is silently rejected by the safety gate.
 
-TEST_CASE("AUDIT-FIX-3: decoder clamps ratio to the shared [1,4] band",
+TEST_CASE("AUDIT-FIX-3: decoder clamps ratio to the shared [1,6] band",
           "[audit][sonicmaster][decoder]")
 {
     float decision[kSonicMasterDecisionWidth] {};
-    // Band 0 ratio = 20.0 (the model's documented max). Must clamp to 4.0,
+    // Band 0 ratio = 20.0 (the model's documented max). Must clamp to 6.0,
     // matching AutoMasteringEngine::applyValidatedPlan's kSonicMasterCompRatioMax.
     decision[kSonicMasterCompOffset + 1] = 20.0f;
 
     ValidatedNeuralMasteringPlan plan {};
     REQUIRE(decodeSonicMasterDecision(decision, kSonicMasterDecisionWidth, 48000.0, plan));
     REQUIRE(plan.hasCompParams);
-    REQUIRE_THAT(plan.compParams[0].ratio, WithinAbs(4.0f, 1e-4f));
+    REQUIRE_THAT(plan.compParams[0].ratio, WithinAbs(6.0f, 1e-4f));
 
     // And the floor.
     decision[kSonicMasterCompOffset + 1] = 0.0f;
@@ -55,7 +61,7 @@ TEST_CASE("AUDIT-FIX-3: ratio constant is the same value the engine uses",
     // kSonicMasterCompRatioMax is referenced by both SonicMasterDecisionDecoder.cpp
     // and AutoMasteringEngine.cpp::applyValidatedPlan.
     CHECK(kSonicMasterCompRatioMin == 1.0f);
-    CHECK(kSonicMasterCompRatioMax == 4.0f);  // AUDIT-FIX (A6): was 6.0f, tightened to keep decoded ratios inside the safety gate
+    CHECK(kSonicMasterCompRatioMax == 6.0f);  // AUDIT-FIX (P5): widened back from A6's 4.0 — CompNorm [3.5±2.5] maps [1,6] onto [-1,+1] exactly.
 }
 
 // ── AUDIT-FIX-3 (round-trip): a ratio the decoder emits survives apply ───────
@@ -69,12 +75,12 @@ TEST_CASE("AUDIT-FIX-3: decoded ratio survives applyValidatedPlan without re-cla
     plan.valid = true;
     plan.appliedMask.dynamics = true;
     plan.hasCompParams = true;
-    // Ratio at the top of the agreed band — must reach the DSP unchanged.
-    plan.compParams[0] = { -18.0f, 4.0f, 10.0f, 100.0f, 0.0f, 3.0f };
+    // Ratio at the top of the agreed [1,6] band — must reach the DSP unchanged.
+    plan.compParams[0] = { -18.0f, 6.0f, 10.0f, 100.0f, 0.0f, 3.0f };
 
     REQUIRE(engine.applyValidatedPlan(plan));
     const auto applied = engine.getDynamics().getBandParams(0);
-    CHECK(applied.ratio == Approx(4.0f).margin(1e-3f));
+    CHECK(applied.ratio == Approx(6.0f).margin(1e-3f));
 }
 
 // ── AUDIT-FIX-5: all-stubs map is detectable ──────────────────────────────────

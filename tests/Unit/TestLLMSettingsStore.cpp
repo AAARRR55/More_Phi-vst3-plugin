@@ -211,3 +211,4 @@ TEST_CASE("Unknown LLM active provider keys are ignored during load", "[unit][ai
 
     cleanupConfigFile(configFile);
 }
+

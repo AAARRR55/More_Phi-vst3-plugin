@@ -1188,8 +1188,10 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
                     drainScratch_[idx] = lastApplied_[idx];
             }
 
-            paramBridge.applyParameterState(drainScratch_.data() + firstTouched,
-                                            lastTouched - firstTouched + 1, now);
+            paramBridge.applyParameterSpan(firstTouched,
+                                           drainScratch_.data() + firstTouched,
+                                           lastTouched - firstTouched + 1,
+                                           now);
 
             // Clear the dirty bitmap for the span we just flushed.
             std::fill(drainTouched_.begin() + firstTouched,

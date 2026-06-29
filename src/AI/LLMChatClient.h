@@ -114,17 +114,17 @@ private:
     // ── Request building ───────────────────────────────────────────────────
     static juce::String buildOpenAIRequestBody(const LLMProviderSettings& ps,
                                                const juce::String& model,
-                                               const std::string& messagesJson,
+                                               const nlohmann::json& messages,
                                                const nlohmann::json& toolsArray);
 
     static juce::String buildAnthropicRequestBody(const LLMProviderSettings& ps,
                                                    const juce::String& model,
-                                                   const std::string& messagesJson,
+                                                   const nlohmann::json& messages,
                                                    const nlohmann::json& toolsArray);
 
     static juce::String buildGeminiRequestBody(const LLMProviderSettings& ps,
                                                 const juce::String& model,
-                                                const std::string& messagesJson,
+                                                const nlohmann::json& messages,
                                                 const nlohmann::json& toolsArray);
 
     static LLMHttpRequest buildHttpRequest(LLMProviderId id,
@@ -139,8 +139,8 @@ private:
     // ── Anthropic message format conversion ────────────────────────────────
     /** Convert OpenAI-style message array (nlohmann::json) to Anthropic format.
      *  Returns {anthropicMessages, systemPromptText}. */
-    static std::pair<std::string, std::string>
-    convertToAnthropicMessages(const std::string& openAIMessagesJson);
+    static std::pair<nlohmann::json, std::string>
+    convertToAnthropicMessages(const nlohmann::json& messages);
 
     // ── In-process tool execution ──────────────────────────────────────────
     juce::String executeTool(const juce::String& name, const juce::String& argumentsJson);

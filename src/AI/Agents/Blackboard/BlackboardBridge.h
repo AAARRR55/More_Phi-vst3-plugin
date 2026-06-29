@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -62,10 +63,22 @@ public:
 
     // O4 (2026-06-29): optional hook invoked after every successful publish, so an
     // external pump (AgentRuntime) can wake its condition_variable immediately
-    // instead of waiting for the next fixed-interval poll. Set to nullptr to
-    // disable. Called on the publishing thread (agent worker / MCP thread), so the
-    // callback MUST be thread-safe and non-blocking (e.g. cv.notify_one).
-    void setOnPublishHook(std::function<void()> hook) { onPublish_ = std::move(hook); }
+    // instead of waiting for the next fixed-interval poll. Pass an empty function
+    // to disable. Called on the publishing thread (agent worker / MCP thread), so
+    // the callback MUST be thread-safe and non-blocking (e.g. cv.notify_one).
+    // H-5 FIX (2026-06-29): the setter runs on the message thread during
+    // AgentRuntime::start()/stop(), while publish() runs on agent worker / MCP
+    // threads — assigning a bare std::function while another thread reads+invokes
+    // it was a data race (torn read of the internal target pointer /
+    // use-after-free at teardown). Stored as a shared_ptr guarded by
+    // onPublishMutex_, mirroring the H-3 subscriber pattern; publish() copies the
+    // shared_ptr under the lock (cheap ref-count) and invokes it unlocked.
+    void setOnPublishHook(std::function<void()> hook)
+    {
+        auto shared = std::make_shared<std::function<void()>>(std::move(hook));
+        std::lock_guard<std::mutex> lock(onPublishMutex_);
+        onPublish_ = std::move(shared);
+    }
 
     // H3: curated, agent-only recent events (newest-first), with payloads replaced
     // by a safe summary. Filters the raw bus down to events whose source/type look
@@ -78,7 +91,9 @@ private:
     std::mutex subscribersMutex_;
     std::unordered_map<std::string, std::vector<std::pair<std::string, Callback>>> subscribers_;
     // O4: optional publish hook (see setOnPublishHook). Invoked from publish().
-    std::function<void()> onPublish_;
+    // H-5: shared_ptr + onPublishMutex_ — see setOnPublishHook.
+    std::mutex onPublishMutex_;
+    std::shared_ptr<std::function<void()>> onPublish_;
     // M2 FIX: written by the blackboard pump thread in poll() and read by MCP
     // connection threads via recentAgentEvents()/hasNewEvents(). A plain
     // uint64_t was a data race (and a torn read on 32-bit). relaxed ops: the

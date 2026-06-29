@@ -567,21 +567,14 @@ juce::String LLMChatClient::parseGeminiResponseForTest(int statusCode, const juc
 
 // ── Anthropic message conversion ───────────────────────────────────────────
 
-std::pair<std::string, std::string>
-LLMChatClient::convertToAnthropicMessages(const std::string& openAIMessagesJson)
+std::pair<json, std::string>
+LLMChatClient::convertToAnthropicMessages(const json& messages)
 {
     std::string systemText;
     json anthropicMessages = json::array();
 
-    json messages;
-    try
-    {
-        messages = json::parse(openAIMessagesJson);
-    }
-    catch (...)
-    {
-        return {"[]", ""};
-    }
+    if (!messages.is_array())
+        return {json::array(), ""};
 
     std::size_t i = 0;
     while (i < messages.size())
@@ -677,7 +670,7 @@ LLMChatClient::convertToAnthropicMessages(const std::string& openAIMessagesJson)
         }
     }
 
-    return {anthropicMessages.dump(), systemText};
+    return {std::move(anthropicMessages), systemText};
 }
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────
@@ -740,7 +733,7 @@ int LLMChatClient::maxTokensFor(const juce::String& model)
 
 juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*ps*/,
                                                     const juce::String& model,
-                                                    const std::string& messagesJson,
+                                                    const nlohmann::json& messages,
                                                     const nlohmann::json& toolsArray)
 {
     try
@@ -748,7 +741,7 @@ juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*
         json body;
         body["model"]      = std::string(model.toRawUTF8());
         body["max_tokens"] = maxTokensFor(model);
-        body["messages"]   = json::parse(messagesJson);
+        body["messages"]   = messages;
 
         if (!toolsArray.empty())
         {
@@ -766,17 +759,17 @@ juce::String LLMChatClient::buildOpenAIRequestBody(const LLMProviderSettings& /*
 
 juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings& /*ps*/,
                                                         const juce::String& model,
-                                                        const std::string& messagesJson,
+                                                        const nlohmann::json& messages,
                                                         const nlohmann::json& toolsArray)
 {
     try
     {
-        auto [anthropicMsgsJson, systemText] = convertToAnthropicMessages(messagesJson);
+        auto [anthropicMsgs, systemText] = convertToAnthropicMessages(messages);
 
         json body;
         body["model"]      = std::string(model.toRawUTF8());
         body["max_tokens"] = maxTokensFor(model);
-        body["messages"]   = json::parse(anthropicMsgsJson);
+        body["messages"]   = std::move(anthropicMsgs);
 
         if (!systemText.empty())
             body["system"] = systemText;
@@ -803,12 +796,11 @@ juce::String LLMChatClient::buildAnthropicRequestBody(const LLMProviderSettings&
 // we maintain an id→apiName map by scanning prior assistant tool_calls as we go.
 juce::String LLMChatClient::buildGeminiRequestBody(const LLMProviderSettings& /*ps*/,
                                                     const juce::String& /*model*/,
-                                                    const std::string& messagesJson,
+                                                    const nlohmann::json& messages,
                                                     const nlohmann::json& toolsArray)
 {
     try
     {
-        const auto messages = json::parse(messagesJson);
         std::string systemText;
         json contents = json::array();
         std::map<std::string, std::string> toolCallIdToName; // id -> apiName
@@ -1522,12 +1514,18 @@ void LLMChatClient::chat(const LLMSettings& settings,
 
     const bool isAnthropic  = (providerId == LLMProviderId::Anthropic);
     const bool isGemini     = (providerId == LLMProviderId::Gemini);
-    const juce::String toolsStr = isAnthropic ? mcpToolsToAnthropicJson()
-                                  : isGemini  ? mcpToolsToGeminiJson()
-                                              : mcpToolsToOpenAIJson();
-    json toolsArray;
-    try { toolsArray = filterToolsForChat(json::parse(toolsStr.toRawUTF8()), isAnthropic); }
-    catch (...) { toolsArray = json::array(); }
+    // ponytail: tool list + chat filter are process-static (compile-time MCP
+    // descriptors in kCoreTools/kExtendedTools); cache the filtered array per
+    // provider so each message skips the rebuild->dump->reparse of ~40 tools.
+    // Ceiling: if tools ever become runtime-dynamic, drop this cache.
+    static const json kCachedTools[3] = {
+        filterToolsForChat(json::parse(mcpToolsToOpenAIJson().toRawUTF8()),   false),
+        filterToolsForChat(json::parse(mcpToolsToAnthropicJson().toRawUTF8()), true),
+        filterToolsForChat(json::parse(mcpToolsToGeminiJson().toRawUTF8()),    false)
+    };
+    const json toolsArray = isAnthropic ? kCachedTools[1]
+                          : isGemini    ? kCachedTools[2]
+                                        : kCachedTools[0];
 
     // Capture everything the background thread needs.
     // alive_ and httpClient_ are captured by copy so they survive the
@@ -1598,17 +1596,19 @@ void LLMChatClient::chat(const LLMSettings& settings,
             // is forced, and (b) a reasoning model exhausting its token budget
             // against the tools array before emitting any visible content. The
             // toolless retry lets either model answer in plain text.
-            const std::string messagesStr = messages.dump();
+            // ponytail: pass messages as const json& instead of dumping+reparsing
+            // up to 16× per message (withTools loop × kMaxToolIterations). Deep-copy
+            // into the body is one allocation, same as json::parse was.
             ParsedResponse parsed;
             for (int withTools = 1; withTools >= 0; --withTools)
             {
                 const json& toolsForRequest = (withTools == 1) ? toolsArray : json::array();
                 const juce::String body =
                     isAnthropic
-                        ? buildAnthropicRequestBody(providerSettings, model, messagesStr, toolsForRequest)
+                        ? buildAnthropicRequestBody(providerSettings, model, messages, toolsForRequest)
                         : isGemini
-                            ? buildGeminiRequestBody(providerSettings, model, messagesStr, toolsForRequest)
-                            : buildOpenAIRequestBody   (providerSettings, model, messagesStr, toolsForRequest);
+                            ? buildGeminiRequestBody(providerSettings, model, messages, toolsForRequest)
+                            : buildOpenAIRequestBody   (providerSettings, model, messages, toolsForRequest);
 
                 if (body == "{}")
                 {
@@ -1729,50 +1729,35 @@ void LLMChatClient::chat(const LLMSettings& settings,
             // its target within a single turn, and intermediate writes just add
             // latency and jitter.
             {
-                struct PendingSet { int toolCallIdx; juce::String paramId; float value; };
-                std::vector<PendingSet> pendingSets;
+                // ponytail: single pass — parse each set_parameter args once,
+                // remember the latest write per param id, and mark every
+                // earlier write for that id into skipIndices as we go. Was two
+                // passes that each json::parse'd the same argumentsJson. Also
+                // drops dead PendingSet/pendingSets/firstSeen declared-but-unused.
+                std::set<int> skipIndices;
                 std::map<juce::String, int> lastSetIdx;
                 for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)
                 {
                     const auto& tc = parsed.toolCalls[static_cast<size_t>(i)];
-                    if (tc.name == "set_parameter" || tc.name == "hosted_plugin.set_parameter"
-                        || tc.name == "more_phi.set_parameter")
+                    if (tc.name != "set_parameter" && tc.name != "hosted_plugin.set_parameter"
+                        && tc.name != "more_phi.set_parameter")
+                        continue;
+                    try
                     {
-                        try
-                        {
-                            auto args = json::parse(tc.argumentsJson.toStdString());
-                            const auto id = juce::String(args.value("index", -1) != -1
-                                ? std::to_string(args.value("index", -1))
-                                : args.value("name", args.value("parameter_id", "")));
-                            if (id.isNotEmpty())
-                                lastSetIdx[id] = i;
-                        }
-                        catch (...) {}
-                    }
-                }
-
-                std::set<int> skipIndices;
-                if (lastSetIdx.size() > 1)
-                {
-                    // Collect earlier duplicate writes to skip
-                    std::map<juce::String, int> firstSeen;
-                    for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)
-                    {
-                        const auto& tc = parsed.toolCalls[static_cast<size_t>(i)];
-                        if (tc.name != "set_parameter" && tc.name != "hosted_plugin.set_parameter"
-                            && tc.name != "more_phi.set_parameter")
+                        auto args = json::parse(tc.argumentsJson.toStdString());
+                        const auto id = juce::String(args.value("index", -1) != -1
+                            ? std::to_string(args.value("index", -1))
+                            : args.value("name", args.value("parameter_id", "")));
+                        if (id.isEmpty())
                             continue;
-                        try
+                        const auto [it, inserted] = lastSetIdx.try_emplace(id, i);
+                        if (!inserted)
                         {
-                            auto args = json::parse(tc.argumentsJson.toStdString());
-                            const auto id = juce::String(args.value("index", -1) != -1
-                                ? std::to_string(args.value("index", -1))
-                                : args.value("name", args.value("parameter_id", "")));
-                            if (id.isNotEmpty() && lastSetIdx.count(id) && lastSetIdx[id] != i)
-                                skipIndices.insert(i);
+                            skipIndices.insert(it->second);  // earlier write superseded
+                            it->second = i;                  // keep latest
                         }
-                        catch (...) {}
                     }
+                    catch (...) {}
                 }
 
                 for (int i = 0; i < static_cast<int>(parsed.toolCalls.size()); ++i)

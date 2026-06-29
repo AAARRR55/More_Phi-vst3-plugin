@@ -525,18 +525,47 @@ juce::String MCPToolsExtended::setParametersOptimized(
     }
     
     // Apply updates (defensive bounds check before enqueue)
-    int applied = 0;
-    int queueFailures = 0;
+    std::vector<MorePhiProcessor::ParamCommand> commands;
+    commands.reserve(updates.size());
     for (const auto& [idx, val] : updates)
     {
         if (idx < 0 || idx >= maxParamCount)
             continue;
-        if (processor.enqueueParameterSet(idx, val,
-                                          MorePhiProcessor::ParameterEditSource::MCP,
-                                          true))
-            applied++;
+        commands.push_back(MorePhiProcessor::ParamCommand{
+            idx,
+            val,
+            false, -1,
+            MorePhiProcessor::ParameterEditSource::MCP,
+            true
+        });
+    }
+
+    int applied = 0;
+    int queueFailures = 0;
+    if (!commands.empty())
+    {
+        const bool hasSpaceForAtomicBatch =
+            commands.size() <= processor.getCommandQueueFreeSpaceApprox();
+        const bool queuedAtomically = hasSpaceForAtomicBatch
+            && processor.enqueueParameterBatch(commands);
+
+        if (queuedAtomically)
+        {
+            applied = static_cast<int>(commands.size());
+        }
         else
-            queueFailures++;
+        {
+            for (const auto& command : commands)
+            {
+                if (processor.enqueueParameterSet(command.paramIndex,
+                                                  command.value,
+                                                  command.source,
+                                                  command.holdAgainstMorph))
+                    ++applied;
+                else
+                    ++queueFailures;
+            }
+        }
     }
     
     // Record usage estimate

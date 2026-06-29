@@ -135,3 +135,65 @@ TEST_CASE("Reactive: unrelated event type is ignored by RealtimeControlAgent", "
 
     agentRuntime.stop();
 }
+
+namespace {
+// Captures the thread id the tool is invoked on, so we can prove the reactive
+// correction is delivered SYNCHRONOUSLY on the calling (pump) thread — NOT
+// deferred via MessageManager::callAsync, which drops on headless/offline-render
+// hosts. Regression for the M5 doc-vs-code footgun: the header used to claim the
+// callAsync path; the code invokes synchronously. This pins the synchronous path.
+struct ThreadCapturingInvoker : public IToolInvoker
+{
+    std::atomic<bool>   invoked{false};
+    std::atomic<float>  value{0.0f};
+    juce::String        lastTool;
+    std::thread::id     callerThread{};
+    std::atomic<bool>   sameThread{false};
+    nlohmann::json invoke(const juce::String& tool, const nlohmann::json& params, const juce::String&) override
+    {
+        lastTool = tool;
+        if (tool == "more_phi.set_parameter")
+        {
+            invoked.store(true);
+            value.store(static_cast<float>(params.value("value", 0.0)));
+            sameThread.store(std::this_thread::get_id() == callerThread);
+        }
+        return { {"ok", true} };
+    }
+};
+} // namespace
+
+TEST_CASE("RealtimeControlAgent delivers corrections synchronously (no callAsync)", "[agents][reactive]")
+{
+    // If delivery were via MessageManager::callAsync, the tool would be invoked
+    // later on the JUCE message thread (a different id) and the assertions below
+    // would fail. Driving onEvent directly on this thread proves synchronous
+    // delivery — the path that keeps output protection alive under offline render.
+    ScopedStore fx;
+    more_phi::IntegrationEventBus bus{16};
+    BlackboardBridge bb{bus};
+    NullAgentLogger logger;
+
+    ThreadCapturingInvoker fake;
+    fake.callerThread = std::this_thread::get_id();
+
+    AgentContext ctx;
+    ctx.tools = &fake;
+    ctx.blackboard = &bb;
+    ctx.logger = &logger;
+
+    RealtimeControlAgent agent;
+    RealtimeControlAgent::Config cfg;
+    cfg.outputGainParamName = "outputGain";
+    cfg.clipTrimStepDb = 1.5f;
+    agent.setConfig(cfg);
+    agent.prepare(ctx);
+
+    agent.onEvent("analysis.clipping_detected", { {"true_peak_db", 0.4} }, "analysis-1", "run-1");
+
+    REQUIRE(fake.invoked.load());
+    REQUIRE(fake.sameThread.load());          // synchronous, same thread — no callAsync hop
+    REQUIRE(fake.lastTool == "more_phi.set_parameter");
+    REQUIRE(fake.value.load() < 1.0f);        // absolute normalized target, trimmed below unity
+    agent.stop();
+}

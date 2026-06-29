@@ -28,9 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
-from typing import Iterable
 
 # Same directory as this script; Python puts script dir on sys.path[0].
 import audit_dataset
@@ -210,6 +210,37 @@ def discover_index(repo: str, token: str | None) -> tuple[dict[str, str], list[s
     return input_paths, combos
 
 
+def materialize(
+    items: list[dict], cache_dir: Path, repo: str, token: str | None
+) -> int:
+    """Fetch referenced audio into cache_dir laid out repo-relative, so that
+    manifest.parent/<repo-relative-path> resolves for torchaudio.load in
+    train_neural_mastering.py. Matches the established Lightning staging model
+    (audio pre-staged in data/, no HF access in the train loop)."""
+    from huggingface_hub import hf_hub_download
+
+    cache_dir = Path(cache_dir)
+    needed: list[str] = []
+    seen: set[str] = set()
+    for it in items:
+        for key in ("inputPath", "targetPath"):
+            rel = it[key]
+            if rel not in seen:
+                seen.add(rel)
+                needed.append(rel)
+    print(f"materialize: {len(needed)} unique files -> {cache_dir}")
+    for index, rel in enumerate(needed):
+        dst = cache_dir / rel
+        if dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src = hf_hub_download(repo_id=repo, repo_type="dataset", filename=rel, token=token)
+        shutil.copy2(src, dst)
+        if (index + 1) % 50 == 0:
+            print(f"  {index + 1}/{len(needed)}")
+    return len(needed)
+
+
 # --- manifest writer --------------------------------------------------------
 
 
@@ -290,6 +321,15 @@ def selfcheck() -> int:
             failures.append(f"combo parse mismatch: {it['id']}")
             break
 
+    # 6. Paths are repo-relative so materialize + torchaudio.load resolve under a cache dir.
+    bad_paths = [
+        it["id"] for it in items
+        if not it["inputPath"].startswith("processed_normalized/")
+        or not it["targetPath"].startswith("processed_ground_truth/")
+    ]
+    if bad_paths:
+        failures.append(f"non-repo-relative paths: {bad_paths[:3]}")
+
     print(json.dumps({"summary": summary, "g10": audit["passed"], "failures": failures}, indent=2, sort_keys=True))
     if failures:
         print("SELF-CHECK FAIL", file=sys.stderr)
@@ -308,6 +348,10 @@ def main() -> int:
     p.add_argument("--holdout-combo-fraction", type=float, default=0.1)
     p.add_argument("--repo", default=REPO)
     p.add_argument("--audit-report", type=Path)
+    p.add_argument("--materialize", action="store_true",
+                   help="fetch referenced audio into --cache-dir (repo-relative) so paths resolve on the studio")
+    p.add_argument("--cache-dir", type=Path, help="materialize target dir (default: manifest parent)")
+    p.add_argument("--max-songs", type=int, help="curriculum cap: use only the first N songs by id (full corpus ~2.6 TB)")
     args = p.parse_args()
 
     if args.out is None:
@@ -325,6 +369,10 @@ def main() -> int:
         songs, combos = _synthetic_index(args.n_songs)
         input_paths = {s: f"processed_normalized/{s}" for s in songs}
 
+    if args.max_songs:
+        songs = sorted(songs)[: args.max_songs]
+        input_paths = {s: input_paths[s] for s in songs}
+
     ratios = tuple(args.ratios)
     holdout = choose_holdout_combos(combos, args.holdout_combo_fraction)
     song_split = assign_song_splits(songs, ratios, args.seed)
@@ -336,6 +384,11 @@ def main() -> int:
     if args.audit_report:
         args.audit_report.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"manifest": str(args.out), "summary": summary, "g10Passed": audit["passed"]}, indent=2))
+    if args.materialize:
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            raise SystemExit("HF_TOKEN required for --materialize (set as a Lightning secret; never commit)")
+        materialize(items, args.cache_dir or args.out.parent, args.repo, token)
     return 0 if audit["passed"] else 2
 
 

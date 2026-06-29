@@ -11,6 +11,7 @@ const std::array<LLMProviderDefinition, llmProviderCount> definitions {{
     { LLMProviderId::Anthropic, "anthropic", "Anthropic", "https://api.anthropic.com", false },
     { LLMProviderId::OpenRouter, "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", false },
     { LLMProviderId::Gemini, "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", false },
+    { LLMProviderId::ZAI, "zai", "Z.AI", "https://api.z.ai/api/coding/paas/v4", false },
     { LLMProviderId::OpenAICompatible, "openai_compatible", "OpenAI Compatible", {}, true },
 }};
 
@@ -47,7 +48,8 @@ std::size_t llmProviderIndex(LLMProviderId id) noexcept
         case LLMProviderId::Anthropic: return 3;
         case LLMProviderId::OpenRouter: return 4;
         case LLMProviderId::Gemini: return 5;
-        case LLMProviderId::OpenAICompatible: return 6;
+        case LLMProviderId::ZAI: return 6;
+        case LLMProviderId::OpenAICompatible: return 7;
     }
 
     jassertfalse;

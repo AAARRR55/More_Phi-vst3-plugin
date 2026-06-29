@@ -1,6 +1,7 @@
 // src/AI/Agents/Agents/AnalysisAgent.cpp
 #include "AI/Agents/Agents/AnalysisAgent.h"
 
+#include <algorithm>
 #include <future>
 
 namespace more_phi::agents {
@@ -20,6 +21,31 @@ bool isMasteringIntent(const juce::String& intent)
 }
 } // namespace
 
+AnalysisAgent::~AnalysisAgent()
+{
+    // Block until every in-flight read finishes so no tool thread touches a freed
+    // agent context. Safe: the registry destroys agents only after the scheduler
+    // and pump are stopped (message-thread domain, never the audio thread).
+    std::vector<std::shared_future<nlohmann::json>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex_);
+        snapshot.swap(pendingReads_);
+    }
+    for (auto& f : snapshot)
+    {
+        try { f.wait(); } catch (...) {}
+    }
+}
+
+void AnalysisAgent::drainCompletedLocked()
+{
+    auto& v = pendingReads_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+        [](const std::shared_future<nlohmann::json>& f) {
+            return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        }), v.end());
+}
+
 AgentResult AnalysisAgent::execute(const AgentTask& task)
 {
     state_.store(AgentState::Busy);
@@ -37,25 +63,53 @@ AgentResult AnalysisAgent::execute(const AgentTask& task)
     nlohmann::json findings = nlohmann::json::object();
     findings["intent"] = task.intent.toStdString();
 
-    // O2 (2026-06-29): the three analysis.get_* reads have no data dependency
-    // between them — run them concurrently instead of serially. Each dispatches
-    // through MCPToolHandler (parse + lock + resolve + serialize), so the serial
-    // version paid 3x the per-call overhead. std::async spawns transient threads;
-    // this is safe because execute() runs on a scheduler worker (message-thread
-    // domain, NEVER the audio thread) and AnalysisAgent is goal-driven, not
-    // per-block. A per-call timeout guards against a hung tool call blocking the
-    // worker indefinitely (mirrors the masteringNeuralApply 5s budget).
-    auto launchRead = [this](const char* tool) -> std::future<nlohmann::json> {
-        return std::async(std::launch::async, [this, tool] {
+    // O2 (2026-06-29) + O2-fix: the three analysis.get_* reads have no data
+    // dependency — run them concurrently via std::async. Each dispatches through
+    // MCPToolHandler (parse + lock + resolve + serialize), so serially they paid
+    // 3x the per-call overhead. Safe: execute() runs on a scheduler worker
+    // (message-thread domain, NEVER the audio thread) and AnalysisAgent is
+    // goal-driven, not per-block.
+    //
+    // O2-fix: std::async futures BLOCK in their destructor, so the previous
+    // version's 5s wait_for was illusory — execute() could not return until every
+    // tool call finished, and a hung tool stalled the worker indefinitely. We now
+    // keep the in-flight reads as shared_futures (non-blocking destructor) in a
+    // bounded collector, drain completed ones before launching more, and apply
+    // backpressure at the cap so re-entrant execute() calls can't multiply the
+    // thread count unbounded. The destructor block-drains the rest.
+    auto launchRead = [this](const char* tool) -> std::shared_future<nlohmann::json> {
+        for (;;)
+        {
+            std::shared_future<nlohmann::json> oldest;
+            {
+                std::lock_guard<std::mutex> lock(pendingMutex_);
+                drainCompletedLocked();
+                if (pendingReads_.size() < kMaxPendingReads)
+                    break;
+                oldest = pendingReads_.front();   // backpressure: wait on oldest outside the lock
+            }
+            try { oldest.wait(); } catch (...) {}
+        }
+        auto fut = std::async(std::launch::async, [this, tool] {
             return ctx_->tools->invoke(tool, {}, id());
         });
+        auto shared = fut.share();
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            drainCompletedLocked();
+            pendingReads_.push_back(shared);
+        }
+        return shared;
     };
-    auto summaryFut  = launchRead("analysis.get_summary");
-    auto spectrumFut = launchRead("analysis.get_spectrum");
-    auto stereoFut   = launchRead("analysis.get_stereo_field");
+    auto summarySf  = launchRead("analysis.get_summary");
+    auto spectrumSf = launchRead("analysis.get_spectrum");
+    auto stereoSf   = launchRead("analysis.get_stereo_field");
 
-    // Helper: wait with a 5s budget, return {} on timeout/exception.
-    auto awaitWithBudget = [](std::future<nlohmann::json>& f) -> nlohmann::json {
+    // Helper: wait with a 5s budget, return {} on timeout/exception. Because the
+    // futures are shared (non-blocking destructor), a timeout now actually lets
+    // execute() return promptly; the read keeps running and is drained later / by
+    // the destructor.
+    auto awaitWithBudget = [](std::shared_future<nlohmann::json>& f) -> nlohmann::json {
         try
         {
             if (f.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
@@ -65,9 +119,9 @@ AgentResult AnalysisAgent::execute(const AgentTask& task)
         return nlohmann::json::object();
     };
 
-    const auto summary  = awaitWithBudget(summaryFut);
-    const auto spectrum = awaitWithBudget(spectrumFut);
-    const auto stereo   = awaitWithBudget(stereoFut);
+    const auto summary  = awaitWithBudget(summarySf);
+    const auto spectrum = awaitWithBudget(spectrumSf);
+    const auto stereo   = awaitWithBudget(stereoSf);
 
     if (! summary.contains("error"))  findings["summary"]  = summary;
     if (! spectrum.contains("error")) findings["spectrum"] = spectrum;

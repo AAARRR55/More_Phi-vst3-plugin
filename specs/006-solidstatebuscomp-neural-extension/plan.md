@@ -157,16 +157,58 @@ All learning stays offline. Learned output enters the plugin only as a bounded `
 
 | Phase | Deliverable | Gate to next |
 |---|---|---|
-| **P0** | Streaming loader + song-level + param-level split manifest; provenance/leakage audit (reuse 004 tooling) | Manifest passes split-leakage check |
-| **P1** | F2 gray-box differentiable compressor baseline; per-param monotonicity evidence | Beats naive (gain-only) baseline on GR-EMD |
-| **P2** | `HybridMasteringNet` + FiLM conditioning (black-box F1); inverse + forward heads; 8 + 3 losses | SI-SDR ≥ F2 on held-out songs **and** held-out params |
-| **P3** | EQ augmentation (§1.1) baked into the loader | Robustness: held-out-song metric holds under ±6 dB EQ perturbation |
-| **P4** | EQ as co-conditioning axis (§1.2); synthetic-pair generation via `AdaptiveEQ` | Predictable output response to `e` conditioning sweep |
+| **P0** ✅ | Manifest builder (`build_solidstatebuscomp_manifest.py`) — dual-axis split + G10 audit reuse + HF staging (`--materialize`) + `run_training_waveform.sh`; selfcheck green | Manifest passes split-leakage check — DONE |
+| **P1** ✅ | F2 gray-box differentiable compressor (`graybox_compressor.py`, 5 params) + trainer (`train_graybox_compressor.py`) + `run_training_graybox.sh`; selfcheck + trainer smoke green (monotone threshold/ratio, exact identity at ratio=1, stereo-linked, finite loss) | Beats naive (gain-only) baseline on GR-EMD — training runs on Lightning |
+| **P2** ✅ | FiLM-conditioned `HybridMasteringNet` (`conditioned_mastering_net.py`, 15.5M params) + inverse param-inference head + trainer (`train_conditioned_master.py`: 8-loss suite + GR-curve + inverse-MSE); val reports SI-SDR split by `holdoutAxis` (interp vs extrap); selfcheck + smoke green | SI-SDR ≥ F2 on held-out songs **and** held-out params — training runs on Lightning |
+| **P3** ✅ | EQ augmentation (§1.1) baked into the loader: `eq_augment.py` (3-section RBJ min-phase biquad cascade via `torchaudio.functional.lfilter`, primed, identity@0 dB, selfcheck green) + input-only aug in F1 `CondDataset` + `validate_under_eq` probe (fixed ±6 dB grid, SI-SDR split by holdoutAxis, separate metric keys — never `vl['loss']`) + optional eval-only F2-proxy behind `--eq-proxy`; runner fixed (`train_conditioned_master.py`→`…mastering.py` P2 typo) + `EQ_AUGMENT`/`EQ_AUGMENT_DB`/`EQ_PROXY` envs; F2 unaugmented by design. smoke + probe/proxy exercise green | Robustness: held-out-song metric holds under ±6 dB EQ perturbation — training runs on Lightning (compare augmented vs un-augmented `si_sdr_robust_drop`) |
+| **P4** ✅ | EQ as co-conditioning axis (§1.2): synthetic POST-DEVICE target `peak_normalize(min_phase_eq(device_target; e), 0.98)` rendered inline in `CondDataset` (no new DSP, no manifest change); `cond` 4→8-dim `[c, e]` (net `cond_dim` default 4→8, fans to FiLM + inverse head); `compute_stats` analytical e-stats (q mean **1.0**, not 0 — the load-bearing invariant); `validate_eq_sweep` P4 gate (sweep `e`, unperturbed input, SI-SDR vs the synthetic target + band-energy monotonicity + `flat_check_drop` continuity catcher); inverse head masked to c-only. net selfcheck + smoke + sweep/probe exercise green (15.456M, `flat_check_drop≈0`) | Predictable output response to `e` conditioning sweep — training runs on Lightning (gate: high per-`e` SI-SDR, `mono_*_up_frac→1`, `flat_check_drop≈0`) |
 | **P5** | Multi-move control plan (full processor vocabulary) on license-clear data; Safety-Layer integration; model card | 003 §3.4 release gates |
 
 P0–P2 use SolidStateBusComp (CC-BY-NC, research only). P5 migrates to license-clear material for anything that could ship.
 
 ---
+
+## 6.1 Lightning training & line reconciliation
+
+**Two model lines coexist; this spec owns the waveform line (they are complementary, not duplicates).**
+
+| Line | Trainer | Manifest | SolidStateBusComp role | Status |
+|---|---|---|---|---|
+| Control regressor (F1 control-plan variant) | `control/train.py` | `control/build_manifest.py` → `train.jsonl` (feature→delta) | eval **feature input** (`manifest_ssl_eval`) | trained on Lightning (Model A) |
+| Waveform forward model (F1 black-box, this spec) | `train_conditioned_master.py` (FiLM-conditioned `conditioned_mastering_net.py`) | `build_solidstatebuscomp_manifest.py` → paired `inputPath/targetPath` + per-item controls | **paired ground truth** (input → 220 hardware outs) | P2 done |
+
+**Lightning staging model** (mirrors the established `control/run_training_t2.sh`): audio is fetched from the gated HF dataset into `data/` on the studio **before** training; `${HF_TOKEN}` is injected as a Lightning secret (never committed); `train_neural_mastering.py` then loads local files via `torchaudio.load` unmodified. `run_training_waveform.sh` wires build → stage → train. The full corpus is ~2.6 TB, so `--max-songs` caps a curriculum subset.
+
+## 6.2 P3 outcome — §1.1 tension resolved
+
+A design workflow (4 readers → 3 proposals → 3 judges → synthesis) converged unanimously, verified line-by-line against the code, on this resolution:
+
+- **Augmentation = input-only minimum-phase EQ, target left as the clean device output.** `generate_mastering_dataset.py::smooth_eq` is a *zero-phase* FFT-multiply (`rfft × real gain → irfft`, confirmed at lines 118–134) and was **rejected** — it pre-rings, and a pre-ring transient is itself a memorizable tag for a 15.5M-param net. Its replacement is a 3-section RBJ biquad cascade (low-shelf @180 Hz, peaking bell @1 kHz — the only true Q knob, high-shelf @6 kHz), minimum-phase by construction (stable poles inside the unit circle), anchor centres lifted from `smooth_eq`'s log-freq grid.
+- **The §1.1 tension ("input-only EQ = denoise-the-EQ") is accepted, not resolved.** The compressor D and spectral shaping A do not commute (D's detector reads per-sample |x|), so `(A(x), D(x))` is not one coherent device map; P3 regularizes toward *local EQ invariance* — a robustness proxy, not robustness itself. The causally-correct fix `D(A(x))` is **uncomputable** here (the SolidStateBusComp hardware is unreachable) and is deferred to **P4** (synthetic chain). Minimum-phase was chosen partly to keep this bias in-distribution (analog-style coloration) rather than adding zero-phase pre-ring that looks like a foreign device artifact.
+- **Implementation choice:** `torchaudio.functional.lfilter` (existing dep, fast causal IIR) over a hand-rolled Python DF1 loop — the loop is O(T) per section in Python (~0.8 s/segment), unusable in a DataLoader worker. One real bug was caught and fixed en route: `lfilter` clamps output to [−1,1] by default (param `clamp`, renamed from `clamp_ct` across versions), which saturates any boost whose impulse exceeds 1.0 — `eq_augment.py` disables it version-robustly.
+- **F2 is unaugmented by design** (no EQ parameters in its topology; input-only EQ would spike its loss from topology mismatch). The P3 gate is F1-only.
+- **Gate** (`validate_under_eq`, separate `eq_probe` keys, never `vl['loss']`): held-out-song SI-SDR under a fixed ±6 dB grid, split by `holdoutAxis`. `si_sdr_robust_drop` is meaningful only compared against the **un-augmented baseline's** floor — good `robust_drop` can coexist with the model having learned to invert EQ (measurement ceiling). Optional eval-only **F2-proxy** (`--eq-proxy`) bounds how device-relevant (GR-coupled) the EQ delta is vs "denoise-the-EQ" waste — never a training target.
+
+## 6.3 P4 outcome — EQ promoted to a co-conditioning axis; §1.1 tension dissolved (half)
+
+A design workflow (4 readers → 3 proposals → 3 judges → synthesis) confronted an **irreducible trilemma**: no topology achieves all of {dissolves the plan's *pre*-compressor EQ causality, continuous at e=identity, no new compressor DSP}. The device is unreachable, so the causally-correct target `device(EQ(input; e); c)` is uncomputable. The three candidates:
+
+- **POST-EQ/DEVICE** (chosen): `target = peak_normalize(min_phase_eq(device_target; e), 0.98)` — apply the EQ to the *existing real device target*. Zero new DSP. Continuous at e=identity by construction (min_phase_eq is passthrough at 0 dB). The compressor in the chain *is* the real device.
+- **PRE-EQ/REFCOMP** (rejected): `target = limit(ref_comp(EQ(input; e); c))` — matches the plan's literal §1.2 step-3 ordering, but **discontinuous at e=identity** (`ref_comp(input; c) ≠ device(input; c)`; the reference compressor cannot be device-calibrated). This would force FiLM to spend capacity bridging two compressor identities at the anchor rather than learning the EQ axis — structurally fatal for the sweep gate. Its only reuse path (`bus_compress`) is a verified trap: 2-param (threshold/ratio) with attack/release frozen into an `avg_pool1d` window — it would silently drop 2 of the 4 conditioning axes.
+- **PRE-EQ/F2** (rejected): blocked — F2 is untrained (P1 not launched) and §3.2 warns against F2 as an F1 target (black-box collapse).
+
+**Chosen: POST-EQ/DEVICE**, because *e-continuity at identity* is the empirically-verifiable, load-bearing property for both the P4 sweep gate and downstream coherence, and it costs zero new DSP. It **half-dissolves** the §1.1 tension, honestly: it kills the label↔target *incoherence* (the same single `e`-draw renders the target AND labels the cond, so the objective flips from EQ-*invariance* to EQ-*responsiveness* — the model is told to PRODUCE `EQ(device_target; e)`), but it does not achieve the plan's preferred *pre*-compressor ordering. The residual ceiling is **EQ/comp non-commutativity** (post-comp EQ ≠ pre-comp EQ: a post-comp +6 dB shelf provokes no gain reduction a pre-comp shelf would), labeled provenance `synthetic-eq`. POST-EQ's residual is strictly preferable to PRE-EQ's e=0 discontinuity given the unreachable device.
+
+**Deviation from §1.2's "via `AdaptiveEQ`":** the synthetic EQ uses `eq_augment.min_phase_eq` (the P3 Python torch EQ), NOT the C++ `AdaptiveEQ` (juce::dsp, unreachable at Python train time). The limiter in §1.2 step 3 is dropped (it would destroy e=identity continuity; `peak_normalize(0.98)` bounds extreme-e peaks instead — a labeled secondary ceiling).
+
+**Implementation notes (the load-bearing subtleties):**
+- `cond` is 8-dim `[c(4), e(4)]`, **c-first** (pinned; reordering would feed EQ gains to the F2 proxy as compressor params). `cond_dim` is the single point of truth in the net (fans to FiLM + inverse head).
+- **e-stats are analytical** (e is drawn per-epoch, never stored): `mean_e=[0,0,0,1.0]`, `std_e=[max_db/√3]×3 + [1/√12]`. **q mean is 1.0, NOT 0** — `sample_eq_gains` draws `q~U(0.5,1.5)`, so the identity `q=1.0` is the distribution centre; mean_q=0 would break the `e=identity ↔ cond_norm=0` anchor that FiLM identity-init and the gate's `flat_check_drop` rely on.
+- **Inverse head masked to c-only** (`inv_loss = mse(inv[:, :4], cond[:, :4])`): recovering the EQ tilt (a deconvolution) from the synthetic target is harder/less stable than recovering c; promote to full 8-dim supervision only if e-recovery proves stable on the first run.
+- **Checkpoint-format break** (4→8-dim): one-way; P4 starts fresh. Downstream readers of `cond_stats.json` that rebuild a `[B,4]` cond will break (flagged; out of scope here). To reproduce a strict P2/P3 run, `git checkout` the pre-P4 commit.
+- **`validate_eq_sweep`** (P4 gate, sibling of `validate_under_eq`): fix `c`, sweep `e` over `eq_probe_grid`, unperturbed input, SI-SDR vs the matching synthetic target + band-energy monotonicity (`mono_*_up_frac`) + `flat_check_drop≈0` wiring catcher. The P3 `validate_under_eq` probe is kept side-by-side (input-robustness at e=identity).
+
+**Forward path to close the residual ceiling:** if P5 licenses a real device render OR a device-calibrated reference compressor becomes available, re-derive via PRE-EQ/REFCOMP to convert the half-dissolution into full pre-compressor causality — but only then; today the e=0 discontinuity of PRE-EQ is worse than POST-EQ's ordering-relabeled bias.
 
 ## 7. Open questions (decide before P2)
 
