@@ -133,7 +133,9 @@ private:
     double sampleRate_      { 48000.0 };
     int    blockSizeSamples_{ 4800 };       // 100ms in samples
     int    blockAccum_      { 0 };          // samples accumulated
-    float  blockSumSq_[kMaxChannels]{};    // mean-square accumulator per ch
+    // AUDIT-FIX (M5): double accumulator — float lost precision on long programs
+    // (18000+ 100ms blocks). One add per block, so no perf concern.
+    double blockSumSq_[kMaxChannels]{};    // mean-square accumulator per ch
 
     // ── Block history (circular) ──────────────────────────────────────────────
     std::array<float, kHistoryBlocks> blockMS_{};      // per-block K-weighted mean-square

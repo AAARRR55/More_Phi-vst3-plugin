@@ -40,6 +40,9 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     audioDomainToggle_.setToggleState(proc_.getAudioDomainEnabled(),
                                        juce::dontSendNotification);
     ParameterBinding::bindToggleButton(audioDomainToggle_, apvts, "audioDomainEnabled");
+    audioDomainToggle_.setTooltip(
+        "Audio Domain: enables frequency-domain processing (spectral, granular, formant engines) "
+        "in addition to regular parameter morphing. Disable to save CPU when using parameter-only morphing.");
 
     // ── Oversampling combo ────────────────────────────────────────────────────
     oversamplingCombo_.addItem("x1", 1);
@@ -73,6 +76,16 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
         [this]() { beginBlendGesture(); };
     paramSlider_.onDragEnd = spectralSlider_.onDragEnd = granularSlider_.onDragEnd =
         [this]() { endBlendGesture(); };
+
+    paramSlider_.setTooltip(
+        "Direct blend weight: how much of the raw parameter morph (no frequency processing) "
+        "is mixed into the final output. The three weights automatically normalize to sum to 1.0.");
+    spectralSlider_.setTooltip(
+        "Spectral blend weight: how much of the spectral morph (frequency-domain crossfade) "
+        "is mixed into the final output.");
+    granularSlider_.setTooltip(
+        "Granular blend weight: how much of the granular morph (time-domain grain resynthesis) "
+        "is mixed into the final output.");
 
     // Slider axis labels
     const auto setupSliderLabel = [this](juce::Label& lbl, const juce::String& text)
@@ -109,6 +122,7 @@ HybridBlendPanel::HybridBlendPanel(MorePhiProcessor& proc)
     alphaKnob_.setColour(juce::Slider::textBoxOutlineColourId,
                           juce::Colours::transparentBlack);
     ParameterBinding::bindSlider(alphaKnob_, apvts, "morphAlpha");
+    alphaKnob_.setTooltip("Alpha: morph crossfade between the A and B snapshots (0 = A, 1 = B).");
 
     alphaLabel_.setText("Alpha", juce::dontSendNotification);
     alphaLabel_.setFont(MorePhiLookAndFeel::bodyFont(10.0f));
@@ -195,8 +209,10 @@ void HybridBlendPanel::resized()
                                       topOffset + innerH - summaryH,
                                       centerW, summaryH);
 
-        // Three vertical sliders — FlexBox row with equal columns
-        const int sliderH  = 120;
+        // Three vertical sliders — FlexBox row with equal columns.
+        // H6: each slider now shows its own % textbox, so sliderH must leave room
+        // for it; the identity label sits below the slider (clearing the textbox).
+        const int sliderH  = 104;
         const int labelH   = 14;
         const int sliderW  = 40;
         const int totalSliderH = sliderH + labelH + 4;
@@ -248,11 +264,22 @@ void HybridBlendPanel::setupToggleButton(juce::TextButton& btn,
 void HybridBlendPanel::setupVerticalSlider(juce::Slider& slider, double defaultVal)
 {
     slider.setSliderStyle(juce::Slider::LinearVertical);
-    slider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    // H6: show the (normalized %) value so users can read exact weights.
+    slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 40, 14);
     slider.setRange(0.0, 1.0, 0.001);
     slider.setValue(defaultVal, juce::dontSendNotification);
     slider.setColour(juce::Slider::thumbColourId,   accent());
     slider.setColour(juce::Slider::trackColourId,   border());
+    slider.setColour(juce::Slider::textBoxTextColourId, textBright());
+    slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider.textFromValueFunction = [](double v)
+    {
+        return juce::String(juce::roundToInt(juce::jlimit(0.0, 1.0, v) * 100.0)) + "%";
+    };
+    slider.valueFromTextFunction = [](const juce::String& t)
+    {
+        return t.retainCharacters("0123456789.").getDoubleValue() / 100.0;
+    };
 }
 
 void HybridBlendPanel::beginBlendGesture()
@@ -355,10 +382,12 @@ void HybridBlendPanel::updateBlendLabel()
         pct_g = juce::jmax(0, pct_g);
     }
 
+    // M2: full words (was cryptic "D: / S: / G:") so the readout matches the
+    // slider labels and "G" isn't mistaken for "Gain".
     const juce::String text =
-        "D:" + juce::String(pct_d) + "%"
-        "  S:" + juce::String(pct_s) + "%"
-        "  G:" + juce::String(pct_g) + "%";
+        "Direct " + juce::String(pct_d) + "%"
+        "   Spectral " + juce::String(pct_s) + "%"
+        "   Granular " + juce::String(pct_g) + "%";
 
     blendSummaryLabel_.setText(text, juce::dontSendNotification);
 }

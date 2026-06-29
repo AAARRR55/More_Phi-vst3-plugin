@@ -22,10 +22,10 @@ public:
     static constexpr float kBaselineWidth = 920.0f;
 
     // Minimum font sizes — nothing goes below these, ever
-    static constexpr float kMinSectionLabel  = 9.0f;
+    static constexpr float kMinSectionLabel  = 10.0f;
     static constexpr float kMinControlLabel  = 10.0f;
-    static constexpr float kMinValueLabel    = 10.0f;
-    static constexpr float kMinSlotNumber    = 9.0f;
+    static constexpr float kMinValueLabel    = 11.0f;
+    static constexpr float kMinSlotNumber    = 10.0f;
     static constexpr float kMinModeLabel     = 10.0f;
 
     enum class FontRole
@@ -50,7 +50,7 @@ public:
     const juce::Colour accentCyanBright{0xff00e2ed};  // Cyan highlight
     const juce::Colour accentMagenta   {0xffe22edb};  // Secondary / bipolar negative
     const juce::Colour accentGreen     {0xff34d399};  // Status: online
-    const juce::Colour accentAmber     {0xfff9e596};  // Status: warning (warm gold)
+    const juce::Colour accentAmber     {0xffe8a040};  // Status: warning (distinct warm amber, was duplicate of goldBright)
 
     // Legacy aliases (kept so existing call sites compile) — remapped to brand.
     const juce::Colour accentCoral     {0xffe5c057};  // → gold (was Stitch coral)
@@ -59,7 +59,10 @@ public:
     // Text
     const juce::Colour textPrimary     {0xffeeeef2};
     const juce::Colour textSecondary   {0xff8e8f95};
-    const juce::Colour textDim         {0xff5a5a60};
+    // L5: raised from 0xff5a5a60 (~2.9:1, fails WCAG AA) to 0xff9a9aa2 (~5.2:1
+    // against backgroundDark 0xff070709), clearing WCAG AA for small text.
+    // Used for the smallest captions.
+    const juce::Colour textDim         {0xff9a9aa2};
 
     // Borders
     const juce::Colour borderColour    {0xff323237};
@@ -115,6 +118,13 @@ public:
 private:
     // Registers the embedded BinaryData fonts with JUCE exactly once.
     static void ensureFontsRegistered();
+
+    // R5: draws a 2px cyan focus ring around a component when it has keyboard
+    // focus. Called from the button/slider overrides below so every focusable
+    // control shows where it is (WCAG 2.4.7). No-op when unfocused, so it's
+    // cheap on the normal paint path.
+    void drawFocusRingIfFocused(juce::Graphics&, juce::Component&,
+                                juce::Rectangle<float> bounds) const;
 
     mutable float editorWidth_ = 920.0f;
 };

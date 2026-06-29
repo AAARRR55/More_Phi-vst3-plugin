@@ -6,6 +6,8 @@
 #pragma once
 
 #include "ParameterClassifier.h"
+#include "ParameterState.h"
+#include <juce_core/juce_core.h>
 #include <vector>
 #include <atomic>
 
@@ -54,10 +56,8 @@ public:
     void setHysteresis(float hysteresis);      // Prevent oscillation (default 0.1)
     void setCooldownFrames(uint32_t frames);   // Minimum frames between switches
 
-    // Reference block config (512 smp @ 44.1 kHz). Used as the dt default so
-    // legacy call sites and the derived cooldown time constant reproduce the
-    // in-box feel exactly.
-    static constexpr float kRefDt = 512.0f / 44100.0f;
+    // kRefDt (512/44100) is defined in ParameterState.h as a namespace-level
+    // constant so all consumers share a single definition.
     
     // Get the discrete map for current interpolation
     std::vector<bool> getDiscreteMask() const { return discreteMask_; }
@@ -108,6 +108,7 @@ public:
         const std::vector<float>& snapshotB) const;
 
 private:
+    mutable juce::SpinLock strategyLock_;  // H-3: protect strategyOverrides_ from audio-thread reads
     std::vector<DiscreteParamState> paramStates_;
     std::vector<bool> discreteMask_;
     std::vector<BlendStrategy> paramStrategies_;

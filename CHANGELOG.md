@@ -5,6 +5,132 @@ alongside the audit documents in `docs/audits/` and the production-readiness
 gates in `docs/validation/`. Format is loosely Keep-a-Changelog; entries are
 grouped by date with severity tags.
 
+## 2026-07-16 — Documentation overhaul & comprehensive audit
+
+- **New:** `VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md` — 39 KB comprehensive
+  audit with 8-criterion ratings (7.9/10 overall), 5-competitor analysis,
+  market positioning, 26 verifiable claims with exact code locations.
+  Based on direct review of ~165 source files across all 7 layers.
+- **Updated:** `README.md` — Complete rewrite: features expanded from 10 to
+  60+, architecture tree updated, MCP tools documented as 30+ across 8
+  categories, technical highlights table added with 9 verifiable claims,
+  installation/build instructions clarified, troubleshooting expanded.
+- **Updated:** `docs/API_REFERENCE.md` — Added audit score reference and
+  expanded tool category overview.
+- **Updated:** `docs/TECHNICAL_DOCUMENTATION.md` — Updated date, added
+  audit reference, expanded multi-agent description.
+- **Updated:** `docs/ARCHITECTURE.md` — Updated date, added audit score.
+- **Updated:** `docs/PERFORMANCE_AUDIT_REPORT.md` — Added cross-reference
+  to comprehensive audit.
+
+## 2026-07-16 — Performance audit fixes (branch `chore/perf-audit-fixes`)
+
+Comprehensive CPU/memory performance audit (`docs/PERFORMANCE_AUDIT_REPORT.md`)
+identified 8 bottlenecks. All 5 priority fixes applied.
+
+### Parameter application (CPU: ~75% reduction in getValue cost)
+- **[HIGH] Interleaved touch sampling (PERF-IA)** — `kTouchSamplingStride=4`,
+  rotating `touchSamplingPhase_`. Only 1/4 params call `getValue()` per block.
+  Touch detection gated to sampled params; cooldowns + setValue still run for
+  all. `src/Plugin/PluginProcessor.{h,cpp}`.
+
+### SonicMaster memory (MEM: up to ~16 MiB saved when inactive)
+- **[MED] Lazy + rate-proportional capture ring (PERF-MEM)** — `ensureRing()` defers
+  `AudioCaptureRing` to first `setActive(true)`, `requestDecisionNow`,
+  or `runCycle()`. Ring size is rate-proportional: `round(8.0 × sampleRate)`,
+  clamped `[2×44100, 32×192000]`, pow2-rounded — ~4 MiB at 44.1 kHz, ~16 MiB at
+  192 kHz. `prepare()` resets ring to nullptr. Saves ~25–60% of More-Phi's
+  baseline memory when the feature is off.
+  `src/AI/SonicMasterAnalysisEngine.{h,cpp}`.
+
+### ParameterBridge memory (MEM: ~64 KB saved)
+- **[LOW] throttleStates_ reduction (PERF-MEM)** — Reduced from 8192 to 4096
+  entries. All bounds checks use `.size()` — safe.
+  `src/Host/ParameterBridge.cpp`.
+
+### Profiling infrastructure (tooling)
+- **[CRITICAL] Profiler initialization bug fixed** — `PerformanceProfiler` was
+  silently broken: `registerSection()` was never called, so all
+  `MORE_PHI_PROFILE` timing data was dropped. Now 13 sections are registered in
+  `prepareToPlay()`: `processBlock_total`, `command_queue_drain`,
+  `midi_processing`, `morph_computation`, `modulation_engine`,
+  `parameter_application`, `hosted_plugin_process`, `sonicmaster_capture`,
+  `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`,
+  `hybrid_blend`. `src/Plugin/PluginProcessor.cpp`.
+- **[LOW] Profiling coverage gaps filled** — Added `MORE_PHI_PROFILE`
+  instrumentation for `midi_processing`, `hosted_plugin_process`,
+  `sonicmaster_capture`, and `modulation_engine`.
+  `src/Plugin/PluginProcessor.cpp`.
+
+### Audio-domain engines (CPU: ~40-60% reduction when enabled)
+- **[MED] CPU Saver mode (PERF-CPU)** — New `cpuSaver` APVTS bool parameter
+  (default OFF). When enabled: halves FFT size (min 512), caps oversampling
+  at ×2. Applied in both `prepareToPlay` and `syncStateFromAPVTS`.
+  `src/Plugin/PluginProcessor.{h,cpp}`.
+
+### Documentation
+- **New:** `docs/PERFORMANCE_AUDIT_REPORT.md` — Full CPU/memory audit (24 KB).
+- **New:** `tests/Performance/ComprehensiveProfilingHarness.cpp` — Automated
+  profiling harness covering all components across buffer sizes (43 KB).
+- **Updated:** `AGENTS.md`, `CLAUDE.md` — New PERF conventions documented.
+
+## 2026-07-15 — Multi-agent orchestration audit fixes (branch `chore/audit-fixes`)
+
+A comprehensive technical audit of the multi-agent orchestration layer found
+11 issues (2 critical/high, 4 high/medium, 5 low). All fixed. Full test suite
+passes (700 tests).
+
+### Audio pipeline / thread safety
+- **[HIGH] Command drain try-lock drops parameter writes (C-3)** — the audio
+  thread's `commandConsumerLock_` try-lock gated both the command queue drain
+  AND the morph-to-parameter application. When the assistant flush path held
+  the lock, morph output was silently dropped for entire blocks. **Fix:**
+  separated `canDrainCommands` (gated by try-lock) from morph application
+  (always proceeds). `liveEditHold_` reads moved inside `hasTouchLock` guard
+  to prevent data race with concurrent assistant flush.
+  `src/Plugin/PluginProcessor.{h,cpp}`.
+- **[MED-HIGH] APVTS state restore silently skipped (H-3)** — DAWs that wrap
+  state XML in an extra element caused APVTS parameters to not restore, with
+  only a `DBG` message (invisible in Release). **Fix:** recursive search for
+  the APVTS state element via `std::function`.
+  `src/Plugin/PluginProcessor.cpp`.
+- **[MED] getStateInformation blocks on audio thread (H-4)** —
+  `beginExclusivePluginUse(500)` called unconditionally from
+  `getStateInformation`, which some DAWs invoke from the audio thread during
+  offline render. **Fix:** detect calling thread; only block on message thread;
+  fall back to buffered `pendingHostedState_` on audio thread.
+  `src/Plugin/PluginProcessor.cpp`.
+
+### Agent layer
+- **[HIGH] BlackboardBridge::publish() discards eventId (C-2)** — returned
+  empty string instead of the generated event ID, breaking event tracing for
+  all agent blackboard events. **Fix:** capture `ev.eventId` before
+  `std::move`, return it. `src/AI/Agents/Blackboard/BlackboardBridge.cpp`.
+- **[MED-HIGH] PriorityScheduler O(n log n) starvation bump + std::mutex
+  (H-1, M-4)** — single `std::priority_queue` forced O(n log n) drain+rebuild
+  for starvation promotion under mutex; starvation guard was 5000ms. **Fix:**
+  replaced with 4 per-priority-level `std::queue` instances. Push, pop, and
+  starvation promotion are all O(1). Guard reduced to 1000ms.
+  `src/AI/Agents/Scheduler/PriorityScheduler.{h,cpp}`.
+- **[LOW-MED] license refresh detached thread race (L-5)** — `juce::Thread::launch`
+  lambda captured raw `LicenseManager*`; could dangle if processor destroyed
+  during refresh. **Fix:** `licenseManager_` changed to `shared_ptr`; lambda
+  captures shared_ptr copy to extend lifetime.
+  `src/Plugin/PluginProcessor.{h,cpp}`.
+
+### Snapshot bank
+- **[MED] findParameterIndex blocking lock on audio path (M-7)** —
+  `SnapshotBank::findParameterIndex` used blocking `ScopedLockType`; called
+  during MIDI-triggered recall on audio thread. **Fix:** changed to
+  `ScopedTryLockType`; returns -1 if lock contended (caller falls back to
+  index-based recall). `src/Core/SnapshotBank.h`.
+
+### Code quality
+- **[LOW] Duplicate finalOutput_.resize() removed (L-3)**
+- **[LOW] readRawBool >=0.5f threshold documented (L-1)**
+- **[LOW-MED] pendingStateRestore_ consumer consolidated (H-5)** — processBlock
+  now uses `requestMessageThreadMaintenance()` instead of directly starting timer.
+
 ## 2026-06-19 — AI/MCP re-audit + DSP verification (branch `chore/ponytail-dead-code-cleanup`)
 
 A focused VST3 + AI-MCP-integration re-audit closed the residual isolation,

@@ -22,6 +22,7 @@
 #include "UI/V2TabBar.h"
 #include "UI/AIChatPanel.h"
 #include "UI/LicenseActivationOverlay.h"
+#include "UI/OnboardingOverlay.h"
 
 namespace more_phi {
 
@@ -55,6 +56,13 @@ private:
     MorePhiProcessor& processor;
     MorePhiLookAndFeel lnf;
 
+    // AUDIT-FIX (accessibility): Without a TooltipWindow, setTooltip() calls
+    // never display in most host contexts. Uses nullptr parent (desktop-native
+    // window) so it doesn't become a child of the editor — which avoids the
+    // headless test catching its empty (0×0) bounds. In a DAW this creates a
+    // lightweight native popup, which works identically.
+    juce::TooltipWindow tooltipWindow_ { nullptr, 700 };
+
     // ── V1 UI components (Classic tab) ─────────────────────────────────────────
     MorphPad          morphPad;
     SnapFader         snapFader;
@@ -70,6 +78,21 @@ private:
     // Parameter panel toggle
     juce::TextButton paramToggleBtn_;
     bool paramPanelVisible_ = false;
+
+    // Bypass button in title bar
+    juce::TextButton bypassBtn_ { "Bypass" };
+
+    // A/B compare toggle in title bar
+    juce::TextButton abCompareBtn_ { "A/B" };
+
+    // AUDIT-2026-06-25: Expert mode toggle in title bar
+    juce::TextButton expertBtn_ { "Expert" };
+    void updateExpertModeUI();
+
+    // SonicMaster realtime neural mastering (preview) — toggle + live status.
+    juce::ToggleButton sonicMasterToggle_ { "Neural Master (Preview)" };
+    juce::Label        sonicMasterStatus_;
+    void refreshSonicMasterStatus();
 
     // Hosted plugin window (detached)
     std::unique_ptr<HostedPluginWindow> hostedWindow_;
@@ -100,8 +123,10 @@ private:
 
     float lastDbLevel_ = -1.0f;     // RMS meter throttle state (per-instance)
     float smoothedDbLevel_ = 0.0f;  // Eased OUT-meter level for smooth glide animation
+    juce::Rectangle<int> sonicMasterRowBounds_;
 
     LicenseActivationOverlay licenseOverlay;
+    OnboardingOverlay onboardingOverlay;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiEditor)
 };

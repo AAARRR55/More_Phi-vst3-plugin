@@ -16,6 +16,7 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <mutex>
 
 namespace more_phi {
 
@@ -46,13 +47,18 @@ public:
     /**
      * Acquire a stable plugin pointer for short-lived processing work.
      * Must be paired with releasePluginFromUse(). Returns nullptr when no plugin is loaded.
+     * W-10 FIX (audit): const-qualified so getNumSteps() (a const host-called
+     * method) can take a ref-counted lease instead of raw-loading the plugin
+     * pointer (which raced unloadPlugin → use-after-free). The methods only
+     * touch atomics (refcounting is logically const), mirroring the documented
+     * "hostManager is mutable" pattern for const host callbacks.
      */
-    juce::AudioPluginInstance* acquirePluginForUse() noexcept;
+    juce::AudioPluginInstance* acquirePluginForUse() const noexcept;
 
     /**
      * Release a previously acquired plugin usage lease.
      */
-    void releasePluginFromUse() noexcept;
+    void releasePluginFromUse() const noexcept;
 
     /**
      * Request exclusive non-audio access to the hosted plugin for opaque state
@@ -79,7 +85,13 @@ public:
     int getExceptionCount() const { return exceptionCount_.load(std::memory_order_relaxed); }
 
     juce::AudioPluginFormatManager& getFormatManager() override { return formatManager; }
-    juce::KnownPluginList& getKnownPlugins() override { return knownPlugins; }
+    juce::KnownPluginList& getKnownPlugins() override
+    {
+        // Lock so reader (UI browser) does not race with scanner (background thread).
+        // The scanner path takes the same lock inside scanPluginFolders.
+        const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+        return knownPlugins;
+    }
     void scanPluginFolders() override;
 
     /** Get the last loaded plugin description — available even after unload for recovery.
@@ -119,6 +131,15 @@ public:
     /** Check if a plugin swap is currently in progress. */
     bool isPluginSwapping() const noexcept { return isSwapping_.load(std::memory_order_acquire); }
 
+    /**
+     * C1 FIX: Destroy any plugin instances whose teardown was deferred because
+     * audio-thread leases were still held when unloadPlugin() timed out.
+     * Safe to call repeatedly; no-op when nothing is pending. Call from the
+     * message thread (e.g. on the maintenance timer) so destruction can run
+     * without blocking real-time audio.
+     */
+    void drainDeferredDoomedPlugins();
+
 private:
     // Suspend (bypass audio) a misbehaving plugin after this many consecutive
     // exceptions. Raised from 5 to tolerate short DAW reconfiguration bursts.
@@ -141,8 +162,16 @@ private:
     // Number of active short-lived plugin users (audio thread processing and
     // parameter-bridge operations). unloadPlugin() waits for this to reach 0
     // after publishing hostedPluginPtr_=nullptr.
-    std::atomic<uint32_t> activePluginUsers_{0};
-    std::atomic<bool> exclusivePluginUseRequested_{false};
+    // W-10 FIX (audit): mutable so const host callbacks (getNumSteps,
+    // getTailLengthSeconds) can take ref-counted leases via the now-const
+    // acquirePluginForUse()/releasePluginFromUse().
+    mutable std::atomic<uint32_t> activePluginUsers_{0};
+    mutable std::atomic<bool> exclusivePluginUseRequested_{false};
+    // L-1 FIX: WaitableEvent signaled by releasePluginFromUse() when the
+    // ref-count drops to zero. beginExclusivePluginUse() waits on this instead
+    // of Thread::sleep(1) spin — avoids 1 ms worst-case latency spikes and
+    // needless wake-ups when the audio thread releases promptly.
+    juce::WaitableEvent usersZeroEvent_;
 
     // C12 FIX: Use unsigned to prevent signed-overflow UB. Cap at MAX+1 to avoid
     // wrap-around which would falsely reset the suspension counter.
@@ -188,6 +217,14 @@ private:
 
     // C3 FIX: Callback invoked when plugin is unloaded so editor can close UI windows
     std::function<void()> windowCloseCallback_;
+
+    // C1 FIX: Plugin instances detached from live use but not yet destroyed
+    // because audio-thread leases were held at unload time. Drained from the
+    // message thread by drainDeferredDoomedPlugins() once users reach zero.
+    // A mutex is acceptable here: only touched on the message thread, and
+    // the drain is best-effort (a missed drain just defers to the destructor).
+    std::mutex deferredDoomMutex_;
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> deferredDoomedPlugins_;
 };
 
 } // namespace more_phi

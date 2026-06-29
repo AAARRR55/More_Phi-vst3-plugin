@@ -20,17 +20,25 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void visibilityChanged() override;
 
     // Intercept mouse events to prevent clicking components behind the overlay
     void mouseDown(const juce::MouseEvent& event) override { (void)event; }
     void mouseUp(const juce::MouseEvent& event) override { (void)event; }
     void mouseDrag(const juce::MouseEvent& event) override { (void)event; }
 
+    // R4: true once the user chose "Continue in Demo" this session. The editor
+    // timer honors this so it doesn't re-spawn the overlay every tick. Audio is
+    // never muted for lack of a license — only premium AI features are gated —
+    // so demo mode is a fully usable plugin, not a brick. Resets on reopen.
+    bool isDismissedForSession() const noexcept { return dismissedForSession_; }
+
 private:
     void onActivateClicked();
     void onBuyClicked();
     void onOfflineClicked();
     void onRefreshClicked();
+    void onDemoClicked();
     void handleActivationResult(const licensing::ValidationResult& result);
     void handleRefreshResult(const licensing::ValidationResult& result);
 
@@ -49,10 +57,12 @@ private:
     juce::TextButton buyBtn_{"Get License Key"};
     juce::TextButton refreshBtn_{"Refresh Now"};
     juce::TextButton offlineBtn_{"Activate Offline"};
+    juce::TextButton demoBtn_{"Continue in Demo"};
     juce::Label statusLabel_;
     juce::HyperlinkButton offlineLink_;
 
     bool isActivating_ = false;
+    bool dismissedForSession_ = false;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(LicenseActivationOverlay)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LicenseActivationOverlay)

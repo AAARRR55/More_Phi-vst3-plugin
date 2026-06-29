@@ -17,6 +17,17 @@ MorphPad::MorphPad(MorePhiProcessor& processor)
     // Initialize trail buffer
     trailBuffer_.fill(juce::Point<float>{0.5f, 0.5f});
     showGrid_ = true;  // Enable grid by default (Stitch design)
+    setTooltip(
+        "XY Morph Pad: drag the cursor to morph between snapshot positions arranged "
+        "around the clock face. Click a numbered dot to recall a snapshot. "
+        "Right-click or double-click to capture the current sound to a slot. "
+        "The trail shows recent cursor movement.");
+    // AUDIT-FIX (accessibility): make the pad keyboard-focusable + announce it.
+    // Arrow keys nudge the morph cursor (see keyPressed); screen readers read
+    // the name/title.
+    setWantsKeyboardFocus(true);
+    setComponentID("MorphPad");
+    setName("XY Morph Pad");
     startTimerHz(30);   // 30 FPS for smooth animation
 }
 
@@ -144,6 +155,14 @@ void MorphPad::timerCallback()
         needsRepaint_ = false;
         repaint();
     }
+
+    // Flash message countdown
+    if (flashTicks_ > 0)
+    {
+        --flashTicks_;
+        if (flashTicks_ == 0)
+            repaint();  // clear the flash
+    }
 }
 
 // OPTIMIZATION: Ring buffer implementation - zero allocations
@@ -163,7 +182,8 @@ int MorphPad::findNextEmptySlot() const
         if (!bank.isOccupied(i))
             return i;
     }
-    return 0;
+    // AUDIT-FIX: return -1 when full rather than silently overwriting slot 0.
+    return -1;
 }
 
 int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
@@ -190,6 +210,8 @@ int MorphPad::findNearestSlotToPoint(juce::Point<float> point) const
 void MorphPad::captureSnapshotAtSlot(int slot)
 {
     proc_.captureSnapshotToSlot(slot, true);
+    flashMessage_ = "Captured to slot " + juce::String(slot + 1);
+    flashTicks_ = 90;
     repaint();
 }
 
@@ -223,6 +245,100 @@ void MorphPad::paint(juce::Graphics& g)
         }
     }
 
+    // ── Voronoi cell overlay (Phase 3) ──────────────────────────────────────
+    // Draw Delaunay/Voronoi cells when Voronoi mode is active and triangulation exists.
+    auto& morph = proc_.getMorphProcessor();
+    if (morph.getInterpolationMode() == 1)
+    {
+        const auto& voronoi = morph.getVoronoiEngine();
+        if (voronoi.isValid())
+        {
+            const auto& cells = voronoi.getVoronoiCells();
+            for (const auto& cell : cells)
+            {
+                if (cell.vertices.size() < 3)
+                    continue;
+
+                // 12-hue palette: evenly spaced around the colour wheel.
+                const float hue = static_cast<float>(cell.slotIndex) / 12.0f;
+                const auto fillCol = juce::Colour::fromHSV(hue, 0.50f, 0.55f, 0.18f);
+                const auto edgeCol = juce::Colour::fromHSV(hue, 0.65f, 0.70f, 0.40f);
+
+                juce::Path cellPath;
+                cellPath.startNewSubPath(
+                    centre.x + cell.vertices[0].x * radius,
+                    centre.y + cell.vertices[0].y * radius);
+                for (size_t vi = 1; vi < cell.vertices.size(); ++vi)
+                    cellPath.lineTo(
+                        centre.x + cell.vertices[vi].x * radius,
+                        centre.y + cell.vertices[vi].y * radius);
+                cellPath.closeSubPath();
+
+                g.setColour(fillCol);
+                g.fillPath(cellPath);
+                g.setColour(edgeCol);
+                g.strokePath(cellPath, juce::PathStrokeType(1.0f));
+            }
+        }
+    }
+
+    // ── Waypoint path overlay (Phase 6) ─────────────────────────────────────
+    // Draw the waypoint path and current position when waypoints are enabled.
+    {
+        auto& wp = proc_.getWaypointEngine();
+        if (wp.getNumWaypoints() > 1)
+        {
+            const auto spos = InterpolationEngine::getClockPositions(0.85f);
+            // Map waypoint [0,1] coordinates to screen space same as clock layout
+            auto wpToScreen = [&](float x, float y) -> juce::Point<float>
+            {
+                // Waypoints use [0,1] normalized space like morphX/Y
+                float sx = centre.x + (x * 2.0f - 1.0f) * radius;
+                float sy = centre.y + (y * 2.0f - 1.0f) * radius;
+                return {sx, sy};
+            };
+
+            const int numWp = wp.getNumWaypoints();
+            // Draw the path connecting waypoints
+            juce::Path path;
+            auto first = wpToScreen(wp.getWaypoint(0).x, wp.getWaypoint(0).y);
+            path.startNewSubPath(first);
+            for (int i = 1; i < numWp; ++i)
+            {
+                auto pt = wpToScreen(wp.getWaypoint(i).x, wp.getWaypoint(i).y);
+                path.lineTo(pt);
+            }
+            // Close the loop
+            path.closeSubPath();
+
+            g.setColour(accent().withAlpha(0.20f));
+            g.strokePath(path, juce::PathStrokeType(1.5f));
+
+            // Draw waypoint dots
+            const float wpDotR = radius * 0.025f;
+            for (int i = 0; i < numWp; ++i)
+            {
+                auto pt = wpToScreen(wp.getWaypoint(i).x, wp.getWaypoint(i).y);
+                bool isCurrent = wp.isPlaying() && (i == wp.getCurrentIndex());
+                g.setColour(isCurrent ? cyanBright().withAlpha(0.7f) : accent().withAlpha(0.35f));
+                g.fillEllipse(pt.x - wpDotR, pt.y - wpDotR, wpDotR * 2, wpDotR * 2);
+            }
+
+            // Draw current waypoint cursor (if playing)
+            if (wp.isPlaying())
+            {
+                float cpx = wp.getPositionX();
+                float cpy = wp.getPositionY();
+                auto cp = wpToScreen(cpx, cpy);
+                float wpCurR = radius * 0.04f;
+                g.setColour(accent().withAlpha(0.50f));
+                g.fillEllipse(cp.x - wpCurR, cp.y - wpCurR, wpCurR * 2, wpCurR * 2);
+                g.setColour(amber());
+                g.drawEllipse(cp.x - wpCurR, cp.y - wpCurR, wpCurR * 2, wpCurR * 2, 1.5f);
+            }
+        }
+    }
+
     // Border
     g.setColour(padGrid());
     g.drawEllipse(centre.x - radius, centre.y - radius, radius * 2, radius * 2, 1.5f);
@@ -239,8 +355,8 @@ void MorphPad::paint(juce::Graphics& g)
     }
 
     // ── Cursor trail (from audio thread) ───────────────────────────────────────
-    auto& morph = proc_.getMorphProcessor();
-    const auto& trail = morph.getTrail();
+    // C3 FIX: read each trail point via the atomic getTrailPoint() accessor so
+    // the UI never sees a torn {x,y} pair written mid-store by the audio thread.
     int head = morph.getTrailHead();
     constexpr int trailLen = MorphProcessor::TRAIL_SIZE;
 
@@ -249,11 +365,14 @@ void MorphPad::paint(juce::Graphics& g)
         int idx0 = (head - trailLen + i + trailLen * 2) % trailLen;
         int idx1 = (idx0 + 1) % trailLen;
 
+        const auto p0 = morph.getTrailPoint(idx0);
+        const auto p1 = morph.getTrailPoint(idx1);
+
         float alpha = static_cast<float>(i) / static_cast<float>(trailLen) * 0.5f;
-        float px0 = centre.x + (trail[idx0].x * 2.0f - 1.0f) * radius;
-        float py0 = centre.y + (trail[idx0].y * 2.0f - 1.0f) * radius;
-        float px1 = centre.x + (trail[idx1].x * 2.0f - 1.0f) * radius;
-        float py1 = centre.y + (trail[idx1].y * 2.0f - 1.0f) * radius;
+        float px0 = centre.x + (p0.x * 2.0f - 1.0f) * radius;
+        float py0 = centre.y + (p0.y * 2.0f - 1.0f) * radius;
+        float px1 = centre.x + (p1.x * 2.0f - 1.0f) * radius;
+        float py1 = centre.y + (p1.y * 2.0f - 1.0f) * radius;
 
         g.setColour(padTrail().withAlpha(alpha));
         g.drawLine(px0, py0, px1, py1, 1.5f);
@@ -262,38 +381,106 @@ void MorphPad::paint(juce::Graphics& g)
     // ── Snapshot nodes (clock layout) ──────────────────────────────────────────
     // Mockup style: numbered ring-nodes around the clock. Filled slots glow cyan
     // with the number inside; empty slots are muted hairline circles.
+    // F-12: Active A/B pair (nearest two occupied slots to cursor) get a brighter glow.
     auto positions = InterpolationEngine::getClockPositions(0.85f);
     auto& bank = proc_.getSnapshotBank();
     float nodeR = juce::jmax(radius * 0.075f, 11.0f);
     float nodeFontSize = juce::jmax(radius * 0.06f, 9.0f);
+
+    // Determine A/B slot pair (two nearest occupied slots to morph position)
+    int slotA = -1, slotB = -1;
+    {
+        float bestDistA = std::numeric_limits<float>::max();
+        float bestDistB = std::numeric_limits<float>::max();
+        float mx = proc_.getMorphX() * 2.0f - 1.0f;
+        float my = proc_.getMorphY() * 2.0f - 1.0f;
+        for (int i = 0; i < 12; ++i)
+        {
+            if (!bank.isOccupied(i))
+                continue;
+            float dist = std::hypot(positions[i].x - mx, positions[i].y - my);
+            if (dist < bestDistA) { bestDistB = bestDistA; slotB = slotA; bestDistA = dist; slotA = i; }
+            else if (dist < bestDistB) { bestDistB = dist; slotB = i; }
+        }
+    }
     for (int i = 0; i < 12; ++i)
     {
         float dotX = centre.x + positions[i].x * radius;
         float dotY = centre.y + positions[i].y * radius;
         bool occupied = bank.isOccupied(i);
+        bool isActiveA = (i == slotA);
+        bool isActiveB = (i == slotB);
 
-        // Glow halo behind filled nodes
+        // Glow halo behind filled nodes — A/B slots get a brighter amber halo
         if (occupied)
         {
-            float haloR = nodeR * 1.8f;
-            g.setColour(cyan().withAlpha(0.18f));
+            float haloR = nodeR * (isActiveA || isActiveB ? 2.2f : 1.8f);
+            g.setColour(isActiveA || isActiveB
+                ? amber().withAlpha(0.30f)
+                : cyan().withAlpha(0.18f));
             g.fillEllipse(dotX - haloR, dotY - haloR, haloR * 2, haloR * 2);
         }
 
-        // Node body
-        g.setColour(occupied ? cyan().withAlpha(0.18f) : surfaceLit());
-        g.fillEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+        // Node body — A/B slots use amber tint; regular occupied use cyan
+        {
+            auto bodyCol = occupied
+                ? (isActiveA || isActiveB
+                    ? amber().withAlpha(0.25f)
+                    : cyan().withAlpha(0.18f))
+                : surfaceLit();
+            g.setColour(bodyCol);
+            g.fillEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+        }
 
-        // Node ring
-        g.setColour(occupied ? cyanBright() : border());
-        g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+        // Node ring — A/B slots use amber
+        {
+            auto ringCol = occupied
+                ? (isActiveA || isActiveB ? amber() : cyanBright())
+                : border();
+            g.setColour(ringCol);
+            if (occupied)
+                g.drawEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2, 1.2f);
+            else
+            {
+                const float dashLen[] = { 2.0f, 2.5f };
+                juce::Path dashedCircle;
+                dashedCircle.addEllipse(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2);
+                juce::PathStrokeType stroke(1.0f);
+                stroke.createDashedStroke(dashedCircle, dashedCircle, dashLen, 2);
+                g.strokePath(dashedCircle, stroke);
+            }
+        }
 
-        // Slot number centered inside the node
-        g.setColour(occupied ? cyanBright() : textSlot());
-        g.setFont(juce::Font(nodeFontSize, juce::Font::bold));
-        g.drawText(juce::String(i + 1),
-                   juce::Rectangle<float>(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2),
-                   juce::Justification::centred);
+        // Slot number — A/B slots get amber text with bold weight; regular slots cyan
+        {
+            auto textCol = isActiveA || isActiveB
+                ? amber().withAlpha(0.9f)
+                : (occupied ? cyanBright() : textSlot());
+            g.setColour(textCol);
+            auto fontWeight = isActiveA || isActiveB ? juce::Font::bold : juce::Font::plain;
+            g.setFont(juce::Font(nodeFontSize, fontWeight));
+            g.drawText(juce::String(i + 1),
+                       juce::Rectangle<float>(dotX - nodeR, dotY - nodeR, nodeR * 2, nodeR * 2),
+                       juce::Justification::centred);
+        }
+
+        // A/B label beneath slot number
+        if (isActiveA)
+        {
+            g.setColour(amber().withAlpha(0.8f));
+            g.setFont(juce::Font(nodeFontSize * 0.7f, juce::Font::bold));
+            g.drawText("A",
+                       juce::Rectangle<float>(dotX - nodeR, dotY + nodeR * 0.7f, nodeR * 2, nodeFontSize),
+                       juce::Justification::centred);
+        }
+        else if (isActiveB)
+        {
+            g.setColour(amber().withAlpha(0.8f));
+            g.setFont(juce::Font(nodeFontSize * 0.7f, juce::Font::bold));
+            g.drawText("B",
+                       juce::Rectangle<float>(dotX - nodeR, dotY + nodeR * 0.7f, nodeR * 2, nodeFontSize),
+                       juce::Justification::centred);
+        }
     }
 
     // ── Cursor position ────────────────────────────────────────────────────────
@@ -356,12 +543,40 @@ void MorphPad::paint(juce::Graphics& g)
         cx = centre.x + procX * radius;
         cy = centre.y + procY * radius;
 
-        // Also show raw input as faint guide dot
+        // Anchor (raw input) in screen space
         float rawCx = centre.x + (proc_.getMorphX() * 2.0f - 1.0f) * radius;
         float rawCy = centre.y + (proc_.getMorphY() * 2.0f - 1.0f) * radius;
-        float guideR = radius * 0.02f;
-        g.setColour(padGuide().withAlpha(0.4f));
-        g.fillEllipse(rawCx - guideR, rawCy - guideR, guideR * 2, guideR * 2);
+
+        if (physMode == 2)  // Drift
+        {
+            // Tension line — connects anchor to drifted cursor
+            g.setColour(accent().withAlpha(0.25f));
+            g.drawLine(rawCx, rawCy, cx, cy, 1.0f);
+
+            // Outer glow ring around the drifted cursor (larger, more visible)
+            float driftGlowR = radius * 0.12f;
+            float driftPulse = 0.7f + 0.3f * std::sin(static_cast<float>(
+                juce::Time::getMillisecondCounter() % 1600) / 1600.0f * 6.2832f);
+            g.setColour(accent().withAlpha(0.15f * driftPulse));
+            g.fillEllipse(cx - driftGlowR, cy - driftGlowR,
+                          driftGlowR * 2, driftGlowR * 2);
+
+            // Inner anchor dot — bright, small, representing the fixed anchor
+            float anchorR = radius * 0.025f;
+            g.setColour(accent().withAlpha(0.6f));
+            g.fillEllipse(rawCx - anchorR, rawCy - anchorR,
+                          anchorR * 2, anchorR * 2);
+            g.setColour(amber().withAlpha(0.4f));
+            g.drawEllipse(rawCx - anchorR, rawCy - anchorR,
+                          anchorR * 2, anchorR * 2, 1.0f);
+        }
+        else  // Elastic — simple guide dot
+        {
+            float guideR = radius * 0.02f;
+            g.setColour(padGuide().withAlpha(0.4f));
+            g.fillEllipse(rawCx - guideR, rawCy - guideR,
+                          guideR * 2, guideR * 2);
+        }
     }
     else
     {
@@ -421,9 +636,22 @@ void MorphPad::paint(juce::Graphics& g)
     float modeFontSize = juce::jlimit(10.0f, 13.0f, bounds.getHeight() * 0.08f);
     g.setColour(textDim().withAlpha(0.8f));
     g.setFont(modeFontSize);
-    g.drawText(juce::String(sourceNames[srcIdx]) + " \u00B7 " + juce::String(physNames[physIdx]),
+    g.drawText(juce::String(sourceNames[srcIdx]) + juce::String(juce::CharPointer_UTF8(" \u00B7 ")) + juce::String(physNames[physIdx]),
                bounds.toNearestInt().withHeight(20).translated(8, 4),
                juce::Justification::centredLeft);
+
+    // ── Flash message (capture/recall feedback) ────────────────────────────────
+    if (flashTicks_ > 0 && flashMessage_.isNotEmpty())
+    {
+        float flashAlpha = flashTicks_ > 60 ? 1.0f
+                         : static_cast<float>(flashTicks_) / 60.0f;  // fade to zero
+        float flashY = bounds.getBottom() - 28.0f;
+        g.setColour(green().withAlpha(flashAlpha));
+        g.setFont(juce::Font(juce::jlimit(10.0f, 13.0f, bounds.getHeight() * 0.07f), juce::Font::bold));
+        g.drawText(flashMessage_,
+                   juce::Rectangle<float>(bounds.getX(), flashY, bounds.getWidth(), 20.0f),
+                   juce::Justification::centred);
+    }
 }
 
 void MorphPad::mouseDown(const juce::MouseEvent& e)
@@ -460,10 +688,111 @@ void MorphPad::updatePosition(juce::Point<float> pos)
     if (auto* py = proc_.getAPVTS().getParameter("morphY"))
         py->setValueNotifyingHost(y);
 
+    // FIX: write the morphX_/morphY_ atomics directly. The APVTS→atomic bridge
+    // (syncStateFromAPVTS, gated by apvtsStateDirty_) only runs once at startup
+    // — nothing re-marks it dirty — so setValueNotifyingHost alone never reached
+    // the atomics, leaving the cursor frozen and the audio-thread morph reading
+    // stale values. Mirrors the setMorphSource call below and the BreedingPanel
+    // precedent (proc_.setMorphX/Y). The cursor paint and morph paths now see
+    // the drag in real time.
+    proc_.setMorphX(x);
+    proc_.setMorphY(y);
+
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 0, 2);
     proc_.setMorphSource(0);  // XY mode
     needsRepaint_ = true;
     repaint();
+}
+
+bool MorphPad::keyPressed(const juce::KeyPress& key)
+{
+    // AUDIT-FIX (accessibility): arrow-key control of the morph cursor, mirroring
+    // a mouse drag through the same APVTS gesture path so DAW automation records
+    // it identically. Each press nudges the cursor 2% — fine enough for keyboard
+    // / screen-reader users and accelerates when held (host key-repeat).
+    constexpr float kStep = 0.02f;
+    float dx = 0.0f, dy = 0.0f;
+
+    if      (key.isKeyCode(juce::KeyPress::leftKey))  dx = -kStep;
+    else if (key.isKeyCode(juce::KeyPress::rightKey)) dx =  kStep;
+    else if (key.isKeyCode(juce::KeyPress::upKey))    dy = -kStep;   // up → smaller morphY
+    else if (key.isKeyCode(juce::KeyPress::downKey))  dy =  kStep;   // down → larger morphY
+    else return false;
+
+    auto& apvts = proc_.getAPVTS();
+    auto* px = apvts.getParameter("morphX");
+    auto* py = apvts.getParameter("morphY");
+    if (px == nullptr || py == nullptr) return false;
+
+    const float newX = juce::jlimit(0.0f, 1.0f, px->getValue() + dx);
+    const float newY = juce::jlimit(0.0f, 1.0f, py->getValue() + dy);
+
+    // One discrete gesture per key press (begin / notify / end) so the host
+    // records a distinct automation point, matching a single mouse click-drag.
+    px->beginChangeGesture();
+    px->setValueNotifyingHost(newX);
+    px->endChangeGesture();
+    py->beginChangeGesture();
+    py->setValueNotifyingHost(newY);
+    py->endChangeGesture();
+
+    // FIX: mirror the APVTS write into the atomics — see updatePosition() for
+    // why setValueNotifyingHost alone doesn't reach morphX_/morphY_.
+    proc_.setMorphX(newX);
+    proc_.setMorphY(newY);
+
+    proc_.setMorphSource(0);  // XY mode
+    needsRepaint_ = true;
+    repaint();
+    return true;
+}
+
+std::unique_ptr<juce::AccessibilityHandler> MorphPad::createAccessibilityHandler()
+{
+    // R4: expose the morph position to assistive tech. A 2D pad can't map to a
+    // single linear value cleanly, so we report a custom value-string of the form
+    // "X 50%, Y 50%" via a read-only value interface (keyboard operability is
+    // already provided by keyPressed above). This lets screen-reader users hear
+    // the current morph location instead of just the control's name.
+    class MorphPadValueInterface : public juce::AccessibilityValueInterface
+    {
+    public:
+        explicit MorphPadValueInterface(MorphPad& owner) : owner_(owner) {}
+
+        bool isReadOnly() const override { return true; }
+        double getCurrentValue() const override
+        {
+            // Report the X axis as the nominal value (0-100) for AT that reads a
+            // numeric value; the full X/Y is in the value string below.
+            return juce::jlimit(0.0, 100.0, owner_.proc_.getMorphX() * 100.0);
+        }
+        void setValue(double) override {}   // read-only: value set via keyboard/mouse
+        juce::String getCurrentValueAsString() const override
+        {
+            const int pctX = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getMorphX()) * 100.0);
+            const int pctY = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getMorphY()) * 100.0);
+            return "X " + juce::String(pctX) + "%, Y " + juce::String(pctY) + "%";
+        }
+        void setValueAsString(const juce::String&) override {}
+        AccessibleValueRange getRange() const override
+        {
+            // AUDIT (pre-existing-build-unblock, 2026-06-25): construct MinAndMax
+            // explicitly. MSVC failed to resolve the prior nested brace-init
+            // `return { { 0.0, 100.0 }, 0.01 };` (C2039 'NormalisedRange' spew),
+            // blocking the full MorePhi build. Behaviour unchanged.
+            return { juce::AccessibilityValueInterface::AccessibleValueRange::MinAndMax{ 0.0, 100.0 }, 0.01 };
+        }
+
+    private:
+        MorphPad& owner_;
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorphPadValueInterface)
+    };
+
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this,
+        juce::AccessibilityRole::group,
+        juce::AccessibilityActions{},
+        juce::AccessibilityHandler::Interfaces { std::make_unique<MorphPadValueInterface>(*this) });
 }
 
 } // namespace more_phi

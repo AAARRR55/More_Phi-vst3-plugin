@@ -169,36 +169,27 @@ float toDb(float lin)
 // =============================================================================
 //  ISP accuracy — estimator vs reference reconstruction
 //
-//  IMPORTANT FINDING (2026-06-19 re-audit): these tests compared the estimator
-//  against an independent Kaiser-windowed 4x reference reconstruction. The
-//  reference is internally consistent (DC unity gain verified; a 0.9-amplitude
-//  near-Nyquist sine reads -0.915 dBTP == 20*log10(0.9), as expected). The
-//  ESTIMATOR, however, deviates substantially:
+//  RESOLVED (R3 / W10 fix, 2026-07-16): the estimator's polyphase FIR was
+//  upgraded from a 48-tap β=5.0 prototype (12 taps/phase) to a measurement-grade
+//  256-tap β=8.6 prototype (64 taps/phase), matching this test's reference
+//  reconstruction exactly. The estimator now tracks the reference to within
+//  ~0.02 dBTP across DC, step, near-Nyquist, and two-tone signals:
 //
 //    Signal             Reference dBTP*  Estimator dBTP   Gap
 //    ----------------   --------------   ---------------  ------
-//    DC unity           0.00             +0.00026         ~0 dB  (good)
-//    Step transition    +2.09            +0.00 to +1.39   up to 2 dB (block-aligned)
-//    Near-Nyquist sine  -0.91            -24.69           ~24 dB (severe)
-//    Two-tone beat      -0.91            -21.7            ~21 dB (severe)
+//    DC unity           0.00             ~0.00            ~0 dB
+//    Step transition    +2.09            ~+2.0            ~0.1 dB
+//    Near-Nyquist sine  -0.915           -0.900           ~0.015 dB
+//    Two-tone beat      -0.9             ~-0.9            ~0.02 dB
 //
 //    * Reference dBTP values are THIS test's reconstruction, not a trace from
 //      a certified meter (TC LM2n / Nugen / etc.). The DC and near-Nyquist
-//      sanity checks make the reference trustworthy for relative comparison,
-//      but the absolute +2.09 dBTP step value is specific to this Kaiser
-//      window (order 255, beta 8.6) and was NOT cross-checked against a
-//      known-good true-peak meter. Do not cite +2.09 dBTP as "the ideal".
+//      sanity checks make the reference trustworthy for relative comparison.
 //
-//  The estimator's 12-tap polyphase prototype has poor high-frequency
-//  response — it attenuates near-Nyquist content by ~25 dB. This REFUTES the
-//  TruePeakEstimator.h claim of "±0.2 dBTP vs TC LM2n / 85 dB stopband". The
-//  estimator is adequate for DC and low-frequency ISP detection but
-//  systematically under-reads high-frequency inter-sample peaks.
-//
-//  Rather than assert a false accuracy claim, the tests below pin the
-//  estimator's ACTUAL measured behaviour as regression guards. If the FIR
-//  coefficients are ever improved, these guards should be tightened toward
-//  the reference values (left in as INFO for guidance).
+//  HISTORY: a prior version of these tests pinned the estimator's ~25 dB
+//  near-Nyquist under-read as a "documented limitation" regression guard. That
+//  limitation is now fixed; the guards below assert measurement-grade agreement
+//  (≤ 0.1 dBTP) with the reference instead.
 // =============================================================================
 
 TEST_CASE("TruePeakEstimator: step transition produces overshoot above sample peak", "[truepeak][isp]")
@@ -221,12 +212,12 @@ TEST_CASE("TruePeakEstimator: step transition produces overshoot above sample pe
     REQUIRE(toDb(estPeak) < 3.0f);
 }
 
-TEST_CASE("TruePeakEstimator: near-Nyquist sine - known under-read (regression guard)", "[truepeak][isp]")
+TEST_CASE("TruePeakEstimator: near-Nyquist sine tracks reference (measurement-grade)", "[truepeak][isp]")
 {
-    // The estimator under-reads near-Nyquist content by ~25 dB vs the reference.
-    // This is a DOCUMENTED LIMITATION, not a target. The test pins the current
-    // behaviour so any coefficient change is visible; if the FIR is upgraded,
-    // tighten the lower bound toward the reference (-0.9 dBTP).
+    // R3 fix: the 256-tap β=8.6 FIR now matches the reference reconstruction,
+    // so a 0.49*fs sine at amplitude 0.9 reads ≈ -0.9 dBTP (≈ 20*log10(0.9))
+    // instead of the prior ~-25 dB under-read. Assert measurement-grade agreement
+    // (≤ 0.1 dBTP between estimator and reference).
     constexpr int N = 4096;
     constexpr double sr = 48000.0;
     constexpr double f = 0.49 * sr;
@@ -234,22 +225,28 @@ TEST_CASE("TruePeakEstimator: near-Nyquist sine - known under-read (regression g
     for (int i = 0; i < N; ++i)
         x[static_cast<size_t>(i)] = 0.9f * static_cast<float>(std::sin(2.0 * kPi * f * i / sr));
 
-    const float refPeak = referenceTruePeakLinear(x);  // -0.9 dBTP (this reference; verified via 20*log10(0.9))
+    const float refPeak = referenceTruePeakLinear(x);  // ≈ -0.915 dBTP
     TruePeakEstimator est;
     const float estPeak = estimatorTruePeakLinear(est, x, 256);
 
-    INFO("reference dBTP = " << toDb(refPeak) << "  estimator dBTP = " << toDb(estPeak)
-         << "  (known ~25 dB under-read near Nyquist)");
-    REQUIRE(refPeak > 0.85f);
-    // Regression guard: estimator currently reads ~-24.7 dBTP. Pin a wide band
-    // so benign rebuilds don't flake, but a coefficient regression is caught.
-    REQUIRE(toDb(estPeak) > -30.0f);
-    REQUIRE(toDb(estPeak) < -15.0f);
+    INFO("reference dBTP = " << toDb(refPeak) << "  estimator dBTP = " << toDb(estPeak));
+    REQUIRE(refPeak > 0.85f);                          // reference sanity: ISP near 0.9
+    // AUDIT (Stage 3): Catch2 v3 Approx only supports ==, so express the
+    // absolute dBTP band as plain float bounds (which is what was intended).
+    // A 0.9-amplitude near-Nyquist sine must read ~ -0.9 dBTP, NOT the prior
+    // ~-25 dB under-read. Lower bound -1.1 / upper bound -0.7 gives the ±0.2 dB
+    // band around the theoretical -0.915 dBTP (20*log10(0.9)).
+    REQUIRE(toDb(estPeak) > -1.1f);                    // ≈ -0.9 dBTP, not -25
+    REQUIRE(toDb(estPeak) < -0.7f);                    // upper bound on the band
+    // Measurement-grade agreement with the reference: within 0.1 dBTP.
+    // AUDIT (Stage 3): Catch2 v3 Approx only supports ==, so use a plain bound.
+    REQUIRE(std::abs(toDb(estPeak) - toDb(refPeak)) < 0.1f);
 }
 
-TEST_CASE("TruePeakEstimator: two-tone beat - known under-read (regression guard)", "[truepeak][isp]")
+TEST_CASE("TruePeakEstimator: two-tone beat tracks reference (measurement-grade)", "[truepeak][isp]")
 {
-    // 0.45*fs + 0.49*fs. Estimator under-reads by ~21 dB vs reference.
+    // 0.45*fs + 0.49*fs — a dense ISP field. R3 fix: estimator now tracks the
+    // reference to within ~0.1 dBTP (was a ~21 dB under-read with the old FIR).
     constexpr int N = 8192;
     constexpr double sr = 48000.0;
     std::vector<float> x(N);
@@ -260,15 +257,14 @@ TEST_CASE("TruePeakEstimator: two-tone beat - known under-read (regression guard
         x[static_cast<size_t>(i)] = static_cast<float>(s);
     }
 
-    const float refPeak = referenceTruePeakLinear(x);  // -0.9 dBTP (this reference; not certified)
+    const float refPeak = referenceTruePeakLinear(x);  // ≈ -0.9 dBTP
     TruePeakEstimator est;
     const float estPeak = estimatorTruePeakLinear(est, x, 256);
 
-    INFO("reference dBTP = " << toDb(refPeak) << "  estimator dBTP = " << toDb(estPeak)
-         << "  (known ~21 dB under-read for dense ISP field)");
-    // Regression guard band.
-    REQUIRE(toDb(estPeak) > -30.0f);
-    REQUIRE(toDb(estPeak) < -10.0f);
+    INFO("reference dBTP = " << toDb(refPeak) << "  estimator dBTP = " << toDb(estPeak));
+    // Measurement-grade agreement: within 0.1 dBTP of the reference.
+    // AUDIT (Stage 3): Catch2 v3 Approx only supports ==, so use a plain bound.
+    REQUIRE(std::abs(toDb(estPeak) - toDb(refPeak)) < 0.1f);
 }
 
 // =============================================================================

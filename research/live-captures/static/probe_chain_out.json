@@ -1,0 +1,439 @@
+{
+  "anchors": {
+    "poller": "0xead3e0",
+    "applier": "0xead930",
+    "dispatcher": "0x166ca90",
+    "data_stream_ctor": "0xfd7f30",
+    "state_helper_a": "0xead2e0",
+    "state_helper_b": "0xead360",
+    "unknown_shared": "0xeabdb0"
+  },
+  "master_assistant_users": [],
+  "callers_of_dispatcher": [
+    "0xd4b830",
+    "0x163dfa0"
+  ],
+  "callers_of_shared": [
+    "0xeab020"
+  ],
+  "callers_of_data_stream_ctor": [
+    "0xfbd0b0",
+    "0x1072860"
+  ],
+  "functions_calling_both_poller_applier": [
+    "0xeabdb0",
+    "0x166ca90"
+  ],
+  "top_candidates": [
+    {
+      "rva": "0xfbd0b0",
+      "score": 6,
+      "callers": 1,
+      "callees": 30,
+      "reasons": [
+        "calls_data_stream_ctor(analysis ingest)",
+        "1_caller(UI-entry?)"
+      ]
+    },
+    {
+      "rva": "0x1072860",
+      "score": 6,
+      "callers": 1,
+      "callees": 17,
+      "reasons": [
+        "calls_data_stream_ctor(analysis ingest)",
+        "1_caller(UI-entry?)"
+      ]
+    },
+    {
+      "rva": "0xeabdb0",
+      "score": 5,
+      "callers": 1,
+      "callees": 12,
+      "reasons": [
+        "calls_poller+applier",
+        "1_caller(UI-entry?)"
+      ]
+    },
+    {
+      "rva": "0xd4b830",
+      "score": 4,
+      "callers": 0,
+      "callees": 2,
+      "reasons": [
+        "calls_dispatcher(0x166CA90)",
+        "few_callers"
+      ]
+    },
+    {
+      "rva": "0xeab020",
+      "score": 4,
+      "callers": 1,
+      "callees": 9,
+      "reasons": [
+        "calls_shared_controller(0xEABDB0)",
+        "1_caller(UI-entry?)"
+      ]
+    },
+    {
+      "rva": "0x163dfa0",
+      "score": 4,
+      "callers": 0,
+      "callees": 1,
+      "reasons": [
+        "calls_dispatcher(0x166CA90)",
+        "few_callers"
+      ]
+    },
+    {
+      "rva": "0x166ca90",
+      "score": 4,
+      "callers": 2,
+      "callees": 5,
+      "reasons": [
+        "calls_poller+applier",
+        "few_callers"
+      ]
+    }
+  ],
+  "upward_chains": {
+    "poller": {
+      "anchor": "0xead3e0",
+      "paths": [
+        [
+          "0xead3e0",
+          "0xeabdb0"
+        ],
+        [
+          "0xead3e0",
+          "0x166ca90"
+        ],
+        [
+          "0xead3e0",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead3e0",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead3e0",
+          "0x166ca90",
+          "0x163dfa0"
+        ],
+        [
+          "0xead3e0",
+          "0xeabdb0",
+          "0xeab020",
+          "0xe9f4f0"
+        ]
+      ]
+    },
+    "applier": {
+      "anchor": "0xead930",
+      "paths": [
+        [
+          "0xead930",
+          "0xeabdb0"
+        ],
+        [
+          "0xead930",
+          "0x166ca90"
+        ],
+        [
+          "0xead930",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead930",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead930",
+          "0x166ca90",
+          "0x163dfa0"
+        ],
+        [
+          "0xead930",
+          "0xeabdb0",
+          "0xeab020",
+          "0xe9f4f0"
+        ]
+      ]
+    },
+    "dispatcher": {
+      "anchor": "0x166ca90",
+      "paths": [
+        [
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0x166ca90",
+          "0x163dfa0"
+        ]
+      ]
+    },
+    "data_stream_ctor": {
+      "anchor": "0xfd7f30",
+      "paths": [
+        [
+          "0xfd7f30",
+          "0xfbd0b0"
+        ],
+        [
+          "0xfd7f30",
+          "0x1072860"
+        ],
+        [
+          "0xfd7f30",
+          "0xfbd0b0",
+          "0x17ff6f0"
+        ],
+        [
+          "0xfd7f30",
+          "0x1072860",
+          "0x10790f0"
+        ],
+        [
+          "0xfd7f30",
+          "0xfbd0b0",
+          "0x17ff6f0",
+          "0x1052380"
+        ]
+      ]
+    },
+    "state_helper_a": {
+      "anchor": "0xead2e0",
+      "paths": [
+        [
+          "0xead2e0",
+          "0xead3e0"
+        ],
+        [
+          "0xead2e0",
+          "0xead930"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00"
+        ],
+        [
+          "0xead2e0",
+          "0xead3e0",
+          "0xeabdb0"
+        ],
+        [
+          "0xead2e0",
+          "0xead3e0",
+          "0x166ca90"
+        ],
+        [
+          "0xead2e0",
+          "0xead930",
+          "0xeabdb0"
+        ],
+        [
+          "0xead2e0",
+          "0xead930",
+          "0x166ca90"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x163d8d0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x166d790"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168c5e0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168cf40"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168e470"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x169cac0"
+        ],
+        [
+          "0xead2e0",
+          "0xead3e0",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead2e0",
+          "0xead3e0",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead2e0",
+          "0xead3e0",
+          "0x166ca90",
+          "0x163dfa0"
+        ],
+        [
+          "0xead2e0",
+          "0xead930",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead2e0",
+          "0xead930",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead2e0",
+          "0xead930",
+          "0x166ca90",
+          "0x163dfa0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x163d8d0",
+          "0xd2acb0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x163d8d0",
+          "0xd2fab0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x163d8d0",
+          "0x169d1a0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168c5e0",
+          "0x168a390"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168cf40",
+          "0x168b7d0"
+        ],
+        [
+          "0xead2e0",
+          "0x166aa00",
+          "0x168cf40",
+          "0x168c5e0"
+        ]
+      ]
+    },
+    "state_helper_b": {
+      "anchor": "0xead360",
+      "paths": [
+        [
+          "0xead360",
+          "0xead3e0"
+        ],
+        [
+          "0xead360",
+          "0xead930"
+        ],
+        [
+          "0xead360",
+          "0xead3e0",
+          "0xeabdb0"
+        ],
+        [
+          "0xead360",
+          "0xead3e0",
+          "0x166ca90"
+        ],
+        [
+          "0xead360",
+          "0xead930",
+          "0xeabdb0"
+        ],
+        [
+          "0xead360",
+          "0xead930",
+          "0x166ca90"
+        ],
+        [
+          "0xead360",
+          "0xead3e0",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead360",
+          "0xead3e0",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead360",
+          "0xead3e0",
+          "0x166ca90",
+          "0x163dfa0"
+        ],
+        [
+          "0xead360",
+          "0xead930",
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xead360",
+          "0xead930",
+          "0x166ca90",
+          "0xd4b830"
+        ],
+        [
+          "0xead360",
+          "0xead930",
+          "0x166ca90",
+          "0x163dfa0"
+        ]
+      ]
+    },
+    "unknown_shared": {
+      "anchor": "0xeabdb0",
+      "paths": [
+        [
+          "0xeabdb0",
+          "0xeab020"
+        ],
+        [
+          "0xeabdb0",
+          "0xeab020",
+          "0xe9f4f0"
+        ],
+        [
+          "0xeabdb0",
+          "0xeab020",
+          "0xe9f4f0",
+          "0xea4fd0"
+        ]
+      ]
+    }
+  }
+}

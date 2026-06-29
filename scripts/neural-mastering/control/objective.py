@@ -32,8 +32,22 @@ from target import TargetProfile
 # symmetric across all candidates and gives the "do nothing" option a fair shot
 # at winning when the audio is already close to target. Small weight so it only
 # breaks ties near the floor, never overrides a real correction.
-WEIGHTS = dict(loud=2.0, spec=1.0, crest=1.0, stereo=1.0, tp=5.0,
-               artifact=8.0, eqsmooth=0.5, prior=0.4, zero=0.15)
+#
+# REWEIGHT (pipeline rework): the original weighting made the spectral term the
+# dominant driver (a quiet input lands ~36 on L_spec vs ~2 on L_loud), so CMA-ES
+# minimized spectral-RMSE-via-EQ and ignored loudness — producing the EQ-abuse
+# labels that made restraint_v5 over-correct (eqGainMaeDb 3.70). The new weights:
+#   - loud DOMINANT (was 2.0 -> 6.0): loudness is the headline mastering axis.
+#   - spec reduced (1.0 -> 0.5): still rewarded but no longer drowns loudness.
+#   - eq_mag NEW (4.0): explicit penalty on the per-band EQ gain magnitude,
+#     measured in dB-equivalent via labels.eq_to_gain_db (delta*12). This is the
+#     term that directly attacks the eqGainMaeDb gate — a label with mean |EQ| of
+#     3.7 dB pays ~3.7 here, comparable to a 1-LU loudness miss. Forces the
+#     teacher to prefer loudness-delta + small corrective EQ over broad EQ boosts.
+#   - artifact reduced (8.0 -> 4.0): keep the harshness guardrail but it was
+#     oversized relative to the now-dominant loudness term.
+WEIGHTS = dict(loud=6.0, spec=0.5, crest=1.0, stereo=1.0, tp=5.0,
+               artifact=4.0, eqsmooth=0.5, eq_mag=4.0, prior=0.4, zero=0.15)
 
 
 def _to_interleaved(seg) -> np.ndarray:
@@ -93,6 +107,14 @@ def loss(delta72, seg, target: TargetProfile, host, x_t1=None, weights=None) -> 
     L["artifact"] = _artifact_proxy(rendered, host.sample_rate)
     eq = np.asarray(delta72[:32], dtype=np.float32)
     L["eqsmooth"] = float(np.mean(np.abs(np.diff(eq))) / 0.24) if len(eq) > 1 else 0.0
+    # L_eq_mag: per-band EQ gain magnitude in dB (delta * kMaxGainDB=12). This is
+    # the term that breaks EQ-abuse: a plan that boosts every band by delta 0.3
+    # pays mean(|0.3*12|)=3.6 here, directly mirroring the eqGainMaeDb release
+    # gate (<=1.5 dB). With weight 4.0 a 3.6 dB mean EQ costs 14.4 in the loss —
+    # more than a 1-LU loudness miss (6.0*(1/6)^2*... ) — so the teacher now
+    # prefers loudness-delta + small corrective EQ over a broad EQ boost.
+    from labels import eq_to_gain_db
+    L["eq_mag"] = float(np.mean([abs(eq_to_gain_db(float(v))) for v in eq])) if len(eq) else 0.0
     if x_t1 is not None:
         L["prior"] = float(np.mean((np.asarray(delta72, dtype=np.float32)
                                     - np.asarray(x_t1, dtype=np.float32)) ** 2))

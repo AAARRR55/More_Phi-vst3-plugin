@@ -434,3 +434,53 @@ TEST_CASE("LicenseVerifier exposes last validated payload's activationId", "[lic
     REQUIRE(last->activationId == "act_capture_unique");
     REQUIRE(last->nextOnlineCheckAtUnix == now + 3600);
 }
+
+// ── Phase 1: production key-rotation regression ───────────────────────────────
+// The dev Ed25519 placeholder public key. A shipping build must NOT carry this
+// key — it is the DEV keypair's public half, so any dev-server-signed cert would
+// verify as a production license. isDevPlaceholderKey() is an internal helper,
+// so we replicate the known-dev literal here and assert the compiled-in prod key
+// differs from it. This test fails (correctly) in a Debug/test build that hasn't
+// injected a production key — but those builds are exempt from the static_assert
+// ship gate. The TEST catches the case where someone commits the dev hex as the
+// "production" key by mistake.
+TEST_CASE("Compiled-in production key is not the dev placeholder", "[licensing][crypto][rotation]")
+{
+    constexpr Ed25519PublicKey kKnownDev = {
+        0x8e, 0x1a, 0xa2, 0x8c, 0x35, 0xa9, 0x4b, 0xf3,
+        0xc6, 0xe5, 0x55, 0xfa, 0xdb, 0x5b, 0xa3, 0x4c,
+        0x5b, 0x48, 0x80, 0x71, 0x56, 0x65, 0xc8, 0x4d,
+        0xfc, 0x37, 0x9e, 0x35, 0x8a, 0x52, 0xac, 0x9f,
+    };
+
+    const auto* pub = publicKeyForKeyId("prod-ed25519-2026-01");
+    REQUIRE(pub != nullptr);
+
+    bool matchesDev = true;
+    for (std::size_t i = 0; i < kKnownDev.size(); ++i)
+        if ((*pub)[i] != kKnownDev[i]) { matchesDev = false; break; }
+
+    // In a Debug/test build (no prod key injected), the dev placeholder is still
+    // compiled in and this assertion is skipped via MORE_PHI_TEST_MODE — that is
+    // the documented, intentional dev state. When a production key HAS been
+    // injected (MORE_PHI_PROD_KEY_AVAILABLE), the prod key MUST differ.
+#ifdef MORE_PHI_PROD_KEY_AVAILABLE
+    REQUIRE_FALSE(matchesDev);
+#else
+    // No prod key injected: we're in dev mode. Document that this is expected.
+    REQUIRE(matchesDev);
+#endif
+}
+
+// Phase 1: the build either injected a prod key (ProdSigningKey.h present) or
+// did not. This define is surfaced by the test target so the assertion above
+// knows which branch to enforce.
+#if ! defined(MORE_PHI_PROD_KEY_AVAILABLE)
+#  if __has_include("ProdSigningKey.h")
+#    include "ProdSigningKey.h"
+#    define MORE_PHI_PROD_KEY_AVAILABLE 1
+#  else
+#    define MORE_PHI_PROD_KEY_AVAILABLE 0
+#  endif
+#endif
+

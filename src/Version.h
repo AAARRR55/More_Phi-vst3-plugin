@@ -8,13 +8,13 @@
 
 namespace more_phi {
 
-// Current version - matching SnappySnap video evidence (3.3.0)
+// Current version
 constexpr int VERSION_MAJOR = 3;
-constexpr int VERSION_MINOR = 3;
-constexpr int VERSION_PATCH = 0;
+constexpr int VERSION_MINOR = 4;
+constexpr int VERSION_PATCH = 1;
 
-constexpr const char* VERSION_STRING = "3.3.0";
-constexpr const char* VERSION_CODENAME = "Synthesizer Edition";
+constexpr const char* VERSION_STRING = "3.4.1";
+constexpr const char* VERSION_CODENAME = "Commercial Hardening";
 
 // Storefront URL — where the "Get License Key" button sends the user. Override
 // at build time by defining MORE_PHI_STORE_URL (CMake -DMORE_PHI_STORE_URL=...).
@@ -61,6 +61,29 @@ struct ChangelogEntry
 };
 
 inline const ChangelogEntry CHANGELOG[] = {
+    {
+        "3.4.1",
+        "July 2026",
+        "Commercial Hardening\n"
+        "- ADD: AAX (Pro Tools) format — opt-in via -DMORE_PHI_BUILD_AAX=ON -DAAX_SDK_PATH=... (closes the Pro Tools market gap)\n"
+        "- SEC: License certificate now encrypted at rest (Windows DPAPI primary, machine-bound BlowFish fallback); legacy plaintext certs migrate transparently\n"
+        "- DSP: True-peak estimator upgraded to measurement-grade 256-tap polyphase FIR (β=8.6); ~25 dB near-Nyquist under-read eliminated, tracks reference to ~0.02 dBTP\n"
+        "- DSP: DC-offset removal added to the spectrum/crest/THD path\n"
+        "- UI: Accessibility value-interfaces on MorphPad (X/Y %) and SnapFader (position %); LLM status-label vocabulary split (plain label vs glyph-prefixed display)\n"
+    },
+    {
+        "3.4.0",
+        "June 2026",
+        "Production Readiness\n"
+        "- FIX: VST3 component version now propagated from CMake project version\n"
+        "- FIX: Production Ed25519 key rotation (build-config injection, dev key blocked at compile time)\n"
+        "- FIX: Editor lease RAII + unload-lifetime safety\n"
+        "- FIX: Real REST LLM hardening (retry/backoff, schema validation, token accounting)\n"
+        "- FIX: Honest AI labeling (online provider vs offline heuristic)\n"
+        "- FIX: State migration: versioned transform chain (rejects pre-3.0.0; 3.3.0→3.4.0 normalizes legacy 'More-Phi' snapshot names to canonical 'MorePhi')\n"
+        "- FIX: VST3 program/IUnitInfo preset surface\n"
+        "- DOC: Corrected false AAX claim (only VST3 + AU are built; AAX is not)\n"
+    },
     {
         "3.3.0",
         "February 2026",

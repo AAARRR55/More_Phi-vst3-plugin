@@ -10,6 +10,7 @@
 #include "InstanceIdentity.h"
 #include "InstanceRegistry.h"
 #include "Plugin/PluginProcessor.h"
+#include <future>
 #include "MCPToolsExtended.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
@@ -19,13 +20,16 @@
 #include "MIDI/MIDIRouter.h"
 #include "OzoneParameterMap.h"
 #include "ChainPlanExecutor.h"
+#include "RuleBasedMasteringResolver.h"
 #include "PluginProfileDB.h"
 #include "PluginSemanticMapper.h"
 #include "TrackAssistantStore.h"
 #include "MasteringCandidateScoring.h"
+#include "Agents/AgentRuntime.h"
+#include "SonicMasterDecisionDecoder.h"
 #include "AutomationControlPlane.h"
-#include "StandaloneMcp/IZotopeIPCAssistant.h"
-#include "StandaloneMcp/IZotopeIPCDiscovery.h"
+#include "StandaloneMcp/MorePhiIPCAssistant.h"
+#include "StandaloneMcp/MorePhiIPCDiscovery.h"
 #include "Dataset/OfflineBatchRenderer.h"
 #include "SemanticPluginProfile.h"
 #include <nlohmann/json.hpp>
@@ -36,6 +40,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -50,6 +55,10 @@
 namespace more_phi {
 
 using json = nlohmann::json;
+
+// Forward declaration — defined later in this TU. Sanitizer for meter reads
+// that may propagate NaN/Inf from uninitialized DSP stages.
+static double finiteOr(double value, double fallback) noexcept;
 
 // Static cache/executor instances for read-only tool acceleration and
 // background tool execution. These are keyed by generation token / job id
@@ -82,6 +91,274 @@ static json parseToolResponse(const juce::String& response)
     {
         return json{{"raw_response", response.toStdString()}};
     }
+}
+
+// DIAGNOSTIC (2026-06-26): helpers that turn the SonicMaster engine's structured
+// failure / status signals into JSON for the sonicmaster_decision and
+// mastering.neural_apply error paths. Previously every requestDecisionNow false
+// collapsed into one opaque string and the assistant had to confabulate a cause;
+// these let the tool report the ACTUAL gate that tripped. Used on both the
+// success path (echoed for parity) and the failure path of the decision tool.
+static const char* sonicmasterFailureState(more_phi::DecisionFailure f) noexcept
+{
+    switch (f)
+    {
+        case more_phi::DecisionFailure::None:               return "ok";
+        case more_phi::DecisionFailure::NotPrepared:        return "not_prepared";
+        case more_phi::DecisionFailure::InsufficientAudio:  return "insufficient_audio";
+        case more_phi::DecisionFailure::SilentInput:        return "silent_input";
+        case more_phi::DecisionFailure::InferenceRejected:  return "inference_rejected";
+        case more_phi::DecisionFailure::DecodeFailed:       return "decode_failed";
+        case more_phi::DecisionFailure::SafetyRejected:     return "safety_rejected";
+    }
+    return "unknown";
+}
+
+static const char* sonicmasterStatusString(more_phi::SonicMasterAnalysisEngine::Status s) noexcept
+{
+    using S = more_phi::SonicMasterAnalysisEngine::Status;
+    switch (s)
+    {
+        case S::Disabled:           return "disabled";
+        case S::CollectingAudio:    return "collecting_audio";
+        case S::Applied:            return "applied";
+        case S::AppliedNoAudioPath: return "applied_no_audio_path";
+        case S::AppliedPartial:     return "applied_partial";
+        case S::HeldLowConfidence:  return "held_low_confidence";
+        case S::ErrorAutoDisabled:  return "error_auto_disabled";
+    }
+    return "unknown";
+}
+
+// Build the live-measurements JSON block (genuine BS.1770-4 / true-peak / spectrum
+// telemetry). Factored so the FAILURE path can include it too — its
+// lufs_integrated / true_peak_dbtp immediately disambiguate "audio is playing and
+// is loud" from "no signal is reaching the plugin," which is exactly the
+// distinction the assistant was guessing at when it said "no fresh audio captured."
+//
+// AUDIT-FIX (F3.1, 2026-06-27): LUFSMeter / TruePeakEstimator initialse their
+// atomics to -infinity and only go finite once signal crosses the gates. The raw
+// values, emitted through nlohmann::json, serialise as `null` — so the assistant
+// previously received {"valid":true,"lufs_integrated":null,...} and could not
+// tell "engine attached, no signal yet" from "engine failed." Every other
+// metrics path in this file uses finiteOr(); this block was the lone exception.
+// Now every numeric field is finiteOr()-guarded, and a measured_finite flag
+// reports whether the loudness/true-peak readings are genuine (signal has
+// crossed the gates) vs. fallback floors.
+json MCPToolHandler::serializeMeasurementsForTests(
+    const more_phi::SonicMasterMeasurementSnapshot& m)
+{
+    json meas;
+    meas["valid"]            = m.valid;
+    meas["source"]           = "more_phi_auto_mastering_engine_live_meters";
+    meas["loudness_method"]  = "ITU-R_BS1770-4_gated_K_weighting";
+    meas["true_peak_method"] = "ITU-R_BS1770-4_4x_polyphase_oversampled";
+    if (m.valid)
+    {
+        // measured_finite: true only when the loudness + true-peak readings are
+        // genuine (signal crossed the gates). Falls to false for the post-prepare
+        // "engine attached, no signal yet" state, so the assistant can
+        // disambiguate without parsing fallback values.
+        const bool loudnessFinite = std::isfinite(m.lufsIntegrated)
+                                 && std::isfinite(m.truePeakDbtp);
+        meas["measured_finite"]   = loudnessFinite;
+        // Fallback floors mirror the heuristic-input convention (finiteOr at
+        // buildRuleBasedInputFromLiveMeters, ~line 199-201): -70 LUFS for
+        // unread loudness, -6 dBTP for unread true-peak, 0 elsewhere.
+        meas["lufs_integrated"]      = finiteOr(m.lufsIntegrated,  -70.0);
+        meas["lufs_short_term"]      = finiteOr(m.lufsShortTerm,   -70.0);
+        meas["lufs_momentary"]       = finiteOr(m.lufsMomentary,    -70.0);
+        meas["lra"]                  = finiteOr(m.lra,               0.0);
+        meas["true_peak_dbtp"]       = finiteOr(m.truePeakDbtp,      -6.0);
+        meas["spectral_centroid_hz"] = finiteOr(m.spectralCentroidHz, 0.0);
+        meas["spectral_tilt"]        = finiteOr(m.spectralTilt,       0.0);
+        meas["stereo_width"]         = finiteOr(m.stereoWidth,        0.0);
+        meas["correlation_mid"]      = finiteOr(m.correlationMid,     0.0);
+        meas["thd_percent"]          = finiteOr(m.thdPercent,         0.0);
+        meas["crest_factor_program"] = finiteOr(m.crestFactorProgram, 0.0);
+        meas["measurement_semantics"] = "genuine_input_measurement_NOT_model_estimate";
+    }
+    else
+    {
+        // Engine not attached: no numeric block at all, so the assistant never
+        // sees stale zeros masquerading as a flat-but-real reading.
+        meas["measured_finite"] = false;
+    }
+    return meas;
+}
+
+static json sonicmasterMeasurementsJson(const more_phi::SonicMasterMeasurementSnapshot& m)
+{
+    return MCPToolHandler::serializeMeasurementsForTests(m);
+}
+
+static json sonicmasterClosedLoopJson(const more_phi::SonicMasterAnalysisEngine::ClosedLoopState& cl)
+{
+    json clj;
+    clj["feedback_active"]          = cl.feedbackActive;
+    clj["last_applied_target_lufs"] = cl.lastAppliedTargetLufs;
+    clj["last_measured_lufs"]       = cl.lastMeasuredLufs;
+    clj["last_lufs_error"]          = cl.lastLufsError;  // + = too quiet
+    clj["next_target_lufs"]         = cl.nextTargetLufs;
+    clj["semantics"] = "closed_loop_lufs_servo_on_background_cycle";
+    return clj;
+}
+
+// FALLBACK (2026-06-27): build a RuleBasedMasteringInput from the AutoMasteringEngine's
+// live meters. Shared by mastering.analyze_rule_based (the explicit heuristic tool) and
+// sonicmaster_decision's opt-in heuristic fallback. Extracting this guarantees the
+// heuristic sees IDENTICAL input whether invoked directly or as a fallback — so the
+// fallback's plan is the same plan a direct heuristic call would produce. The key
+// difference from the neural path: this input carries the MEASURED lufsIntegrated /
+// truePeakDbTp, which the neural model literally cannot see (its input is peak-
+// normalized to -1 dBFS per AUDIT-7). That's why the heuristic can sensibly handle
+// already-hot material the neural model refuses.
+static RuleBasedMasteringInput buildRuleBasedInputFromLiveMeters(
+    MorePhiProcessor& p, float targetLufs, float intensity = 0.5f,
+    std::string_view targetCurve = "streaming")
+{
+    auto& ame = p.getAutoMasteringEngine();
+    RuleBasedMasteringInput input;
+    input.spectrum = [&]() {
+        RealtimeSpectrumAnalyzer::SpectrumSnapshot s;
+        std::ignore = ame.getSpectrumAnalyzer().getSnapshot(s);
+        return s;
+    }();
+    input.stereo = [&]() {
+        StereoFieldAnalyzer::StereoFieldSnapshot s;
+        std::ignore = ame.getStereoFieldAnalyzer().getSnapshot(s);
+        return s;
+    }();
+    input.lufsIntegrated = static_cast<float>(finiteOr(ame.getLUFSIntegrated(), -70.0));
+    input.lra            = static_cast<float>(finiteOr(ame.getLRA(), 0.0));
+    input.truePeakDbTp   = static_cast<float>(finiteOr(ame.getTruePeak_dBTP(), -6.0));
+    input.crestFactor    = static_cast<float>(finiteOr(
+        input.spectrum.frameIndex > 0 ? input.spectrum.crestFactorProgram : 0.0f, 0.0f));
+    input.intensity      = juce::jlimit(0.0f, 1.0f, intensity);
+    input.targetLufs     = targetLufs;
+    input.targetCurveName = targetCurve;
+    return input;
+}
+
+// Human-readable, actionable error string for the failure path. Combines the
+// structured failure reason with the timeout flag and capture diagnostics so the
+// assistant can relay a truthful next step instead of inventing one. The capture
+// percentage is taken against requiredFrames (the ~6s window), not the ring
+// capacity (which is 8s and wraps) — that's the number the user cares about.
+// Build the safety_rejection JSON block from the engine's last-rejection
+// snapshot. Surfaces the SPECIFIC NeuralMasteringValidationIssue(s) so the
+// assistant can give an honest, actionable next step instead of "rejected, try
+// again." Includes the candidate confidence + hard/soft classification so a
+// client can tell "retryable soft hold (low_confidence)" from "hard reject
+// (target_out_of_range — retrying the same audio won't help)."
+static json sonicmasterSafetyRejectionJson(
+    const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
+{
+    json r;
+    r["valid"]             = sr.valid;
+    r["primary_issue"]     = more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+    r["hard_reject"]       = sr.hardReject;
+    r["retryable"]         = sr.valid && !sr.hardReject;  // soft hold: audio/target change can flip it
+    r["candidate_confidence"] = sr.candidateConfidence;
+    json issuesArr = json::array();
+    for (std::size_t i = 0; i < sr.issueCount; ++i)
+        issuesArr.push_back(more_phi::neuralMasteringIssueKey(sr.issues[i]));
+    r["issues"] = issuesArr;
+    return r;
+}
+
+// Human-readable explanation of a specific safety issue, for the `error` prose.
+// Falls back to the generic message when no specific issue was recorded.
+static std::string sonicmasterSafetyIssueMessage(
+    const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
+{
+    if (!sr.valid) return "The decoded plan was rejected by the safety policy.";
+    const char* issue = more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+    const std::string conf = std::isfinite(sr.candidateConfidence)
+        ? " (model confidence " + std::to_string(sr.candidateConfidence) + ")" : "";
+    // Hand-written guidance per issue so the assistant doesn't have to infer it.
+    using I = more_phi::NeuralMasteringValidationIssue;
+    switch (sr.primaryIssue)
+    {
+        case I::LowConfidence:
+            return std::string("The model's confidence was below the safety floor") + conf +
+                   ". This is usually an out-of-distribution input (e.g. signal far "
+                   "from the training distribution). Retrying on DIFFERENT audio may "
+                   "help; retrying the same audio will not.";
+        case I::TargetOutOfRange:
+            return "The decoded EQ/loudness/stereo targets fell outside the sanity "
+                   "bounds. This is a hard reject — the model produced an unreasonable "
+                   "plan for this input. Try different audio or a different target_lufs.";
+        case I::DeltaOutOfRange:
+            return "The per-step delta from the last safe plan exceeded [-1,1]. Hard "
+                   "reject; retrying the same audio will not help.";
+        case I::NonFiniteValue:
+            return "The model emitted a non-finite value (NaN/Inf). This indicates a "
+                   "numerical failure on this input; retry, and if it persists the "
+                   "embedded model or the input gain-staging needs checking.";
+        case I::StalePlan:
+            return "The plan was stale by the time it reached validation (capture "
+                   "window too old). Soft hold — re-capture and retry.";
+        case I::Abstain:
+            return "The model explicitly abstained. Soft hold; try different audio.";
+        case I::ReviewOnly:
+            return "The plan was flagged review-only. Soft hold.";
+        case I::SchemaVersionMismatch:
+        case I::AudioCallbackRuntime:
+        case I::InvalidTimestamp:
+        case I::UnsupportedLayout:
+        case I::IllegalMask:
+        case I::HighRiskMask:
+            return std::string("Rejected (") + issue +
+                   "): an infrastructure/contract check failed. This is a hard reject "
+                   "and usually points to a build or wiring problem, not the audio.";
+        case I::MaxDeltaProjected:
+        case I::None:
+            return "The decoded plan was rejected by the safety policy.";
+    }
+    return "The decoded plan was rejected by the safety policy.";
+}
+
+static std::string sonicmasterFailureMessage(more_phi::DecisionFailure f, bool timedOut,
+                                             const more_phi::SonicMasterAnalysisEngine::CaptureDiagnostics& cd,
+                                             const more_phi::SonicMasterAnalysisEngine::LastSafetyRejection& sr)
+{
+    if (timedOut)
+        return "Inference did not complete within 5.0 s. The analysis thread may "
+               "hold the inference lock (preview cycle running), or the model is "
+               "overloaded. Retry; if it persists, disable the Neural Master preview "
+               "toggle so the background cycle stops contending for the lock.";
+    const auto req = cd.requiredFrames > 0 ? cd.requiredFrames : std::size_t { 1 };
+    const int pct = static_cast<int>(
+        std::min<std::uint64_t>(cd.capturedFrames, req) * 100.0 / static_cast<double>(req) + 0.5);
+    switch (f)
+    {
+        case more_phi::DecisionFailure::NotPrepared:
+            return "The SonicMaster ONNX model is not loaded in-process (ring/source "
+                   "unavailable). Rebuild with MORE_PHI_ENABLE_ONNX=ON.";
+        case more_phi::DecisionFailure::InsufficientAudio:
+            return "Captured " + std::to_string(pct) + "% of the ~6 s window needed "
+                   "for inference. Keep playback running continuously and retry in a "
+                   "few seconds — do NOT restart playback.";
+        case more_phi::DecisionFailure::SilentInput:
+            return "The captured audio is effectively silent (peak < 1e-15). Play "
+                   "actual program material; the model cannot analyse silence.";
+        case more_phi::DecisionFailure::InferenceRejected:
+            return "The ONNX model rejected the input (Run threw or returned no "
+                   "output). See last_inference_ms and engine_status; retry, and if "
+                   "it persists the embedded model may be corrupt.";
+        case more_phi::DecisionFailure::DecodeFailed:
+            return "The model produced output but it could not be decoded into a "
+                   "valid mastering plan (shape/contract mismatch).";
+        case more_phi::DecisionFailure::SafetyRejected:
+            // Delegate to the issue-specific explainer so the prose carries the
+            // ACTUAL reason (low_confidence vs target_out_of_range vs ...) instead
+            // of the old generic "confidence or sanity bounds" non-explanation.
+            return sonicmasterSafetyIssueMessage(sr);
+        case more_phi::DecisionFailure::None:
+            return "ok";
+    }
+    return "Unknown failure.";
 }
 
 static juce::var jsonToJuceVar(const json& value)
@@ -345,6 +622,7 @@ static juce::String suggestedActionForError(const juce::String& errorCode)
     // Verification failure modes (Phase 1 execution verification).
     if (lower == "value_drift")        return "The applied value differs from the request (the parameter may be discrete or clamped by the host); re-read the parameter and adjust.";
     if (lower == "out_of_range")       return "Clamp the value to the parameter's valid range and retry.";
+    if (lower == "parameter_index_out_of_range") return "The parameter index exceeds the hosted plugin's actual parameter count; use list_parameters to discover valid indices.";
     if (lower == "timeout")            return "Retry with a smaller batch or check the hosted plugin's responsiveness.";
     if (lower == "plugin_not_ready")   return "Wait for the hosted plugin to finish initializing, then retry.";
     return "Check the error details and retry; report if the error persists.";
@@ -364,7 +642,11 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
                                         params.getProperty("workflowRunId", "")).toString());
     const auto workflowStepId = juce::String(params.getProperty("workflow_step_id",
                                          params.getProperty("workflowStepId", "")).toString());
-    auto decision = runtime.permissions().evaluate(method, paramsJson, workflowRunId);
+    // AUDIT-FIX (L3-1, 2026-06-29): pass the caller's instance ID so evaluate()
+    // can store it on the ApprovalRequest for self-approval prevention.
+    const auto callerSessionId = juce::String(params.getProperty("instance_id",
+                                  params.getProperty("instanceId", "")).toString());
+    auto decision = runtime.permissions().evaluate(method, paramsJson, workflowRunId, callerSessionId);
     if (!decision.allowed)
     {
         decision.approval.predictedDiff = buildApprovalPredictedDiff(method, params, p);
@@ -955,7 +1237,16 @@ static bool restoreMorePhiControlsFromState(const json& state, MorePhiProcessor&
         auto* parameter = p.getAPVTS().getParameter(id);
         if (parameter == nullptr)
             continue;
-        parameter->setValueNotifyingHost(static_cast<float>(item.value("value", parameter->getValue())));
+        // AUDIT-FIX (VST3 gestures): a bulk state restore is a discrete
+        // programmatic edit per parameter, so bracket each write with
+        // begin/end gesture. This lets the host record the restore as proper
+        // automation touches rather than gesture-less notify calls. (Continuous
+        // morph streams elsewhere intentionally omit per-sample gestures per
+        // the VST3 spec.)
+        const float restored = static_cast<float>(item.value("value", parameter->getValue()));
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost(restored);
+        parameter->endChangeGesture();
     }
     return true;
 }
@@ -982,12 +1273,12 @@ static json rollbackAutomationTransaction(const juce::var& params, MorePhiProces
         std::vector<MorePhiProcessor::ParamCommand> commands;
         commands.reserve(valuesJson.size());
         // MCP-CONTROL-04: bound the rollback to the project's parameter ceiling
-        // (MAX_PARAMETERS=2048). A tampered/oversized ledger could otherwise queue
+        // (MAX_PARAMETERS=4096). A tampered/oversized ledger could otherwise queue
         // commands for non-existent param indices, and enqueueParameterBatch
         // rejects the ENTIRE batch if any index >= MAX_PARAMETERS — breaking the
         // whole rollback. (writeParameter still drops any index beyond the live
         // hosted-plugin count, so this is robustness, not memory-safety.)
-        constexpr int kMaxRollbackParamIndex = 2047;
+        constexpr int kMaxRollbackParamIndex = 4095;
         for (size_t i = 0; i < valuesJson.size() && static_cast<int>(i) <= kMaxRollbackParamIndex; ++i)
         {
             if (!valuesJson[i].is_number())
@@ -1158,7 +1449,9 @@ static juce::String handleControlPlaneTool(const juce::String& method,
     {
         const auto id = params.getProperty("approval_id",
                         params.getProperty("approvalId", "")).toString();
-        const bool ok = runtime.permissions().approve(id);
+        // AUDIT-FIX (L3-1, 2026-06-29): pass the instance ID as the approver session
+        // so approve() can reject self-approval (same session that created the request).
+        const bool ok = runtime.permissions().approve(id, identity.instanceId);
         if (ok)
         {
             runtime.events().publish(IntegrationEvent{
@@ -1556,14 +1849,22 @@ static json modelStatusToJson(MorePhiProcessor& processor)
 {
     auto& engine = processor.getAutoMasteringEngine();
     const bool genreLoaded = engine.isGenreClassifierModelLoaded();
+    // AUDIT-FIX (P15, 2026-06-29): surface whether the neural mastering ONNX
+    // model is available in-process. Previously the only signal was calling
+    // sonicmaster_decision and checking "available" — an expensive round-trip
+    // just to discover readiness. The SonicMaster engine's isAvailable()
+    // checks the ONNX runner or HTTP fallback.
+    const bool neuralMasteringAvailable = processor.getSonicMasterEngine().isAvailable();
 
     return {
+        {"neural_mastering_available", neuralMasteringAvailable},
         {"genre_classifier_loaded", genreLoaded},
         {"genre_classifier_backend", genreLoaded ? "loaded_backend" : "default_fallback"},
         {"genre_classifier_status", genreLoaded ? "model_loaded" : "default_fallback"},
         {"genre_classifier_inference", genreLoaded ? "available" : "unavailable"},
         {"limitations", json::array({
-            "genre classifier uses default fallback when no model is loaded"
+            "genre classifier uses default fallback when no model is loaded",
+            "neural mastering model is loudness-blind (peak-normalized input)"
         })}
     };
 }
@@ -1645,17 +1946,17 @@ static json currentMeasurementsToJson(MorePhiProcessor& processor)
     auto& engine = processor.getAutoMasteringEngine();
     json dynamics = json::array();
     for (int i = 0; i < 4; ++i)
-        dynamics.push_back(engine.getGainReductionDB(i));
+        dynamics.push_back(finiteOr(engine.getGainReductionDB(i), -300.0));
 
     return {
-        {"rms", processor.getRmsLevel()},
+        {"rms", finiteOr(processor.getRmsLevel(), -300.0)},
         {"queue_usage", processor.getCommandQueueUsage()},
-        {"lufs_momentary", engine.getLUFSMomentary()},
-        {"lufs_short_term", engine.getLUFSShortTerm()},
-        {"lufs_integrated", engine.getLUFSIntegrated()},
-        {"lra", engine.getLRA()},
-        {"true_peak_dbtp", engine.getTruePeak_dBTP()},
-        {"limiter_gr_db", engine.getLimiterGainReductionDB()},
+        {"lufs_momentary", finiteOr(engine.getLUFSMomentary(), -70.0)},
+        {"lufs_short_term", finiteOr(engine.getLUFSShortTerm(), -70.0)},
+        {"lufs_integrated", finiteOr(engine.getLUFSIntegrated(), -70.0)},
+        {"lra", finiteOr(engine.getLRA(), 0.0)},
+        {"true_peak_dbtp", finiteOr(engine.getTruePeak_dBTP(), -300.0)},
+        {"limiter_gr_db", finiteOr(engine.getLimiterGainReductionDB(), 0.0)},
         {"dynamics_gr_db", dynamics}
     };
 }
@@ -1709,7 +2010,8 @@ static json parameterFlushToJson(const MorePhiProcessor::ParameterCommandFlushRe
         {"plugin_unavailable", flush.pluginUnavailable},
         {"exclusive_access_timed_out", flush.exclusiveAccessTimedOut},
         {"retry_count", flush.retryCount},
-        {"waited_ms", flush.waitedMs}
+        {"waited_ms", flush.waitedMs},
+        {"out_of_range_count", flush.outOfRangeCount}
     };
 }
 
@@ -1719,7 +2021,10 @@ static json parameterFlushToJson(const MorePhiProcessor::ParameterCommandFlushRe
 // parameters apply within tolerance; discrete parameters may legitimately snap
 // to a step, which surfaces as a (non-fatal) value_drift status with a
 // corrective action instead of a silent mismatch.
-static constexpr float kVerificationDriftTolerance = 0.01f;
+// AUDIT-FIX 4.1: default drift tolerance for continuous parameters.
+// For discrete parameters the effective tolerance is tightened to 0.5 / numSteps
+// so a step-snap is correctly detected rather than silently passing.
+static constexpr float kVerificationDriftToleranceContinuous = 0.01f;
 
 struct VerificationCapture
 {
@@ -1738,15 +2043,22 @@ struct VerificationCapture
 };
 
 // Classifies a write outcome.
-//   applied  - the edit reached the parameter path (queue/resolve succeeded)
-//   drained  - it was actually applied to the underlying parameter this call
-//              (false when still pending in the realtime queue)
+//   applied          - the edit reached the parameter path (queue/resolve succeeded)
+//   drained          - it was actually applied to the underlying parameter this call
+//                      (false when still pending in the realtime queue)
 //   requestedValue / valueAfter - clamped normalized target and post-write read
-//   failureCode - error code when !applied (e.g. "queue_full")
+//   failureCode      - error code when !applied (e.g. "queue_full")
+//   isDiscrete       - when true, tolerance = max(0.5f / numSteps, 0.001f)
+//   numSteps         - used for discrete tolerance calculation
+//   morphOverwriteRisk - when true and value drifted, status is "morph_overwrite_risk"
+//                         instead of "value_drift" (AUDIT-FIX 4.5)
 static VerificationCapture classifyVerification(bool applied, bool drained,
                                                 float requestedValue, float valueAfter,
                                                 double executionTimeMs,
-                                                const juce::String& failureCode = {})
+                                                const juce::String& failureCode = {},
+                                                bool isDiscrete = false,
+                                                int numSteps = 0,
+                                                bool morphOverwriteRisk = false)
 {
     VerificationCapture v;
     v.requestedValue = requestedValue;
@@ -1767,15 +2079,75 @@ static VerificationCapture classifyVerification(bool applied, bool drained,
         v.correctiveAction = suggestedActionForError("pending_parameter_edits");
         return v;
     }
-    if (std::abs(valueAfter - requestedValue) > kVerificationDriftTolerance)
+
+    // AUDIT-FIX 4.1: discrete-aware tolerance — use half-step width for
+    // discrete parameters so a snap to the wrong step is detected.
+    float tolerance = kVerificationDriftToleranceContinuous;
+    if (isDiscrete && numSteps > 0)
     {
-        v.status = "value_drift";
-        v.errorReason = "applied_value_differs_from_requested";
-        v.correctiveAction = suggestedActionForError("value_drift");
+        tolerance = std::max(0.5f / static_cast<float>(numSteps), 0.001f);
+    }
+
+    if (std::abs(valueAfter - requestedValue) > tolerance)
+    {
+        // AUDIT-FIX 4.5: when morph overwrite risk is flagged, surface a
+        // distinct status so the AI can distinguish "my edit was overwritten
+        // by morph" from "the plugin rejected my value".
+        if (morphOverwriteRisk)
+        {
+            v.status = "morph_overwrite_risk";
+            v.errorReason = "morph_may_have_overwritten_edit";
+            v.correctiveAction = "Pause morph or increase live-edit hold threshold before re-applying the edit.";
+        }
+        else if (isDiscrete)
+        {
+            v.status = "value_drift_discrete";
+            v.errorReason = "discrete_parameter_snapped_to_different_step";
+            v.correctiveAction = suggestedActionForError("value_drift");
+        }
+        else
+        {
+            v.status = "value_drift";
+            v.errorReason = "applied_value_differs_from_requested";
+            v.correctiveAction = suggestedActionForError("value_drift");
+        }
         return v;
     }
     v.status = "success";
     return v;
+}
+
+// F4/AUDIT: the immediate post-flush readback (valueAfter) cannot detect a
+// morph overwrite that happens in the NEXT applyMorphAndParameters block —
+// morph runs every block after the drain and rewrites parameters once
+// liveEditHold_ releases. This sleeps one audio block's worth (~6ms, covering
+// 128 samples @48k plus headroom) then re-reads. If the value diverged from
+// what we wrote, morph overwrote it: downgrade to morph_overwrite_confirmed.
+// Returns true (with an updated VerificationCapture) only when a deferred
+// overwrite was actually detected; nullopt otherwise (caller keeps its result).
+static std::optional<VerificationCapture>
+deferredMorphOverwriteCheck(ParameterBridge& bridge, int id, float requestedValue,
+                            bool isDiscrete, int numSteps)
+{
+    // ponytail: bounded single sleep. A full deferred-readback subsystem is
+    // unwarranted for a synchronous MCP tool that must return promptly.
+    juce::Thread::sleep(6);
+    const float valueDeferred = bridge.getParameterNormalized(id);
+    float tolerance = kVerificationDriftToleranceContinuous;
+    if (isDiscrete && numSteps > 0)
+        tolerance = std::max(0.5f / static_cast<float>(numSteps), 0.001f);
+    if (std::abs(valueDeferred - requestedValue) > tolerance)
+    {
+        VerificationCapture v;
+        v.requestedValue = requestedValue;
+        v.valueAfter = valueDeferred;
+        v.status = "morph_overwrite_confirmed";
+        v.errorReason = "morph_overwrote_edit_after_one_block";
+        v.correctiveAction = "Pause morph (or move morph position away from a "
+                             "snapshot boundary) before re-applying this edit.";
+        return v;
+    }
+    return std::nullopt;
 }
 
 static json verificationToJson(const VerificationCapture& v)
@@ -1889,38 +2261,259 @@ static json parseSchema(const char* schemaText)
     }
 }
 
+// ── Per-tool input-schema validation (AUDIT Q9 fix, 2026-06-27) ───────────────
+// The tool tables advertise JSON schemas in tools/list but handle() previously
+// routed params straight to each handler's ad-hoc checks. This gate enforces
+// the advertised contract (required keys, per-property type, enum, min/max)
+// uniformly before dispatch. It intentionally ALLOWS unknown/extra properties —
+// no schema declares additionalProperties:false, and alias keys like
+// parameter_id/parameterId/id must keep working. Returns nullptr for methods
+// with no schema table entry (fail-open → existing unknown_method path).
+//
+// ponytail: subset validator only — implements exactly what the in-tree tool
+// schemas use (type/required/enum/minimum/maximum/properties/items), not a
+// full JSON-Schema engine. Upgrade path: pull in a real validator if a schema
+// ever needs oneOf/pattern/exclusiveMinimum etc.
+
+// juce::var lacks an isNumber(); this covers int/int64/double.
+static bool varIsNumber(const juce::var& v)
+{
+    return v.isDouble() || v.isInt() || v.isInt64();
+}
+
+static bool validateVarAgainstSchema(const juce::var& value, const json& schema,
+                                     juce::String& outError);
+
+static bool validateProperty(const juce::var& value, const json& propSchema,
+                             juce::String& outError)
+{
+    const auto tIt = propSchema.find("type");
+    if (tIt == propSchema.end() || ! tIt->is_string())
+        return true; // no type constraint → accept anything
+
+    const std::string type = tIt->get<std::string>();
+
+    if (type == "object")
+    {
+        if (! value.isObject())
+        {
+            outError = "expected object";
+            return false;
+        }
+        return validateVarAgainstSchema(value, propSchema, outError);
+    }
+    if (type == "array")
+    {
+        if (! value.isArray())
+        {
+            outError = "expected array";
+            return false;
+        }
+        const auto itemsIt = propSchema.find("items");
+        if (itemsIt != propSchema.end() && itemsIt->is_object())
+        {
+            juce::Array<juce::var>* arr = value.getArray();
+            for (int i = 0; i < arr->size(); ++i)
+            {
+                juce::String e;
+                if (! validateProperty((*arr)[i], *itemsIt, e))
+                {
+                    outError = "array[" + juce::String(i) + "]: " + e;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    if (type == "string")
+    {
+        if (! value.isString())
+        {
+            outError = "expected string";
+            return false;
+        }
+    }
+    else if (type == "number")
+    {
+        // juce::var quirk: an integer literal still satisfies "number".
+        if (! varIsNumber(value))
+        {
+            outError = "expected number";
+            return false;
+        }
+    }
+    else if (type == "integer")
+    {
+        if (! (value.isInt() || value.isInt64()))
+        {
+            outError = "expected integer";
+            return false;
+        }
+    }
+    else if (type == "boolean")
+    {
+        if (! value.isBool())
+        {
+            outError = "expected boolean";
+            return false;
+        }
+    }
+
+    // enum constraint. Handles BOTH string enums ("mode":["fast","full"]) and
+    // numeric enums ("resolution":[32,64,128,256]). The prior version only
+    // matched string entries, so every tool with a numeric enum (e.g.
+    // analysis.get_spectrum's resolution) was rejected at the schema gate and
+    // never reached its handler — surfaced as a missing "success" field.
+    const auto enumIt = propSchema.find("enum");
+    if (enumIt != propSchema.end() && enumIt->is_array())
+    {
+        bool matched = false;
+        for (const auto& allowed : *enumIt)
+        {
+            if (allowed.is_string())
+            {
+                if (value.isString()
+                    && juce::String(allowed.get<std::string>()) == value.toString())
+                {
+                    matched = true;
+                    break;
+                }
+            }
+            else if (allowed.is_number() && varIsNumber(value)
+                     && allowed.get<double>() == static_cast<double>(value))
+            {
+                matched = true;
+                break;
+            }
+        }
+        if (! matched)
+        {
+            outError = "value '" + value.toString() + "' not in enum";
+            return false;
+        }
+    }
+
+    // minimum / maximum (numeric)
+    if (varIsNumber(value))
+    {
+        const auto minIt = propSchema.find("minimum");
+        if (minIt != propSchema.end() && minIt->is_number()
+            && static_cast<double>(value) < minIt->get<double>())
+        {
+            outError = "value below minimum";
+            return false;
+        }
+        const auto maxIt = propSchema.find("maximum");
+        if (maxIt != propSchema.end() && maxIt->is_number()
+            && static_cast<double>(value) > maxIt->get<double>())
+        {
+            outError = "value above maximum";
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool validateVarAgainstSchema(const juce::var& value, const json& schema,
+                                     juce::String& outError)
+{
+    // Top-level schema should be an object schema.
+    const auto tIt = schema.find("type");
+    if (tIt != schema.end() && tIt->is_string() && tIt->get<std::string>() == "object")
+    {
+        // An empty/null juce::var (the common "no params" call, e.g.
+        // get_plugin_info / sonicmaster_decision with no arguments) is treated
+        // as an empty object: it satisfies any object schema that declares no
+        // required keys. Matches the pre-gate dispatch behavior where handlers
+        // received juce::var() and treated it as {}.
+        const bool isEmpty = value.isVoid()
+                             || (value.isObject() && value.getDynamicObject() == nullptr);
+        if (! value.isObject() && ! isEmpty)
+        {
+            outError = "params must be an object";
+            return false;
+        }
+        // required[]
+        const auto reqIt = schema.find("required");
+        if (reqIt != schema.end() && reqIt->is_array())
+        {
+            auto* obj = isEmpty ? nullptr : value.getDynamicObject();
+            for (const auto& key : *reqIt)
+            {
+                if (! (obj != nullptr && obj->hasProperty(juce::String(key.get<std::string>()))))
+                {
+                    outError = "missing required parameter: " + juce::String(key.get<std::string>());
+                    return false;
+                }
+            }
+        }
+        // per-property checks (extra properties intentionally allowed; empty params
+        // have no properties to check)
+        const auto propsIt = schema.find("properties");
+        if (propsIt != schema.end() && propsIt->is_object() && ! isEmpty)
+        {
+            auto* obj = value.getDynamicObject();
+            if (obj != nullptr)
+            {
+                for (const auto& [name, propSchema] : propsIt->items())
+                {
+                    const juce::Identifier id(name);
+                    if (! obj->hasProperty(id))
+                        continue;
+                    juce::String e;
+                    if (! validateProperty(obj->getProperty(id), propSchema, e))
+                    {
+                        outError = juce::String(name) + ": " + e;
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+// Lazily-built name → parsed inputSchema map. handle() is MCP-thread; the
+// std::call_once build is one-time and message-thread-light.
+// NOTE: definition is moved below kCoreTools/kExtendedTools declarations to
+// avoid a forward-reference to an array of unknown size.
+static const json* inputSchemaFor(const juce::String& method);
+
 static const ToolDefinition kCoreTools[] = {
     {"heartbeat", "Liveness probe. Requires authentication but does NOT consume a rate-limit slot, so an idle client can keep the connection alive without starving tool traffic. Returns server time, uptime, queue depth, connected clients, and health.", R"({"type":"object","properties":{"client_clock_ms":{"type":"integer","description":"Optional client-side epoch millis for RTT estimation."}}})"},
     {"get_plugin_info", "Return More-Phi and hosted plugin identity information.", R"({"type":"object","properties":{}})"},
-    {"list_parameters", "List hosted plugin parameters with stable IDs and normalized values.", R"({"type":"object","properties":{}})"},
-    {"get_parameter", "Read a hosted plugin parameter by stableId, index, or exact name.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
-    {"set_parameter", "Set one hosted plugin parameter by stableId, index, or exact name using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
+    {"list_parameters", "List HOSTED PLUGIN parameters with stable IDs and normalized values. For More-Phi's own controls, use more_phi.parameters.", R"({"type":"object","properties":{}})"},
+    {"get_parameter", "Read a HOSTED PLUGIN parameter by stableId, index, or exact name. For More-Phi's own controls, use more_phi.get_parameter.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
+    {"set_parameter", "Set one HOSTED PLUGIN parameter by stableId, index, or exact name using the realtime-safe queue and immediate assistant flush. IMPORTANT: this changes the HOSTED VST3 plugin's parameters, NOT More-Phi's own controls. To change More-Phi's internal parameters (morph position, physics mode, cpuSaver, etc.), use more_phi.set_parameter instead.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
     {"set_parameters_batch", "Set multiple hosted plugin parameters using the realtime-safe queue and immediate assistant flush.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}},"params":{"type":"array","items":{"type":"object"}}}})", kVerifiedWriteOutputSchema},
+    {"sweep_parameter", "Autonomously sweep ONE hosted-plugin parameter across a normalized [from,to] range in `steps` increments, capturing live measurements (LUFS-I/S/M, LRA, true-peak dBTP, spectral centroid/tilt, stereo width/correlation, THD%, program crest factor) after each step. This is the ONLY tool that performs a value-space sweep on the LIVE hosted plugin; it reuses the verified write path (resolve -> command queue -> drain -> ParameterBridge -> readback) for every step. Each step enqueues a set_parameter value, flushes, waits capture_ms, then reads getLiveMeasurements(). Returns an array of {step, value, measurements}. Note: this is a slow, audio-driven tool — the user must have audio playing through the track for the measurements to be meaningful.", R"({"type":"object","properties":{"parameter":{"description":"stableId, index, or exact name"},"index":{"type":"integer"},"stableId":{"type":"string"},"name":{"type":"string"},"from":{"type":"number","minimum":0,"maximum":1,"default":0},"to":{"type":"number","minimum":0,"maximum":1,"default":1},"steps":{"type":"integer","minimum":2,"maximum":64,"default":5},"capture_ms":{"type":"integer","minimum":10,"maximum":5000,"default":250}},"required":["from","to"]})", kVerifiedWriteOutputSchema},
     {"capture_snapshot", "Capture the current hosted parameter state into a More-Phi snapshot slot.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"includeState":{"type":"boolean","default":true}},"required":["slot"]})"},
     {"recall_snapshot", "Recall a More-Phi snapshot through the realtime-safe queue.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"mode":{"type":"string","enum":["fast","full"]}},"required":["slot"]})"},
     {"set_morph_position", "Set More-Phi morph pad/fader state.", R"({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"fader":{"type":"number"},"source":{"type":"string","enum":["xy","xypad","fader"]}}})"},
     {"get_morph_state", "Return More-Phi morph pad/fader state.", R"({"type":"object","properties":{}})"},
     {"more_phi.parameters", "List More-Phi's own APVTS runtime controls with normalized values.", R"({"type":"object","properties":{}})"},
     {"more_phi.get_parameter", "Read a More-Phi APVTS runtime control by parameter_id, index, or exact name.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"}}})"},
-    {"more_phi.set_parameter", "Set one More-Phi APVTS runtime control by normalized value.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
+    {"more_phi.set_parameter", "Set one More-Phi APVTS runtime control by normalized value. IMPORTANT: this changes More-Phi's OWN internal parameters (morph position, physics mode, cpuSaver, etc.), NOT the hosted VST3 plugin's parameters. To change the hosted plugin use set_parameter or hosted_plugin.set_parameter instead.", R"({"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})", kVerifiedWriteOutputSchema},
     {"more_phi.set_parameters", "Set multiple More-Phi APVTS runtime controls by normalized value.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object","properties":{"parameter_id":{"type":"string"},"parameterId":{"type":"string"},"id":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}}}},"params":{"type":"array","items":{"type":"object"}}}})", kVerifiedWriteOutputSchema},
     {"run_self_test", "Run a deterministic local More-Phi self-test without waiting for an external LLM.", R"({"type":"object","properties":{"suite":{"type":"string","enum":["quick","snapshot","full"],"default":"quick"}}})"},
     {"get_mastering_state", "Return current local mastering meters and hosted Ozone status.", R"({"type":"object","properties":{}})"},
     {"ozone.audit_parameters", "Discover Ozone parameter indices from the current hosted plugin and optionally apply the map.", R"({"type":"object","properties":{"apply":{"type":"boolean","default":false}}})"},
-    {"apply_mastering_plan", "Generate and apply a mastering plan from compact analysis metrics.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
-    {"izotope_ipc_attach", "Attach read-only to a named iZotope IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
-    {"izotope_ipc_detach", "Detach from the currently mapped iZotope IPC segment.", R"({"type":"object","properties":{}})"},
-    {"izotope_ipc_status", "Report iZotope IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
-    {"izotope_ipc_snapshot", "Read a bounded byte range from the attached IPC segment and report candidate IZOT frames.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":1024},"max_frames":{"type":"integer","minimum":0,"default":16}}})"},
-    {"izotope_ipc_dump", "Write a bounded raw byte range from the attached IPC segment to a local file.", R"({"type":"object","properties":{"output_path":{"type":"string"},"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":65536}},"required":["output_path"]})"},
-    {"izotope_ipc_capture", "Sample a bounded IPC memory window and record byte changes for Assistant troubleshooting.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":4096},"duration_ms":{"type":"integer","minimum":0,"default":2000},"interval_ms":{"type":"integer","minimum":1,"default":25},"max_changes":{"type":"integer","minimum":1,"default":64},"max_ranges_per_change":{"type":"integer","minimum":1,"default":64},"max_frames":{"type":"integer","minimum":0,"default":16},"baseline_base64":{"type":"string"},"output_path":{"type":"string"},"include_changed_bytes":{"type":"boolean","default":false}}})"},
-    {"ozone_run_assistant", "Inject an AssistantRequest into the manifest-defined iZotope IPC ring and wait for AssistantResult parameter decisions.", R"({"type":"object","properties":{"schema_path":{"type":"string"},"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"ozone_instance_id":{"type":"integer","minimum":0},"plugin_name_query":{"type":"string","default":"Ozone"},"timeout_ms":{"type":"integer","minimum":0,"default":10000},"poll_interval_ms":{"type":"integer","minimum":1,"default":10},"observer_id":{"type":"integer","minimum":0,"default":3735928559},"allow_unsafe_write":{"type":"boolean","default":false},"apply_result":{"type":"boolean","default":false}},"required":["allow_unsafe_write"]})"},
+    {"apply_mastering_plan", "Generate and apply a HEURISTIC mastering plan from compact analysis metrics. AUDIT-FIX-4: this drives BOTH More-Phi's internal chain AND (if ozone.audit_parameters has populated the map) the hosted Ozone plugin's parameters. The hosted-plugin writes are inert until audit_parameters(apply=true) has run against a loaded Ozone instance — call ozone.audit_parameters first if you intend to master through Ozone.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+	    {"sonicmaster_decision", "Run the neural mastering model on the last ~6s of captured audio and return the decoded mastering decision (EQ gains, target LUFS, true-peak ceiling, 3-band compressor, stereo width, limiter, character) WITHOUT applying it. Uses the embedded ONNX model IN-PROCESS as the primary path (no server needed once the plugin is built with MORE_PHI_ENABLE_ONNX); the local Python HTTP inference server at 127.0.0.1:8765 is a fallback for when the ONNX model can't load. Use this as the PRIMARY source of mastering decisions; fall back to apply_mastering_plan (heuristic) only if it errors or is unavailable. The user should play audio for ~6s before calling. CRITICAL NOTE (loudness-blind model): The ONNX model input is peak-normalized to -1 dBFS before inference. The model CANNOT measure absolute input loudness. The 'lufs' value in projected_plan is the TARGET loudness the model recommends, not a measurement of the input. For genuine input loudness, always use live_measurements.lufs_integrated which reports BS.1770-4 gated integrated loudness. NOTE (target_lufs): target_lufs is the mastering TARGET (honored at decode time as an override of the model's recommendation), NOT a measurement of the input's loudness — the ~6s window is peak-normalized, so the model cannot infer absolute LUFS; use live_measurements for a real ITU-R BS.1770 loudness reading. NOTE (live_measurements): the response includes a live_measurements block with genuine ITU-R BS.1770-4 LUFS, true-peak, LRA, spectral centroid, spectral tilt, stereo width, mid-correlation, THD%, and program crest factor from the engine's live meters. These are MEASUREMENTS (not model estimates). NOTE (apply target): when applied via mastering.neural_apply or the background cycle, the decision drives the HOSTED plugin's parameters (EQ/dynamics/stereo/maximizer) through OzonePlanApplicator. More-Phi's internal mastering chain is dormant by design. Check mapping_status.mapped_slot_count and mapping_status.ozone_mapped to confirm the hosted plugin's parameters are mapped — a plan with zero mapped slots applies nothing to the hosted plugin. NOTE (apply_limiter_ceiling): opt-in bool; when true, the decoded true-peak ceiling is honoured on apply, hard-clamped to the streaming-safe -1.0 dBTP. Default false (limiter is high-risk). NOTE (fallback_to_heuristic): bool, default true. When true AND the neural model REFUSES (safety_rejected/low_confidence/target_out_of_range — common on already-loud or out-of-distribution material, since the model is loudness-blind), the tool automatically runs the measurement-driven RuleBasedMasteringResolver (which DOES see the measured input LUFS) and APPLIES its plan, returning a success-shaped result with path='heuristic_fallback' and the original neural_refusal_reason preserved. Default true because a measurement-driven heuristic plan is always better than a flat failure on material the model cannot assess. The result's top-level `path` field reports which path ran: 'neural' (model produced the plan) or 'heuristic_fallback' (model refused, heuristic took over). Set false to see the raw model refusal instead of the automatic fallback. fallback_target_lufs (default -14) sets the heuristic's loudness target independently of target_lufs.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false},"fallback_to_heuristic":{"type":"boolean","default":true},"fallback_target_lufs":{"type":"number","default":-14.0,"minimum":-23,"maximum":-8}}})"},
+    {"mastering.neural_apply", "One-click neural Master Assistant: run the ONNX decision on the last ~6s of captured audio AND apply it to the hosted plugin in a single call. Composes requestDecisionNow + applyValidatedPlan. Returns applied=true with the per-slot breakdown (enqueued/skipped/unmapped) via mapping_status. This is the COMMIT door — sonicmaster_decision stays decision-only for preview; this writes hosted-plugin parameters. Requires a hosted plugin whose parameters are mapped (check mapping_status.ozone_mapped); if no plugin is hosted or the map is all-stubs, the apply is a no-op and the response explains why. Params: target_lufs (float, default -14, overrides the model's loudness recommendation), apply_limiter_ceiling (bool, default false). The user should play audio for ~6s before calling.", R"({"type":"object","properties":{"target_lufs":{"type":"number","default":-14.0,"minimum":-30,"maximum":-6},"apply_limiter_ceiling":{"type":"boolean","default":false}}})"},
+    {"morephi_ipc_attach", "Attach read-only to a named IPC shared-memory segment.", R"({"type":"object","properties":{"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"mapped_size_bytes":{"type":"integer","minimum":1,"default":4194304}}})"},
+    {"morephi_ipc_detach", "Detach from the currently mapped IPC segment.", R"({"type":"object","properties":{}})"},
+    {"morephi_ipc_status", "Report IPC attachment state and last attach error.", R"({"type":"object","properties":{}})"},
+    {"morephi_ipc_snapshot", "Read a bounded byte range from the attached IPC segment and report candidate MORP frames.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":1024},"max_frames":{"type":"integer","minimum":0,"default":16}}})"},
+    {"morephi_ipc_dump", "Write a bounded raw byte range from the attached IPC segment to a local file.", R"({"type":"object","properties":{"output_path":{"type":"string"},"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":65536}},"required":["output_path"]})"},
+    {"morephi_ipc_capture", "Sample a bounded IPC memory window and record byte changes for Assistant troubleshooting.", R"({"type":"object","properties":{"offset":{"type":"integer","minimum":0,"default":0},"size_bytes":{"type":"integer","minimum":1,"default":4096},"duration_ms":{"type":"integer","minimum":0,"default":2000},"interval_ms":{"type":"integer","minimum":1,"default":25},"max_changes":{"type":"integer","minimum":1,"default":64},"max_ranges_per_change":{"type":"integer","minimum":1,"default":64},"max_frames":{"type":"integer","minimum":0,"default":16},"baseline_base64":{"type":"string"},"output_path":{"type":"string"},"include_changed_bytes":{"type":"boolean","default":false}}})"},
+    {"morephi_ipc_run_assistant", "Inject an AssistantRequest into the manifest-defined IPC ring and wait for AssistantResult parameter decisions.", R"({"type":"object","properties":{"schema_path":{"type":"string"},"segment_name":{"type":"string"},"daw_process_id":{"type":"integer","minimum":0},"instance_id":{"type":"integer","minimum":0},"plugin_name_query":{"type":"string","default":""},"timeout_ms":{"type":"integer","minimum":0,"default":10000},"poll_interval_ms":{"type":"integer","minimum":1,"default":10},"observer_id":{"type":"integer","minimum":0,"default":3735928559},"allow_unsafe_write":{"type":"boolean","default":false},"apply_result":{"type":"boolean","default":false}},"required":["allow_unsafe_write"]})"},
     {"hosted_plugin.scan", "Inspect a VST3 plugin path and return the discoverable plugin description.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
     {"hosted_plugin.load", "Load a hosted VST3 plugin from an explicit path.", R"({"type":"object","properties":{"path":{"type":"string"},"plugin_path":{"type":"string"}}})"},
     {"hosted_plugin.info", "Alias for get_plugin_info.", R"({"type":"object","properties":{}})"},
     {"hosted_plugin.parameters", "Alias for list_parameters.", R"({"type":"object","properties":{}})"},
-    {"hosted_plugin.set_parameter", "Alias for set_parameter.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})"},
-    {"hosted_plugin.set_parameters", "Alias for set_parameters_batch.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}}}})"},
+    {"hosted_plugin.set_parameter", "Set one HOSTED PLUGIN parameter. Same as set_parameter — changes the loaded VST3 plugin, NOT More-Phi's own internal controls. For More-Phi controls use more_phi.set_parameter.", R"({"type":"object","properties":{"stableId":{"type":"string"},"index":{"type":"integer"},"name":{"type":"string"},"value":{"type":"number"}},"required":["value"]})"},
+    {"hosted_plugin.set_parameters", "Set multiple HOSTED PLUGIN parameters. Same as set_parameters_batch — changes the loaded VST3 plugin, NOT More-Phi's own internal controls.", R"({"type":"object","properties":{"parameters":{"type":"array","items":{"type":"object"}}}})"},
     {"hosted_plugin.capture_state", "Capture hosted plugin parameter state, optionally into a snapshot slot.", R"({"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":11},"include_values":{"type":"boolean","default":false},"includeState":{"type":"boolean","default":true}}})"},
     {"diagnose_parameter_pipeline", "Diagnose the AI-to-hosted-plugin parameter pipeline. Reports tool resolution, queue health, plugin availability, flush readiness, restore state, morph hold counts, and snapshot occupancy.", R"({"type":"object","properties":{"index":{"type":"integer","description":"Optional parameter index to check live-edit hold state for"}}})"},
     {"analysis.get_summary", "Return compact More-Phi-owned analysis and metering data.", R"({"type":"object","properties":{}})"},
@@ -1930,6 +2523,7 @@ static const ToolDefinition kCoreTools[] = {
     {"analysis.compare_render", "Compare two compact analysis summaries or compare a provided summary to current meters.", R"({"type":"object","properties":{"before":{"type":"object"},"after":{"type":"object"}}})"},
     {"mastering.plan_preview", "Generate a mastering plan without applying it.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
     {"mastering.apply_plan", "Alias for apply_mastering_plan.", R"({"type":"object","properties":{"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
+    {"mastering.analyze_rule_based", "Generate a deterministic mastering plan from live audio measurements (no training data required).", R"({"type":"object","properties":{"intensity":{"type":"number","minimum":0,"maximum":1,"default":0.5},"target_lufs":{"type":"number","default":-14},"target_curve":{"type":"string","default":"streaming"},"apply":{"type":"boolean","default":false}}})"},
     {"mastering.render_batch", "Create dry-run mastering candidates or start an offline file-backed hosted-plugin render job.", R"({"type":"object","properties":{"candidate_count":{"type":"integer","default":3},"dry_run":{"type":"boolean","default":true},"input_path":{"type":"string"},"output_path":{"type":"string"},"plugin_path":{"type":"string"},"allow_passthrough":{"type":"boolean","default":false},"duration_seconds":{"type":"number"},"sample_rate":{"type":"number","default":48000},"block_size":{"type":"integer","default":512},"channels":{"type":"integer","default":2},"parallel_workers":{"type":"integer","default":1},"genre_index":{"type":"integer"},"dynamic_range":{"type":"number"},"spectral_tilt":{"type":"number"},"correlation_ms":{"type":"number"}}})"},
     {"mastering.render_status", "Poll an offline mastering render job started by mastering.render_batch.", R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"},
     {"mastering.select_candidate", "Select a candidate ID returned by mastering.render_batch.", R"({"type":"object","properties":{"candidate_id":{"type":"string"}},"required":["candidate_id"]})"},
@@ -2019,6 +2613,38 @@ static const ToolDefinition kCoreTools[] = {
      "Retrieve the final result of a completed async_tool.submit job.",
      R"({"type":"object","properties":{"job_id":{"type":"string"}},"required":["job_id"]})"}
 };
+
+// Definition of inputSchemaFor (forward-declared above). Now that kCoreTools
+// and kExtendedTools are fully defined, the SchemaTable ctor can iterate them.
+static const json* inputSchemaFor(const juce::String& method)
+{
+    struct SchemaTable
+    {
+        std::unordered_map<std::string, json> byName;
+        SchemaTable()
+        {
+            auto add = [this](const char* name, const char* schemaText)
+            {
+                byName.emplace(name, parseSchema(schemaText));
+            };
+            for (const auto& tool : kCoreTools)
+                add(tool.name, tool.inputSchema);
+            for (int i = 0; i < kExtendedToolCount; ++i)
+                add(kExtendedTools[i].name, kExtendedTools[i].schema);
+            // agents.* tools (declared inline in getToolList, not in a table)
+            add("agents.list", R"({"type":"object","properties":{}})");
+            add("agents.run_goal", R"({"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]})");
+            add("agents.run_task", R"({"type":"object","properties":{"agent":{"type":"string"},"intent":{"type":"string"}},"required":["agent"]})");
+            add("agents.run_status", R"({"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"]})");
+            add("agents.run_cancel", R"({"type":"object","properties":{}})");
+            add("agents.blackboard.recent", R"({"type":"object","properties":{}})");
+            add("agents.set_autonomy", R"({"type":"object","properties":{"level":{"type":"string","enum":["manual","assist","copilot","autopilot"]}},"required":["level"]})");
+        }
+    };
+    static SchemaTable table;
+    const auto it = table.byName.find(method.toStdString());
+    return (it != table.byName.end()) ? &it->second : nullptr;
+}
 
 static json plannerInputsToJson(int genreIndex,
                                 float dynamicRange,
@@ -2759,6 +3385,7 @@ void MCPToolHandler::invalidateToolResultCacheForTool(const juce::String& toolNa
 
     if (toolName == "set_parameter" || toolName == "set_parameters_batch"
         || toolName == "set_parameters_optimized"
+        || toolName == "sweep_parameter"
         || toolName == "hosted_plugin.set_parameter"
         || toolName == "hosted_plugin.set_parameters"
         || toolName == "more_phi.set_parameter"
@@ -2947,6 +3574,22 @@ juce::String MCPToolHandler::getToolList()
     for (int i = 0; i < kExtendedToolCount; ++i)
         appendTool(kExtendedTools[i].name, kExtendedTools[i].description, kExtendedTools[i].schema);
 
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    appendTool("agents.list", "List registered agents and their state",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.run_goal", "Submit a natural-language goal to the Conductor agent",
+        R"({"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]})");
+    appendTool("agents.run_task", "Submit a task directly to a named agent (bypass Conductor)",
+        R"({"type":"object","properties":{"agent":{"type":"string"},"intent":{"type":"string"}},"required":["agent"]})");
+    appendTool("agents.run_status", "Poll a run/task for state and findings",
+        R"({"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"]})");
+    appendTool("agents.run_cancel", "Cooperatively cancel the agent runtime",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.blackboard.recent", "Read recent blackboard events",
+        R"({"type":"object","properties":{}})");
+    appendTool("agents.set_autonomy", "Set the agent-domain autonomy level",
+        R"({"type":"object","properties":{"level":{"type":"string","enum":["manual","assist","copilot","autopilot"]}},"required":["level"]})");
+
     return toJString(json{{"tools", tools}});
 }
 
@@ -2971,6 +3614,27 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     if (auto cached = getCachedToolResult(method, params, p); cached.isNotEmpty())
         return cached;
 
+    // AUDIT Q9: enforce the advertised input schema before dispatch. Fail-closed
+    // for declared tools; unknown methods fall through to unknown_method. Schemas
+    // using compound keywords (allOf/anyOf/oneOf) are beyond this subset
+    // validator's scope — we fail OPEN for them (return no schema) and let the
+    // handler's own ad-hoc validation run, since over-rejecting on a partially-
+    // understood schema would break lenient handler behavior (e.g. the
+    // feedback_status normalizer). ponytail: upgrade to a real JSON-Schema
+    // validator if compound schemas become common.
+    if (const json* schema = inputSchemaFor(method))
+    {
+        const bool isCompound = schema->contains("allOf")
+                                || schema->contains("anyOf")
+                                || schema->contains("oneOf");
+        if (! isCompound)
+        {
+            juce::String schemaError;
+            if (! validateVarAgainstSchema(params, *schema, schemaError))
+                return toJString(json{{"error", "invalid_params"}, {"message", schemaError.toStdString()}});
+        }
+    }
+
     juce::String result;
 
     if (method == "get_plugin_info")      result = getPluginInfo(p);
@@ -2978,6 +3642,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "get_parameter")   result = getParameter(params, p);
     else if (method == "set_parameter")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParameter(params, p); });
     else if (method == "set_parameters_batch") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setParametersBatch(params, p); });
+    else if (method == "sweep_parameter") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return sweepParameter(params, p); });
     else if (method == "capture_snapshot")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return captureSnapshot(params, p); });
     else if (method == "recall_snapshot")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return recallSnapshot(params, p); });
     else if (method == "set_morph_position")   return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorphPosition(params, p); });
@@ -2988,13 +3653,13 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "more_phi.set_parameter")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameter(params, p); });
     else if (method == "more_phi.set_parameters") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return setMorePhiParameters(params, p); });
     else if (method == "ozone.audit_parameters")  result = auditOzoneParameters(params, p);
-    else if (method == "izotope_ipc_attach")      result = izotopeIpcAttach(params, p);
-    else if (method == "izotope_ipc_detach")      result = izotopeIpcDetach(p);
-    else if (method == "izotope_ipc_status")      result = izotopeIpcStatus(p);
-    else if (method == "izotope_ipc_snapshot")    result = izotopeIpcSnapshot(params, p);
-    else if (method == "izotope_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcDump(params, p); });
-    else if (method == "izotope_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return izotopeIpcCapture(params, p); });
-    else if (method == "ozone_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return ozoneRunAssistantIpc(params, p); });
+    else if (method == "morephi_ipc_attach")      result = morePhiIpcAttach(params, p);
+    else if (method == "morephi_ipc_detach")      result = morePhiIpcDetach(p);
+    else if (method == "morephi_ipc_status")      result = morePhiIpcStatus(p);
+    else if (method == "morephi_ipc_snapshot")    result = morePhiIpcSnapshot(params, p);
+    else if (method == "morephi_ipc_dump")     return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcDump(params, p); });
+    else if (method == "morephi_ipc_capture")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcCapture(params, p); });
+    else if (method == "morephi_ipc_run_assistant")  return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return morePhiIpcRunAssistant(params, p); });
     else if (method == "async_tool.submit")  return submitAsyncTool(method, params, p, identity, runtime);
     else if (method == "async_tool.status")  return getAsyncToolStatus(params);
     else if (method == "async_tool.result")  return getAsyncToolResult(params);
@@ -3014,6 +3679,7 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "analysis.capture_window")     result = captureAnalysisWindow(params, p);
     else if (method == "analysis.compare_render")     result = compareAnalysis(params, p);
     else if (method == "mastering.plan_preview")      result = previewMasteringPlan(params, p);
+    else if (method == "mastering.analyze_rule_based") result = analyzeRuleBasedMastering(params, p);
     else if (method == "mastering.apply_plan")        return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
     else if (method == "mastering.render_batch")      return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return renderMasteringBatch(params, p, identity); });
     else if (method == "mastering.render_status")     result = getMasteringRenderStatus(params, identity.instanceId);
@@ -3026,6 +3692,26 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     else if (method == "plugin_profile.save")         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return savePluginProfile(params, p); });
     else if (method == "plugin_profile.describe_semantic_map" || method == "describe_plugin_semantic_map")
         result = describePluginSemanticMap(params, p);
+
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    // C1 FIX: write/impactful agents.* tools now route through
+    // dispatchWithAutomationTransaction — the ONLY path that runs
+    // PermissionKernel::evaluate() (autonomy gate) and writes the
+    // permission/AutomationTransaction audit rows. Previously these bypassed
+    // the gate: agents.set_autonomy (classified HighImpact) could flip
+    // Assist→Autopilot with no approval check and no audit trail. The
+    // classifier already assigns their risk (AutomationControlPlane.cpp:825-832),
+    // so gating them was a dead-code gap. agents.run_task cascades into
+    // specialist tools that are individually re-gated via DefaultToolInvoker,
+    // but the entry-point risk class + audit must still fire. No recursion:
+    // classifyTool() only assigns a RiskLevel, it never re-dispatches.
+    else if (method == "agents.list")               result = agentsList(p);
+    else if (method == "agents.run_goal")           return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return agentsRunGoal(params, p); });
+    else if (method == "agents.run_task")           return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return agentsRunTask(params, p); });
+    else if (method == "agents.run_status")         result = agentsRunStatus(params, p);
+    else if (method == "agents.run_cancel")         result = agentsRunCancel(params, p);
+    else if (method == "agents.blackboard.recent")  result = agentsBlackboardRecent(p);
+    else if (method == "agents.set_autonomy")       return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return agentsSetAutonomy(params, p, runtime); });
 
     else if (method == "sync.apply_envelope")
         return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return handleControlPlaneTool(method, params, p, identity, runtime); });
@@ -3079,6 +3765,10 @@ juce::String MCPToolHandler::handle(const juce::String& method,
     // Ozone mastering tools
     else if (method == "get_mastering_state")  result = getMasteringState(p);
     else if (method == "apply_mastering_plan") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return applyMasteringPlan(params, p); });
+    else if (method == "sonicmaster_decision")  result = sonicmasterDecision(params, p);
+    // Stage B (2026-06-26): one-click neural analyze+apply. Writes hosted params,
+    // so route through the automation transaction (MediumWrite) like apply_plan.
+    else if (method == "mastering.neural_apply") return dispatchWithAutomationTransaction(method, params, p, runtime, [&]() { return masteringNeuralApply(params, p); });
 
     // Ozone Track Assistant tools (guide-aligned, implemented natively in C++)
     else if (method == "ozone.track.get_info" || method == "ozone_track_get_info")
@@ -3247,13 +3937,62 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
     const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
     const float valueAfter = bridge.getParameterNormalized(id);
     const juce::String humanAfter = bridge.getParameterDisplayValueAtNormalized(id, valueAfter);
-    auto verification = classifyVerification(true, flush.drained > 0, value, valueAfter, elapsedMs);
+
+    // AUDIT-FIX 4.7: if the flush detected out-of-range writes, surface the
+    // specific error instead of letting it fall through to value_drift.
+    const bool indexOutOfRange = flush.outOfRangeCount > 0;
+
+    // AUDIT-FIX 4.1: pass discrete info for tighter tolerance on step-snapping params.
+    const bool paramIsDiscrete = bridge.isDiscrete(id);
+    const int  paramNumSteps   = bridge.getParameterNumSteps(id);
+
+    // AUDIT-FIX 4.5: after flush, check if morph may have overwritten the edit.
+    // liveEditHold_ is only accessible via the processor; we approximate by
+    // checking if the morph is active (snapshots occupied) and the value drifted.
+    const bool morphActive = p.getSnapshotBank().hasAnyOccupied();
+    const bool morphOverwriteRisk = morphActive && (std::abs(valueAfter - value) > 0.001f)
+                                    && (std::abs(valueAfter - valueBefore) < 0.001f);
+    // Heuristic: if valueAfter == valueBefore (despite our write), morph likely overwrote.
+
+    auto verification = classifyVerification(
+        true, flush.drained > 0 && !indexOutOfRange,
+        value, valueAfter, elapsedMs,
+        indexOutOfRange ? "parameter_index_out_of_range" : "",
+        paramIsDiscrete, paramNumSteps,
+        morphOverwriteRisk);
     verification.valueBefore = valueBefore;
     verification.humanBefore = humanBefore;
     verification.humanAfter = humanAfter;
 
+    // F4/AUDIT: when morph is active, the immediate readback above can return
+    // `success` while the next applyMorphAndParameters block silently
+    // overwrites the edit. Re-read after one block; if morph clobbered it,
+    // downgrade the verification so the assistant is told the edit did NOT
+    // stick. Skipped when morph is inactive (nothing would overwrite it) and
+    // when the immediate readback already failed (no point re-checking).
+    if (morphActive && verification.status == "success")
+    {
+        if (auto deferred = deferredMorphOverwriteCheck(bridge, id, value,
+                                                        paramIsDiscrete, paramNumSteps))
+        {
+            verification = *deferred;
+        }
+    }
+
+    // AUDIT-FIX 4.3: gate top-level success on actual verification — do NOT
+    // report success when the edit is still queued or the value drifted.
+    // EXCEPTION: when the command was accepted into the realtime queue but the
+    // hosted plugin is currently unavailable (nothing to apply against), the
+    // write is a SOFT SUCCESS — the queue holds it and it will apply the moment
+    // a plugin loads. Reporting a hard failure here would mislead callers into
+    // retrying/erroring on a perfectly valid queued write. The plugin_unavailable
+    // flag (below in "flush") is the informative signal, and a warning is added.
+    const bool pluginUnavailableSoftSuccess =
+        flush.pluginUnavailable && flush.drained == 0 && flush.pendingAfter > 0;
+    const bool editVerified = verification.status == "success" || pluginUnavailableSoftSuccess;
+
     json response{
-        {"success", true},
+        {"success", editVerified},
         {"index", id},
         {"value", value},
         {"queued", 1},
@@ -3264,18 +4003,36 @@ juce::String MCPToolHandler::setParameter(const juce::var& params, MorePhiProces
         {"verification", verificationToJson(verification)}
     };
 
+    if (!editVerified)
+    {
+        response["error"] = verification.errorReason.toStdString();
+        if (!verification.correctiveAction.isEmpty())
+            response["suggested_action"] = verification.correctiveAction.toStdString();
+    }
+
     if (flush.drained == 0 && flush.pendingBefore > 0)
     {
         if (flush.pluginUnavailable)
         {
             response["warning"] = "Value was queued but the hosted plugin is currently unavailable; it will apply once a plugin is loaded.";
-            response["suggested_action"] = suggestedActionForError("plugin_not_loaded").toStdString();
+            if (!response.contains("suggested_action"))
+                response["suggested_action"] = suggestedActionForError("plugin_not_loaded").toStdString();
         }
         else if (flush.exclusiveAccessTimedOut)
         {
             response["warning"] = "Value was queued but could not be flushed immediately because the hosted plugin was in use; the audio thread will apply it on the next callback.";
-            response["suggested_action"] = suggestedActionForError("pending_parameter_edits").toStdString();
+            if (!response.contains("suggested_action"))
+                response["suggested_action"] = suggestedActionForError("pending_parameter_edits").toStdString();
         }
+    }
+
+    if (indexOutOfRange)
+    {
+        // The write targeted an index the (loaded or stub) descriptor map does
+        // not have. This is a genuine client error: downgrade any soft-success
+        // to a hard failure so the caller is told the write was dropped.
+        response["success"] = false;
+        response["warning"] = "Parameter index exceeds the hosted plugin's parameter count; the write was dropped. Use list_parameters to discover valid indices.";
     }
 
     return toJString(response);
@@ -3307,6 +4064,8 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         juce::String name;
         bool enqueued = false;
         juce::String failureCode;
+        bool isDiscrete = false;   // AUDIT-FIX 4.1
+        int numSteps = 0;          // AUDIT-FIX 4.1
     };
     std::vector<BatchVerificationItem> verificationItems;
     verificationItems.reserve(static_cast<size_t>(requested));
@@ -3344,6 +4103,9 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
             }
             const float value = juce::jlimit(0.0f, 1.0f, rawValue);
             vi.valueBefore = bridge.getParameterNormalized(resolution.index);
+            // AUDIT-FIX 4.1: capture discrete info during enqueue for per-item tolerance.
+            vi.isDiscrete = bridge.isDiscrete(resolution.index);
+            vi.numSteps = bridge.getParameterNumSteps(resolution.index);
             if (p.enqueueParameterSet(resolution.index, value,
                                       MorePhiProcessor::ParameterEditSource::MCP,
                                       true))
@@ -3384,22 +4146,32 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
     const bool drained = flush.drained > 0;
 
     // Finalize per-item verification now that the flush has applied the batch.
+    const bool morphActive = p.getSnapshotBank().hasAnyOccupied();
     json verificationArray = json::array();
+    int verifiedCount = 0;
     for (auto& vi : verificationItems)
     {
         VerificationCapture v;
         if (vi.enqueued)
         {
             const float valueAfter = bridge.getParameterNormalized(vi.index);
-            v = classifyVerification(true, drained, vi.requested, valueAfter, elapsedMs);
+            // AUDIT-FIX 4.5: detect morph overwrite risk per item.
+            const bool itemMorphOverwrite = morphActive
+                && (std::abs(valueAfter - vi.requested) > 0.001f)
+                && (std::abs(valueAfter - vi.valueBefore) < 0.001f);
+            v = classifyVerification(true, drained, vi.requested, valueAfter, elapsedMs,
+                                     "", vi.isDiscrete, vi.numSteps, itemMorphOverwrite);
             v.humanBefore = bridge.getParameterDisplayValueAtNormalized(vi.index, vi.valueBefore);
             v.humanAfter = bridge.getParameterDisplayValueAtNormalized(vi.index, valueAfter);
+            v.valueBefore = vi.valueBefore;
+            if (v.status == "success")
+                ++verifiedCount;
         }
         else
         {
             v = classifyVerification(false, false, vi.requested, 0.0f, elapsedMs, vi.failureCode);
+            v.valueBefore = vi.valueBefore;
         }
-        v.valueBefore = vi.valueBefore;
 
         json viJson{
             {"index", vi.index},
@@ -3410,19 +4182,61 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         verificationArray.push_back(std::move(viJson));
     }
 
+    // F4/AUDIT: when morph is active, the per-item immediate readback above
+    // cannot see a morph overwrite in the next block. Do ONE deferred re-read
+    //pass (6ms covers all items — morph runs per block) and downgrade any
+    //item that was immediately `success` but got clobbered.
+    if (morphActive && verifiedCount > 0)
+    {
+        juce::Thread::sleep(6);
+        for (auto& viJson : verificationArray)
+        {
+            auto& v = viJson["verification"];
+            if (v.value("status", std::string{}) != "success")
+                continue;
+            const int itemId = viJson.value("index", -1);
+            if (itemId < 0)
+                continue;
+            const float requestedVal = v.value("requested_value", 0.0f);
+            const float valueDeferred = bridge.getParameterNormalized(itemId);
+            float tolerance = kVerificationDriftToleranceContinuous;
+            if (bridge.isDiscrete(itemId))
+            {
+                const int steps = bridge.getParameterNumSteps(itemId);
+                if (steps > 0) tolerance = std::max(0.5f / static_cast<float>(steps), 0.001f);
+            }
+            if (std::abs(valueDeferred - requestedVal) > tolerance)
+            {
+                v["status"] = "morph_overwrite_confirmed";
+                v["value_after"] = valueDeferred;
+                v["error_reason"] = "morph_overwrote_edit_after_one_block";
+                v["corrective_action"] = "Pause morph (or move morph position away "
+                                         "from a snapshot boundary) before re-applying.";
+                --verifiedCount;
+            }
+        }
+    }
+
+    // AUDIT-FIX 4.3: gate top-level success on actual verification, not just
+    // queue acceptance. If no items were verified as successfully applied, the
+    // batch did not take effect.
     const bool allQueued = requested > 0
         && applied == requested
         && rejected == 0
         && queueFailures == 0;
+    const bool anyVerified = verifiedCount > 0;
+    // Success needs both: all items queued AND at least one verified as applied.
+    const bool batchSuccess = allQueued && (anyVerified || applied == 0);
 
     json response{
-        {"success", allQueued},
+        {"success", batchSuccess},
         {"queued", applied},
         {"applied", applied},
         {"appliedNow", flush.drained},
         {"requested", requested},
         {"rejected", rejected},
         {"queueFailures", queueFailures},
+        {"verifiedCount", verifiedCount},
         {"pendingAfter", flush.pendingAfter},
         {"flush", parameterFlushToJson(flush)},
         {"verification", verificationArray}
@@ -3451,6 +4265,176 @@ juce::String MCPToolHandler::setParametersBatch(const juce::var& params, MorePhi
         }
     }
 
+    if (allQueued && !anyVerified && applied > 0)
+    {
+        response["warning"] = "All parameters were queued but none could be verified as applied; the hosted plugin may not be ready or the indices may be out of range.";
+        response["suggested_action"] = suggestedActionForError("plugin_not_ready").toStdString();
+    }
+
+    return toJString(response);
+}
+
+juce::String MCPToolHandler::sweepParameter(const juce::var& params, MorePhiProcessor& p)
+{
+    // sweep_parameter / AUDIT: the only tool that autonomously sweeps a value
+    // range on the LIVE hosted plugin. Each step reuses the verified write path
+    // (resolve -> enqueue -> flush) and then reads the live BS.1770-4 / true-
+    // peak / spectrum / THD meters, so the assistant gets a real per-value
+    // measurement curve instead of a one-shot guess. ponytail: no new write
+    // mechanism — every step goes through the same set_parameter plumbing the
+    // assistant already trusts, including the F6 force-apply drain and F4
+    // morph-overwrite readback.
+    auto& bridge = p.getParameterBridge();
+
+    // Resolve the target parameter once (stableId | index | name).
+    const auto stableId = params.getProperty("stableId",
+                          params.getProperty("stable_id", "")).toString();
+    const int rawId = params.hasProperty("index")
+        ? static_cast<int>(params.getProperty("index", -1))
+        : static_cast<int>(params.getProperty("id", -1));
+    const auto name = params.getProperty("name",
+                       params.getProperty("parameter", "")).toString();
+    const auto resolution = bridge.resolveParameter(stableId, rawId, name);
+    if (! resolution.success)
+    {
+        return toJString(json{{"success", false},
+            {"error", resolution.error.isEmpty() ? "unresolved_parameter" : resolution.error.toStdString()},
+            {"resolved", false}});
+    }
+    const int idx = resolution.index;
+
+    float from = static_cast<float>(params.getProperty("from", 0.0));
+    float to   = static_cast<float>(params.getProperty("to",   1.0));
+    from = juce::jlimit(0.0f, 1.0f, from);
+    to   = juce::jlimit(0.0f, 1.0f, to);
+    int steps = static_cast<int>(params.getProperty("steps", 5));
+    steps = juce::jlimit(2, 64, steps);
+    const int captureMs = juce::jlimit(10, 5000, static_cast<int>(params.getProperty("capture_ms", 250)));
+
+    // AUDIT-FIX (SWEEP-2): safe-mode parameter exclusion. When safe_only=true
+    // (default), reject parameters whose names contain known-dangerous tokens
+    // (bypass, mute, solo, etc.) so the AI cannot accidentally sweep destructive
+    // controls. The caller can pass safe_only=false to bypass this check, or
+    // provide an explicit exclude_names array for custom exclusions.
+    const bool safeOnly = params.getProperty("safe_only", true);
+    if (safeOnly)
+    {
+        auto* hosted = p.getHostManager().getPlugin();
+        if (hosted && idx >= 0 && idx < static_cast<int>(hosted->getParameters().size()))
+        {
+            const juce::String paramName = hosted->getParameters()[static_cast<std::size_t>(idx)]->getName(64);
+            const juce::String lower = paramName.toLowerCase();
+            // Danger patterns: structural/bypass controls, dynamics killers,
+            // routing, oversampling, latency, metering.
+            const bool dangerous = lower.contains("bypass") || lower.contains("mute")
+                || lower.contains("solo") || lower.contains("phase") || lower.contains("invert")
+                || lower.contains("latency") || lower.contains("oversampl")
+                || lower.contains("analyzer") || lower.contains("meter")
+                || lower.contains("lookahead") || lower.contains("stereo placement")
+                || lower.contains("speaker") || lower.contains("side chain")
+                || lower.contains("external") || lower.contains("routing");
+            if (dangerous)
+                return toJString(json{{"success", false},
+                    {"error", "parameter_excluded_for_safety"},
+                    {"param_name", paramName.toStdString()},
+                    {"index", idx},
+                    {"hint", "Set safe_only=false to sweep this parameter, or add "
+                             "it to exclude_names together with safe_only=false."}});
+        }
+    }
+
+    // AUDIT-FIX (SWEEP-2/4b): explicit exclusion list. The caller can pass an
+    // array of name substrings; the sweep is rejected if the resolved parameter
+    // name contains any exclusion token. This gives the AI fine-grained control
+    // without disabling safe_only entirely.
+    {
+        const auto excludeNames = params.getProperty("exclude_names", juce::var());
+        if (auto* arr = excludeNames.getArray())
+        {
+            const juce::String resolvedName = bridge.getParameterName(idx).toLowerCase();
+            for (const auto& ex : *arr)
+            {
+                if (resolvedName.contains(ex.toString().toLowerCase()))
+                    return toJString(json{{"success", false},
+                        {"error", "parameter_excluded_by_name"},
+                        {"param_name", resolvedName.toStdString()},
+                        {"index", idx}});
+            }
+        }
+    }
+
+    // AUDIT-FIX (SWEEP-7): spacing mode. "linear" (default) generates evenly-
+    // spaced values across [from, to]. "log" generates exponentially-spaced
+    // values, which is perceptually uniform for frequency, Q, and other
+    // log-scale parameters. Log mode requires from > 0.0f and to > 0.0f;
+    // falls back to linear when either endpoint is non-positive.
+    const juce::String spacing = params.getProperty("spacing", "linear").toString().toLowerCase();
+    const bool useLogSpacing = (spacing == "log" && from > 0.0f && to > 0.0f);
+
+    json results = json::array();
+    int capturedSteps = 0;
+
+    for (int step = 0; step < steps; ++step)
+    {
+        const float t = (steps <= 1) ? 0.0f : static_cast<float>(step) / static_cast<float>(steps - 1);
+        float value;
+        if (useLogSpacing)
+            value = juce::jlimit(0.0f, 1.0f, from * std::pow(to / from, t));
+        else
+            value = juce::jlimit(0.0f, 1.0f, from + t * (to - from));
+
+        // Enqueue + flush through the same verified write path as set_parameter.
+        if (! p.enqueueParameterSet(idx, value, MorePhiProcessor::ParameterEditSource::MCP, true))
+        {
+            results.push_back({{"step", step}, {"value", value},
+                               {"error", "queue_full"}, {"applied", false}});
+            continue;
+        }
+        const auto flush = p.flushPendingParameterCommandsForAssistant();
+        // Let the meters settle on the new value before sampling.
+        juce::Thread::sleep(captureMs);
+
+        const auto m = p.getSonicMasterEngine().getLiveMeasurements();
+        json meas;
+        meas["valid"] = m.valid;
+        if (m.valid)
+        {
+            meas["lufs_integrated"]      = m.lufsIntegrated;
+            meas["lufs_short_term"]      = m.lufsShortTerm;
+            meas["lufs_momentary"]       = m.lufsMomentary;
+            meas["lra"]                  = m.lra;
+            meas["true_peak_dbtp"]       = m.truePeakDbtp;
+            meas["spectral_centroid_hz"] = m.spectralCentroidHz;
+            meas["spectral_tilt"]        = m.spectralTilt;
+            meas["stereo_width"]         = m.stereoWidth;
+            meas["correlation_mid"]      = m.correlationMid;
+            meas["thd_percent"]          = m.thdPercent;
+            meas["crest_factor_program"] = m.crestFactorProgram;
+        }
+        // Read back the actual applied value so the assistant can see drift.
+        const float appliedValue = bridge.getParameterNormalized(idx);
+
+        results.push_back({
+            {"step", step},
+            {"value", value},
+            {"applied_value", appliedValue},
+            {"applied", flush.drained > 0},
+            {"measurements", meas}
+        });
+        ++capturedSteps;
+    }
+
+    json response{
+        {"success", capturedSteps > 0},
+        {"index", idx},
+        {"from", from},
+        {"to", to},
+        {"steps", steps},
+        {"captured_steps", capturedSteps},
+        {"results", results}
+    };
+    if (capturedSteps == 0)
+        response["error"] = "no_steps_captured";
     return toJString(response);
 }
 
@@ -4861,6 +5845,40 @@ juce::String MCPToolHandler::previewMasteringPlan(const juce::var& params, MoreP
     return toJString(result);
 }
 
+juce::String MCPToolHandler::analyzeRuleBasedMastering(const juce::var& params, MorePhiProcessor& p)
+{
+    auto& ame = p.getAutoMasteringEngine();
+
+    const float intensity    = juce::jlimit(0.0f, 1.0f,
+                                            static_cast<float>(params.getProperty("intensity", 0.5f)));
+    const float targetLufs   = static_cast<float>(params.getProperty("target_lufs", -14.0f));
+    const auto  targetCurve  = params.getProperty("target_curve", "streaming").toString().toStdString();
+
+    const RuleBasedMasteringInput input = buildRuleBasedInputFromLiveMeters(p, targetLufs, intensity, targetCurve);
+
+    const bool apply = params.getProperty("apply", false);
+
+    RuleBasedMasteringResolver resolver;
+    MultiEffectPlan plan = resolver.resolve(input);
+
+    if (apply && plan.valid)
+        ame.getChainPlanner().applyPlan(plan);
+
+    json result = planToJson(plan);
+    result["success"] = plan.valid;
+    result["applied"] = apply && plan.valid;
+    result["measured"] = json{
+        {"lufs_integrated", input.lufsIntegrated},
+        {"lra", input.lra},
+        {"true_peak_dbtp", input.truePeakDbTp},
+        {"crest_factor", input.crestFactor},
+        {"spectral_centroid_hz", input.spectrum.spectralCentroid},
+        {"spectral_tilt", input.spectrum.spectralTilt},
+        {"stereo_width", input.stereo.stereoWidth}
+    };
+    return toJString(result);
+}
+
 juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity)
 {
     const int candidateCount = juce::jlimit(1, 8, static_cast<int>(params.getProperty("candidate_count", 3)));
@@ -4875,6 +5893,20 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
 
         const uint64_t batchId = gNextDryRunBatchId.fetch_add(1);
         json candidates = json::array();
+
+        // P3.9 (AUDIT): the dry-run path previously emitted score=0.0 and NO
+        // lufs_error field, so OptimizationAgent's min(lufs_error) selection read
+        // infinity for every candidate and chose nothing (bestIdx stayed -1, zero
+        // proposed actions). Populate a real lufs_error per candidate: the absolute
+        // distance between the candidate's targetLUFS and the engine's live
+        // integrated LUFS measurement. This is a meaningful ranking signal (a
+        // candidate whose target lands far from the measured program loudness is a
+        // worse fit) and makes OptimizationAgent's selection genuinely discriminate
+        // among the offset candidates. It is NOT a rendered-audio fitness (no
+        // offline render in dry-run); score_basis documents that honestly.
+        auto& ame = p.getAutoMasteringEngine();
+        const double measuredLufs = finiteOr(ame.getLUFSIntegrated(), -70.0);
+
         for (int i = 0; i < candidateCount; ++i)
         {
             const float offset = static_cast<float>(i) - static_cast<float>(candidateCount - 1) * 0.5f;
@@ -4891,7 +5923,9 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             const auto rulesApplied = plannerRulesToJson(
                 genreIndex, adjustedDynamicRange, adjustedSpectralTilt, adjustedCorrelationMS, plan);
             const auto candidateId = makeDryRunCandidateId(batchId, i);
-            const float score = 0.0f;
+            const float lufsError = static_cast<float>(std::abs(plan.targetLUFS - measuredLufs));
+            // Normalize to [0,1]: 0 = perfect match, 1 = >=24 LU off (full target band).
+            const float score = std::clamp(1.0f - lufsError / 24.0f, 0.0f, 1.0f);
 
             {
                 const std::lock_guard<std::mutex> guard(gDryRunCandidatesMutex);
@@ -4904,6 +5938,8 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
             json candidate = planToJson(plan);
             candidate["id"] = candidateId.toStdString();
             candidate["score"] = score;
+            candidate["lufs_error"] = lufsError;          // P3.9: OptimizationAgent ranks on this
+            candidate["measured_lufs"] = measuredLufs;    // provenance for the error
             candidate["measured_inputs"] = measuredInputs;
             candidate["rules_applied"] = rulesApplied;
             candidates.push_back(candidate);
@@ -4912,10 +5948,11 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         return toJString(json{
             {"success", true},
             {"mode", "dry_run_plan_candidates"},
+            {"risk_level", "read_only"},  // AUDIT-FIX (L3-6, 2026-06-29): surface risk
             {"planner_type", kPlannerType},
             {"rule_version", kPlannerRuleVersion},
-            {"score_available", false},
-            {"score_basis", kDryRunScoreBasis},
+            {"score_available", true},
+            {"score_basis", "lufs_target_distance_proxy"},  // P3.9: honest about what the score means
             {"planner_metadata", plannerMetadataToJson()},
             {"candidates", candidates}
         });
@@ -5099,6 +6136,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         {"output_directory", outputDirectory.getFullPathName().toStdString()},
         {"plugin_path", pluginFile.getFullPathName().toStdString()},
         {"total_variations", candidateCount},
+        {"risk_level", "high_impact"},  // AUDIT-FIX (L3-6, 2026-06-29): file renders write output
         {"planner_type", kPlannerType},
         {"rule_version", kPlannerRuleVersion},
         {"score_available", false},
@@ -5536,14 +6574,15 @@ juce::String MCPToolHandler::getMasteringState(MorePhiProcessor& p)
             p.getHostManager().getPlugin()->getName());
 
     json result;
-    result["lufs_momentary"]  = ame.getLUFSMomentary();
-    result["lufs_short_term"] = ame.getLUFSShortTerm();
-    result["lufs_integrated"] = ame.getLUFSIntegrated();
-    result["lra"]             = ame.getLRA();
-    result["true_peak_dbtp"]  = ame.getTruePeak_dBTP();
-    result["limiter_gr_db"]   = ame.getLimiterGainReductionDB();
+    result["lufs_momentary"]  = finiteOr(ame.getLUFSMomentary(), -70.0);
+    result["lufs_short_term"] = finiteOr(ame.getLUFSShortTerm(), -70.0);
+    result["lufs_integrated"] = finiteOr(ame.getLUFSIntegrated(), -70.0);
+    result["lra"]             = finiteOr(ame.getLRA(), 0.0);
+    result["true_peak_dbtp"]  = finiteOr(ame.getTruePeak_dBTP(), -300.0);
+    result["limiter_gr_db"]   = finiteOr(ame.getLimiterGainReductionDB(), 0.0);
     result["ozone_hosted"]    = ozoneHosted;
     result["ozone_applicator_active"] = ame.getChainPlanner().hasOzoneApplicator();
+    result["risk_level"] = "read_only";  // AUDIT-FIX (L3-6): surface risk classification
     result["planner_type"] = kPlannerType;
     result["rule_version"] = kPlannerRuleVersion;
     result["score_available"] = false;
@@ -5555,7 +6594,7 @@ juce::String MCPToolHandler::getMasteringState(MorePhiProcessor& p)
     // Per-band dynamics gain reduction
     json grArr = json::array();
     for (int i = 0; i < 4; ++i)
-        grArr.push_back(ame.getGainReductionDB(i));
+        grArr.push_back(finiteOr(ame.getGainReductionDB(i), -300.0));
     result["dynamics_gr_db"] = grArr;
 
     // Last mastering plan (if any)
@@ -5590,9 +6629,803 @@ juce::String MCPToolHandler::applyMasteringPlan(const juce::var& params, MorePhi
     return toJString(result);
 }
 
-// ── iZotope IPC Assistant tools ──────────────────────────────────────────────
+juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePhiProcessor& p)
+{
+    const float targetLufs = static_cast<float>(params.getProperty("target_lufs", -14.0));
+    // FALLBACK (2026-06-27): opt-in graceful degradation. When the neural model
+    // refuses (safety_rejected / low_confidence / target_out_of_range — the exact
+    // failure on already-hot material, since the model is loudness-blind per
+    // AUDIT-7 and cannot see that the input is at -7 LUFS), fall through to the
+	    // measurement-driven heuristic (RuleBasedMasteringResolver), which DOES see
+	    // the measured LUFS. Default true: a neural refusal on already-hot material
+	    // is the most common user-facing failure (the model is loudness-blind and
+	    // cannot measure input LUFS — see AUDIT-7). The heuristic ALWAYS sees the
+	    // measured LUFS and can produce a sensible plan. The result's `path` field
+	    // reports "heuristic_fallback" so nobody mistakes a heuristic plan for a
+	    // neural one, and the original refusal reason is preserved in
+	    // `neural_refusal_reason`. Set false to see the raw model failure instead.
+	    const bool fallbackToHeuristic = params.getProperty("fallback_to_heuristic", true);
+    // The heuristic always targets the streaming-safe default (-14 LUFS) unless
+    // the caller explicitly overrides via the dedicated param. This is deliberate:
+    // the neural attempt may have used a different target than what's sensible for
+    // the heuristic, and -14/-1.0 dBTP is the conservative, platform-safe choice.
+    const float fallbackTargetLufs = static_cast<float>(
+        params.getProperty("fallback_target_lufs", -14.0));
 
-juce::String MCPToolHandler::izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p)
+    // AUDIT-FIX-R10: short-TTL cache (3s) for repeated calls with the same
+    // target_lufs. Audio changes slowly enough that a 3s window is safe for
+    // caching, and it prevents unnecessary re-inference when the assistant
+    // queries the same decision twice (e.g. to report it + to confirm it).
+    {
+        const auto cached = toolResultCache().get("sonicmaster_decision", params,
+                                                   p.getProcessorGenerationToken(),
+                                                   p.getInstanceIdentity().instanceId);
+        if (cached.has_value())
+        {
+            json wrapper = *cached;
+            wrapper["cached"] = true;
+            // AUDIT-FIX (P11, 2026-06-29): surface the cache entry age and a
+            // current UTC timestamp so clients can detect stale decisions and
+            // correlate with their own clocks. cache_age_seconds measures from
+            // insertion (not expiry) — a small value means the cached decision
+            // reflects recent audio; a value approaching the 3s TTL means it
+            // may be overtaken by newer audio.
+            const double cacheAge =
+                toolResultCache().getEntryAgeSeconds("sonicmaster_decision", params,
+                                                      p.getProcessorGenerationToken(),
+                                                      p.getInstanceIdentity().instanceId);
+            wrapper["cache_age_seconds"] = cacheAge >= 0.0 ? cacheAge : 0.0;
+            {
+                const auto nowUtc = std::chrono::system_clock::now();
+                const auto timeT = std::chrono::system_clock::to_time_t(nowUtc);
+                std::tm utcTm {};
+            #ifdef _WIN32
+                gmtime_s(&utcTm, &timeT);
+            #else
+                gmtime_r(&timeT, &utcTm);
+            #endif
+                char buf[32];
+                std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utcTm);
+                wrapper["timestamp"] = std::string(buf);
+            }
+            return toJString(wrapper);
+        }
+    }
+
+    auto& engine = p.getSonicMasterEngine();
+
+    if (!engine.isAvailable())
+    {
+        // Stage C (2026-06-26): the in-process ONNX model is the PRIMARY inference
+        // path (no server needed once built with MORE_PHI_ENABLE_ONNX). The HTTP
+        // server is a fallback. The prior message framed this as a server problem,
+        // which was misleading — if you see this, the plugin build is not
+        // ONNX-enabled (rebuild) OR no source is wired, not 'go start a server.'
+        json err;
+        err["success"] = false;
+        err["available"] = false;
+        err["state"] = "model_unavailable";
+        err["error"] = "The SonicMaster ONNX model is not loaded in-process. Rebuild the "
+                       "plugin with MORE_PHI_ENABLE_ONNX=ON (the primary path; no server "
+                       "needed). The local Python HTTP inference server "
+                       "(tools/inference_server/server.py) is a fallback only.";
+        return toJString(err);
+    }
+
+    ValidatedNeuralMasteringPlan plan {};
+    std::array<float, more_phi::kSonicMasterDecisionWidth> raw {};
+    bool inferenceOk = false;
+    bool timedOut = false;
+    // DIAGNOSTIC (2026-06-26): capture the structured failure reason so the error
+    // path can report WHICH gate tripped (silent input vs inference rejected vs
+    // safety held vs insufficient audio) instead of the opaque catch-all that
+    // forced the assistant to confabulate "no audio captured" / "server down."
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    {
+        auto future = std::async(std::launch::async, [&]() {
+            return engine.requestDecisionNow(targetLufs, plan, raw.data(), raw.size(), &failure);
+        });
+        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
+            inferenceOk = future.get();
+        else
+            timedOut = true;
+    }
+    if (!inferenceOk)
+    {
+        const auto cd = engine.getCaptureDiagnostics();
+        // SAFETY-REJECTION-DETAIL (2026-06-26): when failure == SafetyRejected, pull
+        // the SPECIFIC issue(s) so the JSON can say "low_confidence (retryable)" vs
+        // "target_out_of_range (hard reject)" instead of the coarse bucket. Read
+        // unconditionally — it's cheap, and on a non-safety failure it carries the
+        // last rejection from a prior call (cleared on accept), which is still
+        // useful context ("the previous attempt was held for low_confidence").
+        const auto sr = engine.getLastSafetyRejection();
+        json err;
+        err["success"] = false;
+        err["available"] = engine.isAvailable();
+        // DIAGNOSTIC: machine-readable state + the actual failure reason. Clients
+        // (the assistant) should branch on `state`/`failure_reason`, not parse
+        // the `error` prose. `timed_out` is its own boolean because a timeout
+        // masks the failure reason (the async task was abandoned before returning).
+        err["timed_out"]      = timedOut;
+        err["state"]          = timedOut ? "timeout" : sonicmasterFailureState(failure);
+        err["failure_reason"] = sonicmasterFailureState(failure);
+        err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
+        err["error"]          = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
+                                                          timedOut, cd, sr);
+        // When the failure is a safety reject, fold the specific issue into the
+        // top-level state so clients reading only `state` still see the reason
+        // (e.g. "safety_rejected:low_confidence"). Non-safety failures keep the
+        // plain reason.
+        if (!timedOut && failure == more_phi::DecisionFailure::SafetyRejected && sr.valid)
+            err["state"] = std::string("safety_rejected:") + more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+        // last_inference_ms disambiguates "model hung" (large value) from "model
+        // fast but rejected" (small value, failure_reason=inference_rejected).
+        err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        // CAPTURE-TELEMETRY (2026-06-26): surface the live capture-ring state so
+        // the assistant can report WHY inference was skipped instead of guessing.
+        // The most common cause is capturedFrames < requiredFrames (the ring
+        // hasn't filled a full ~6 s window), but ringAllocated=false or
+        // prepared=false reveal infrastructure failures the generic error hid.
+        json cap;
+        cap["prepared"]         = cd.prepared;
+        cap["active"]           = cd.active;
+        cap["ring_allocated"]   = cd.ringAllocated;
+        cap["captured_frames"]  = cd.capturedFrames;
+        cap["required_frames"]  = cd.requiredFrames;
+        cap["ring_capacity"]    = cd.ringCapacity;
+        // Human-readable hint derived from the actual state.
+        if (!cd.prepared)
+            cap["hint"] = "engine not prepared (prepareToPlay did not run).";
+        else if (!cd.ringAllocated)
+            cap["hint"] = "capture ring is not allocated.";
+        else if (cd.requiredFrames > 0 && cd.capturedFrames < cd.requiredFrames)
+            cap["hint"] = "not enough audio captured yet — play continuous audio for ~"
+                        + std::to_string(static_cast<int>(cd.requiredFrames / 48000.0)) + " s.";
+        else
+            cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
+        err["capture_diagnostics"] = cap;
+        // SAFETY-REJECTION-DETAIL (2026-06-26): the specific issue(s) + retryable
+        // flag. Always emit so the shape is stable; `valid=false` when no rejection
+        // has been recorded (e.g. insufficient_audio failure). This is the field the
+        // assistant should read to decide "retry" vs "change the audio" vs "hard
+        // reject — report this rather than guessing from the coarse failure_reason.
+        err["safety_rejection"] = sonicmasterSafetyRejectionJson(sr);
+        // DIAG (2026-06-26): surface the real ORT exception + run/fail counters.
+        // The catch(...) in runDecision previously swallowed the reason entirely;
+        // these fields turn "inference failed" into an actionable message.
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        err["inference_diagnostics"] = infer;
+        // Include live measurements on the FAILURE path too: a valid
+        // lufs_integrated/true_peak_dbtp here proves audio IS reaching the plugin
+        // (rules out the "no audio captured" confabulation), while invalid +
+        // silent capture confirms it. This is the signal the assistant was missing.
+        err["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+        err["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
+
+        // FALLBACK (2026-06-27): opt-in graceful degradation. If the caller asked
+        // for a heuristic fallback AND the failure is one the heuristic can
+        // sensibly address (a model refusal — safety_rejected/low_confidence/
+        // target_out_of_range/inference_rejected/decode_failed — NOT a timeout or
+        // infrastructure problem like NotPrepared/InsufficientAudio/SilentInput),
+        // run the measurement-driven RuleBasedMasteringResolver and apply its plan.
+        // The heuristic sees the MEASURED LUFS the neural model cannot, so it can
+        // produce a sensible plan for already-hot material. We return a SUCCESS-
+        // shaped result with honest provenance so nobody mistakes it for a neural
+        // endorsement. Timeouts and capture failures are left to the caller — the
+        // heuristic would be operating on stale/empty meters in those cases.
+        // A "refusal" is a model/decode/safety failure — the heuristic can sensibly
+        // take over because it reasons from measurements. Capture/infra failures
+        // (NotPrepared/InsufficientAudio/SilentInput) and timeouts are NOT refusals:
+        // the heuristic would be operating on empty/stale meters in those cases, so
+        // we leave them to the caller. SafetyRejected covers both low_confidence
+        // soft-holds and hard target_out_of_range rejects (the specific issue lives
+        // in safety_rejection.primary_issue, surfaced above).
+        const bool isRefusal = !timedOut && (
+            failure == more_phi::DecisionFailure::SafetyRejected ||
+            failure == more_phi::DecisionFailure::InferenceRejected ||
+            failure == more_phi::DecisionFailure::DecodeFailed);
+        if (fallbackToHeuristic && isRefusal)
+        {
+            const auto input = buildRuleBasedInputFromLiveMeters(p, fallbackTargetLufs, 0.5f, "streaming");
+            RuleBasedMasteringResolver resolver;
+            const MultiEffectPlan heuristicPlan = resolver.resolve(input);
+            if (heuristicPlan.valid)
+            {
+                p.getAutoMasteringEngine().getChainPlanner().applyPlan(heuristicPlan);
+                json fb;
+                fb["success"] = true;
+                fb["applied"] = true;
+                fb["path"] = "heuristic_fallback";
+                // Preserve the original neural refusal so the assistant can tell the
+                // user WHY the neural path was bypassed (honest provenance).
+                fb["neural_refusal_reason"] = std::string(err["state"]);
+                fb["neural_refusal_detail"] = json{
+                    {"failure_reason", err["failure_reason"]},
+                    {"safety_rejection", err["safety_rejection"]},
+                    {"last_inference_ms", err["last_inference_ms"]}
+                };
+                fb["heuristic_plan"] = planToJson(heuristicPlan);
+                fb["measured"] = json{
+                    {"lufs_integrated", input.lufsIntegrated},
+                    {"lra", input.lra},
+                    {"true_peak_dbtp", input.truePeakDbTp},
+                    {"crest_factor", input.crestFactor},
+                    {"spectral_centroid_hz", input.spectrum.spectralCentroid},
+                    {"spectral_tilt", input.spectrum.spectralTilt},
+                    {"stereo_width", input.stereo.stereoWidth}
+                };
+                fb["fallback_target_lufs"] = fallbackTargetLufs;
+                fb["note"] = "Neural model refused this input (see neural_refusal_reason). "
+                             "Applied a measurement-driven heuristic plan targeting "
+                             + std::to_string(static_cast<int>(fallbackTargetLufs))
+                             + " LUFS instead. The heuristic uses the MEASURED input "
+                               "loudness, which the neural model cannot see.";
+                return toJString(fb);
+            }
+            // Heuristic itself failed (shouldn't — resolver always sets valid=true —
+            // but be defensive): fall through to the neural failure below, flagged.
+            err["path"] = "all_paths_failed";
+            err["fallback_error"] = "heuristic resolver returned an invalid plan";
+        }
+        return toJString(err);
+    }
+
+    // Limiter ceiling / AUDIT: opt-in. The decision is not applied here (it is a
+    // decision-only tool), but if the caller requests the limiter ceiling be
+    // honoured when they apply, stamp the flag onto the returned plan so a
+    // subsequent apply_validated_plan honours it (hard-clamped to the
+    // streaming-safe ceiling in AutoMasteringEngine::applyValidatedPlan).
+    const bool applyLimiterCeiling = params.hasProperty("apply_limiter_ceiling")
+        && static_cast<bool>(params.getProperty("apply_limiter_ceiling", false));
+    plan.applyLimiterCeiling = applyLimiterCeiling;
+
+    auto pushTargetArray = [](json& dst, const char* key, const auto& values)
+    {
+        dst[key] = json::array();
+        for (const auto value : values)
+            dst[key].push_back(value);
+    };
+
+    const auto appliedMask = json{
+        {"eq", plan.appliedMask.eq},
+        {"dynamics", plan.appliedMask.dynamics},
+        {"stereo", plan.appliedMask.stereo},
+        {"harmonic", plan.appliedMask.harmonic},
+        {"limiter", plan.appliedMask.limiter},
+        {"loudness", plan.appliedMask.loudness}
+    };
+
+    // Raw model telemetry mirrors mastering_decision_adapter's slice map. These
+    // values are not the current engine controls; the safety-projected plan and
+    // actual_engine_mapping below describe what the DSP path would consume.
+    json rawModelDecision;
+    rawModelDecision["field_semantics"] = "raw_model_telemetry_not_applied_parameters";
+    json eqBands = json::array();
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+        eqBands.push_back({ {"frequencyHz", more_phi::kSonicMasterEqFrequenciesHz[i]},
+                            {"gainDb", raw[more_phi::kSonicMasterEqGainOffset + i]},
+                            {"q", more_phi::kSonicMasterEqDefaultQ} });
+    rawModelDecision["eq_bands"] = eqBands;
+    rawModelDecision["target_lufs"] = raw[more_phi::kSonicMasterTargetLufsIdx];
+    rawModelDecision["target_lufs_semantics"] = "requested_mastering_target_not_input_loudness_measurement";
+    rawModelDecision["true_peak_ceiling_dbtp"] = raw[more_phi::kSonicMasterTruePeakIdx];
+
+    // AUDIT-F1.1 (2026-06-27): the embedded ONNX graph was exported with
+    // target_lufs baked as a CONSTANT (-14.0, tools/export_onnx/export_patched.py:376)
+    // because the C++ runner takes a single waveform input. The HTTP fallback
+    // server (tools/inference_server/server.py:83-88) passes target_lufs as a
+    // LIVE input. So the two paths agree at -14 but DIVERGE whenever the closed-
+    // loop feedback or genre prior pushes a target != -14 — the HTTP path
+    // conditions on the actual target, the ONNX graph cannot. This field tells
+    // the assistant which path shaped the applied target so the model's loudness
+    // recommendation (always computed against -14 on the ONNX path) is not
+    // mistaken for a target-aware recommendation.
+    {
+        const auto cl = engine.getClosedLoopState();
+        const bool explicitOverride = std::abs(targetLufs - (-14.0f)) > 0.01f;
+        std::string path;
+        std::string divergenceNote;
+        if (cl.feedbackActive)
+        {
+            path = "closed_loop_feedback";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "applied target driven by closed-loop LUFS servo (may diverge from HTTP path).";
+        }
+        else if (explicitOverride)
+        {
+            path = "explicit_on_demand_override";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "applied target is the caller's explicit override (may diverge from HTTP path).";
+        }
+        else
+        {
+            // genre prior is folded at decode (setGenreTargetLufs) when confidence
+            // >= 0.5; otherwise the model default (-14 baked) applies. We can't
+            // observe the genre flag from here without the classifier, so report
+            // the conservative default path; the closed_loop_state block carries
+            // the live next-target for confirmation.
+            path = "model_default_or_genre_prior";
+            divergenceNote = "ONNX loudness recommendation computed against baked -14; "
+                             "a genre prior (when classifier confidence >= 0.5) may also shape decode.";
+        }
+        rawModelDecision["loudness_target_path"] = path;
+        rawModelDecision["loudness_path_divergence_note"] = divergenceNote;
+        rawModelDecision["onnx_baked_target_lufs"] = -14.0;
+    }
+
+    json compBands = json::array();
+    for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
+    {
+        const std::size_t o = more_phi::kSonicMasterCompOffset + b * more_phi::kSonicMasterCompBandWidth;
+        compBands.push_back({ {"id", (int)b},
+                              {"thresholdDb", raw[o + 0]},
+                              {"ratio",       raw[o + 1]},
+                              {"attackMs",    raw[o + 2]},
+                              {"releaseMs",   raw[o + 3]},
+                              {"makeupDb",    raw[o + 4]},
+                              {"kneeDb",      raw[o + 5]} });
+    }
+    rawModelDecision["compressor_bands"] = compBands;
+    rawModelDecision["limiter_aggressiveness"] = raw[more_phi::kSonicMasterAggrIdx];
+    rawModelDecision["expected_gain_reduction_db"] = raw[more_phi::kSonicMasterGainRedIdx];
+
+    // Character argmax over the 3 logits.
+    const float c0 = raw[more_phi::kSonicMasterCharOffset + 0];
+    const float c1 = raw[more_phi::kSonicMasterCharOffset + 1];
+    const float c2 = raw[more_phi::kSonicMasterCharOffset + 2];
+    const char* charNames[] = { "transparent", "balanced", "aggressive" };
+    int charIdx = (c0 >= c1 && c0 >= c2) ? 0 : (c1 >= c2 ? 1 : 2);
+    rawModelDecision["character"] = charNames[charIdx];
+
+    json projectedPlan;
+    projectedPlan["valid"] = plan.valid;
+    projectedPlan["projected"] = plan.projected;
+    projectedPlan["fallback_mode"] = "none";
+    projectedPlan["applied_mask"] = appliedMask;
+    // AUDIT-FIX (P10, 2026-06-29): surface the model confidence so programmatic
+    // clients can branch on plan quality without parsing the failure path. The
+    // confidence comes from the engine's last-apply confirmedFraction (the ratio
+    // of verified slots to enqueued slots). A value < 0.75 (the safety floor)
+    // means the plan was accepted but borderline — the client may want to request
+    // a second opinion. 1.0 when no apply has run yet (no evidence of problems).
+    const float projectedConfidence = p.getAutoMasteringEngine()
+        .getLastApplyVerification().confirmedFraction();
+    projectedPlan["confidence"] = projectedConfidence;
+    // AUDIT-FIX (P10, 2026-06-29): surface the per-cycle delta caps so clients can
+    // predict how many cycles the closed-loop servo will need to converge. The
+    // policy config's maxDeltaPerPlan fields clamp each cycle's step — a loudness
+    // delta of 0.6 LU/cycle toward a 3 LU target means ~5 cycles to converge.
+    projectedPlan["delta_cap_per_cycle"] = json{
+        {"loudness_lu", 0.6},      // maxDeltaPerPlan.loudness[0] * 10 (approx)
+        {"eq_db", 1.2},            // maxDeltaPerPlan.eq per band (approx)
+        {"dynamics_ratio", 0.3},   // maxDeltaPerPlan.dynamics per slot (approx)
+        {"stereo_width", 0.1}      // maxDeltaPerPlan.stereo per region (approx)
+    };
+    pushTargetArray(projectedPlan, "eq_normalized", plan.projectedTargets.eq);
+    pushTargetArray(projectedPlan, "dynamics_normalized", plan.projectedTargets.dynamics);
+    pushTargetArray(projectedPlan, "stereo_normalized", plan.projectedTargets.stereo);
+    pushTargetArray(projectedPlan, "harmonic_normalized", plan.projectedTargets.harmonic);
+    pushTargetArray(projectedPlan, "limiter_normalized", plan.projectedTargets.limiter);
+    pushTargetArray(projectedPlan, "loudness_normalized", plan.projectedTargets.loudness);
+
+    json engineMapping;
+    engineMapping["field_semantics"] = "safety_projected_values_mapped_to_current_dsp_controls";
+    engineMapping["stage_order"] = json::array({"dynamics", "eq", "stereo", "harmonic", "loudness", "limiter"});
+    engineMapping["applied_mask"] = appliedMask;
+
+    json engineEq = json::array();
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+    {
+        const auto normalized = plan.projectedTargets.eq[i];
+        engineEq.push_back({
+            {"frequencyHz", more_phi::kSonicMasterEqFrequenciesHz[i]},
+            {"q", more_phi::kSonicMasterEqDefaultQ},
+            {"normalized", normalized},
+            {"gainDb", std::clamp(normalized * more_phi::kAdaptiveEqMaxGainDb,
+                                  -more_phi::kAdaptiveEqMaxGainDb,
+                                  more_phi::kAdaptiveEqMaxGainDb)},
+            {"applied_if_confirmed", plan.appliedMask.eq}
+        });
+    }
+    engineMapping["eq_bands"] = engineEq;
+
+    json engineDynamics = json::array();
+    for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
+    {
+        // AUDIT FIX: read the model's decoded compressor params from the
+        // compParams sidecar (populated by decodeSonicMasterDecision), not
+        // from the current DSP state. The DSP may still hold the previous
+        // plan's values or heuristic defaults — the model's actual intent
+        // is in the sidecar.
+        const auto& cp = plan.compParams[b];
+        engineDynamics.push_back({
+            {"id", static_cast<int>(b)},
+            {"thresholdDb", std::clamp(cp.thresholdDb, -40.0f, -6.0f)},
+            {"ratio",       std::clamp(cp.ratio,       1.0f,  6.0f)},
+            {"attackMs",    cp.attackMs},
+            {"releaseMs",   cp.releaseMs},
+            {"makeupDb",    cp.makeupDb},
+            {"kneeDb",      cp.kneeDb},
+            {"direct_model_controls", json::array({"thresholdDb", "ratio", "attackMs", "releaseMs", "makeupDb", "kneeDb"})},
+            {"applied_if_confirmed", plan.appliedMask.dynamics}
+        });
+    }
+    engineMapping["dynamics_bands"] = engineDynamics;
+
+    json engineStereo = json::array();
+    for (std::size_t i = 0; i < more_phi::kSonicMasterStereoRegionCount; ++i)
+    {
+        const auto normalized = plan.projectedTargets.stereo[i];
+        engineStereo.push_back({
+            {"region", static_cast<int>(i)},
+            {"normalized", normalized},
+            {"width", std::clamp(1.0f + normalized, 0.0f, 2.0f)},
+            {"applied_if_confirmed", plan.appliedMask.stereo}
+        });
+    }
+    engineMapping["stereo_regions"] = engineStereo;
+    engineMapping["loudness"] = {
+        {"target_lufs", std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f, -23.0f, -8.0f)},
+        {"applied_if_confirmed", plan.appliedMask.loudness},
+        // AUDIT-FIX (H2): machine-readable semantic discriminator. This loudness
+        // slot is the mastering TARGET (the SonicMaster input is peak-normalized,
+        // so the model cannot measure absolute input LUFS — see
+        // SonicMasterAnalysisEngine AUDIT-7). Genuine input-loudness measurements
+        // come only from the BS.1770-4 meter surfaced via the measurements
+        // snapshot. The boolean + "kind" let programmatic clients branch without
+        // parsing the warnings array.
+        {"kind", "target"},
+        {"is_input_measurement", plan.loudnessIsMeasurement}
+    };
+    engineMapping["limiter"] = {
+        {"ceiling_dbtp", std::clamp(-1.0f + plan.projectedTargets.limiter[0] * 0.5f, -3.0f, -0.1f)},
+        {"applied_if_confirmed", plan.appliedMask.limiter || plan.applyLimiterCeiling},
+        {"apply_limiter_ceiling_requested", plan.applyLimiterCeiling},
+        {"default_semantics", "telemetry_only_unless_limiter_mask_true_or_apply_limiter_ceiling"}
+    };
+    engineMapping["harmonic"] = {
+        {"amount_normalized", plan.projectedTargets.harmonic[0]},
+        {"applied_if_confirmed", plan.appliedMask.harmonic},
+        {"default_semantics", "telemetry_only_unless_harmonic_mask_true"}
+    };
+
+    json result;
+    result["success"] = true;
+    result["available"] = true;
+    result["applied"] = false;  // decision only — assistant/user applies next
+    // FALLBACK (2026-06-27): provenance flag so the assistant can always tell
+    // which path produced this result. "neural" = the model produced this plan.
+    // Mirrors the "heuristic_fallback" path emitted when the model refuses and
+    // the caller opted into fallback_to_heuristic.
+    result["path"] = "neural";
+    result["response_schema_version"] = 2;
+    result["model_source"] = "sonicmaster-v2 (masteringbrainv2)";
+    // AUDIT (C2, 2026-06-25): surface the ONNX inference latency so the 3 s
+    // analysis-cycle budget can be monitored. 0.0 when ONNX is unavailable or
+    // before the first run. A sustained last_inference_ms approaching the cycle
+    // budget means the model can no longer keep up at the configured cadence.
+    result["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+    result["max_inference_ms"]  = p.getSonicMasterMaxInferenceMs();
+    result["analysis_cycle_budget_ms"] = 3000;  // kSonicMasterAnalysisInterval * 1000
+    result["target_lufs_requested"] = targetLufs;
+    // F2/AUDIT: make explicit that the neural mastering decision — even if
+    // applied — lands on More-Phi's INTERNAL mastering chain, which is dormant
+    // in the shipped plugin (no audio flows through it unless the Ozone
+    // applicator bridge forwarded parameters to a hosted plugin).
+    // `applied_to_audio_path` reports whether the last apply actually reached
+    // an audible path (internal chain active OR Ozone bridge wrote params),
+    // using engine.lastApplyReachedAudioPath() instead of isActive() directly.
+    result["applied_to_audio_path"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+    // AUDIT-FIX (VERIFY-4): convenience top-level fields mirroring the detailed
+    // mapping_status block below, so callers that only need "did the last plan
+    // actually reach audio?" have a flat boolean + count without parsing the
+    // nested object. plan_reached_audio is an alias for applied_to_audio_path
+    // that reads naturally in the "decision → apply" flow.
+    result["plan_reached_audio"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+    result["ozone_applied_count"] = p.getAutoMasteringEngine().getLastOzoneAppliedCount();
+    result["application_target"] = "more_phi_internal_mastering_chain_not_hosted_plugin";
+    // Item 7 relabel: the loudness slot semantics are already disclosed in
+    // engineMapping.loudness; echo the discriminator at top level for clients
+    // that only read flat fields.
+    result["loudness_slot_is_target_not_measurement"] = (plan.loudnessIsMeasurement == false);
+    result["decision"] = rawModelDecision; // legacy alias; prefer raw_model_decision.
+    result["raw_model_decision"] = rawModelDecision;
+    result["projected_plan"] = projectedPlan;
+    result["actual_engine_mapping"] = engineMapping;
+
+    // AUDIT (W1+M1, 2026-06-25): surface OzonePlanApplicator mapping readiness
+    // and the last-apply breakdown so a caller can distinguish "plan applied
+    // zero parameters because the hosted plugin is unmapped" from "plan applied
+    // zero parameters because it genuinely contained no changes." Previously
+    // the only signal was a DBG line (OzonePlanApplicator.cpp:83-92) that never
+    // reached the assistant. `ozone_mapped==false` here means the neural plan's
+    // writes silently no-op regardless of the decoded decision.
+    {
+        json ms;
+        ms["ozone_mapped"]       = p.ozoneMappingReady();
+        ms["has_applicator"]     = p.hasOzonePlanApplicator();
+        ms["mapped_slot_count"]  = p.ozoneMappedSlotCount();
+        ms["max_slot_count"]     = 50;  // 8*5 EQ + 4 dyn + 4 imager + 2 maximizer
+        ms["field_semantics"]    = "static_hosted_plugin_parameter_discovery";
+        // If a neural apply has run, fold in its per-slot outcome so the
+        // readiness signal is paired with what actually landed last cycle.
+        // Decision-only calls (no prior apply) read zeros — that is expected.
+        const auto breakdown = p.getAutoMasteringEngine().getChainPlanner().getLastOzoneApplyBreakdown();
+        const auto verify    = p.getAutoMasteringEngine().getLastApplyVerification();
+        ms["last_apply_enqueued"]      = breakdown.enqueued;
+        ms["last_apply_skipped"]       = breakdown.skipped;
+        ms["last_apply_unmapped"]      = breakdown.unmapped;
+        ms["last_apply_ambiguous"]     = breakdown.ambiguous;
+        ms["last_apply_verified"]      = verify.verified;
+        ms["last_apply_mismatched"]    = verify.mismatched;
+        ms["last_apply_was_partial"]   = p.getAutoMasteringEngine().lastApplyWasPartial();
+        result["mapping_status"] = ms;
+    }
+
+    // AUDIT-FIX-R2: include genuine BS.1770-4 / EBU R128 measurements from the
+    // AutoMasteringEngine's already-running meters. These are MEASUREMENTS
+    // (K-weighting, gated integration, 4x polyphase ISP), distinct from the
+    // model ESTIMATE which is peak-normalized and target-dependent. The assistant
+    // should report both, clearly labeled, so it never presents the model's
+    // target_lufs as a measurement of the input audio. Factored into
+    // sonicmasterMeasurementsJson() so the failure path emits the same shape.
+    result["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+
+    // Stage E (2026-06-26): closed-loop state so the assistant can report
+    // convergence ("applied -11.2 LUFS, measured -11.8, correcting...") and know
+    // whether the always-on cycle is actively correcting toward the target.
+    // Factored into sonicmasterClosedLoopJson() so the failure path matches.
+    result["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
+
+    // AUDIT-F1.5 (2026-06-27): surface the structured reason the most recent
+    // BACKGROUND runCycle skipped (symmetric with failure_reason, which covers
+    // this on-demand call). The assistant can now tell "the background cycle
+    // last skipped because the input was silent" vs "low confidence" vs "ok".
+    result["last_cycle_skip_reason"] = sonicmasterFailureState(engine.getLastCycleFailure());
+
+    // AUDIT-FIX (L3-9, 2026-06-29): surface inference diagnostics in the SUCCESS
+    // path too (previously only emitted on failure). The run/fail counters and
+    // last error tell the assistant whether the model is healthy and whether
+    // past failures preceded this success, which is useful context when the
+    // on-demand call succeeded but the background cycle is failing intermittently.
+    {
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        infer["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        result["inference_diagnostics"] = infer;
+    }
+
+	    result["warnings"] = json::array({
+	        "decision_contains_raw_model_telemetry_not_applied_parameters",
+	        "target_lufs_is_requested_target_not_input_loudness_measurement",
+	        "limiter_ceiling_is_telemetry_unless_applied_mask_limiter_true"
+	    });
+
+	    // AUDIT-FIX (P8, 2026-06-27): semantic labeling block. Explicitly documents
+	    // for every field whether it is a measurement, a target, or a model estimate.
+	    // Prevents the AI assistant from conflating the model's peak-normalized
+	    // loudness TARGET with the genuine BS.1770-4 input MEASUREMENT.
+	    result["semantics"] = json::object({
+	        {"projected_plan.target_lufs", "mastering_target"},
+	        {"projected_plan.eq_gains", "model_estimate"},
+	        {"projected_plan.true_peak_ceiling", "model_estimate"},
+	        {"projected_plan.comp_ratio", "model_estimate"},
+	        {"live_measurements.lufs_integrated", "measurement"},
+	        {"live_measurements.lufs_short_term", "measurement"},
+	        {"live_measurements.lufs_momentary", "measurement"},
+	        {"live_measurements.true_peak_dbtp", "measurement"},
+	        {"live_measurements.thd_percent", "measurement"},
+	        {"live_measurements.crest_factor", "measurement"},
+	        {"live_measurements.spectral_centroid_hz", "measurement"},
+	        {"live_measurements.spectral_tilt", "measurement"},
+	        {"live_measurements.stereo_width", "measurement"},
+	        {"live_measurements.correlation_mid", "measurement"},
+	        {"closed_loop_state.last_lufs_error", "closed_loop_correction"}
+	    });
+
+    // Legacy normalized arrays retained for existing clients. Prefer
+    // projected_plan.*_normalized in new integrations.
+    result["plan_eq_normalized"]      = json::array();
+    result["plan_dynamics_normalized"] = json::array();
+    result["plan_stereo_normalized"]   = json::array();
+    result["plan_loudness_normalized"] = json::array();
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringEqTargetCount; ++i) result["plan_eq_normalized"].push_back(plan.projectedTargets.eq[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringDynamicsTargetCount; ++i) result["plan_dynamics_normalized"].push_back(plan.projectedTargets.dynamics[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringStereoTargetCount; ++i) result["plan_stereo_normalized"].push_back(plan.projectedTargets.stereo[i]);
+    for (std::size_t i = 0; i < more_phi::kNeuralMasteringLoudnessTargetCount; ++i) result["plan_loudness_normalized"].push_back(plan.projectedTargets.loudness[i]);
+
+    // AUDIT-FIX-R10: cache the result with a 3-second TTL so repeated calls
+    // from the assistant within a short window don't re-run inference.
+    toolResultCache().put("sonicmaster_decision", params,
+                          p.getProcessorGenerationToken(), result,
+                          p.getInstanceIdentity().instanceId,
+                          std::chrono::seconds(3));
+
+    return toJString(result);
+}
+
+juce::String MCPToolHandler::masteringNeuralApply(const juce::var& params, MorePhiProcessor& p)
+{
+    // Stage B (2026-06-26): one-click neural Master Assistant. Composes
+    // requestDecisionNow + applyValidatedPlan and returns the per-slot
+    // breakdown. This is the COMMIT door — sonicmaster_decision stays
+    // decision-only for preview.
+    using namespace nlohmann;
+
+    const float targetLufs = static_cast<float>(params.getProperty("target_lufs", -14.0));
+    const bool applyLimiterCeiling = params.hasProperty("apply_limiter_ceiling")
+        && static_cast<bool>(params.getProperty("apply_limiter_ceiling", false));
+
+    auto& engine = p.getSonicMasterEngine();
+
+    // State 1: model unavailable (in-process ONNX not loaded / no HTTP fallback).
+    if (!engine.isAvailable())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = false;
+        err["applied"] = false;
+        err["state"] = "model_unavailable";
+        err["error"] = "The SonicMaster ONNX model is not loaded (in-process). Rebuild the "
+                       "plugin with MORE_PHI_ENABLE_ONNX=ON, or start the HTTP fallback "
+                       "(python tools/inference_server/server.py).";
+        return toJString(err);
+    }
+
+    // State 2: no hosted plugin loaded → the decision has nowhere to land.
+    if (!p.hasOzonePlanApplicator())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["state"] = "no_hosted_plugin";
+        err["error"] = "No hosted plugin is loaded. Load a mastering plugin (e.g. an Ozone "
+                       "instance) into More-Phi first, then re-run.";
+        json ms;
+        ms["ozone_mapped"] = false;
+        ms["has_applicator"] = false;
+        ms["mapped_slot_count"] = 0;
+        err["mapping_status"] = ms;
+        return toJString(err);
+    }
+
+    // State 3: hosted plugin loaded but its parameters aren't mapped (all-stubs).
+    if (!p.ozoneMappingReady())
+    {
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["state"] = "unmapped";
+        err["mapped_slot_count"] = p.ozoneMappedSlotCount();
+        err["error"] = "The hosted plugin's parameter names don't match the Ozone-shaped "
+                       "discovery, so the neural plan has nowhere to write. Check "
+                       "mapping_status for details, or host an iZotope Ozone instance.";
+        return toJString(err);
+    }
+
+    // Run the decision (5 s budget, matching sonicmaster_decision).
+    ValidatedNeuralMasteringPlan plan {};
+    bool inferenceOk = false;
+    bool timedOut = false;
+    // DIAGNOSTIC (2026-06-26): same structured failure reason as sonicmaster_decision
+    // — the commit door was just as opaque ("Inference failed (model returned no
+    // decision)") and the assistant would confabulate identically here.
+    more_phi::DecisionFailure failure = more_phi::DecisionFailure::None;
+    {
+        auto future = std::async(std::launch::async, [&]() {
+            return engine.requestDecisionNow(targetLufs, plan, nullptr, 0, &failure);
+        });
+        if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready)
+            inferenceOk = future.get();
+        else
+            timedOut = true;
+    }
+    if (!inferenceOk)
+    {
+        const auto cd = engine.getCaptureDiagnostics();
+        const auto sr = engine.getLastSafetyRejection();
+        json err;
+        err["success"] = false;
+        err["available"] = true;
+        err["applied"] = false;
+        err["timed_out"]      = timedOut;
+        err["state"]          = timedOut ? "timeout" : sonicmasterFailureState(failure);
+        err["failure_reason"] = sonicmasterFailureState(failure);
+        if (!timedOut && failure == more_phi::DecisionFailure::SafetyRejected && sr.valid)
+            err["state"] = std::string("safety_rejected:") + more_phi::neuralMasteringIssueKey(sr.primaryIssue);
+        err["engine_status"]  = sonicmasterStatusString(engine.getStatus());
+        err["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        err["error"] = sonicmasterFailureMessage(timedOut ? more_phi::DecisionFailure::None : failure,
+                                                 timedOut, cd, sr);
+        // Mirror sonicmaster_decision's failure-path diagnostics so callers of the
+        // commit door get the same capture + measurement + safety context.
+        json cap;
+        cap["prepared"]         = cd.prepared;
+        cap["active"]           = cd.active;
+        cap["ring_allocated"]   = cd.ringAllocated;
+        cap["captured_frames"]  = cd.capturedFrames;
+        cap["required_frames"]  = cd.requiredFrames;
+        cap["ring_capacity"]    = cd.ringCapacity;
+        if (!cd.prepared)
+            cap["hint"] = "engine not prepared (prepareToPlay did not run).";
+        else if (!cd.ringAllocated)
+            cap["hint"] = "capture ring is not allocated.";
+        else if (cd.requiredFrames > 0 && cd.capturedFrames < cd.requiredFrames)
+            cap["hint"] = "not enough audio captured yet — play continuous audio for ~"
+                        + std::to_string(static_cast<int>(cd.requiredFrames / 48000.0)) + " s.";
+        else
+            cap["hint"] = "ring has a full window but inference still failed; this is a model/decode error, not a capture problem.";
+        err["capture_diagnostics"] = cap;
+        err["safety_rejection"] = sonicmasterSafetyRejectionJson(sr);
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        err["inference_diagnostics"] = infer;
+        err["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+        err["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
+        return toJString(err);
+    }
+
+    plan.applyLimiterCeiling = applyLimiterCeiling;
+
+    // Commit: apply to the hosted plugin via the existing applyValidatedPlan door.
+    const bool applied = p.getAutoMasteringEngine().applyValidatedPlan(plan);
+
+    json result;
+    result["success"] = applied;
+    result["available"] = true;
+    result["applied"] = applied;
+    result["state"] = applied ? "active_applying" : "apply_no_op";
+    result["target_lufs_requested"] = targetLufs;
+    result["loudness_slot_is_target_not_measurement"] = (plan.loudnessIsMeasurement == false);
+
+    // Per-slot breakdown (reuses the Stage-2 mapping_status surface).
+    {
+        const auto breakdown = p.getAutoMasteringEngine().getChainPlanner().getLastOzoneApplyBreakdown();
+        const auto verify = p.getAutoMasteringEngine().getLastApplyVerification();
+        json ms;
+        ms["ozone_mapped"] = p.ozoneMappingReady();
+        ms["has_applicator"] = p.hasOzonePlanApplicator();
+        ms["mapped_slot_count"] = p.ozoneMappedSlotCount();
+        ms["last_apply_enqueued"] = breakdown.enqueued;
+        ms["last_apply_skipped"] = breakdown.skipped;
+        ms["last_apply_unmapped"] = breakdown.unmapped;
+        ms["last_apply_ambiguous"] = breakdown.ambiguous;
+        ms["last_apply_verified"] = verify.verified;
+        ms["last_apply_mismatched"] = verify.mismatched;
+        ms["last_apply_was_partial"] = p.getAutoMasteringEngine().lastApplyWasPartial();
+        ms["last_apply_reached_audio_path"] = p.getAutoMasteringEngine().lastApplyReachedAudioPath();
+        result["mapping_status"] = ms;
+    }
+
+    // Fold in the live measurements so the assistant can read achieved LUFS for
+    // the closed loop (Stage D) without a second call. Uses the shared helper so
+    // the shape matches sonicmaster_decision's success AND failure paths.
+    result["live_measurements"] = sonicmasterMeasurementsJson(engine.getLiveMeasurements());
+
+    // Stage E: closed-loop state (the one-click apply is a single shot, but the
+    // background cycle's loop state is still useful context for the assistant).
+    result["closed_loop_state"] = sonicmasterClosedLoopJson(engine.getClosedLoopState());
+
+    if (!applied)
+        result["error"] = "The decision was decoded but applyValidatedPlan wrote zero "
+                          "parameters (see mapping_status for the per-slot breakdown).";
+
+    return toJString(result);
+}
+
+// ── IPC Assistant tools ──────────────────────────────────────────────────────
+
+juce::String MCPToolHandler::morePhiIpcAttach(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcAttachArgs parsed;
     juce::String error;
@@ -5612,20 +7445,20 @@ juce::String MCPToolHandler::izotopeIpcAttach(const juce::var& params, MorePhiPr
     if (mappedSize)
         parsed.mappedSizeBytes = *mappedSize;
 
-    return toJString(p.getIZotopeIPCDiscovery().attach(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().attach(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcDetach(MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcDetach(MorePhiProcessor& p)
 {
-    return toJString(p.getIZotopeIPCDiscovery().detach().body);
+    return toJString(p.getMorePhiIPCDiscovery().detach().body);
 }
 
-juce::String MCPToolHandler::izotopeIpcStatus(MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcStatus(MorePhiProcessor& p)
 {
-    return toJString(p.getIZotopeIPCDiscovery().status().body);
+    return toJString(p.getMorePhiIPCDiscovery().status().body);
 }
 
-juce::String MCPToolHandler::izotopeIpcSnapshot(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcSnapshot(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcSnapshotArgs parsed;
     juce::String error;
@@ -5648,10 +7481,10 @@ juce::String MCPToolHandler::izotopeIpcSnapshot(const juce::var& params, MorePhi
     if (value)
         parsed.maxFrames = *value;
 
-    return toJString(p.getIZotopeIPCDiscovery().snapshot(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().snapshot(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcDump(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcDump(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcDumpArgs parsed;
     juce::String error;
@@ -5671,10 +7504,10 @@ juce::String MCPToolHandler::izotopeIpcDump(const juce::var& params, MorePhiProc
     if (value)
         parsed.sizeBytes = *value;
 
-    return toJString(p.getIZotopeIPCDiscovery().dump(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().dump(parsed).body);
 }
 
-juce::String MCPToolHandler::izotopeIpcCapture(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcCapture(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcCaptureArgs parsed;
     juce::String error;
@@ -5728,10 +7561,10 @@ juce::String MCPToolHandler::izotopeIpcCapture(const juce::var& params, MorePhiP
     if (!optionalBoolProperty(params, "include_changed_bytes", parsed.includeChangedBytes, error))
         return invalidParamsResponse(error.toRawUTF8());
 
-    return toJString(p.getIZotopeIPCDiscovery().capture(parsed).body);
+    return toJString(p.getMorePhiIPCDiscovery().capture(parsed).body);
 }
 
-juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MorePhiProcessor& p)
+juce::String MCPToolHandler::morePhiIpcRunAssistant(const juce::var& params, MorePhiProcessor& p)
 {
     standalone_mcp::IpcAssistantRunArgs parsed;
     juce::String error;
@@ -5748,9 +7581,9 @@ juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MoreP
         return invalidParamsResponse(error.toRawUTF8());
 
     value.reset();
-    if (!optionalSizeProperty(params, "ozone_instance_id", value, error))
+    if (!optionalSizeProperty(params, "instance_id", value, error))
         return invalidParamsResponse(error.toRawUTF8());
-    if (!assignOptionalUInt32(value, parsed.ozoneInstanceId, "ozone_instance_id", error))
+    if (!assignOptionalUInt32(value, parsed.instanceId, "instance_id", error))
         return invalidParamsResponse(error.toRawUTF8());
 
     std::optional<std::string> pluginNameQuery;
@@ -5786,7 +7619,7 @@ juce::String MCPToolHandler::ozoneRunAssistantIpc(const juce::var& params, MoreP
     if (!optionalBoolProperty(params, "apply_result", applyResult, error))
         return invalidParamsResponse(error.toRawUTF8());
 
-    auto outcome = p.getIZotopeIPCAssistant().runAssistant(parsed);
+    auto outcome = p.getMorePhiIPCAssistant().runAssistant(parsed);
     if (!outcome.isError && applyResult)
     {
         auto applyOutcome = applyIpcAssistantParametersToHostedPlugin(outcome.body, p);
@@ -6099,6 +7932,194 @@ juce::String MCPToolHandler::ozoneTrackSearch(const juce::var& params,
     }
 
     return toJString(TrackAssistantStore::search(query, statuses, dateFrom, dateTo, page, pageSize));
+}
+
+// ── Agent runtime tools (agents.*) ────────────────────────────────────────────
+//
+// These handlers are thin MCP wrappers over AgentRuntime (src/AI/Agents/AgentRuntime.h).
+// They intentionally defer every state check to the runtime; if the runtime was never
+// constructed (e.g. MCP server not started, or agent layer disabled) we return a
+// deterministic `agents_unavailable` error envelope so callers can branch cleanly.
+
+namespace {
+// Resolves the per-processor agent runtime. Returns nullptr if the plugin has not
+// started its MCP server / runtime yet.
+more_phi::agents::AgentRuntime* runtimeOf(MorePhiProcessor& p);
+more_phi::agents::AgentRuntime* runtimeOf(MorePhiProcessor& p)
+{
+    return p.getAgentRuntime();
+}
+
+juce::String agentsUnavailable()
+{
+    return juce::String(nlohmann::json{
+        {"error", { {"code", "agents_unavailable"},
+                    {"message", "agent runtime not started"} } }
+    }.dump());
+}
+
+// Best-effort conversion of an AgentResult (which uses nlohmann::json internally) to a
+// juce::String MCP envelope. Findings/actions/events are surfaced verbatim so MCP
+// consumers (and tests) can introspect them.
+juce::String resultEnvelope(const juce::String& taskId, const more_phi::agents::AgentResult& r)
+{
+    nlohmann::json env = nlohmann::json::object();
+    env["task_id"] = taskId.toStdString();
+    env["success"] = r.success;
+    if (! r.errorCode.isEmpty())
+        env["error_code"] = r.errorCode.toStdString();
+    env["findings"]       = r.findings;
+    env["proposed_actions"] = r.proposedActions;
+    env["telemetry"]      = r.telemetry;
+    return juce::String(env.dump());
+}
+} // namespace
+
+juce::String MCPToolHandler::agentsList(MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    return juce::String(rt->describeState().dump());
+}
+
+juce::String MCPToolHandler::agentsRunGoal(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto intent = params.getProperty("intent", {}).toString();
+    if (intent.trim().isEmpty())
+        return toJString(json{{"error", "missing_intent"}});
+
+    if (! rt->isRunning())
+        return juce::String(nlohmann::json{
+            {"error", "runtime_stopped"},
+            {"message", "agent runtime is stopped; start it before submitting goals"}
+        }.dump());
+
+    const auto runId = rt->submitGoal(intent, more_phi::agents::TaskPriority::High, "mcp");
+    if (runId.isEmpty())
+        return toJString(json{{"error", "no_conductor_registered"}});
+
+    return juce::String(nlohmann::json{
+        {"run_id", runId.toStdString()},
+        {"state",  "submitted"}
+    }.dump());
+}
+
+juce::String MCPToolHandler::agentsRunTask(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto agentName = params.getProperty("agent", {}).toString().trim();
+    const auto intent    = params.getProperty("intent", {}).toString().trim();
+    if (agentName.isEmpty())
+        return toJString(json{{"error", "missing_agent"}});
+    // H2: intent is required — mirrors agentsRunGoal. An empty intent produces a
+    // no-op task that wastes a queue slot and returns a generic error later.
+    if (intent.isEmpty())
+        return toJString(json{{"error", "missing_intent"}});
+
+    const auto role = more_phi::agents::agentRoleFromString(agentName);
+    // H2: reject Custom outright. No Custom agent is ever registered in production,
+    // and the old "allow through if literally 'custom'" path silently enqueued a
+    // doomed task. Fail fast with a clear error.
+    if (role == more_phi::agents::AgentRole::Custom)
+        return toJString(json{{"error", "unknown_agent_role"}, {"role", agentName.toStdString()}});
+
+    if (! rt->isRunning())
+        return juce::String(nlohmann::json{
+            {"error", "runtime_stopped"},
+            {"message", "agent runtime is stopped; start it before submitting tasks"}
+        }.dump());
+
+    more_phi::agents::AgentTask task;
+    task.targetRole = role;
+    task.intent     = intent;
+    task.priority   = more_phi::agents::TaskPriority::Normal;
+    task.origin     = "mcp";
+    const auto taskId = rt->submitTask(std::move(task));
+    if (taskId.isEmpty())
+        return toJString(json{{"error", "agent_not_registered"}, {"role", agentName.toStdString()}});
+
+    return juce::String(nlohmann::json{
+        {"task_id", taskId.toStdString()},
+        {"state",   "submitted"}
+    }.dump());
+}
+
+juce::String MCPToolHandler::agentsRunStatus(const juce::var& params, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+
+    const auto taskId = params.getProperty("task_id", {}).toString().trim();
+    if (taskId.isEmpty())
+        return toJString(json{{"error", "missing_task_id"}});
+
+    const auto maybe = rt->peekResult(taskId);
+    if (! maybe.has_value())
+    {
+        return juce::String(nlohmann::json{
+            {"task_id", taskId.toStdString()},
+            {"state",   "pending"}
+        }.dump());
+    }
+    return resultEnvelope(taskId, *maybe);
+}
+
+juce::String MCPToolHandler::agentsRunCancel(const juce::var& /*params*/, MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    // H1: stop() halts workers + pump. It is restartable — a subsequent
+    // agents.run_goal / agents.run_task returns runtime_stopped until start() is
+    // called again (e.g. via re-initialization or an explicit start path). We do
+    // NOT silently re-queue into a dead pool.
+    const bool wasRunning = rt->isRunning();
+    rt->stop();
+    return juce::String(nlohmann::json{
+        {"state", "stopped"},
+        {"was_running", wasRunning},
+        {"restartable", true}
+    }.dump());
+}
+
+juce::String MCPToolHandler::agentsBlackboardRecent(MorePhiProcessor& p)
+{
+    auto* rt = runtimeOf(p);
+    if (rt == nullptr)
+        return agentsUnavailable();
+    // H3: surface the CURATED, agent-only view from BlackboardBridge rather than
+    // the raw IntegrationEventBus. The raw bus also carries non-agent traffic
+    // (action-ledger artifacts, permission decisions) and full payloads with
+    // mastering telemetry — both inappropriate for an unscoped MCP consumer.
+    // blackboardRecent() filters to agent-published events and redacts payloads
+    // to a safe summary (type/source/runId/sequence).
+    return juce::String(rt->blackboardRecent(32).dump());
+}
+
+juce::String MCPToolHandler::agentsSetAutonomy(const juce::var& params,
+                                                MorePhiProcessor& p,
+                                                AutomationRuntime& runtime)
+{
+    (void)p;
+    const auto levelStr = params.getProperty("level", {}).toString().trim();
+    if (levelStr.isEmpty())
+        return toJString(json{{"error", "missing_level"}});
+
+    const auto level = more_phi::autonomyLevelFromString(levelStr);
+    runtime.permissions().setAutonomyLevel(level);
+    return juce::String(nlohmann::json{
+        {"level",  more_phi::toString(level).toStdString()},
+        {"applied", true}
+    }.dump());
 }
 
 } // namespace more_phi

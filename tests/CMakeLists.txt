@@ -24,7 +24,11 @@ add_executable(MorePhiTests
     Unit/TestPhysicsAndGenetic.cpp
     Unit/TestSidechainTrigger.cpp
     Unit/TestAudioEngine.cpp
+    Unit/TestRecallRamp.cpp
+    Unit/TestBypassCrossfade.cpp
     Unit/TestDSPQuality.cpp
+    # Output-protection limiter on the main wet path (morph-clip fix).
+    Unit/TestMorphOutputProtection.cpp
     Unit/TestAIRegressions.cpp
     Unit/TestLLMSettings.cpp
     Unit/TestLLMSettingsStore.cpp
@@ -36,12 +40,15 @@ add_executable(MorePhiTests
     Unit/SIMDAudioTests.cpp
     Unit/PerformanceProfilerTests.cpp
     Integration/TestPluginLifecycle.cpp
+    Integration/TestGenrePriorE2E.cpp
     Integration/TestMCPIntegration.cpp
     Integration/TestDatasetIntegration.cpp
     Integration/TestUserManualFeatureSurface.cpp
     Integration/TestVST3ParameterAutomation.cpp
     Integration/TestVST3MidiAndSidechain.cpp
     Integration/TestVST3AudioSignalAccuracy.cpp
+    # Phase 1: end-to-end activation (skips without secrets; never fails without them)
+    Integration/TestActivationE2E.cpp
     # Integration/TestVST3ComprehensiveE2E.cpp  # Out of sync with v3.3 core/API; needs rewrite
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
@@ -50,6 +57,13 @@ add_executable(MorePhiTests
     Unit/TestPresetLibrary.cpp
     Unit/TestV2Integration.cpp
     # Unit/TestDatasetModules.cpp  # Existing suite is out of sync with current dataset APIs
+
+    # ── Phase 1/2: Gravity Wells & Voronoi Morph Engine ──────────────────────────
+    Unit/TestGravityWells.cpp
+    Unit/TestVoronoiMorph.cpp
+
+    # ── Phase 7: Smart Preset Caching ───────────────────────────────────────────
+    Unit/TestSmartCaching.cpp
 
     # ── Pre-Deployment Audit Protocol (2026-04-14) ──────────────────────────────
     # Module 2: Host Integration (P0)
@@ -70,24 +84,88 @@ add_executable(MorePhiTests
     Unit/TestVST3IPCBridge.cpp
     Unit/TestAsyncToolExecutor.cpp
     # Ozone 11 mastering integration
-    Unit/TestOzoneIntegration.cpp
+    Unit/TestMorePhiIpcIntegration.cpp
     # Neural mastering safety projection
     Unit/TestNeuralMasteringSafetyPolicy.cpp
     Unit/TestNeuralMasteringController.cpp
+    Unit/TestRuleBasedMasteringResolver.cpp
     Unit/TestNeuralMasteringFeatureExtractor.cpp
     Unit/TestOnnxNeuralMasteringRunner.cpp
     Unit/TestOnnxRunnerInference.cpp
+    # SonicMaster realtime neural mastering (preview)
+    Unit/TestSonicMasterDecisionDecoder.cpp
+    # Contract parsing regression guard (C1: shipped contract schema mismatch).
+    # ONNX-independent — runs in every CI config.
+    Unit/TestSonicMasterContractParsing.cpp
+    # Ozone parameter-map discovery regression guard (W1: silent no-op when the
+    # hosted plugin's names don't match the discovery heuristic).
+    Unit/TestOzoneParameterMapDiscovery.cpp
+    # Per-parameter write-source stamp + write-precedence conflict counter (E2).
+    Unit/TestParameterBridgeWriteSource.cpp
+    # Hosted-parameter transition guard (C7): notifyHostedParameterChanged
+    # discards a straddling capture window + flushes the ring.
+    Unit/TestSonicMasterTransitionGuard.cpp
+    # C1 empirical proof: exercises the PRODUCTION loadModel(model, contract)
+    # path against the real staged ONNX model (the no-contract live test skips
+    # the parser, which is exactly how C1 hid). Opt-in: ONNX + staged model.
+    Unit/TestSonicMasterRunnerLiveContract.cpp
+    Unit/TestAuditFixes.cpp
+    Unit/TestAudioCaptureRing.cpp
+    Unit/TestNeuralPlanVerification.cpp
+    Unit/TestMasteringMeters.cpp
+    Unit/TestSonicMasterAnalysisEngine.cpp
+    # AUDIT-FIX (L1-5/L1-6, 2026-06-29): CompNorm constant self-consistency +
+    # resampler normalization coverage.
+    Unit/TestSonicMasterResampler.cpp
+    # AUDIT-FIX (P0, 2026-06-27): full-chain E2E signal integrity test.
+    Unit/TestEndToEndSignalIntegrity.cpp
+    Unit/TestGenreLoudnessPrior.cpp
+    Unit/TestTonalBalanceExtractor.cpp
+    Unit/TestTransientShaper.cpp
+    Unit/TestMelSpectrogram.cpp
+    Unit/TestGenreClassifierFallback.cpp
+    Unit/TestGenreClassifierRemap.cpp
+    Unit/TestSonicMasterHttpInferenceSource.cpp
+    Unit/TestSonicMasterHttpLive.cpp
+    # AUDIT-F3.1: live_measurements finite-guard regression (no -inf -> null).
+    Unit/TestSonicMasterMeasurementsJson.cpp
+    # AUDIT-F2.1: tokenized nameMatches comparator regression.
+    Unit/TestOzonePlanApplicatorNameMatch.cpp
+    # AUDIT-F2.2: P3.10 plan-boundary drain observability contract.
+    Unit/TestPlanBoundaryDrain.cpp
     # Realtime mastering analysis
     Unit/TestMeterWindowAccumulator.cpp
     Unit/TestSpectrumAnalyzer.cpp
     Unit/TestStereoFieldAnalyzer.cpp
     Unit/TestTruePeakEstimator.cpp
+    Unit/TestDenormals.cpp
     Unit/TestLUFSMeter.cpp
     Unit/TestAdaptiveEQ.cpp
     Unit/TestModulationAndEnvelope.cpp
     Unit/TestLicensing.cpp
     # Spec optimization extensions (heartbeat, scoped cache invalidation, adaptive rate limit)
     Unit/TestSpecOptimizations.cpp
+    # Multi-agent orchestration layer
+    Unit/TestAgentRuntimeCore.cpp
+    Unit/TestAgentIsolation.cpp
+    Unit/TestConductorAgent.cpp
+    # Phase 3: real REST LLM hardening (retry/validation/tokens), no network
+    Unit/TestRestLlmClientHardening.cpp
+    Unit/TestAnalysisAgent.cpp
+    Unit/TestOptimizationAgent.cpp
+    Unit/TestCreativeAgent.cpp
+    Unit/TestRealtimeControlAgent.cpp
+    Unit/TestQualitySafetyAgent.cpp
+    Unit/TestMemoryAgent.cpp
+    Unit/TestStructuredAgentLogger.cpp
+    Unit/TestAgentE2E.cpp
+    Unit/TestRealtimeReactive.cpp
+    Unit/TestAgentAudioThreadIsolation.cpp
+    # Orchestrator facades and protocols
+    Unit/TestAgentOrchestrator.cpp
+    Unit/TestMcpProtocol.cpp
+    Unit/TestEcosystemConfig.cpp
+    Unit/TestSecurityValidator.cpp
 )
 
 # Python stdio MCP server integration test. Only compiled once the C++ IPC
@@ -103,6 +181,7 @@ target_link_libraries(MorePhiTests PRIVATE
     MorePhi                 # JUCE shared-code target generated by juce_add_plugin
     juce::juce_core           # propagates JUCE include paths to test translation units
     juce::juce_audio_processors
+    juce::juce_cryptography   # LicenseEnvelopeCrypto (BlowFish/SHA256) + license store tests
     juce::juce_dsp            # required by OversamplingWrapper and LatencyManager tests
     nlohmann_json::nlohmann_json
 )
@@ -132,16 +211,19 @@ if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhiTests PRIVATE MORE_PHI_HAS_ONNX=1)
     target_link_libraries(MorePhiTests PRIVATE more_phi::onnxruntime)
 
-    # Stage the trained artifact next to the test exe so the inference test can
-    # find it at runtime, and copy the ONNX Runtime DLL alongside so Windows
-    # can resolve it. Both are POST_BUILD so they refresh on incremental builds.
-    set(MOREPHI_MODEL_SRC "${CMAKE_SOURCE_DIR}/scripts/neural-mastering/control/model_scaled.onnx")
-    set(MOREPHI_MODEL_DST "$<TARGET_FILE_DIR:MorePhiTests>/model_scaled.onnx")
-    add_custom_command(TARGET MorePhiTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${MOREPHI_MODEL_SRC}" "${MOREPHI_MODEL_DST}"
-        COMMENT "Staging model_scaled.onnx next to test exe"
-        VERBATIM)
+    # PluginProcessor.h includes "SonicMasterModelHash.h" (generated/) and
+    # "BinaryData.h" (the embedded-model BinaryData target's JuceLibraryCode)
+    # under the MORE_PHI_HAS_ONNX guard. The MorePhi (plugin) target gets these
+    # as PRIVATE includes; MorePhiTests links the SharedCode lib directly so it
+    # must add them itself or the test TUs fail with C1083.
+    # AUDIT (2026-06-26): the model is now embedded in the MorePhiFonts BinaryData
+    # (one namespace — separate targets collide on namedResourceList), so the
+    # BinaryData.h include dir is the fonts target's JuceLibraryCode.
+    target_include_directories(MorePhiTests PRIVATE
+        "${CMAKE_BINARY_DIR}/generated"
+        "${CMAKE_BINARY_DIR}/juce_binarydata_MorePhiFonts/JuceLibraryCode"
+    )
+
     if(WIN32 AND MORE_PHI_ONNX_RUNTIME_LIB)
         add_custom_command(TARGET MorePhiTests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -149,9 +231,64 @@ if(MORE_PHI_HAS_ONNX)
             COMMENT "Copying onnxruntime.dll next to test exe"
             VERBATIM)
     endif()
+
+    # ── SonicMaster realtime neural mastering (preview) ──────────────────────
+    # The live smoke test compiles only with ONNX linked. It loads the exported
+    # masteringbrain_v2 model + contract if they are staged (produced by
+    # tools/export_onnx/masteringbrain_to_onnx.py), and skips cleanly otherwise.
+    target_sources(MorePhiTests PRIVATE Unit/TestSonicMasterRunnerLive.cpp)
+
+    set(MOREPHI_SONICMASTER_MODEL    "masteringbrain_v2_decision.onnx")
+    set(MOREPHI_SONICMASTER_CONTRACT "masteringbrain_v2_contract.json")
+    # AUDIT (C1, 2026-06-26): stage from the canonical models/sonicmaster/ dir
+    # (which carries the FIXED contract, masterbrain_v2_decision.contract.json),
+    # NOT build/sonicmaster/ (a stale export dir from 2026-06-23 that held the
+    # pre-C1 broken 283-byte schema). The build/sonicmaster copy_if_different
+    # was silently overwriting the fix on every build, making loadModel fail at
+    # the contract-parse step (parsed=0). The source contract filename differs
+    # (...decision.contract.json) from the staged name (..._contract.json), so
+    # copy under the renamed target.
+    set(MOREPHI_SONICMASTER_SRC_DIR        "${CMAKE_SOURCE_DIR}/models/sonicmaster")
+    set(MOREPHI_SONICMASTER_SRC_CONTRACT   "${MOREPHI_SONICMASTER_SRC_DIR}/masteringbrain_v2_decision.contract.json")
+    set(MOREPHI_SONICMASTER_DST_DIR        "$<TARGET_FILE_DIR:MorePhiTests>")
+    if(EXISTS "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_DIR}/${MOREPHI_SONICMASTER_MODEL}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_MODEL}"
+            COMMENT "Staging ${MOREPHI_SONICMASTER_MODEL} next to test exe (from models/)"
+            VERBATIM)
+    endif()
+    if(EXISTS "${MOREPHI_SONICMASTER_SRC_CONTRACT}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_CONTRACT}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/${MOREPHI_SONICMASTER_CONTRACT}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOREPHI_SONICMASTER_SRC_CONTRACT}"
+                    "${MOREPHI_SONICMASTER_DST_DIR}/masteringbrain_v2_decision.contract.json"
+            COMMENT "Staging fixed ${MOREPHI_SONICMASTER_CONTRACT} next to test exe (from models/)"
+            VERBATIM)
+    endif()
+    # ── V2 feature→delta ONNX model staging (optional) ────────────────────────
+    # The 63→72 model is staged alongside the test exe so
+    # TestOnnxNeuralMasteringRunner and friends can exercise it. Conditional — if
+    # no model file exists, the runner stays !available (graceful degradation).
+    set(MOREPHI_V2_MODEL "neural_mastering_v2.onnx")
+    set(MOREPHI_V2_MODEL_SRC "${CMAKE_SOURCE_DIR}/models/sonicmaster/${MOREPHI_V2_MODEL}")
+    if(EXISTS "${MOREPHI_V2_MODEL_SRC}")
+        add_custom_command(TARGET MorePhiTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MOREPHI_V2_MODEL_SRC}"
+                "$<TARGET_FILE_DIR:MorePhiTests>/${MOREPHI_V2_MODEL}"
+            COMMENT "Staging ${MOREPHI_V2_MODEL} next to test exe (from models/)"
+            VERBATIM)
+    endif()
+    unset(MOREPHI_V2_MODEL)
+    unset(MOREPHI_V2_MODEL_SRC)
 endif()
 if(COMMAND more_phi_apply_build_tuning)
-    more_phi_apply_build_tuning(MorePhiTests)
+    more_phi_apply_build_tuning(MorePhiTests)    
 endif()
 
 # ── Stack size (MSVC: 4 MB, matches plugin build for V2 engine overhead) ─────
@@ -179,7 +316,7 @@ catch_discover_tests(MorePhiTests
 # ── Standalone stdio MCP server tests ────────────────────────────────────────
 add_executable(MorePhiMcpServerTests
     Unit/TestStandaloneMcpServer.cpp
-    Unit/TestIZotopeIPCAssistant.cpp
+    Unit/TestMorePhiIPCAssistant.cpp
 )
 
 target_link_libraries(MorePhiMcpServerTests PRIVATE
@@ -237,6 +374,43 @@ if(MORE_PHI_BUILD_BENCHMARKS)
     )
     if(COMMAND more_phi_apply_build_tuning)
         more_phi_apply_build_tuning(MorePhiBenchmarks)
+    endif()
+endif()
+
+# ── Integrated processor benchmark (audit, opt-in) ───────────────────────────
+# AUDIT-2026-06-25: IntegratedProcessorBenchmark.cpp drives the REAL
+# MorePhiProcessor.processBlock headlessly through the 8 audit scenarios
+# (idle / active / sweep / rapid / neural-isolation / neural-in-context /
+# combined / combined+ozone). It has its OWN main() — distinct from
+# BenchmarkSuite.cpp's — so it cannot share the MorePhiBenchmarks target.
+# Built only when BOTH benchmarks + profiling are requested (profiling is
+# required for the per-section breakdown to be meaningful).
+if(MORE_PHI_BUILD_BENCHMARKS AND MORE_PHI_ENABLE_PROFILING)
+    add_executable(MorePhiAuditBenchmark
+        Performance/IntegratedProcessorBenchmark.cpp
+    )
+
+    target_link_libraries(MorePhiAuditBenchmark PRIVATE
+        MorePhi
+        juce::juce_core
+        juce::juce_events
+        juce::juce_audio_processors
+    )
+
+    if(WIN32)
+        target_link_libraries(MorePhiAuditBenchmark PRIVATE Psapi)
+    endif()
+
+    target_include_directories(MorePhiAuditBenchmark PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_compile_definitions(MorePhiAuditBenchmark PRIVATE
+        MORE_PHI_TEST_MODE=1
+        JUCE_STANDALONE_APPLICATION=0
+    )
+    if(COMMAND more_phi_apply_build_tuning)
+        more_phi_apply_build_tuning(MorePhiAuditBenchmark)
     endif()
 endif()
 

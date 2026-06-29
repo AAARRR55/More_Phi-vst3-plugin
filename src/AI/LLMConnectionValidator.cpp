@@ -91,6 +91,9 @@ juce::String authHeadersFor(LLMProviderId providerId, const juce::String& apiKey
     if (providerId == LLMProviderId::Anthropic)
         return "x-api-key: " + apiKey + "\r\nanthropic-version: 2023-06-01\r\nContent-Type: application/json; charset=utf-8\r\n";
 
+    if (providerId == LLMProviderId::Gemini)
+        return "x-goog-api-key: " + apiKey + "\r\nContent-Type: application/json; charset=utf-8\r\n";
+
     return "Authorization: Bearer " + apiKey + "\r\nContent-Type: application/json; charset=utf-8\r\n";
 }
 
@@ -496,6 +499,18 @@ LLMHttpRequest LLMConnectionValidator::buildTestPromptRequestForTest(LLMProvider
     const auto baseUrl = baseUrlFor(providerId, settings);
     const auto model = settings.selectedModel.trim();
 
+    if (providerId == LLMProviderId::Gemini)
+    {
+        nlohmann::json body;
+        body["contents"] = { { { "parts", { { { "text", testPrompt } } } } } };
+        body["generationConfig"] = { { "maxOutputTokens", 16 } };
+        return {LLMHttpMethod::Post,
+                baseUrl + "/models/" + model + ":generateContent",
+                authHeadersFor(providerId, settings.apiKey.trim()),
+                juce::String::fromUTF8(body.dump().c_str()),
+                timeoutFor(providerId, LLMValidationOperation::TestPrompt)};
+    }
+
     if (providerId == LLMProviderId::Anthropic)
     {
         nlohmann::json body;
@@ -562,10 +577,38 @@ LLMValidationResult LLMConnectionValidator::parseTestPromptForTest(LLMProviderId
     if (statusCode < 200 || statusCode >= 300)
         return inputError("Test prompt failed with HTTP " + juce::String(statusCode) + ".");
 
-    try
-    {
-        const auto root = nlohmann::json::parse(body.toRawUTF8());
-        const auto text = providerId == LLMProviderId::Anthropic ? extractAnthropicText(root) : extractOpenAIText(root);
+	    try
+	    {
+	        const auto root = nlohmann::json::parse(body.toRawUTF8());
+	        juce::String text;
+	        if (providerId == LLMProviderId::Gemini)
+	        {
+	            // {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+	            if (root.contains("candidates") && root["candidates"].is_array()
+	                && !root["candidates"].empty()
+	                && root["candidates"][0].contains("content")
+	                && root["candidates"][0]["content"].contains("parts")
+	                && root["candidates"][0]["content"]["parts"].is_array()
+	                && !root["candidates"][0]["content"]["parts"].empty())
+	            {
+	                for (const auto& part : root["candidates"][0]["content"]["parts"])
+	                {
+	                    if (part.contains("text") && part["text"].is_string())
+	                    {
+	                        text += juce::String(part["text"].get<std::string>());
+	                        break;
+	                    }
+	                }
+	            }
+	        }
+	        else if (providerId == LLMProviderId::Anthropic)
+	        {
+	            text = extractAnthropicText(root);
+	        }
+	        else
+	        {
+	            text = extractOpenAIText(root);
+	        }
         if (!text.trim().contains("OK"))
             return inputError("Test prompt failure: provider did not reply with OK.");
 

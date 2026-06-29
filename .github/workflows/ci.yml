@@ -13,14 +13,45 @@ concurrency:
 
 env:
   PLUGIN_NAME: MorePhi
-  PLUGIN_VERSION: 3.3.0
+  # AUDIT-FIX: derive the version from the single source of truth (the
+  # project(VERSION) call in CMakeLists.txt) instead of maintaining a
+  # separate hardcoded string. Previously this said "3.3.0" while CMake
+  # and Version.h said "3.4.0" and the editor painted "v3.3.0" — four
+  # sources, two values. Extraction happens in the first job and is
+  # exported via GITHUB_ENV so every subsequent job/artifact name agrees.
   CMAKE_VERSION: "3.28"
   PLUGINVAL_VERSION: "1.0.3"
 
 jobs:
 
+  # ─── Version extraction (single source of truth: CMakeLists.txt) ────────────
+  # AUDIT-FIX: every downstream job reads this output so artifact names, the
+  # release zip, and the version painted in the UI all agree byte-for-byte.
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Extract PROJECT_VERSION from CMakeLists.txt
+        id: v
+        run: |
+          # project(MorePhi VERSION x.y.z LANGUAGES ...) — grab the x.y.z
+          V=$(grep -m1 -E '^project\(' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -z "$V" ]; then
+            echo "::error::Could not extract PROJECT_VERSION from CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved plugin version: $V"
+
   # ─── Windows x64 MSVC 2022 ──────────────────────────────────────────────────
   build-windows:
+    needs: resolve-version
+    env:
+      PLUGIN_VERSION: ${{ needs.resolve-version.outputs.version }}
     name: Windows x64 MSVC 2022
     runs-on: windows-2022
 
@@ -117,6 +148,9 @@ jobs:
 
   # ─── macOS Universal Binary ──────────────────────────────────────────────────
   build-macos:
+    needs: resolve-version
+    env:
+      PLUGIN_VERSION: ${{ needs.resolve-version.outputs.version }}
     name: macOS Universal Binary (x64 + arm64)
     runs-on: macos-14
 

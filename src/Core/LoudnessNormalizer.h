@@ -25,6 +25,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -45,6 +46,24 @@ public:
 
     /** Set the target integrated LUFS. Common values: -9, -14, -16, -23. */
     void setTargetLUFS(float lufs) noexcept { targetLUFS_.store(lufs, std::memory_order_relaxed); }
+
+    /**
+     * AUDIT-FIX (M3): target headroom margin in LU. The normalizer drives the
+     * chain toward (targetLUFS - margin) instead of targetLUFS, giving the
+     * downstream brickwall limiter headroom rather than forcing heavy gain
+     * reduction on every normalized block (the classic loudness-normalize-then-
+     * limit pumping artifact). Default 0.0 preserves the prior exact-target
+     * behaviour. Range [0, 3] LU; values outside are clamped on store.
+     * Example: target -14 LUFS, margin 0.5 LU -> normalize to -14.5 LUFS.
+     */
+    void setTargetMarginLU(float margin) noexcept
+    {
+        targetMarginLU_.store(std::clamp(margin, 0.0f, 3.0f), std::memory_order_relaxed);
+    }
+    [[nodiscard]] float getTargetMarginLU() const noexcept
+    {
+        return targetMarginLU_.load(std::memory_order_relaxed);
+    }
 
     /** Enable / disable loudness normalization. When disabled, gain = 0 dB. */
     void setEnabled(bool enabled) noexcept  { enabled_.store(enabled, std::memory_order_relaxed); }
@@ -94,6 +113,8 @@ private:
     LUFSMeter* meter_ = nullptr;
 
     std::atomic<float> targetLUFS_    { kDefaultTargetLUFS };
+    // AUDIT-FIX (M3): LU subtracted from targetLUFS_ to leave limiter headroom.
+    std::atomic<float> targetMarginLU_{ 0.0f };
     std::atomic<bool>  enabled_       { true };
     std::atomic<float> correctionDB_  { 0.0f };         // dB correction (message thread writes)
     std::atomic<float> correctionGain_{ 1.0f };         // linear (message thread writes, audio reads)

@@ -1,6 +1,6 @@
 # VST3 License Key Management System
 
-**Target:** More-Phi / JUCE 8 / C++20 VST3 and AU plugin releases  
+**Target:** More-Phi v3.4.1 / JUCE 8 / C++20 VST3 and AU plugin releases  
 **Purpose:** Practical implementation guide for trial, perpetual, subscription, node-locked, and floating licensing in a desktop audio plugin.  
 **Security posture:** Defense-in-depth. The goal is to deter casual misuse and large-scale redistribution while keeping the plugin stable, real-time safe, privacy-aware, and user-friendly.
 
@@ -348,7 +348,7 @@ Content-Type: application/json
 {
   "licenseKey": "MPH1-9K4M-Q7XN-2R8D-HW6T-3PZA-F",
   "productId": "more-phi-vst3",
-  "pluginVersion": "3.3.0",
+  "pluginVersion": "3.4.1",
   "machineHash": "b64url_sha256_hash",
   "os": "macos-14-arm64",
   "dawHint": "Ableton Live",
@@ -395,7 +395,7 @@ Offline request payload:
 {
   "schema": "morephi-offline-request-v1",
   "productId": "more-phi-vst3",
-  "pluginVersion": "3.3.0",
+  "pluginVersion": "3.4.1",
   "machineHash": "b64url_sha256_hash",
   "requestNonce": "b64url_128bit_random",
   "createdAt": "2026-03-08T12:00:00Z"
@@ -1107,7 +1107,7 @@ Activation request body:
 {
   "license_key": "MPH1-XXXX-XXXX-XXXX-XXXX-XXXX-C or MPHI-XXXXX-XXXXX-XXXXX-XXXXX",
   "machine_id": "hashed-machine-id",
-  "plugin_version": "3.3.0",
+  "plugin_version": "3.4.1",
   "platform": "windows-vst3 or macos-au/vst3 hint",
   "daw": "Ableton Live",
   "product_id": "more-phi-vst3",
@@ -1260,3 +1260,10 @@ For More-Phi specifically, implement this default policy:
   - Preserve saved projects regardless of license state.
 
 This gives a strong, user-friendly licensing foundation without violating the real-time and lifecycle constraints of VST3/AU plugin hosting.
+
+---
+
+## 25. Recent Changes
+
+### More-Phi v3.4.1
+- **Experimental research artifacts quarantined to `research/`:** All experimental and research-oriented code artifacts (dataset generation V2/V3 pipelines, inference server prototypes, and related tooling) have been moved to the `research/` directory at the repository root. This has **no impact on the production build** — these components are excluded from the standard VST3/AU build path and do not affect runtime behavior, plugin load times, or DAW compatibility. Production code continues to live under `src/` and is built normally via CMake.

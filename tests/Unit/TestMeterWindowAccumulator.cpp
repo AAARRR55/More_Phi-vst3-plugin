@@ -53,3 +53,29 @@ TEST_CASE("MeterWindowAccumulator computes rolling percentile statistics", "[Met
     REQUIRE(recentWindow.sampleCount == 2);
     CHECK(recentWindow.metrics[more_phi::MeterWindowAccumulator::rms].mean == Approx(4.5f));
 }
+
+TEST_CASE("MeterWindowAccumulator carries THD and crest factor through the window",
+          "[MeterWindow][analysis][Metrics]")
+{
+    // AUDIT fix: MeterSample now carries thdPercent and crestFactorProgram
+    // from RealtimeSpectrumAnalyzer. Verify they flow through push/accumulate.
+    more_phi::MeterWindowAccumulator accumulator;
+    for (int i = 0; i < 3; ++i)
+    {
+        more_phi::MeterWindowAccumulator::MeterSample sample;
+        sample.timestampSeconds = static_cast<double>(i) * 0.1;
+        sample.rms = 0.5f;
+        sample.thdPercent = 0.1f * static_cast<float>(i + 1);
+        sample.crestFactorProgram = 12.0f + static_cast<float>(i);
+        accumulator.pushSample(sample);
+    }
+
+    const auto stats = accumulator.computeWindow(1.0f);
+    REQUIRE(stats.success);
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::thdPercent].mean == Approx(0.2f));
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::thdPercent].min == Approx(0.1f));
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::thdPercent].max == Approx(0.3f));
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::crestFactorProgram].mean == Approx(13.0f));
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::crestFactorProgram].min == Approx(12.0f));
+    CHECK(stats.metrics[more_phi::MeterWindowAccumulator::crestFactorProgram].max == Approx(14.0f));
+}

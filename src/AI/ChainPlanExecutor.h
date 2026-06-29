@@ -26,18 +26,62 @@
 #include <atomic>
 #include <array>
 #include <functional>
+#include <vector>   // AUDIT-FIX (Fix 6): OzoneApplyBreakdown::applied
 #include <juce_core/juce_core.h>
+#include "Core/NeuralMasteringTypes.h"  // AUDIT-FIX (L4-1): NeuralMasteringCompBand
 
-// Forward declaration — avoids header dependency loop
+// Forward declarations — avoids header dependency loops
 namespace more_phi { class OzonePlanApplicatorBase; }
+namespace more_phi { struct RuleBasedMasteringInput; }
 
 namespace more_phi {
+
+// AUDIT-FIX (Fix 6): breakdown of a single OzonePlanApplicator::apply() call.
+// Previously apply() returned only an int (params enqueued), so a 3-of-40 partial
+// apply was indistinguishable from a full apply. Defined here (not in
+// OzonePlanApplicator.h) because ChainPlanExecutor returns it by value, and
+// OzonePlanApplicator.h includes this header. Carries enqueued/skipped/unmapped/
+// ambiguous counts AND the {index, requestedValue} pairs actually pushed so the
+// caller can do readback verification (Fix 2).
+struct OzoneApplyBreakdown
+{
+    int enqueued = 0;       // successfully pushed to the command queue
+    int skipped = 0;        // idx valid but push failed (queue full / throttle)
+    int unmapped = 0;       // idx == -1 (no audit mapping for this slot)
+    int ambiguous = 0;      // idx == -2 (Fix 3: ambiguous name match)
+    struct AppliedParam { int index; float requestedNormalized; };
+    std::vector<AppliedParam> applied;   // for readback verification (Fix 2)
+};
+
+// AUDIT-FIX (Fix 2): readback verification of the most recent OzonePlanApplicator::
+// apply() call. 'requested' = slots the plan tried to write; 'enqueued' = how many
+// reached the command queue; 'verified' = how many read back within tolerance after
+// the drain; 'driftedDiscrete' = discrete params whose value snapped to a different
+// step than requested (expected with setParameterNormalizedSnapped); 'mismatched' =
+// params whose readback was outside tolerance for non-snap reasons.
+//
+// AUDIT-FIX (Fix 2): ApplyVerification is DEFINED in Core/AutoMasteringEngine.h
+// (the engine owns the verification concept). Forward-declared here so this header
+// can declare getLastOzoneVerification() returning it by value without pulling in
+// AutoMasteringEngine.h (which would create a cycle: AutoMasteringEngine.h includes
+// this header). The complete type is required only where the method is defined
+// (ChainPlanExecutor.cpp includes AutoMasteringEngine.h) or where instances are
+// constructed/inspected (callers include AutoMasteringEngine.h).
+struct ApplyVerification;
 
 struct MultiEffectPlan
 {
     // Dynamics
-    float compressionNeed = 0.5f;    // [0=gentle, 1=aggressive]
+    float compressionNeed = 0.5f;    // [0=gentle, 1=aggressive] — scalar fallback
     bool  useNeuralComp   = false;
+
+    // AUDIT-FIX (L4-1, 2026-06-29): per-band compressor parameters from the neural
+    // model. When hasCompParams is true and the OzoneParameterMap has per-band
+    // mapping, applyDynamics() routes these directly instead of collapsing to the
+    // scalar compressionNeed. This preserves the full 3-band × 6-param fidelity.
+    static constexpr std::size_t kCompBandCount = 3;
+    std::array<more_phi::NeuralMasteringCompBand, kCompBandCount> compBandParams {};
+    bool hasCompBandParams = false;
 
     // EQ
     juce::String eqPrescriptionJSON;  // JSON for EQParameterTranslator
@@ -92,13 +136,16 @@ public:
     }
 
     /**
-     * Execute the 5-step deterministic rule chain on the calling thread.
-     * Call from a background ThreadPool job.
-     *
-     * @param genreIndex    Current genre index (0–11) from GenreClassifier.
-     * @param dynamicRange  Measured dynamic range in LU.
-     * @param spectralTilt  Measured spectral tilt in dB/octave.
-     * @param correlationMS Measured M/S correlation [-1, 1].
+     * Execute the rule-based resolver on the calling thread.
+     * This is the rich path: it uses live spectrum/stereo/LUFS measurements.
+     */
+    MultiEffectPlan executePlan(const RuleBasedMasteringInput& input);
+
+    /**
+     * Legacy compatibility overload.
+     * Builds a minimal input from the provided summary values and resolves it.
+     * The spectrum/stereo snapshots will be empty, so the resolver falls back to
+     * the static target curve.
      */
     MultiEffectPlan executePlan(int    genreIndex,
                                 float  dynamicRange,
@@ -107,7 +154,12 @@ public:
 
     /**
      * Build the same plan as executePlan() without mutating lastPlan_, invoking
-     * callbacks, or applying it to any hosted plugin.
+     * callbacks, or applying it to any hosted plugin. Rich path.
+     */
+    MultiEffectPlan previewPlan(const RuleBasedMasteringInput& input);
+
+    /**
+     * Legacy compatibility overload.
      */
     MultiEffectPlan previewPlan(int    genreIndex,
                                 float  dynamicRange,
@@ -117,28 +169,40 @@ public:
     /** Apply an already-built plan through callbacks and registered hosted-plugin applicators. */
     int applyPlan(const MultiEffectPlan& plan);
 
+    // AUDIT-FIX (Fix 6): per-slot breakdown of the most recent applyPlan() call to
+    // the registered Ozone applicator — enqueued/skipped/unmapped/ambiguous counts
+    // plus the {index, requestedValue} pairs actually pushed. Returns an empty
+    // breakdown when no applicator is registered. Used by AutoMasteringEngine::
+    // applyValidatedPlan for honest partial-apply reporting and readback (Fix 2).
+    [[nodiscard]] OzoneApplyBreakdown getLastOzoneApplyBreakdown() const noexcept;
+
+    // AUDIT-FIX (Fix 2): forward the applicator's readback verification of the most
+    // recent apply. Returns an empty ApplyVerification when no applicator is set.
+    // ApplyVerification is defined in Core/AutoMasteringEngine.h; forward-declared
+    // here to keep this header dependency-light.
+    [[nodiscard]] ApplyVerification getLastOzoneVerification() const noexcept;
+
     /** Get the last executed plan. Thread-safe (returns a copy). */
     [[nodiscard]] MultiEffectPlan getLastPlan() const noexcept { return lastPlan_; }
 
 private:
-    MultiEffectPlan buildPlan(int genreIndex,
-                              float dynamicRange,
-                              float spectralTilt,
-                              float correlationMS);
+    MultiEffectPlan buildPlan(const RuleBasedMasteringInput& input) const;
 
-    // Step implementations
-    MultiEffectPlan stepDynamicsAssessment(float dynamicRange);
-    void stepSpectralAssessment(MultiEffectPlan& plan, int genreIndex, float spectralTilt);
-    void stepStereoAssessment(MultiEffectPlan& plan, float correlationMS);
-    void stepLoudnessTarget(MultiEffectPlan& plan, int genreIndex);
-    void stepStageControl(MultiEffectPlan& plan);
+    // Legacy helper: construct a minimal RuleBasedMasteringInput from the old
+    // summary-style arguments.  The spectrum/stereo snapshots are left empty so
+    // the resolver falls back to the static target curve.
+    [[nodiscard]] RuleBasedMasteringInput makeInputFromLegacy(int    genreIndex,
+                                                               float  dynamicRange,
+                                                               float  /*spectralTilt*/,
+                                                               float  correlationMS) const noexcept;
 
     PlanCallback  callback_;
     MultiEffectPlan lastPlan_;
     mutable juce::SpinLock ozoneApplicatorLock_;
     OzonePlanApplicatorBase* ozoneApplicator_ = nullptr;
 
-    // Genre LUFS targets (matching mastering_profiles.json)
+    // Genre LUFS targets (matching mastering_profiles.json).  Kept for legacy
+    // path mapping when no user target is supplied.
     static constexpr float kGenreLUFS[12] = {
         -9.f, -9.f, -11.f, -13.f, -12.f, -16.f,
         -17.f, -20.f, -18.f, -10.f, -14.f, -23.f

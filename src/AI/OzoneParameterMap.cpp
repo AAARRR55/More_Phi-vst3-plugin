@@ -178,6 +178,55 @@ int countMapped(const OzoneParameterMap& map) noexcept
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+// AUDIT-FIX-5
+bool OzoneParameterMap::hasAnyMapping() const noexcept
+{
+    for (int i = 0; i < kEQBands; ++i)
+    {
+        const auto& b = eq[static_cast<std::size_t>(i)];
+        if (b.freqIdx >= 0 || b.gainIdx >= 0 || b.qIdx >= 0
+            || b.typeIdx >= 0 || b.enabledIdx >= 0)
+            return true;
+    }
+    if (dynamics.thresholdIdx >= 0 || dynamics.ratioIdx >= 0
+        || dynamics.attackIdx >= 0 || dynamics.releaseIdx >= 0)
+        return true;
+    for (int i = 0; i < 4; ++i)
+        if (imager.widthIdx[static_cast<std::size_t>(i)] >= 0)
+            return true;
+    if (maximizer.outputLevelIdx >= 0 || maximizer.ceilingIdx >= 0)
+        return true;
+    return false;
+}
+
+int OzoneParameterMap::mappedSlotCount() const noexcept
+{
+    // AUDIT (W1): count every mapped (>= 0) index so the sonicmaster_decision
+    // tool can report concrete coverage, not just a readiness bool. The total is
+    // recomputed on each call (it's only read at decision time, ~0.3 Hz, so the
+    // small loop is not a hot path). Max possible = 8*5 + 4 + 4 + 2 = 50.
+    int count = 0;
+    for (int i = 0; i < kEQBands; ++i)
+    {
+        const auto& b = eq[static_cast<std::size_t>(i)];
+        if (b.freqIdx >= 0)    ++count;
+        if (b.gainIdx >= 0)    ++count;
+        if (b.qIdx >= 0)       ++count;
+        if (b.typeIdx >= 0)    ++count;
+        if (b.enabledIdx >= 0) ++count;
+    }
+    if (dynamics.thresholdIdx >= 0) ++count;
+    if (dynamics.ratioIdx >= 0)     ++count;
+    if (dynamics.attackIdx >= 0)    ++count;
+    if (dynamics.releaseIdx >= 0)   ++count;
+    for (int i = 0; i < 4; ++i)
+        if (imager.widthIdx[static_cast<std::size_t>(i)] >= 0)
+            ++count;
+    if (maximizer.outputLevelIdx >= 0) ++count;
+    if (maximizer.ceilingIdx >= 0)     ++count;
+    return count;
+}
+
 OzoneParameterMap OzoneParameterMap::buildForOzone11()
 {
     OzoneParameterMap m;
@@ -267,6 +316,36 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
                 m.dynamics.releaseIdx = index;
         }
 
+        // AUDIT-FIX (L4-1, 2026-06-29): discover per-band compressor parameters.
+        // Ozone 11 Advanced exposes per-band dynamics as "Comp Band N Threshold", etc.
+        // Also match "Compressor Band N" and "Dynamics Band N" naming variants.
+        // Band numbers are 1-based in Ozone's UI, but we store 0-based in compBands[].
+        {
+            const juce::String lower = name.toLowerCase();
+            if ((lower.contains("comp") || lower.contains("compressor") || lower.contains("dynamics"))
+                && lower.contains("band"))
+            {
+                // Extract band number from the parameter name.
+                int bandNum = -1;
+                if      (lower.contains("band 1") || lower.contains("low"))    bandNum = 0;
+                else if (lower.contains("band 2") || lower.contains("mid"))    bandNum = 1;
+                else if (lower.contains("band 3") || lower.contains("high"))   bandNum = 2;
+
+                if (bandNum >= 0 && bandNum < OzoneParameterMap::kCompBands)
+                {
+                    auto& cb = m.compBands[static_cast<std::size_t>(bandNum)];
+                    if      (cb.thresholdIdx < 0 && lower.contains("threshold")) cb.thresholdIdx = index;
+                    else if (cb.ratioIdx     < 0 && lower.contains("ratio"))    cb.ratioIdx     = index;
+                    else if (cb.attackIdx    < 0 && lower.contains("attack"))    cb.attackIdx    = index;
+                    else if (cb.releaseIdx   < 0 && lower.contains("release"))   cb.releaseIdx   = index;
+                    else if (cb.makeupIdx    < 0 && lower.contains("makeup"))    cb.makeupIdx    = index;
+                    else if (cb.kneeIdx      < 0 && lower.contains("knee"))      cb.kneeIdx      = index;
+                    else if (lower.contains("enable") || lower.contains("bypass") || lower.contains("active"))
+                        m.compEnableIdx = index;  // single enable for all bands
+                }
+            }
+        }
+
         if (name.contains("imager") && name.contains("width"))
         {
             if (m.imager.widthIdx[0] < 0 && containsAny(name, { "sub", "low bass", "band 1" }))
@@ -304,9 +383,15 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
 
 bool OzoneParameterMap::isOzone11(const juce::String& pluginName) noexcept
 {
-    // Case-insensitive substring match; handles both "Ozone 11" and "iZotope Ozone 11 Advanced"
+    // Case-insensitive substring match.
+    // Matches "Ozone 11" / "iZotope Ozone 11 Advanced" (numbered release) and
+    // "Ozone Pro" (the version-less product name iZotope ships the same engine
+    // under for Ozone 11 Advanced). Ozone 10 and earlier are rejected: their
+    // parameter sets predate the Ozone 11 Advanced layout this map targets, so
+    // auto-registration would silently route to the wrong indices.
     const auto lower = pluginName.toLowerCase();
-    return lower.contains("ozone 11") || lower.contains("ozone11");
+    return lower.contains("ozone 11") || lower.contains("ozone11")
+        || lower.contains("ozone pro");
 }
 
 // ── Normalization helpers ─────────────────────────────────────────────────────

@@ -30,6 +30,12 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
         addAndMakeVisible(sourceButtons_[i]);
     }
     sourceButtons_[0].setToggleState(true, juce::dontSendNotification);
+    sourceButtons_[0].setTooltip(
+        "2D Pad: morph by dragging the cursor on the XY pad between snapshot positions "
+        "arranged around the clock face.");
+    sourceButtons_[1].setTooltip(
+        "Fader: morph along a single axis using the vertical slider, interpolating "
+        "between occupied snapshots in clock order.");
 
     // ── Physics mode buttons: Direct | Elastic | Drift ──────────────────────
     const juce::StringArray modeLabels = {"Direct", "Elastic", "Drift"};
@@ -43,6 +49,15 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
         addAndMakeVisible(modeButtons_[i]);
     }
     modeButtons_[0].setToggleState(true, juce::dontSendNotification);
+    modeButtons_[0].setTooltip(
+        "Direct mode: cursor position drives morph instantly with no physics simulation. "
+        "Parameters update at the raw cursor position.");
+    modeButtons_[1].setTooltip(
+        "Elastic mode: spring-physics cursor with momentum and inertia. "
+        "Feels like a weighted object pulled toward your target.");
+    modeButtons_[2].setTooltip(
+        "Drift mode: Perlin-noise wandering around the target position. "
+        "Adjust speed, distance, and chaos on the Engine tab for evolving, organic movement.");
 
     modeLabel_.setText("Mode", juce::dontSendNotification);
     modeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
@@ -55,6 +70,10 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     smoothSlider_.setValue(0.95);
     smoothSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     smoothSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 18);
+    smoothSlider_.setTooltip(
+        "Smoothing: blends morph output over time. 0 = instant jumps between positions, "
+        "higher values = gradual, gliding transitions. "
+        "Maximum is 0.999 (not 1.0) to prevent numerical instability in the filter.");
     smoothSlider_.onDragStart = [this]() {
         if (!smoothingGestureActive_)
         {
@@ -91,6 +110,35 @@ ModeBar::ModeBar(MorePhiProcessor& p) : proc_(p)
     smoothLabel_.setFont(MorePhiLookAndFeel::bodyFont(MorePhiLookAndFeel::kMinControlLabel));
     smoothLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(smoothLabel_);
+
+    // R1b: Elastic preset combo (Slow / Medium / Heavy). Indices match the
+    // PhysicsEngine::ElasticPreset enum (0/1/2). The processor stores the value
+    // in an atomic applied every block, so onChange writes straight to it — no
+    // new APVTS parameter (which would bump the state version). Default Medium.
+    elasticPresetCombo_.addItem("Slow",   1);
+    elasticPresetCombo_.addItem("Medium", 2);
+    elasticPresetCombo_.addItem("Heavy",  3);
+    elasticPresetCombo_.setSelectedItemIndex(juce::jlimit(0, 2, proc_.getElasticPreset()),
+                                             juce::dontSendNotification);
+    elasticPresetCombo_.setTooltip(
+        "Elastic preset: spring stiffness and damping. Slow = loose, gliding "
+        "transitions; Medium = balanced; Heavy = tight, snappy response. Only "
+        "applies while Elastic physics mode is active.");
+    elasticPresetCombo_.onChange = [this]()
+    {
+        if (elasticPresetSyncing_)
+            return;
+        const int idx = elasticPresetCombo_.getSelectedItemIndex();
+        if (idx >= 0 && idx < 3)
+            proc_.setElasticPreset(idx);
+    };
+    addAndMakeVisible(elasticPresetCombo_);
+
+    elasticLabel_.setText("Preset", juce::dontSendNotification);
+    elasticLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8e8f95));
+    elasticLabel_.setFont(MorePhiLookAndFeel::bodyFont(MorePhiLookAndFeel::kMinControlLabel));
+    elasticLabel_.setJustificationType(juce::Justification::centredRight);
+    addAndMakeVisible(elasticLabel_);
 
     syncButtonsToState();
     syncSmoothingToState();
@@ -129,6 +177,10 @@ void ModeBar::resized()
         addFixed(selectors, modeLabel_, 42.0f, topH);
         for (auto& btn : modeButtons_)
             addFixed(selectors, btn, 62.0f, topH);
+        selectors.items.add(juce::FlexItem().withWidth(8.0f));
+        // R1b: Elastic preset on the compact top row too (hidden unless Elastic).
+        addFixed(selectors, elasticLabel_, 46.0f, topH);
+        selectors.items.add(juce::FlexItem(elasticPresetCombo_).withWidth(88.0f).withHeight(topH).withMargin(1));
         selectors.items.add(juce::FlexItem().withFlex(1));
         selectors.performLayout(topRow);
 
@@ -156,6 +208,11 @@ void ModeBar::resized()
     fb.items.add(juce::FlexItem().withWidth(12.0f));
     addFixed(fb, smoothLabel_, 56.0f, rowH);
     fb.items.add(juce::FlexItem(smoothSlider_).withWidth(150.0f).withHeight(rowH).withMargin(1));
+
+    // R1b: Elastic preset (only visible while Elastic is active).
+    fb.items.add(juce::FlexItem().withWidth(12.0f));
+    addFixed(fb, elasticLabel_, 52.0f, rowH);
+    fb.items.add(juce::FlexItem(elasticPresetCombo_).withWidth(96.0f).withHeight(rowH).withMargin(1));
 
     fb.items.add(juce::FlexItem().withFlex(1));
     fb.performLayout(area);
@@ -224,6 +281,26 @@ void ModeBar::syncButtonsToState()
         for (int i = 0; i < 3; ++i)
             modeButtons_[i].setToggleState(i == phys, juce::dontSendNotification);
     }
+
+    // R1b: keep the Elastic preset combo in sync with the processor and reveal
+    // it only while Elastic is the active physics mode.
+    const int preset = juce::jlimit(0, 2, proc_.getElasticPreset());
+    if (elasticPresetCombo_.getSelectedItemIndex() != preset)
+    {
+        elasticPresetSyncing_ = true;
+        elasticPresetCombo_.setSelectedItemIndex(preset, juce::dontSendNotification);
+        elasticPresetSyncing_ = false;
+    }
+    updateElasticPresetVisibility();
+}
+
+void ModeBar::updateElasticPresetVisibility()
+{
+    // Elastic == physics mode index 1. Hide the preset controls on Direct/Drift
+    // so they never look inert.
+    const bool isElastic = modeButtons_[1].getToggleState();
+    elasticPresetCombo_.setVisible(isElastic);
+    elasticLabel_.setVisible(isElastic);
 }
 
 void ModeBar::syncSmoothingToState()

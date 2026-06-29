@@ -8,17 +8,27 @@
 namespace more_phi {
 
 // ── Elastic Spring-Damper ────────────────────────────────────────────────────
+//
+// AUDIT-FIX (L1): MODEL SEMANTICS. This is a *perceptual* spring that moves the
+// morph cursor through a dimensionless [−1,1] XY space, NOT a physical spring
+// over audio units. The "stiffness" k below is therefore a normalized rate
+// constant (cursor units / s²), not a material stiffness in N/m. The presets
+// were tuned by feel at 44.1 kHz / 512-sample blocks. Sample-rate independence
+// comes from advancing the spring by the true wall-clock dt (seconds) via the
+// adaptive sub-stepping below, NOT from k having physical units. Do not "tune k
+// to real stiffness" — that would change the feel at every sample rate.
 
 void PhysicsEngine::updateElastic(ElasticState& s,
                                    float targetX, float targetY,
                                    ElasticPreset preset, float dt) noexcept
 {
-    // H-2 FIX: The preset constants below are the TRUE physical stiffness and
-    // damping, tuned at 44100 Hz / 512-sample block (where dt == kRefDt and the
-    // previous dtScale compensation was a no-op). Sample-rate independence comes
-    // from the adaptive sub-stepping below: it advances the spring by the full
-    // physical dt every block regardless of how that dt is sliced, so the spring
-    // settles in the same wall-clock time at any sample rate / block size.
+    // H-2 FIX: The preset constants below are the normalized stiffness and
+    // damping ratio, tuned at 44100 Hz / 512-sample block (where dt == kRefDt
+    // and the previous dtScale compensation was a no-op). Sample-rate
+    // independence comes from the adaptive sub-stepping below: it advances the
+    // spring by the full physical dt every block regardless of how that dt is
+    // sliced, so the spring settles in the same wall-clock time at any sample
+    // rate / block size.
     //
     // The previous code ALSO multiplied stiffness & damping by kRefDt/dt, which
     // double-compensated: scaling k and c by s scales BOTH the natural frequency
@@ -72,9 +82,15 @@ void PhysicsEngine::updateElastic(ElasticState& s,
     // juce::ScopedNoDenormals, so IEEE-754 denormals are already flushed to
     // zero at the CPU level.  This threshold (1e-6) is coarser than the
     // denormal range (~1e-38) and intentionally stops perceptibly-silent motion.
-    constexpr float kRestThreshold = 1e-6f;
-    if (std::abs(s.vx) < kRestThreshold) s.vx = 0.0f;
-    if (std::abs(s.vy) < kRestThreshold) s.vy = 0.0f;
+    //
+    // DEEP-DIVE FIX: also check that position is near target before killing
+    // velocity. Previously the velocity-only kill stopped the spring mid-air
+    // when it was still far from target but moving very slowly, causing a
+    // re-energize on the next block and a subtle stutter.
+    constexpr float kRestThreshVel = 1e-6f;
+    constexpr float kRestThreshPos = 1e-4f;
+    if (std::abs(s.vx) < kRestThreshVel && std::abs(s.x - targetX) < kRestThreshPos) s.vx = 0.0f;
+    if (std::abs(s.vy) < kRestThreshVel && std::abs(s.y - targetY) < kRestThreshPos) s.vy = 0.0f;
 }
 
 // ── Perlin Noise ─────────────────────────────────────────────────────────────
@@ -115,10 +131,13 @@ float PhysicsEngine::grad(int hash, float x, float y) noexcept
     // C8 FIX: Use 8 gradient directions (classic 2D Perlin) instead of only 4
     // diagonal vectors.  The old hash & 3 produced only 4 gradients, creating
     // visible directional bias in the drift noise.
+    // C2-AUDIT-FIX: Scale raw gradient to [-1,1] because the 8-direction vectors
+    // have magnitudes up to 3.0, which broke perlinOctaves() normalization.
     const int h = hash & 7;
     const float u = h < 4 ? x : y;
     const float v = h < 4 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
+    float raw = ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
+    return raw / 3.0f;
 }
 
 float PhysicsEngine::perlin(float x, float y) noexcept
@@ -131,8 +150,12 @@ float PhysicsEngine::perlin(float x, float y) noexcept
     const float fy = std::floor(wy);
     const int xi = static_cast<int>(fx) & 255;
     const int yi = static_cast<int>(fy) & 255;
-    const float xf = x - fx;
-    const float yf = y - fy;
+    // AUDIT-FIX: Use the wrapped coordinate (wx, wy) to compute the fractional
+    // part, not the original (x, y). When x is negative, std::fmod produces a
+    // negative result; using x - fx with the unwrapped x yields wildly wrong
+    // fractional parts (e.g. -1000 - (-232) = -768 instead of 0).
+    const float xf = wx - fx;
+    const float yf = wy - fy;
     const float u = fade(xf);
     const float v = fade(yf);
 
@@ -173,8 +196,15 @@ void PhysicsEngine::updateDrift(float& outX, float& outY,
     const float safeSpeed = std::max(speed, 0.0f);
     const float safeDistance = std::max(distance, 0.0f);
     const int octaves = std::clamp(static_cast<int>(chaos * 4.0f) + 1, 1, 4);
-    const float nx = perlinOctaves(time * safeSpeed, 0.5f, octaves) * safeDistance;
-    const float ny = perlinOctaves(0.5f, time * safeSpeed, octaves) * safeDistance;
+    // AUDIT-FIX (C5): wrap on the perlin-space coordinate, not on raw time.
+    // perlin() is C1-continuous across its 256-wide lattice boundary IN ITS
+    // ARGUMENT, so fmod'ing the argument by 256 guarantees continuity for any
+    // (possibly non-integer) speed. The +128 offset on the y-argument decorrelates
+    // the two noise channels the way the previous two-arg call intended.
+    const double wrappedX = std::fmod(static_cast<double>(time) * safeSpeed, 256.0);
+    const double wrappedY = std::fmod(static_cast<double>(time) * safeSpeed + 128.0, 256.0);
+    const float nx = perlinOctaves(static_cast<float>(wrappedX), 0.5f, octaves) * safeDistance;
+    const float ny = perlinOctaves(0.5f, static_cast<float>(wrappedY), octaves) * safeDistance;
 
     switch (mode)
     {

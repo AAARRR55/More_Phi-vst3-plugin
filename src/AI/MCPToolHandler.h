@@ -8,6 +8,7 @@
 #include <juce_core/juce_core.h>
 #include "ToolResultCache.h"
 #include "AsyncToolExecutor.h"
+#include <nlohmann/json.hpp>
 
 namespace more_phi {
 
@@ -47,12 +48,36 @@ public:
     /** Access the async executor for long-running tools. */
     static AsyncToolExecutor& getAsyncToolExecutor();
 
+    // Stage B (2026-06-26): public so the state-machine (model_unavailable /
+    // no_hosted_plugin / unmapped / active_applying) can be unit-tested directly,
+    // bypassing the dispatch wrapper's approval gate (which is exercised by the
+    // approval-flow tests). sonicmaster_decision stays private because its tests
+    // run through handle() with read-only classification.
+    static juce::String masteringNeuralApply(const juce::var& params, MorePhiProcessor& p);
+
+    // AUDIT-FIX (F3.1, 2026-06-27): pure-function serializer for the
+    // live_measurements JSON block, exposed so the finite-guard regression can
+    // be unit-tested directly without spinning up a hosted plugin. The internal
+    // sonicmasterMeasurementsJson() helper delegates to this; it lives on the
+    // public surface only because it is a pure function with no processor state.
+    static nlohmann::json serializeMeasurementsForTests(
+        const struct SonicMasterMeasurementSnapshot& snapshot);
+
 private:
     static juce::String getPluginInfo(MorePhiProcessor& p);
     static juce::String listParameters(const juce::var& params, MorePhiProcessor& p);
     static juce::String getParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String setParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String setParametersBatch(const juce::var& params, MorePhiProcessor& p);
+    /** Tool: sweep_parameter — iterate ONE hosted-plugin parameter across a
+     *  normalized range, capturing live measurements (LUFS-I/S/M, LRA, dBTP,
+     *  spectral centroid/tilt, stereo width/correlation, THD%, program crest)
+     *  after each step. This is the only tool that performs an autonomous
+     *  value-space sweep on the LIVE hosted plugin via the verified write path
+     *  (resolve → command queue → drain → ParameterBridge → readback).
+     *  Params: parameter (stableId|index|name), from (0..1), to (0..1),
+     *  steps (int, default 5), capture_ms (int, default 250). */
+    static juce::String sweepParameter(const juce::var& params, MorePhiProcessor& p);
     static juce::String captureSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String recallSnapshot(const juce::var& params, MorePhiProcessor& p);
     static juce::String setMorphPosition(const juce::var& params, MorePhiProcessor& p);
@@ -75,14 +100,21 @@ private:
      *  Params: genre_index (int), dynamic_range (float), spectral_tilt (float), correlation_ms (float). */
     static juce::String applyMasteringPlan(const juce::var& params, MorePhiProcessor& p);
 
-    // ── iZotope IPC Assistant tools ─────────────────────────────────────────
-    static juce::String izotopeIpcAttach(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcDetach(MorePhiProcessor& p);
-    static juce::String izotopeIpcStatus(MorePhiProcessor& p);
-    static juce::String izotopeIpcSnapshot(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcDump(const juce::var& params, MorePhiProcessor& p);
-    static juce::String izotopeIpcCapture(const juce::var& params, MorePhiProcessor& p);
-    static juce::String ozoneRunAssistantIpc(const juce::var& params, MorePhiProcessor& p);
+    /** Tool: sonicmaster_decision — runs the neural mastering model on the last
+     *  ~6s of captured audio and returns the decoded mastering decision (EQ
+     *  gains, target LUFS, true-peak ceiling, 3-band compressor, stereo, limiter,
+     *  character) WITHOUT applying it. The assistant applies via apply_mastering_plan
+     *  or set_parameters once the user confirms. Params: target_lufs (float, default -14). */
+    static juce::String sonicmasterDecision(const juce::var& params, MorePhiProcessor& p);
+
+    // ── IPC Assistant tools ─────────────────────────────────────────────────
+    static juce::String morePhiIpcAttach(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcDetach(MorePhiProcessor& p);
+    static juce::String morePhiIpcStatus(MorePhiProcessor& p);
+    static juce::String morePhiIpcSnapshot(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcDump(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcCapture(const juce::var& params, MorePhiProcessor& p);
+    static juce::String morePhiIpcRunAssistant(const juce::var& params, MorePhiProcessor& p);
 
     // ── Ozone Track Assistant tools (guide-aligned) ──────────────────────────
 
@@ -116,6 +148,7 @@ private:
     static juce::String captureAnalysisWindow(const juce::var& params, MorePhiProcessor& p);
     static juce::String compareAnalysis(const juce::var& params, MorePhiProcessor& p);
     static juce::String previewMasteringPlan(const juce::var& params, MorePhiProcessor& p);
+    static juce::String analyzeRuleBasedMastering(const juce::var& params, MorePhiProcessor& p);
     static juce::String renderMasteringBatch(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
     static juce::String getMasteringRenderStatus(const juce::var& params, const juce::String& instanceId);
     static juce::String selectMasteringCandidate(const juce::var& params, MorePhiProcessor& p, const InstanceIdentity& identity);
@@ -139,6 +172,15 @@ private:
                                         AutomationRuntime& runtime);
     static juce::String getAsyncToolStatus(const juce::var& params);
     static juce::String getAsyncToolResult(const juce::var& params);
+
+    // ── Agent runtime tools (agents.*) ──────────────────────────────────────
+    static juce::String agentsList(MorePhiProcessor& p);
+    static juce::String agentsRunGoal(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunTask(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunStatus(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsRunCancel(const juce::var& params, MorePhiProcessor& p);
+    static juce::String agentsBlackboardRecent(MorePhiProcessor& p);
+    static juce::String agentsSetAutonomy(const juce::var& params, MorePhiProcessor& p, AutomationRuntime& runtime);
 
     // Caching helpers
     static bool isCacheableTool(const juce::String& method);

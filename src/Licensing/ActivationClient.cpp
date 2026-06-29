@@ -202,6 +202,7 @@ ActivationResponse parseActivationResponse(int statusCode, const juce::String& b
         if (response.errorCode.isEmpty())
             response.errorCode = jsonStringOrEmpty(root, "code");
         response.message = jsonStringOrEmpty(root, "message");
+        response.activationId = jsonStringOrEmpty(root, "activation_id");
 
         if (auto cert = certificateFromResponse(root))
             response.certificate = *cert;
@@ -233,15 +234,25 @@ LicenseApiConfig HttpActivationClient::configFromEnvironment()
 {
     LicenseApiConfig config;
     config.baseUrl = envString("LICENSE_API_BASE_URL");
-    if (config.baseUrl.isEmpty())
-        config.baseUrl = "http://localhost:4000";
 
     config.publicClientToken = envString("MOREPHI_PUBLIC_CLIENT_TOKEN");
-    if (config.publicClientToken.isEmpty())
-        config.publicClientToken = "dev-token-vst-plugin-more-phi";
 
     if (auto headerName = envString("MOREPHI_CLIENT_HEADER"); headerName.isNotEmpty())
         config.clientHeaderName = headerName;
+
+    // Phase 1 (production readiness): dev defaults are ONLY available in Debug
+    // builds so local end-to-end activation tests keep working against a dev
+    // backend. In a Release build, an unset env var is left empty — so
+    // isUsable() returns false and createFromEnvironment() falls through to
+    // the offline StubActivationClient. This guarantees a shipping binary never
+    // silently calls http://localhost:4000 with a dev token, and never transmits
+    // the license key / machine hash in cleartext over an unconfigured endpoint.
+#ifndef NDEBUG
+    if (config.baseUrl.isEmpty())
+        config.baseUrl = "http://localhost:4000";
+    if (config.publicClientToken.isEmpty())
+        config.publicClientToken = "dev-token-vst-plugin-more-phi";
+#endif
 
     return config;
 }

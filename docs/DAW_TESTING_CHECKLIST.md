@@ -1,5 +1,7 @@
 # MORPH-028: DAW Compatibility Testing Checklist
 
+**Version:** More-Phi v3.4.1
+
 Manual validation checklist for each supported DAW.  
 Automated integration tests cover the programmatic API contract — this checklist covers host-specific behaviors.
 
@@ -25,7 +27,7 @@ Automated integration tests cover the programmatic API contract — this checkli
 
 ### Ableton Live 11+
 - [ ] Plugin loads in instrument/audio effect rack
-- [ ] Automation lanes available for all 4 new parameters
+- [ ] Automation lanes available for all APVTS parameters
 - [ ] Session save/restore preserves all state
 - [ ] Sidechain input routable via Ableton's routing
 - [ ] No issues with Ableton's chunked processBlock sizes
@@ -56,6 +58,43 @@ Automated integration tests cover the programmatic API contract — this checkli
 - [ ] SanityMode protected indices persist across DAW restarts
 - [ ] RecallMode setting persists across DAW restarts
 - [ ] Sidechain threshold persists across DAW restarts
+
+---
+
+## Multi-Agent Orchestration Testing (v3.4.0+)
+
+### Core Orchestrator Checks
+- [ ] Agent orchestrator starts successfully in DAW
+- [ ] MCP server starts on correct port per instance
+- [ ] AI goal submission works through UI
+- [ ] Agent states display correctly in AI status panel
+- [ ] RealtimeControl agent responds to clipping events
+- [ ] Creative agent suggestions require approval
+- [ ] Graceful degradation when MCP is disabled
+
+### DAW-Specific Orchestrator Tests
+
+#### FL Studio 21+
+- [ ] Multiple plugin instances each receive unique MCP ports (base port + instance offset)
+- [ ] AI status panel renders correctly in FL Studio's plugin wrapper window
+- [ ] No CPU spikes when orchestrator agents perform background analysis
+
+#### Ableton Live 11+
+- [ ] AI goal parameter is automatable via Live's parameter lane
+- [ ] Agent state parameters appear in Live's automation lane list
+- [ ] Freeze/flatten preserves agent configuration state
+
+#### Reaper 7+
+- [ ] Multi-instance MCP port allocation works with Reaper's multi-threaded FX processing
+- [ ] Agent orchestrator survives Reaper's "Run FX when not playing" idle mode
+
+#### Bitwig Studio 5+
+- [ ] Bitwig's parameter modulation integrates with agent-controlled parameters
+- [ ] Orchestrator state persists through Bitwig's project save/load with container nesting
+
+#### Logic Pro (macOS only)
+- [ ] AU sandbox does not block localhost MCP communication
+- [ ] Agent panel renders correctly in Logic's plugin window on both Intel and Apple Silicon
 
 ---
 

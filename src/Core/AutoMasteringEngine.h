@@ -1,36 +1,65 @@
 /*
  * More-Phi — Core/AutoMasteringEngine.h
  *
- * Top-level orchestrator for the 10-stage automated mastering chain.
+ * Top-level orchestrator for the automated mastering chain.
  *
- * Stage order:
- *   [1]  MSMatrix::encode         L/R → M/S
- *   [2]  MultibandSplitter        4-band Linkwitz-Riley (80/250/5kHz)
- *   [3]  MultibandDynamicsProcessor  per-band VCA compressor
- *   [4]  Band summation           4 bands → stereo M/S
- *   [5]  AdaptiveEQ               32-band parametric EQ
- *   [6]  StereoImager             freq-dependent M/S width
- *   [7]  HarmonicExciter          optional tanh soft-sat
- *   [8]  BrickwallLimiter         4ms lookahead, ISP detection
- *   [9]  LUFSMeter                integrated LUFS measurement
- *   [10] LoudnessNormalizer       LUFS → target correction gain
- *   [11] MSMatrix::decode         M/S → L/R
+ * Stage order (matches processBlock; AUDIT Q4 reconciliation, 2026-06-27):
+ *   [1]  MSMatrix::encode           L/R → M/S
+ *   [2]  MultibandSplitter          4-band Linkwitz-Riley (80/250/5kHz)
+ *   [3]  MultibandDynamicsProcessor per-band VCA compressor
+ *   [4]  Band summation             4 bands → stereo M/S
+ *   [5]  TransientShaper            fast 3ms / slow 150ms ratio (post-dynamics, pre-EQ)
+ *   [6]  AdaptiveEQ                 32-band parametric EQ
+ *   [7]  StereoImager               freq-dependent M/S width
+ *   [8]  HarmonicExciter            optional tanh soft-sat
+ *   [9]  LoudnessNormalizer         LUFS → target correction gain
+ *   [10] MSMatrix::decode           M/S → L/R  (MSDECODE-1: decode BEFORE the
+ *                                               limiter so the brickwall sees
+ *                                               the true stereo signal)
+ *   [11] BrickwallLimiter           4ms lookahead, ISP detection
+ *   [12] Meters                     LUFS / true-peak / crest readout
  *
- * Intelligence (all on message thread):
+ * Intelligence (timers on the message thread):
  *   - EQParameterTranslator applies genre warm-start to EQ bands 0–7
  *   - ChainPlanExecutor runs a 5-step heuristic rule planner every 30s
  *   - GenreClassifier classifies genre every 30s
  *   - LoudnessNormalizer.updateCorrectionGain() called every 100ms
  *   - MonoCompatibilityChecker checks fold-down every 1s
  *
- * Thread safety:
- *   processBlock() — audio thread, noexcept.
- *   prepare() — message thread only.
- *   All intelligence timers — message thread only.
+ * Thread safety (THREADSWEEP-2026-06):
+ *   - processBlock()       — audio thread, noexcept.
+ *   - analyzeBlock()       — AUDIO thread (called throttled from the host's
+ *                            processBlock in PluginProcessor). Despite the name
+ *                            it is NOT a message-thread path; its meter writes
+ *                            are safe only because LUFSMeter /
+ *                            RealtimeSpectrumAnalyzer / StereoFieldAnalyzer /
+ *                            TruePeakEstimator / MeterWindowAccumulator /
+ *                            GenreClassifier publish their cross-thread outputs
+ *                            via atomic floats or seqlocks. Do NOT add a second
+ *                            analyzeBlock caller on another thread — that would
+ *                            create a two-writer race on the meters' raw state.
+ *   - prepare/reset        — message thread only, and the JUCE contract
+ *                            guarantees the host is NOT calling processBlock /
+ *                            analyzeBlock during them. That mutual exclusion is
+ *                            what makes the non-atomic analysis accumulators
+ *                            below (analysisSumSquares_, analysisSampleCount_,
+ *                            analysisElapsedSeconds_, analysisSamplesSinceWindow
+ *                            Sample_) and sampleRate_/blockSize_ safe: they have
+ *                            a single writer during playback (the audio thread)
+ *                            and are only mutated otherwise by prepare/reset,
+ *                            which run with playback stopped. Atomizing them
+ *                            would be cargo-cult — the host already serializes
+ *                            the access.
+ *   - Intelligence timers  — message thread only.
+ *   - applyValidatedPlan() — message thread only. The SonicMaster analysis
+ *                            thread hops to the message thread via callAsync
+ *                            (SonicMasterAnalysisEngine::applyRamped) before
+ *                            calling it, so DSP setter semantics hold.
  */
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -49,12 +78,91 @@
 #include "MeterWindowAccumulator.h"
 #include "RealtimeSpectrumAnalyzer.h"
 #include "StereoFieldAnalyzer.h"
+#include "TransientShaper.h"
 #include "NeuralMasteringTypes.h"
+#include "NeuralMasteringSafetyPolicy.h"
 #include "../AI/EQParameterTranslator.h"
 #include "../AI/ChainPlanExecutor.h"
 #include "../AI/GenreClassifier.h"
 
 namespace more_phi {
+
+// P2.5 (AUDIT): forward-declared so AutoMasteringEngine can hold an optional
+// ActionLedger* to record neural mastering writes (which bypass MCPToolHandler).
+// Full definition pulled in the .cpp only.
+class ActionLedger;
+
+// Forward-declared so AutoMasteringEngine can expose an aggregated analysis
+// snapshot without pulling NeuralMasteringFeatureExtractor.h into this header.
+struct NeuralMasteringAnalysisSnapshot;
+
+// ── ApplyVerification (P1.2 / AUDIT-FIX Fix 2) ──────────────────────────────
+// Readback verification of the last mastering-plan apply. Populated by the
+// chain planner / OzonePlanApplicator after enqueueing a plan: it counts how
+// many parameter writes were requested, enqueued, and then verified by reading
+// the hosted plugin back, plus why any weren't verified (drifted to a discrete
+// step, mismatched beyond tolerance, unmapped to a param index, or ambiguous).
+//
+// DEFINED HERE (not in ChainPlanExecutor.h) because AutoMasteringEngine holds
+// it by value (lastApplyVerification_); ChainPlanExecutor.h and
+// OzonePlanApplicator.h forward-declare it and include this header only in
+// their .cpp files where the complete type is needed.
+struct ApplyVerification
+{
+    int requested       = 0;   // total parameter writes the plan asked for
+    int enqueued        = 0;   // actually enqueued onto the hosted plugin
+    int verified        = 0;   // readback matched the requested value (within tol)
+    int driftedDiscrete = 0;   // readback differs but snaps to a valid discrete step
+    int mismatched      = 0;   // readback differs beyond tolerance (write didn't land)
+    int unmapped        = 0;   // plan referenced a param index with no mapping (-1)
+    int ambiguous       = 0;   // plan referenced an index that maps ambiguously
+
+    // Fraction of enqueued writes that verified cleanly. Used by
+    // AutoMasteringEngine to classify an apply as full vs partial (<0.80).
+    [[nodiscard]] float verifiedFraction() const noexcept
+    {
+        return enqueued > 0 ? static_cast<float>(verified) / static_cast<float>(enqueued) : 0.0f;
+    }
+
+    // AUDIT-F2.3 (2026-06-27): fraction of enqueued writes whose read-back
+    // either matched OR snapped to a valid discrete step, over the writes whose
+    // read-back has actually LANDED (verified + driftedDiscrete). mismatched is
+    // excluded from BOTH numerator and denominator because the read-back runs
+    // immediately after applyPlan(), BEFORE the audio thread drains the command
+    // queue — so a not-yet-drained write reads back as mismatched purely due to
+    // timing, not genuine drift. Counting it against verifiedFraction() made a
+    // clean apply spuriously read <0.80 -> AppliedPartial. confirmedFraction()
+    // only counts writes whose state is genuinely known.
+    //
+    // AUDIT-FIX (L4-4, 2026-06-29): clarification — confirmedFraction() returns
+    // 1.0 (not 0.0) when no writes have landed yet (landed == 0). This is a
+    // "no evidence of problems" sentinel, distinct from 0.0 which would mean
+    // "all landed writes are unconfirmed." An initial 1.0 is correct for the
+    // first apply cycle (there is no basis to claim partial application before
+    // any read-backs have occurred), but callers should treat a 1.0 with
+    // enqueued==0 as "no data" rather than "perfect confirmation." The
+    // projected_plan.confidence field in the MCP surface feeds this value.
+    [[nodiscard]] float confirmedFraction() const noexcept
+    {
+        const int landed = verified + driftedDiscrete;
+        return landed > 0 ? static_cast<float>(verified) / static_cast<float>(landed) : 1.0f;
+    }
+};
+
+// AUDIT-FIX (R8, Phase 3b): per-cycle composite quality score. Computed
+// in applyValidatedPlan() from the readback verification, delta-clamp count,
+// and the plan's target reasonableness. Stored atomically and surfaced via
+// getLastQualityScore() so callers (the AI assistant, the background cycle)
+// have an explicit numeric signal for "did this apply improve things?"
+// This is an INFORMATIONAL signal — not a gate. Scores are [0..1] where
+// 1.0 = perfect apply with conservative deltas and reasonable targets.
+struct CompositeQualityScore
+{
+    float verificationFraction = 0.0f;
+    std::size_t deltaClampCount   = 0;
+    float loudnessReasonableness = 0.0f;
+    float composite              = 0.0f;
+};
 
 class AutoMasteringEngine : public juce::Timer
 {
@@ -67,6 +175,14 @@ public:
     void prepare(double sampleRate, int maxBlockSize, bool startIntelligence = true);
     void reset() noexcept;
 
+    // AUDIT-FIX (Fix 8): true iff prepare() was called with startIntelligence=true.
+    // applyValidatedPlan uses this to gate the internal eq_/dynamics_/stereo_/
+    // limiter_/normalizer_ writes — those objects are dormant in the shipped plugin
+    // (PluginProcessor calls prepare(...,false)) and writing to them is misleading
+    // (looks like audio processing but reaches no samples). Returns the value passed
+    // to the most recent prepare(); defaults false before prepare() is called.
+    [[nodiscard]] bool isIntelligenceActive() const noexcept { return intelligenceActive_; }
+
     // ── Activation (any thread — atomic) ─────────────────────────────────────
 
     void setActive(bool active) noexcept { active_.store(active, std::memory_order_relaxed); }
@@ -75,16 +191,22 @@ public:
     // ── Audio thread ──────────────────────────────────────────────────────────
 
     /**
-     * Process audio through all 10 mastering stages.
+     * Process audio through all 12 mastering stages (see file header).
      * If !isActive() returns immediately — zero processing cost.
      * noexcept — all sub-modules are noexcept.
      */
     void processBlock(juce::AudioBuffer<float>& buf) noexcept;
 
     /**
-     * Non-mutating live analysis tap. Updates LUFS, true peak, spectrum, and
-     * stereo-field meters from the supplied buffer without applying mastering
-     * processing or changing the audio.
+     * Live analysis tap: updates LUFS, true peak, spectrum, stereo-field meters
+     * and the genre classifier from the supplied buffer WITHOUT applying
+     * mastering processing or changing the audio.
+     *
+     * THREADSWEEP-2026-06: AUDIO THREAD ONLY. Despite "analyze" in the name this
+     * is called throttled from the host's processBlock (PluginProcessor:1520,
+     * 2102), not from a message-thread timer. Its cross-thread meter reads below
+     * are safe only via the meters' atomic/seqlock publications. A second caller
+     * on any other thread would race the meters' raw (pre-publication) state.
      */
     void analyzeBlock(const juce::AudioBuffer<float>& buf) noexcept;
 
@@ -98,6 +220,37 @@ public:
     [[nodiscard]] float getLimiterGainReductionDB() const noexcept { return limiter_.getGainReductionDB(); }
     [[nodiscard]] float getGainReductionDB(int band) const noexcept { return dynamics_.getGainReductionDB(band); }
 
+    // AUDIT-FIX (Fix 7): total host-rate samples observed via analyzeBlock() since
+    // prepare(). Used by SonicMasterAnalysisEngine to populate the safety policy's
+    // frame-based staleness check (producedAtFrame/expiresAfterFrame) — previously
+    // the SonicMaster path left runtime.currentFrame=0, so only the wall-clock
+    // guard fired. Atomic: written on the audio thread (analyzeBlock), read on the
+    // analysis thread (runCycle). Relaxed is sufficient — advisory staleness only.
+    [[nodiscard]] std::uint64_t getAnalyzedSampleCount() const noexcept
+    { return analyzedSamples_.load(std::memory_order_relaxed); }
+
+    // AUDIT-FIX (Fix 2): readback verification of the most recent applyValidatedPlan()
+    // call against the hosted plugin. Compares each enqueued param's requested
+    // normalized value against getParameterNormalized(idx) after the command queue
+    // drains, with a discrete-aware tolerance (matching MCPToolHandler's
+    // classifyVerification). Returns a zeroed struct before the first apply or when
+    // the hosted plugin applicator is unmapped.
+    // AUDIT-FIX (L2-2, 2026-06-29): now SpinLock-guarded — written on the message
+    // thread, read from any thread (MCP handler).
+    [[nodiscard]] ApplyVerification getLastApplyVerification() const noexcept
+    {
+        const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_);
+        return lastApplyVerification_;
+    }
+
+    // AUDIT-FIX (Fix 2/6): true iff the most recent applyValidatedPlan() either
+    // enqueued <80% of the requested slots OR read back <80% of the enqueued params
+    // within tolerance. The SonicMaster engine reads this to choose Status::AppliedPartial
+    // over Status::Applied so the assistant cannot claim a clean apply when params
+    // drifted or were skipped. Atomic; written under the apply path, read any thread.
+    [[nodiscard]] bool lastApplyWasPartial() const noexcept
+    { return lastApplyWasPartial_.load(std::memory_order_acquire); }
+
     /** ENHANCERS-1/PDC: total lookahead latency of the mastering chain in
      *  host-rate samples (brickwall-limiter lookahead + exciter oversampling
      *  when enabled). Returns 0 when the chain is inactive (dormant), so the
@@ -109,6 +262,9 @@ public:
     }
     [[nodiscard]] bool isGenreClassifierModelLoaded() const noexcept { return genreClassifier_.isModelLoaded(); }
 
+    /** Aggregated analysis snapshot for the neural feature extractor. */
+    [[nodiscard]] NeuralMasteringAnalysisSnapshot getSnapshot() const noexcept;
+
     // ── Chain access (message thread — for ABCompareEngine etc.) ─────────────
 
     LUFSMeter&                    getLUFSMeter()        noexcept { return lufs_; }
@@ -118,6 +274,7 @@ public:
     MultibandDynamicsProcessor&   getDynamics()         noexcept { return dynamics_; }
     GenreClassifier&              getGenreClassifier()  noexcept { return genreClassifier_; }
     ChainPlanExecutor&            getChainPlanner()     noexcept { return chainPlanner_; }
+    TruePeakEstimator&            getTruePeakEstimator()noexcept { return analysisTruePeak_; }
     RealtimeSpectrumAnalyzer&     getSpectrumAnalyzer() noexcept { return spectrumAnalyzer_; }
     StereoFieldAnalyzer&          getStereoFieldAnalyzer() noexcept { return stereoFieldAnalyzer_; }
     const RealtimeSpectrumAnalyzer& getSpectrumAnalyzer() const noexcept { return spectrumAnalyzer_; }
@@ -133,10 +290,65 @@ public:
     void clearLastSafeNeuralMasteringPlan() noexcept;
     [[nodiscard]] bool hasLastSafeNeuralMasteringPlan() const noexcept { return hasLastSafeNeuralPlan_; }
     [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafeNeuralMasteringPlan() const noexcept { return lastSafeNeuralPlan_; }
+    // AUDIT-F4.1: number of projectedTargets dimensions the apply-time delta cap
+    // clamped on the most recent applyValidatedPlan call (0 = within slew limits,
+    // or no last-safe baseline). For telemetry / regression tests.
+    [[nodiscard]] std::size_t getLastApplyDeltaClamps() const noexcept { return lastApplyDeltaClamps_.load(std::memory_order_relaxed); }
+    // AUDIT-F4.2: the limiter ceiling (dBTP) stamped after the streaming-safe
+    // clamp on the most recent applyValidatedPlan. Guaranteed <= -1.0 dBTP
+    // (kStreamingSafeCeilingDBTP) regardless of the limiter mask, so the
+    // streaming-safe guarantee is observable without exposing the private limiter.
+    [[nodiscard]] float getLastAppliedCeilingDbtp() const noexcept { return lastAppliedCeilingDbtp_.load(std::memory_order_relaxed); }
+
+    // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
+    // Returns a zeroed struct before the first apply. Read from any thread.
+    // AUDIT-FIX (L2-3, 2026-06-29): now SpinLock-guarded — same pattern as
+    // getLastApplyVerification.
+    [[nodiscard]] CompositeQualityScore getLastQualityScore() const noexcept
+    {
+        const juce::SpinLock::ScopedLockType lock(lastQualityScoreLock_);
+        return lastQualityScore_;
+    }
+
+    // P2.5 (AUDIT): wire the ActionLedger so neural mastering writes (which bypass
+    // MCPToolHandler::handle and were therefore NOT recorded) become auditable. Pass
+    // nullptr to detach. The processor wires this after the MCP server's
+    // AutomationRuntime exists. Message thread only. Ledger is NOT owned here.
+    void setActionLedger(ActionLedger* ledger) noexcept { actionLedger_ = ledger; }
+
+    // AUDIT CRITICAL-6/7/17: the neural plan is bridged to the hosted plugin via
+    // the OzonePlanApplicator path (chainPlanner_.applyPlan forwards the plan to
+    // whatever mastering plugin is loaded). Returns the parameter-enqueue count
+    // from the last apply (>0 means the hosted plugin actually received writes),
+    // or -1 when no applicator is registered / no apply has run. Read from any
+    // thread (atomic).
+    [[nodiscard]] int getLastOzoneAppliedCount() const noexcept { return lastOzoneAppliedCount_.load(std::memory_order_acquire); }
+
+    // True when the last neural apply reached an audible path: either the
+    // internal chain is active, or the Ozone applicator wrote at least one
+    // parameter. SonicMasterAnalysisEngine uses this to distinguish Applied from
+    // AppliedNoAudioPath.
+    [[nodiscard]] bool lastApplyReachedAudioPath() const noexcept
+    {
+        return isActive() || getLastOzoneAppliedCount() > 0;
+    }
+
+    // ── State persistence (MED-11: survive save/restore) ────────────────────
+    // Serializes the last applied neural plan (if any) as a MASTERING_PLAN child
+    // of `parent`. No-op when no plan is held. Message thread only.
+    void serializeLastPlan(juce::XmlElement& parent) const;
+    // Restores a previously serialized plan. Returns true on success. Safe to
+    // call when no MASTERING_PLAN element exists (no-op, returns false).
+    bool restoreLastPlan(const juce::XmlElement& parent);
 
 private:
     void timerCallback() override;
     void applyPlan(const MultiEffectPlan& plan);
+    // AUDIT CRITICAL-7: convert a neural plan into the MultiEffectPlan the
+    // OzonePlanApplicator consumes. Kept as a member so it can read the engine's
+    // current stereo/limiter state to fill fields the neural plan leaves at
+    // defaults. Message thread only.
+    MultiEffectPlan buildBridgePlanFromNeural(const ValidatedNeuralMasteringPlan& plan) const noexcept;
     void updateAnalysisWindow(const juce::AudioBuffer<float>& buf) noexcept;
     void sumBands(juce::AudioBuffer<float> bands[MultibandSplitter::kNumBands],
                   juce::AudioBuffer<float>& out) noexcept;
@@ -145,6 +357,7 @@ private:
     MSMatrix                    ms_;
     MultibandSplitter           splitter_;
     MultibandDynamicsProcessor  dynamics_;
+    TransientShaper             transient_;   // Phase 3: Impact module (after dynamics, before EQ)
     AdaptiveEQ                  eq_;
     StereoImager                stereo_;
     HarmonicExciter             exciter_;
@@ -166,8 +379,44 @@ private:
     juce::AudioBuffer<float> bandBuffers_[MultibandSplitter::kNumBands];
 
     std::atomic<bool> active_ { false };
+    // M-4 FIX: member arrays replacing static thread_local in getSnapshot().
+    // thread_local triggers a hidden malloc on first access per thread on MSVC;
+    // member arrays avoid that cost and are trivially safe for the single-threaded
+    // analysis path. These are only read/written in getSnapshot() (analysis thread)
+    // and the snapshot-return path, so no synchronization is needed.
+    // mutable: getSnapshot() is const, but these are scratch buffers (like bandBuffers_
+    // above) — logically const, physically mutated to fill the snapshot.
+    mutable std::array<float, kNeuralMasteringSpectralBandCount> memberSpectralBands_ {};
+    mutable std::array<float, kNeuralMasteringStereoBandCount> memberCorrelation_ {};
+    mutable std::array<float, kNeuralMasteringStereoBandCount> memberMidSideRatio_ {};
+    // THREADSWEEP-2026-06: sampleRate_/blockSize_ are written by prepare()
+    // (message thread) and read by updateAnalysisWindow()/analyzeBlock() (audio
+    // thread). Safe only under the JUCE contract that prepare runs with playback
+    // stopped — NOT atomics. If you ever reconfigure the chain while audio is
+    // flowing, gate that path on the audio thread first (or make these atomic).
     double sampleRate_  = 48000.0;
     int    blockSize_   = 512;
+    // AUDIT-FIX (Fix 8): captured from prepare()'s startIntelligence arg. When
+    // false, applyValidatedPlan skips the internal-chain writes (dormant objects).
+    bool   intelligenceActive_ = false;
+    // AUDIT-FIX (Fix 7): cumulative sample count for frame-based staleness.
+    std::atomic<std::uint64_t> analyzedSamples_ { 0 };
+    // AUDIT-FIX (Fix 2): readback verification of the last applyValidatedPlan().
+    // AUDIT-FIX (L2-2, 2026-06-29): protected by lastApplyVerifyLock_ — written on
+    // the message thread (applyValidatedPlan), read from any thread (MCP handler).
+    mutable juce::SpinLock lastApplyVerifyLock_;
+    ApplyVerification lastApplyVerification_ {};
+    // AUDIT-FIX (Fix 2/6): partial-apply flag (see lastApplyWasPartial()).
+    std::atomic<bool> lastApplyWasPartial_ { false };
+    // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
+    // AUDIT-FIX (L2-3, 2026-06-29): protected by lastQualityScoreLock_ — same pattern.
+    mutable juce::SpinLock lastQualityScoreLock_;
+    CompositeQualityScore lastQualityScore_ {};
+    // P2.5: optional ledger for auditing neural writes. Set by the processor after
+    // the MCP server's AutomationRuntime exists. nullptr when not wired (tests).
+    ActionLedger* actionLedger_ = nullptr;
+    // Same lifecycle invariant: single audio-thread writer during playback,
+    // mutated by reset()/prepare() only when the host has stopped playback.
     double analysisElapsedSeconds_ = 0.0;
     int    analysisSamplesSinceWindowSample_ = 0;
     double analysisSumSquares_ = 0.0;
@@ -177,8 +426,25 @@ private:
     int tickCount_            = 0;
     int plannerUpdateInterval_= 300;  // ~30s at 10Hz timer
     float smoothedSpectralTilt_ = 0.0f;
+    int genreClassifyTimer_    = 0;   // classify every 30th tick
+    int monoCheckTimer_        = 0;   // check mono every 1st tick
+    int chainPlanTimer_        = 0;   // re-plan every 300 ticks
+    int loudnessCorrectionTimer_ = 0; // update normalizer every tick
+
+    // Neural mastering state (message thread only)
+    // AUDIT-8: the last safe neural mastering plan. Used by the heuristic
+    // ChainPlanExecutor as a warm-start (the heuristic defers to this plan's
+    // values on any stage the neural plan contested). Also used as the baseline
+    // for the safety policy's per-cycle delta caps (F4.1).
     ValidatedNeuralMasteringPlan lastSafeNeuralPlan_ {};
     bool hasLastSafeNeuralPlan_ = false;
+    // AUDIT-F4.1: number of clamped dimensions from the most recent apply.
+    std::atomic<std::size_t> lastApplyDeltaClamps_ { 0 };
+    // AUDIT-F4.2: the streaming-safe-clamped ceiling from the most recent apply.
+    std::atomic<float> lastAppliedCeilingDbtp_ { -1.0f };
+    // AUDIT CRITICAL-7: count of hosted-plugin params applied last cycle.
+    std::atomic<int> lastOzoneAppliedCount_ { -1 };
+    NeuralMasteringSafetyPolicy applyGuardPolicy_ { NeuralMasteringSafetyPolicy::defaultConfig() };
 };
 
 } // namespace more_phi

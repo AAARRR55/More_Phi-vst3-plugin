@@ -23,6 +23,7 @@ silently. Keep the parity test green.
 - `codec.py` — single source of truth for the feature/label tensor layout (mirrors `src/Core/NeuralMasteringTypes.h` + `serializeFeatureFrame`/`buildPlanCandidate`).
 - `model.py` — `MasteringControlRegressor` (conv front-end over spectral bands + MLP head, tanh-bounded). Input normalization is baked **inside** the model so the exported ONNX is self-contained and the C++ seam feeds raw values unchanged.
 - `train.py` — training loop with two data modes.
+- `diff_dsp.py`, `hybrid_loss.py`, `train_hybrid.py` — optional hybrid training path. It keeps the same 63→72 ONNX contract but adds a pure-PyTorch differentiable DSP proxy for offline audio-domain loss. This proxy is not plugin runtime DSP.
 - `tests/test_contract.py` — ONNX contract + train/serve parity verification.
 
 ## Requirements
@@ -71,6 +72,27 @@ python train.py \
 
 python tests/test_contract.py runs/control/model.onnx
 ```
+
+## Hybrid training — parameter policy with audio-domain loss
+
+Use `train_hybrid.py` when the manifest rows include audio references such as
+`sourcePath` plus `startSample`. The script still exports the same ONNX shape
+for `OnnxNeuralMasteringRunner`; it just trains with an extra differentiable
+audio loss before final headless-render validation.
+
+```bash
+python train_hybrid.py \
+  --data-mode manifest \
+  --train-manifest data/control/train.jsonl \
+  --val-manifest data/control/val.jsonl \
+  --audio-root . \
+  --epochs 80 --batch-size 8 \
+  --export-onnx runs/control/control_regressor_hybrid.onnx
+```
+
+Rows without an audio reference fail fast. If `--headless-lib` points at
+`libmore_phi_headless_render`, the final report includes real-chain LUFS error,
+true-peak violations, EQ magnitude, and overcorrection metrics.
 
 ### Train/serve parity — the critical invariant
 

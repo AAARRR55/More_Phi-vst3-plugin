@@ -1,13 +1,12 @@
 /*
  * More-Phi — UI/PerformancePanel.h
  *
- * Horizontal strip of opt-in CPU/performance toggles for morphing and
+ * Horizontal strip of opt-in CPU-saver toggles for morphing and
  * hosted-parameter application. Lives in the Engine tab, below the blend strip.
  *
- * Toggles (all default OFF — preserve current behaviour):
- *   Coarse Writes        — raise the apply-loop write deadband (fewer setValue calls)
- *   Disable Touch Detect — skip the per-block batch getValue() read + touch logic
- *   Throttle Commits     — push setValue to the hosted plugin only every Nth block
+ * H7: labels + tooltips are written in producer language (these trade some
+ * morph smoothness for CPU); the section is headed "CPU SAVER" to make the
+ * trade-off explicit. All default OFF (preserve current behaviour).
  *
  * Bound to APVTS so they support DAW automation and persist with state.
  */
@@ -36,9 +35,9 @@ private:
 
     static constexpr int kLabelWidth = 96;
 
-    juce::TextButton coarseWritesToggle_    { "Coarse Writes" };
-    juce::TextButton disableTouchToggle_    { "Disable Touch Detect" };
-    juce::TextButton throttleCommitsToggle_ { "Throttle Commits" };
+    // F-8: "Lower Write Rate" removed — merged into "Throttle Writes".
+    juce::TextButton disableTouchToggle_    { "Pure Morph" };
+    juce::TextButton throttleCommitsToggle_ { "Throttle Writes" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PerformancePanel)
 };

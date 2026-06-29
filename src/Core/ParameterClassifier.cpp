@@ -23,7 +23,7 @@ void ParameterClassifier::analyzeParameters(const IParameterBridge& host)
     std::lock_guard<std::mutex> lock(mutex_);
     
     const int count = host.getParameterCount();
-    const uint32_t clampedCount = static_cast<uint32_t>(juce::jlimit(0, MAX_PARAMS, count));
+    const uint32_t clampedCount = static_cast<uint32_t>(juce::jlimit(0, MAX_PARAMETERS, count));
     parameterCount_.store(clampedCount);
 
     const auto assignCategory = [](const juce::String& lowerName, ParameterMetadata& meta)
@@ -228,7 +228,7 @@ std::vector<int> ParameterClassifier::getExposedParameterIndicesNoLock() const
 {
     std::vector<int> exposed;
 
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
 
     for (uint32_t i = 0; i < count; ++i)
     {
@@ -255,7 +255,7 @@ std::vector<int> ParameterClassifier::getInterpolatableIndices() const
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<int> interpolatable;
     
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (metadata_[i].isInterpolatable)
@@ -269,7 +269,7 @@ std::vector<int> ParameterClassifier::getInterpolatableIndices() const
 
 void ParameterClassifier::recordModification(int paramIndex)
 {
-    if (paramIndex < 0 || paramIndex >= MAX_PARAMS)
+    if (paramIndex < 0 || paramIndex >= MAX_PARAMETERS)
         return;
     
     std::lock_guard<std::mutex> lock(mutex_);
@@ -284,7 +284,7 @@ void ParameterClassifier::recordModification(int paramIndex)
 
 void ParameterClassifier::recordAIAdjustment(int paramIndex)
 {
-    if (paramIndex < 0 || paramIndex >= MAX_PARAMS)
+    if (paramIndex < 0 || paramIndex >= MAX_PARAMETERS)
         return;
     
     // AI adjustments don't increase importance as much as user modifications
@@ -296,7 +296,7 @@ void ParameterClassifier::recordAIAdjustment(int paramIndex)
 ParameterMetadata ParameterClassifier::getMetadata(int index) const
 {
     static const ParameterMetadata emptyMeta{};
-    if (index < 0 || index >= MAX_PARAMS)
+    if (index < 0 || index >= MAX_PARAMETERS)
         return emptyMeta;
     std::lock_guard<std::mutex> lock(mutex_);
     return metadata_[index];
@@ -304,7 +304,7 @@ ParameterMetadata ParameterClassifier::getMetadata(int index) const
 
 void ParameterClassifier::setMetadata(int index, const ParameterMetadata& meta)
 {
-    if (index < 0 || index >= MAX_PARAMS)
+    if (index < 0 || index >= MAX_PARAMETERS)
         return;
     
     std::lock_guard<std::mutex> lock(mutex_);
@@ -314,7 +314,7 @@ void ParameterClassifier::setMetadata(int index, const ParameterMetadata& meta)
 void ParameterClassifier::exposeAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (!metadata_[i].isSanityProtected)
@@ -325,7 +325,7 @@ void ParameterClassifier::exposeAll()
 void ParameterClassifier::hideAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     for (uint32_t i = 0; i < count; ++i)
     {
         metadata_[i].isExposed = false;
@@ -339,7 +339,7 @@ void ParameterClassifier::exposeCategory(const char* category)
     const juce::String categoryLower = juce::String(category).toLowerCase();
 
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (juce::String(metadata_[i].category).toLowerCase().contains(categoryLower))
@@ -356,7 +356,7 @@ void ParameterClassifier::hideCategory(const char* category)
     const juce::String categoryLower = juce::String(category).toLowerCase();
 
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     for (uint32_t i = 0; i < count; ++i)
     {
         if (juce::String(metadata_[i].category).toLowerCase().contains(categoryLower))
@@ -422,7 +422,7 @@ bool ParameterClassifier::isDiscrete(int index) const
 
 bool ParameterClassifier::isDiscreteNoLock(int index) const
 {
-    if (index < 0 || index >= MAX_PARAMS)
+    if (index < 0 || index >= MAX_PARAMETERS)
         return false;
 
     const auto& meta = metadata_[index];
@@ -435,7 +435,7 @@ bool ParameterClassifier::isDiscreteNoLock(int index) const
 bool ParameterClassifier::isBinary(int index) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (index < 0 || index >= MAX_PARAMS)
+    if (index < 0 || index >= MAX_PARAMETERS)
         return false;
     return metadata_[index].type == ParameterType::Binary;
 }
@@ -443,7 +443,7 @@ bool ParameterClassifier::isBinary(int index) const
 std::vector<bool> ParameterClassifier::getDiscreteMap() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     std::vector<bool> map;
     map.reserve(count);
     
@@ -458,7 +458,7 @@ std::vector<bool> ParameterClassifier::getDiscreteMap() const
 std::vector<bool> ParameterClassifier::getBinaryMap() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     std::vector<bool> map;
     map.reserve(count);
     
@@ -473,7 +473,7 @@ std::vector<bool> ParameterClassifier::getBinaryMap() const
 bool ParameterClassifier::shouldSkipForMorph(int index) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (index < 0 || index >= MAX_PARAMS)
+    if (index < 0 || index >= MAX_PARAMETERS)
         return true;
     
     const auto& meta = metadata_[index];
@@ -499,7 +499,7 @@ bool ParameterClassifier::shouldSkipForMorph(int index) const
 
 void ParameterClassifier::updateImportanceScores()
 {
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
 
     for (uint32_t i = 0; i < count; ++i)
     {
@@ -551,7 +551,7 @@ ParameterClassifier::Statistics ParameterClassifier::getStatistics() const
     std::lock_guard<std::mutex> lock(mutex_);
     Statistics stats{};
     
-    stats.totalParameters = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    stats.totalParameters = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     
     float totalImportance = 0.0f;
     for (uint32_t i = 0; i < stats.totalParameters; ++i)
@@ -595,7 +595,7 @@ ParameterClassifier::Statistics ParameterClassifier::getStatistics() const
 void ParameterClassifier::clearLearningData()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     
     for (uint32_t i = 0; i < count; ++i)
     {
@@ -613,7 +613,7 @@ void ParameterClassifier::serialize(std::vector<uint8_t>& out) const
     out.clear();
     out.push_back(1); // Version
     
-    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMS);
+    const uint32_t count = std::min<uint32_t>(parameterCount_.load(), MAX_PARAMETERS);
     out.insert(out.end(), 
         reinterpret_cast<const uint8_t*>(&count), 
         reinterpret_cast<const uint8_t*>(&count) + sizeof(count));
@@ -645,17 +645,17 @@ void ParameterClassifier::deserialize(const uint8_t* data, size_t size)
     if (size < expectedSize)
         return;
     
-    parameterCount_.store(std::min<uint32_t>(count, MAX_PARAMS));
+    parameterCount_.store(std::min<uint32_t>(count, MAX_PARAMETERS));
     
     const uint8_t* metaData = data + 1 + sizeof(count);
-    for (uint32_t i = 0; i < count && i < MAX_PARAMS; ++i)
+    for (uint32_t i = 0; i < count && i < MAX_PARAMETERS; ++i)
     {
         std::memcpy(&metadata_[i], metaData + i * sizeof(ParameterMetadata), 
                    sizeof(ParameterMetadata));
     }
 
     // H12 FIX: Zero out stale metadata beyond the deserialized count.
-    for (uint32_t i = count; i < MAX_PARAMS; ++i)
+    for (uint32_t i = count; i < MAX_PARAMETERS; ++i)
         metadata_[i] = ParameterMetadata{};
 }
 

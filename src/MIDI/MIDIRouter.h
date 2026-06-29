@@ -23,18 +23,17 @@ public:
     void setMidiChannel(int channel) { midiChannel_.store(juce::jlimit(0, 16, channel), std::memory_order_relaxed); }
     int getMidiChannel() const { return midiChannel_.load(std::memory_order_relaxed); }
 
-    /** Set the snapshot callback. MUST be called before prepareToPlay() and
-     *  must NOT be changed during audio processing. The callback pointer is
-     *  stored atomically but is NOT guarded by a lock; changing it concurrently
-     *  with processMidi() or processSidechain() is a data race. */
+    // B2 FIX — callback contract (clarified):
+    // The callbacks are set ONCE in MorePhiProcessor's constructor, before any
+    // audio thread exists, and never changed. The std::atomic<...> storage is
+    // defense-in-depth so a re-registration during shutdown doesn't immediately
+    // tear a read; it is NOT a license to re-bind callbacks live. Changing a
+    // callback while processMidi()/processSidechain() may run is a data race
+    // on the pointed-to callable (the atomic only guards the pointer store).
     void setSnapshotCallback(SnapshotCallback cb, void* ctx = nullptr) {
         snapshotCb_.store(cb, std::memory_order_release);
         snapshotCtx_.store(ctx, std::memory_order_release);
     }
-    /** Set the morph callback. MUST be called before prepareToPlay() and
-     *  must NOT be changed during audio processing. The callback pointer is
-     *  stored atomically but is NOT guarded by a lock; changing it concurrently
-     *  with processMidi() or processSidechain() is a data race. */
     void setMorphCallback(MorphCallback cb, void* ctx = nullptr) {
         morphCb_.store(cb, std::memory_order_release);
         morphCtx_.store(ctx, std::memory_order_release);

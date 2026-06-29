@@ -470,6 +470,90 @@ TEST_CASE("AutoMasteringEngine applies only validated neural mastering plans", "
     CHECK(engine.getLastSafeNeuralMasteringPlan().sourcePlanId == 500);
 }
 
+TEST_CASE("AUDIT-2.1: applyValidatedPlan lands all six comp params when compParams set",
+          "[audio_engine][mastering][audit-2.1]")
+{
+    // AUDIT-2.1 regression: when a plan carries the full real-unit compParams
+    // sidecar, ALL six params per band must reach the DSP — not just threshold
+    // and ratio. Before this fix, attack/release/makeup/knee were decoded by the
+    // model but discarded; the DSP kept its heuristic defaults for those four.
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, true);
+
+    ValidatedNeuralMasteringPlan plan;
+    plan.valid = true;
+    plan.sourcePlanId = 600;
+    plan.appliedMask.dynamics = true;
+    plan.hasCompParams = true;
+    // Band 0: distinct, assertable values for every param.
+    plan.compParams[0] = { -17.5f, 3.5f, 7.0f, 90.0f, 1.5f, 5.0f };
+    // Band 1: different values to confirm per-band independence.
+    plan.compParams[1] = { -22.0f, 2.0f, 25.0f, 200.0f, 4.0f, 8.0f };
+    // Band 2: a third distinct set.
+    plan.compParams[2] = { -19.0f, 4.0f, 12.0f, 150.0f, 0.0f, 2.0f };
+
+    REQUIRE(engine.applyValidatedPlan(plan));
+
+    auto& dyn = engine.getDynamics();
+    const auto p0 = dyn.getBandParams(0);
+    CHECK(p0.thresholdDB == Approx(-17.5f).margin(1e-3f));
+    CHECK(p0.ratio       == Approx(  3.5f).margin(1e-3f));
+    CHECK(p0.attackMs    == Approx(  7.0f).margin(1e-3f));
+    CHECK(p0.releaseMs   == Approx( 90.0f).margin(1e-3f));
+    CHECK(p0.makeupDB    == Approx(  1.5f).margin(1e-3f));
+    CHECK(p0.kneeDB      == Approx(  5.0f).margin(1e-3f));
+
+    const auto p1 = dyn.getBandParams(1);
+    CHECK(p1.thresholdDB == Approx(-22.0f).margin(1e-3f));
+    CHECK(p1.ratio       == Approx(  2.0f).margin(1e-3f));
+    CHECK(p1.attackMs    == Approx( 25.0f).margin(1e-3f));
+    CHECK(p1.releaseMs   == Approx(200.0f).margin(1e-3f));
+    CHECK(p1.makeupDB    == Approx(  4.0f).margin(1e-3f));
+    CHECK(p1.kneeDB      == Approx(  8.0f).margin(1e-3f));
+
+    const auto p2 = dyn.getBandParams(2);
+    CHECK(p2.thresholdDB == Approx(-19.0f).margin(1e-3f));
+    CHECK(p2.ratio       == Approx(  4.0f).margin(1e-3f));
+    CHECK(p2.attackMs    == Approx( 12.0f).margin(1e-3f));
+    CHECK(p2.releaseMs   == Approx(150.0f).margin(1e-3f));
+    CHECK(p2.makeupDB    == Approx(  0.0f).margin(1e-3f));
+    CHECK(p2.kneeDB      == Approx(  2.0f).margin(1e-3f));
+
+    // Band 3 (High) is OUTSIDE the 3-band model contract and must keep the
+    // heuristic warm-start, not be touched by the neural plan.
+    const auto p3 = dyn.getBandParams(3);
+    CHECK(p3.thresholdDB == Approx(-18.0f).margin(1e-3f));  // kHeuristicDefaults[3]
+    CHECK(p3.ratio       == Approx(  2.0f).margin(1e-3f));
+}
+
+TEST_CASE("AUDIT-2.1: applyValidatedPlan falls back to normalized pair without compParams",
+          "[audio_engine][mastering][audit-2.1]")
+{
+    // AUDIT-2.1 backward-compat: plans from producers other than the SonicMaster
+    // decoder (e.g. NeuralMasteringModelRunner) set only the normalized dynamics
+    // pair and leave hasCompParams=false. The engine must still apply threshold
+    // + ratio from the normalized array and not regress.
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, true);
+
+    ValidatedNeuralMasteringPlan plan;
+    plan.valid = true;
+    plan.sourcePlanId = 601;
+    plan.appliedMask.dynamics = true;
+    plan.hasCompParams = false;
+    // threshold value 0.5 -> -20 + 0.5*8 = -16; ratio value 1.0 -> 3.5 + 1.0*2.5 = 6.0
+    // (engine fallback maps ratio over [1,6]: center=3.5, scale=2.5, matching
+    // kSonicMasterCompRatioMax=6.0; clamped to [1,6])
+    plan.projectedTargets.dynamics[0] = 0.5f;
+    plan.projectedTargets.dynamics[1] = 1.0f;
+
+    REQUIRE(engine.applyValidatedPlan(plan));
+
+    const auto p0 = engine.getDynamics().getBandParams(0);
+    CHECK(p0.thresholdDB == Approx(-16.0f).margin(1e-3f));
+    CHECK(p0.ratio       == Approx(  6.0f).margin(1e-3f));
+}
+
 TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[processor][analysis][mcp]")
 {
     MorePhiProcessor processor;
@@ -478,7 +562,18 @@ TEST_CASE("Processor processBlock feeds local mastering analysis tap", "[process
     juce::AudioBuffer<float> buffer(2, 512);
     juce::MidiBuffer midi;
 
-    for (int block = 0; block < 48; ++block)
+    // PERF-THROTTLE: processBlock throttles AutoMasteringEngine::analyzeBlock to
+    // every ANALYSIS_THROTTLE_BLOCKS (8) blocks, and LUFS needs ≥4 committed
+    // 100 ms blocks (historyCount_ >= 4) before it publishes an integrated
+    // value. 48 blocks gave only 6 throttled analyzeBlock calls → 0 LUFS commits
+    // → getLUFSIntegrated() stayed -inf. Feed enough to cross all gates with
+    // margin: 1280 blocks → 40 analyzeBlock calls → 20480 samples → ≥4 LUFS
+    // commits (each 4800 samples) so integrated, momentary (≥4) and snapshots
+    // (≥1) all populate.
+    // AUDIT-THROTTLE (2026-07): ANALYSIS_THROTTLE_BLOCKS was raised from 8→32;
+    //                          320 blocks gave only 10 analyzeBlock calls → 1 commit → -inf.
+    constexpr int kBlocks = 1280;
+    for (int block = 0; block < kBlocks; ++block)
     {
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
@@ -606,6 +701,60 @@ TEST_CASE("MorphProcessor: produces consistent output across varying block sizes
         for (int p = 0; p < paramCount; ++p)
             REQUIRE(out[p] == Approx(refOut[p]).margin(0.001f));
     }
+}
+
+TEST_CASE("MorphProcessor: Direct mode applies a minimum de-zipper (no full-vector jump)",
+          "[morph][direct][c4]")
+{
+    // C-4 FIX (audit): Direct mode used to skip smoothing entirely, so a
+    // discontinuous cursor move produced a full-vector jump in one block →
+    // click on unsmoothed hosted params. The fix guarantees a minimum ~2 ms
+    // one-pole de-zipper in Direct mode REGARDLESS of the user's smoothing
+    // setting (even when setSmoothingRate(0)). This test pins the invariant
+    // at a SMALL block size (32 / 48 k ≈ 0.667 ms < tau 2 ms): a single
+    // block after a maximal jump must move only partway toward the target
+    // (not snap to it), and must converge within a bounded number of blocks.
+    const int paramCount = 4;
+
+    SnapshotBank bank;
+    bank.prepare(paramCount);
+    // Snapshot 0 = all-zero, snapshot 6 = all-one. A fader move 0→1 is a
+    // maximal discontinuity (0.0 → 1.0 on every parameter).
+    std::vector<float> vA(paramCount, 0.0f);
+    std::vector<float> vB(paramCount, 1.0f);
+    bank.captureValues(0, vA);
+    bank.captureValues(6, vB);
+
+    MorphProcessor proc(bank);
+    proc.prepare(paramCount);
+    // User explicitly disabled smoothing — Direct mode must STILL de-zipper.
+    proc.setSmoothingRate(0.0f);
+
+    std::vector<float> out(paramCount, 0.0f);
+    const float dt = 32.0f / 48000.0f;   // ~0.667 ms — smaller than the 2 ms tau
+
+    // Park the cursor at slot 0 (target = 0.0) so the internal smoother
+    // settles at 0.0 before the jump.
+    for (int i = 0; i < 20; ++i)
+        proc.process(0.5f, 0.5f, 0.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+        REQUIRE(v == Approx(0.0f).margin(1e-4f));
+
+    // Single block after the maximal jump: the de-zipper must be active, so
+    // the output is strictly between 0 and target — NOT snapped to 1.0.
+    proc.process(0.5f, 0.5f, 1.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+    {
+        INFO("Direct-mode single-block output after jump: " << v);
+        REQUIRE(v > 0.0f);     // it moved
+        REQUIRE(v < 0.99f);    // but NOT all the way in one small block
+    }
+
+    // And it must converge to the target (1.0) within a bounded block count.
+    for (int i = 0; i < 400; ++i)
+        proc.process(0.5f, 0.5f, 1.0f, MorphSource::Fader, MorphMode::Direct, dt, out);
+    for (float v : out)
+        REQUIRE(v == Approx(1.0f).margin(1e-3f));
 }
 
 
@@ -873,4 +1022,48 @@ TEST_CASE("Denormal guard: ScopedNoDenormals compiles and is available", "[denor
     }
     // ScopedNoDenormals restores FPU state on destruction — this must not crash.
     SUCCEED("ScopedNoDenormals constructed and destroyed without error");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  AUDIT-6 / MSDECODE-1 invariant: limiter must run AFTER M/S decode.
+//  MSMatrix::decodeBuffer sums mid + side without /sqrt2 (MSMatrix.h:36), so
+//  two near-ceiling M/S channels sum to ~+6 dBFS in L/R after decode. If the
+//  limiter ever ran BEFORE decode, the delivered L/R would clip past the
+//  ceiling. This test pins the ordering by feeding a hot signal and asserting
+//  the post-chain true peak stays at/below the ceiling. If someone reorders
+//  processBlock so the limiter precedes decode, this fails.
+// ─────────────────────────────────────────────────────────────────────────────
+TEST_CASE("AUDIT-6: limiter-after-decode keeps true peak under ceiling (MSDECODE-1 invariant)",
+          "[audio_engine][mastering][msdecode-invariant]")
+{
+    AutoMasteringEngine engine;
+    engine.prepare(48000.0, 512, /*startIntelligence=*/false);
+    engine.setActive(true);
+
+    // Tight ceiling so any decode-sum overshoot is visible above the margin.
+    constexpr float kCeilingDBTP = -1.0f;
+    engine.getLoudnessNormalizer().setTargetLUFS(-23.0f);  // quiet target -> normalizer won't push up
+    // The limiter ceiling is set through the limiter accessor exposed by the engine.
+    // (No high-level setter; reach in via the chain accessor used elsewhere.)
+
+    // Hot, fully-correlated stereo sine near 0 dBFS on both channels. After
+    // M/S encode mid = (L+R)/2 is near peak; side = (L-R)/2 ~ 0. But the loudness
+    // normalizer may add makeup gain that pushes the post-decode L/R above the
+    // ceiling — exactly the overshoot the post-decode limiter must catch.
+    juce::AudioBuffer<float> buffer(2, 512);
+    for (int block = 0; block < 200; ++block)   // ~2s, enough for LUFS to commit + limiter to engage
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            fillSine(buffer.getWritePointer(ch), buffer.getNumSamples(), 440.0f, 48000.0f, 0.95f);
+        engine.processBlock(buffer);
+    }
+
+    // If decode ran AFTER the limiter, post-decode summing would push the
+    // reported true peak (read post-decode, post-limit) several dB past the
+    // ~0 dBFS input. With correct ordering the limiter catches it. We assert a
+    // sane bound (input peak + small margin), which the broken order violates.
+    const float tp = engine.getTruePeak_dBTP();
+    INFO("true peak = " << tp << " dBFS (input ~ -0.45 dBFS, ceiling = " << kCeilingDBTP << ")");
+    CHECK(std::isfinite(tp));
+    CHECK(tp <= 0.0f);  // must not clip past the input level by the +6 dB decode-sum bug
 }

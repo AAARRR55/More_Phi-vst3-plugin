@@ -1,0 +1,28 @@
+{
+  "hwnd": "0x8406cc",
+  "pid": 45448,
+  "tally_before": {
+    "poller_state": 37,
+    "state_helper_a": 0,
+    "state_helper_b": 0,
+    "hub": 0,
+    "thunk": 0,
+    "body": 0,
+    "getter": 111,
+    "pipeline_root": 0,
+    "applier": 37
+  },
+  "delta": {
+    "thunk": 0,
+    "applier": 731,
+    "poller_state": 731,
+    "state_helper_a": 0,
+    "hub": 0,
+    "body": 0,
+    "pipeline_root": 0,
+    "getter": 2199,
+    "state_helper_b": 0
+  },
+  "pipeline_fired": false,
+  "advance_method": "coord_next"
+}

@@ -52,7 +52,7 @@ juce::var PresetSerializer::serialize(const SnapshotBank& bank,
         }
     }))
     {
-        juce::Logger::writeToLog("PresetSerializer::serialize — tryReadLocked failed");
+        DBG("PresetSerializer::serialize — tryReadLocked failed");
         delete root;
         return juce::var{};
     }
@@ -77,13 +77,13 @@ juce::var PresetSerializer::serialize(const SnapshotBank& bank,
             }
             catch (const std::exception& e)
             {
-                juce::Logger::writeToLog("PresetSerializer::serialize — getStateInformation failed: "
+                DBG("PresetSerializer::serialize — getStateInformation failed: "
                     + juce::String(e.what()));
                 pluginState.reset();
             }
             catch (...)
             {
-                juce::Logger::writeToLog("PresetSerializer::serialize — getStateInformation failed: unknown exception");
+                DBG("PresetSerializer::serialize — getStateInformation failed: unknown exception");
                 pluginState.reset();
             }
 
@@ -110,7 +110,7 @@ bool PresetSerializer::deserialize(const juce::var& json,
         return false;
     if (ver > 1)
     {
-        juce::Logger::writeToLog("PresetSerializer::deserialize — preset version "
+        DBG("PresetSerializer::deserialize — preset version "
             + juce::String(ver) + " is newer than expected (1); attempting migration");
         // Future: call migrateFromV1() or version-specific migration here
         // For now, proceed with best-effort deserialization
@@ -205,12 +205,12 @@ bool PresetSerializer::deserialize(const juce::var& json,
                 }
                 catch (const std::exception& e)
                 {
-                    juce::Logger::writeToLog("PresetSerializer::deserialize — setStateInformation failed: "
+                    DBG("PresetSerializer::deserialize — setStateInformation failed: "
                         + juce::String(e.what()));
                 }
                 catch (...)
                 {
-                    juce::Logger::writeToLog("PresetSerializer::deserialize — setStateInformation failed: unknown exception");
+                    DBG("PresetSerializer::deserialize — setStateInformation failed: unknown exception");
                 }
                 hostManager->releasePluginFromUse();
             }

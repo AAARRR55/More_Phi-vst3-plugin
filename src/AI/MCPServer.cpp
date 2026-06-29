@@ -17,14 +17,6 @@ namespace more_phi {
 
 using json = nlohmann::json;
 
-static bool constantTimeEqual(const char* a, const char* b, size_t len)
-{
-    volatile uint8_t diff = 0;
-    for (size_t i = 0; i < len; ++i)
-        diff |= static_cast<uint8_t>(a[i] ^ b[i]);
-    return diff == 0;
-}
-
 
 MCPServer::MCPServer(MorePhiProcessor& processor)
     : juce::Thread("MorePhi-MCP"), processor_(processor)
@@ -64,7 +56,10 @@ MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingS
     : Thread("MCP-Connection"), owner_(owner), socket_(socket)
 {
     startedSuccessfully_ = startThread();
-    owner_.connectedClients_++;
+    // M8: only count the connection when startThread() actually succeeded,
+    // preventing a negative connectedClients_ after destructor decrement.
+    if (startedSuccessfully_)
+        owner_.connectedClients_++;
 }
 
 MCPServer::ConnectionThread::~ConnectionThread()
@@ -74,7 +69,10 @@ MCPServer::ConnectionThread::~ConnectionThread()
     // variables are destroyed. Since signalExit() closes the socket, the thread
     // will unblock and exit immediately.
     stopThread(-1);
-    owner_.connectedClients_--;
+    // M8: mirror the conditional increment — only decrement if the thread was
+    // actually started (constructor only increments on success).
+    if (startedSuccessfully_)
+        owner_.connectedClients_--;
 }
 
 void MCPServer::ConnectionThread::signalExit()
@@ -92,7 +90,14 @@ void MCPServer::ConnectionThread::run()
     constexpr int MAX_READ_ERRORS = 3;
     constexpr int MAX_REQUEST_BYTES = 256 * 1024;
     constexpr int IDLE_TIMEOUT_MS = 30000;
-    int64_t lastActivityMs = juce::Time::currentTimeMillis();
+    // SECURITY (Finding #9): Maximum session lifetime. Even an active connection
+    // is forcibly dropped after this period, forcing re-authentication. Caps the
+    // blast radius of a stolen/snarfed bearer token: the attacker must re-acquire
+    // the live token after each cap. 30 minutes mirrors the typical DAW editing
+    // session length; clients auto-reconnect.
+    constexpr int64_t MAX_SESSION_MS = 30ll * 60ll * 1000ll;
+    const int64_t sessionStartMs = juce::Time::currentTimeMillis();
+    int64_t lastActivityMs = sessionStartMs;
 
     while (!threadShouldExit() && !writeError)
     {
@@ -108,9 +113,17 @@ void MCPServer::ConnectionThread::run()
             if (ready == 0)
             {
                 readErrors = 0;
-                if (juce::Time::currentTimeMillis() - lastActivityMs > IDLE_TIMEOUT_MS)
+                const int64_t nowMs = juce::Time::currentTimeMillis();
+                if (nowMs - lastActivityMs > IDLE_TIMEOUT_MS)
                 {
                     owner_.logError("connection", "Idle timeout exceeded; closing connection");
+                    break;
+                }
+                // SECURITY (Finding #9): hard session cap — even active connections
+                // are torn down after MAX_SESSION_MS, forcing re-authentication.
+                if (authenticated_ && (nowMs - sessionStartMs) > MAX_SESSION_MS)
+                {
+                    owner_.logError("connection", "Session lifetime cap reached; closing connection (re-auth required)");
                     break;
                 }
                 continue;
@@ -396,17 +409,25 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
 
     // Convert id to nlohmann::json
     json reqId = nullptr;
-    if (parsed.contains("id"))
+    bool idWasPresent = parsed.contains("id");
+    if (idWasPresent)
     {
         if (parsed["id"].is_number_integer())
             reqId = parsed["id"].get<int64_t>();
         else if (parsed["id"].is_string())
             reqId = parsed["id"].get<std::string>();
-        // else remains null
+        else if (parsed["id"].is_null())
+            reqId = nullptr;  // explicit null — still a request, not a notification
+        // else remains null (invalid type — will be caught below)
     }
 
-    // C-15 FIX: Suppress JSON-RPC notification responses.
-    if (reqId.is_null())
+    // AUDIT-FIX (L3-7, 2026-06-29): JSON-RPC 2.0 §4 specifies that a
+    // notification is a request object WITHOUT an "id" member. An explicit
+    // "id": null IS a request and MUST receive a response. Previously
+    // reqId.is_null() suppressed responses for both absent-id (notification)
+    // and explicit-null-id (valid request). Now we distinguish: absent id =
+    // notification (no response); present but null = request (respond).
+    if (reqId.is_null() && !idWasPresent)
     {
         return {};
     }
@@ -580,21 +601,24 @@ bool MCPServer::validateAuth(const juce::var& params)
         const juce::String candidateToken = token;
         const juce::String expectedToken = identity_.bearerToken;
 
-        // C-14 FIX: Fixed-length constant-time comparison to prevent timing attacks.
-        //
-        // Timing note (audit N3, 2026-06-19): the length pre-check below returns
-        // early on a length mismatch, which leaks the EXPECTED token length via
-        // the time taken to reject. This is acceptable here because the bearer
-        // token is a fixed-size format — InstanceIdentity::generate() always
-        // produces a 16-byte (32-hex-char) token — so the length is public
-        // knowledge, not a secret. The constantTimeEqual() loop then compares
-        // only the byte contents without early exit. If the token format ever
-        // becomes variable-length, replace the pre-check with a
-        // length-padded constant-time compare (e.g. HMAC tag comparison).
-        if (candidateToken.length() != expectedToken.length())
-            return false;
+        // SECURITY (Finding #11): Fully constant-time comparison — no length
+        // pre-check, no early exit. Pad the shorter string with null bytes in the
+        // XOR loop so timing reveals nothing about the expected token length.
+        // The loop always runs for max(lenA, lenB) iterations.
+        const auto* strA = candidateToken.toRawUTF8();
+        const auto* strB = expectedToken.toRawUTF8();
+        const int lenA = candidateToken.length();
+        const int lenB = expectedToken.length();
+        const int maxLen = (lenA > lenB) ? lenA : lenB;
 
-        return constantTimeEqual(candidateToken.toRawUTF8(), expectedToken.toRawUTF8(), static_cast<size_t>(expectedToken.length()));
+        volatile uint8_t diff = 0;
+        for (int i = 0; i < maxLen; ++i)
+        {
+            const char ca = (i < lenA) ? strA[i] : '\0';
+            const char cb = (i < lenB) ? strB[i] : '\0';
+            diff |= static_cast<uint8_t>(ca ^ cb);
+        }
+        return diff == 0;
     }
     catch (...)
     {

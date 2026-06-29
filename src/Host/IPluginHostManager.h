@@ -31,6 +31,12 @@ public:
     virtual void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept = 0;
     
     // Access
+    // P3 NOTE: getPlugin() returns a raw pointer whose lifetime is bound to the
+    // PluginHostManager that owns it. The pointer is NOT stable across plugin
+    // load/unload cycles. For audio-thread and parameter-bridge access, prefer
+    // acquirePluginForUse()/releasePluginFromUse() which provide ref-counted
+    // safety. getPlugin() is safe only for single-call access (check-then-use
+    // with no intervening yield) and is provided primarily for test stubs.
     virtual juce::AudioPluginInstance* getPlugin() = 0;
     virtual const juce::AudioPluginInstance* getPlugin() const = 0;
     virtual const juce::PluginDescription* getLastDescription() const = 0;

@@ -33,7 +33,8 @@ private:
 
 // The full scrollable panel
 class ParameterMapPanel : public juce::Component,
-                           private juce::Timer
+                           private juce::Timer,
+                           private juce::TextEditor::Listener
 {
 public:
     explicit ParameterMapPanel(MorePhiProcessor& proc);
@@ -45,12 +46,17 @@ public:
 
 private:
     void timerCallback() override;
+    void textEditorTextChanged(juce::TextEditor&) override;
+    void applyFilter();
 
     MorePhiProcessor& proc_;
     juce::Viewport viewport_;
     juce::Component rowContainer_;
     std::vector<std::unique_ptr<ParameterRow>> rows_;
     juce::Label headerLabel_;
+    juce::TextEditor searchField_;
+    juce::Label emptyLabel_;
+    juce::String filterText_;
     int lastParamCount_ = 0;
 };
 

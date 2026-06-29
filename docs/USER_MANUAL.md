@@ -2,8 +2,6 @@
 
 This manual is the definitive feature reference for More-Phi. Use it when you need to identify a control, understand a setting, troubleshoot behavior, or look up terminology.
 
-> Screenshot placeholder: `[Screenshot: Fully loaded More-Phi UI with numbered callouts for every major region]`
-
 ## Quick Navigation
 
 - [Product Summary](#product-summary)
@@ -19,6 +17,7 @@ This manual is the definitive feature reference for More-Phi. Use it when you ne
 - [Presets Tab](#presets-tab)
 - [AI Tab and LLM Settings](#ai-tab-and-llm-settings)
 - [AI Status Bar](#ai-status-bar)
+- [Agent Orchestration](#agent-orchestration)
 - [MIDI Functions](#midi-functions)
 - [MCP Feature Reference](#mcp-feature-reference)
 - [Configuration and Automation Parameters](#configuration-and-automation-parameters)
@@ -63,12 +62,15 @@ Bottom Tabs
   |-- Engine
   |-- Modulation
   |-- Presets
-  `-- AI
+  |-- AI
+  `-- Agent Orchestration
 
 AI Status Bar
   |-- MCP status
   |-- Port
   |-- External clients
+  |-- Agent states
+  |-- Scheduler stats
   |-- Start/Stop MCP
   `-- Copy Token
 ```
@@ -82,7 +84,7 @@ AI Status Bar
 | Control | Description |
 |---|---|
 | More-Phi logo | Identifies the active plugin window. |
-| Version label | Displays the plugin version, currently `v3.3.0`. |
+| Version label | Displays the plugin version, currently `v3.4.1`. |
 | OUT meter | Shows approximate output level. Green indicates safe level, coral indicates elevated level, red indicates near-clipping. |
 
 ### Resizing
@@ -288,7 +290,21 @@ More-Phi presets are separate from hosted-plugin presets. A More-Phi preset can 
 
 ## AI Tab and LLM Settings
 
-The AI tab hosts chat and assistant workflows where enabled.
+The AI tab hosts chat and assistant workflows where enabled. It also displays the **Agent Status** panel when the orchestrator is active, showing the current state of all six built-in agents, the scheduler queue depth, and the Conductor's latest plan.
+
+### Agent Status Panel
+
+When MCP is running, the AI tab includes an **Agent Status** panel with the following readouts:
+
+| Element | Description |
+|---|---|
+| Orchestrator state | `running`, `paused`, or `stopped`. |
+| Agent list | One row per agent (Conductor, Analysis, Optimization, Creative, RealtimeControl, QualitySafety) showing current state. |
+| Agent state badges | `idle`, `planning`, `waiting_for_approval`, `executing`, or `error`. |
+| Scheduler stats | Queue depth, tasks completed, and average task latency. |
+| Plan viewer | Collapsible view of the Conductor's current plan with step ownership. |
+| Approval buttons | **Approve**, **Modify**, and **Reject** buttons appear when the Creative or Optimization agents propose changes. |
+| Cancel button | Interrupts the currently executing plan. |
 
 ### LLM Settings Dialog
 
@@ -326,6 +342,68 @@ The AI status bar is always visible at the bottom of the editor.
 | External clients | Label | Shows connected external client count when greater than zero. |
 | Start MCP / Stop MCP | Button | Starts or stops the embedded MCP server. |
 | Copy Token | Button | Copies the current MCP bearer token to the clipboard. |
+
+## Agent Orchestration
+
+More-Phi v3.4.1 includes a multi-agent orchestration layer that supervises six built-in agents to carry out high-level sound-design goals. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
+
+### The Six Built-In Agents
+
+| Agent | Role | Behavior |
+|---|---|---|
+| **Conductor** | Coordinates all other agents, breaks down user goals, and approves or rejects proposed plans. | Always active when orchestration is enabled. |
+| **Analysis** | Reads audio measurements, spectrum, stereo field, and parameter states. | Read-only; it never changes parameters directly. |
+| **Optimization** | Drafts detailed parameter plans (EQ moves, gain changes, width adjustments) to satisfy a goal. | Proposes plans only; changes are applied only through Conductor approval. |
+| **Creative** | Generates novel snapshot ideas, suggests unconventional parameter combinations, and explores variations. | Always requires user explicit approval before applying changes, regardless of autonomy settings. |
+| **RealtimeControl** | Manages time-critical adjustments such as gain staging or limiting during playback. | Operates automatically on **RealtimeCritical** priority; does not wait for manual approval. |
+| **QualitySafety** | Monitors every proposed change against safety policies and clamps or rejects dangerous values. | Runs automatically in the background. |
+
+### Autonomy Levels
+
+| Level | Agents | Effect |
+|---|---|---|
+| **Automatic** | RealtimeControl, QualitySafety | Act immediately without user intervention. |
+| **Approval-required** | Creative | Always prompts the user before applying changes. |
+| **Conductor-gated** | Optimization | Drafts plans, but the Conductor queues them for review or auto-approves based on trust settings. |
+
+### AI Status Bar Additions
+
+When the orchestrator is active, the AI status bar also shows:
+
+| Control | Type | Description |
+|---|---|---|
+| Orchestrator state | Label | `Orchestrator: running`, `paused`, or `stopped`. |
+| Active agent count | Label | Number of agents currently busy. |
+| Queue depth | Label | Current scheduler task queue depth. |
+
+### Using Agent Orchestration
+
+1. Start MCP from the AI status bar.
+2. Open the AI tab and locate the **Agent Status** panel.
+3. Type a goal in plain language (e.g., "make this track louder and brighter") and submit it.
+4. The Conductor agent breaks the goal into sub-tasks and delegates to the appropriate agents.
+5. Monitor agent states in the status panel. Click any agent row to expand its reasoning log or proposed plan.
+6. If an agent is waiting for approval, a notification badge appears on the AI tab. Click the badge to review and approve, modify, or reject the proposal.
+7. Click **Cancel** in the AI tab to stop an in-progress plan at any time.
+
+## Neural Master (Preview)
+
+Above the AI status bar, **Neural Master (Preview)** drives the built-in mastering chain from a neural decision model (`masteringbrainv2`). When enabled, the plugin continuously analyses the most recent ~6 seconds of audio on a background thread and refreshes the EQ, compressor, limiter ceiling, loudness target, and stereo width roughly every 3 seconds, crossfading parameters in over 200 ms.
+
+| Control | Type | Description |
+|---|---|---|
+| Neural Master (Preview) | Toggle | Enables the background analysis loop. **Off by default.** |
+| Neural Master status | Label | `off` · `collecting audio...` · `applied #N` · `held (low confidence)` · `error - see log` · `unavailable (no model)`. |
+
+**This is a preview feature and off by default.** The model is research-grade — it failed several of its own release-quality gates (EQ MAE ≈ 2.1 dB, true-peak ≈ 0.8 dBTP) — so treat it as an assistant, not an autocrat. Every prediction is clamped by the plugin's `NeuralMasteringSafetyPolicy`, so a bad frame can never push the chain into an unsafe state; rejected frames hold the last safe setting.
+
+**To enable it**, start the local Python inference server that hosts the model (see `tools/inference_server/README.md`), then toggle "Neural Master (Preview)" on. The toggle stays disabled ("unavailable (no model)") until the server is reachable on `127.0.0.1:8765`. The plugin drives inference via that server because the checkpoint cannot yet be exported to a faithful in-process ONNX model; the server path runs the exact inference the model was validated with.
+
+Limitations (by design):
+
+- It cannot react faster than ~3–6 seconds. Sudden transients or level changes are not re-mastered until the next cycle. The DSP chain's own realtime limiter and loudness normalizer remain the first line of defence during the gap.
+- It is not sample-accurate: it produces static parameter settings, refreshed every cycle with a 200 ms crossfade.
+- See `docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md` for the full design and failure model.
 
 ## MIDI Functions
 
@@ -380,6 +458,22 @@ Safety categories:
 | `mastering.plan_preview` | Generate a heuristic rule-based plan without applying. |
 | `mastering.apply_plan` | Apply a heuristic rule-based mastering plan. |
 
+### Multi-Agent System
+
+The MCP server also exposes tools for the multi-agent orchestration layer. These tools are available when the agent runtime is active and MCP is running.
+
+| Tool | Description |
+|---|---|
+| `agents.list` | Lists all registered agents with status and capabilities. |
+| `agents.run_goal` | Submits a high-level goal (e.g., "make this track louder and brighter") to the Conductor agent for decomposition and delegation. |
+| `agents.run_task` | Submits a single task to a specific agent by name. |
+| `agents.run_status` | Queries the status of a running goal or task. |
+| `agents.run_cancel` | Cancels a running goal or task. |
+| `agents.blackboard.recent` | Returns recent blackboard events for a specific agent. |
+| `agents.set_autonomy` | Adjusts the agent autonomy level (`manual`, `assisted`, or `autonomous`). |
+
+> **Note:** The earlier `orchestrator.*` tool names (`describe_system_state`, `submit_user_goal`, etc.) documented in prior revisions do not exist as MCP tools. Use the `agents.*` tools listed above instead.
+
 ## Configuration and Automation Parameters
 
 | Parameter | Type | Description |
@@ -398,6 +492,7 @@ Safety categories:
 | `outputGain` | Float dB | Controls final output gain. |
 | `bypass` | Bool | Bypasses processing. |
 | `smartRandomize` | Bool/trigger | DAW-automatable randomization trigger. |
+| `SonicMasterAnalysisEnabled` | Bool | Enables the neural mastering preview loop (off by default). |
 | `driftOutputX` | Float | Automation output for drift X position. |
 | `driftOutputY` | Float | Automation output for drift Y position. |
 
@@ -492,3 +587,13 @@ Safety categories:
 | Snapshot | Captured hosted-plugin parameter state in one of 12 slots. |
 | Snap Fader | Vertical 1D morph control. |
 | VST3 | Cross-platform audio plugin format. |
+| AgentOrchestrator | The multi-agent supervision layer that coordinates the six built-in agents and manages the scheduler. |
+| ConductorAgent | The central agent that breaks down user goals, delegates tasks, and approves or rejects proposed plans. |
+| AnalysisAgent | Read-only agent that inspects audio measurements, spectrum, stereo field, and parameter states. |
+| OptimizationAgent | Agent that drafts detailed parameter plans to satisfy a goal; applies changes only through Conductor approval. |
+| CreativeAgent | Agent that generates novel snapshot ideas and unconventional parameter combinations; always requires user approval. |
+| RealtimeControlAgent | Agent that manages time-critical adjustments such as gain staging or limiting during playback. |
+| QualitySafetyAgent | Agent that monitors proposed changes against safety policies and clamps or rejects dangerous values. |
+| BlackboardBridge | Internal shared-state bridge that lets agents read and post intermediate results without direct coupling. |
+| EcosystemConfig | Runtime configuration object that controls orchestrator and MCP server settings. |
+| McpProtocol | JSON-RPC schema definitions used by the MCP server for message construction and tool dispatch. |

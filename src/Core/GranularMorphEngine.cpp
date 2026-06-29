@@ -147,6 +147,16 @@ bool GranularMorphEngine::isActive() const noexcept
     return active_.load(std::memory_order_relaxed);
 }
 
+double GranularMorphEngine::getTailLengthSeconds() const noexcept
+{
+    // AUDIT-FIX: a grain already in flight continues to play out its full
+    // grainSizeMs_ envelope after input stops. Report that as the tail so the
+    // DAW compensates offline-bounce tails. Returns 0 when inactive.
+    if (! isActive())
+        return 0.0;
+    return static_cast<double>(grainSizeMs_) / 1000.0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio thread — main entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,13 +331,30 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
     const int grainLengthSamples =
         static_cast<int>(grainSizeMs_ * 0.001f * static_cast<float>(sampleRate_));
 
+    // DEEP-DIVE FIX: save the fractional phase before the increment so we can
+    // compute each grain's output start sample within the block. Without this,
+    // all grains emitted in one block start at sample 0, causing amplitude
+    // modulation at the block rate when blockSize > intervalSamples.
+    const float startFraction = schedulerAccum_;
+
     // Increment accumulator by blockSize / interval.
     schedulerAccum_ += static_cast<float>(blockSize) / intervalSamples;
 
     // Emit one grain for every time the accumulator crosses 1.0.
+    int grainIndex = 0;
     while (schedulerAccum_ >= 1.0f)
     {
         schedulerAccum_ -= 1.0f;
+
+        // DEEP-DIVE FIX: compute the sample offset within this block where this
+        // grain should start. The Nth grain fires when the total elapsed
+        // intervals from block start reaches (1 - startFraction + N).
+        // Samples = intervals * intervalSamples.
+        const float offsetF = (1.0f - startFraction + static_cast<float>(grainIndex))
+                            * intervalSamples;
+        const int outputStartSample = std::max(0, std::min(blockSize - 1,
+                                               static_cast<int>(offsetF)));
+        ++grainIndex;
 
         // Choose source: random < alpha → source B, otherwise source A.
         const float r0 = nextRandom();
@@ -373,7 +400,8 @@ void GranularMorphEngine::scheduleGrains(float alpha, int blockSize) noexcept
                        + pitchLUT_[static_cast<size_t>(lo + 1)] * frac;
         }
 
-        (void)pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples, pitchRatio);
+        (void)pool_.activate(srcIdx, amplitude, readStart, grainLengthSamples,
+                             pitchRatio, outputStartSample);
     }
 }
 
@@ -389,6 +417,11 @@ void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
 
         for (int s = 0; s < numSamples; ++s)
         {
+            // DEEP-DIVE FIX: skip output samples before this grain's start offset
+            // so multiple grains emitted within a block are staggered in time.
+            if (s < g.outputStartSample)
+                continue;
+
             // Check if this grain has finished.
             if (g.currentPos >= g.grainLength)
             {
@@ -401,8 +434,8 @@ void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
                 static_cast<float>(g.currentPos) / static_cast<float>(g.grainLength - 1);
             const float env = pool_.getEnvelope(normPos);
 
-            // Read source sample with linear interpolation for pitch shift.
-            // Sub-sample position within the circular buffer.
+            // Read source sample with cubic Hermite interpolation for pitch
+            // shift. Sub-sample position within the circular buffer.
             const float readPosF =
                 static_cast<float>(g.startSample)
                 + static_cast<float>(g.currentPos) * g.pitchRatio;
@@ -411,14 +444,28 @@ void GranularMorphEngine::renderGrains(float* output, int numSamples) noexcept
             const int   readPosInt  = static_cast<int>(readPosF);
             const float readPosFrac = readPosF - static_cast<float>(readPosInt);
 
-            const int idx0 = readPosInt                     & (kCircularBufferSize - 1);
-            const int idx1 = (readPosInt + 1)               & (kCircularBufferSize - 1);
+            // AUDIT-FIX (DSP): replaced 2-point linear interpolation with 4-point
+            // cubic Hermite. Linear resampling has poor high-frequency response
+            // and aliases on pitch shifts (no anti-imaging). Cubic Hermite
+            // substantially reduces aliasing/imaging at ~3 extra multiplies per
+            // output sample. The circular buffer is power-of-2 (masked below),
+            // so (n - 1) wraps correctly under two's-complement masking.
+            constexpr int mask = kCircularBufferSize - 1;
+            const size_t idxm1 = static_cast<size_t>((readPosInt - 1) & mask);
+            const size_t idx0  = static_cast<size_t>( readPosInt      & mask);
+            const size_t idx1  = static_cast<size_t>((readPosInt + 1) & mask);
+            const size_t idx2  = static_cast<size_t>((readPosInt + 2) & mask);
 
-            const float s0 = sb.data[static_cast<size_t>(idx0)];
-            const float s1 = sb.data[static_cast<size_t>(idx1)];
+            const float xm1 = sb.data[idxm1];
+            const float x0  = sb.data[idx0];
+            const float x1  = sb.data[idx1];
+            const float x2  = sb.data[idx2];
 
-            // Linear interpolation.
-            const float sample = s0 + readPosFrac * (s1 - s0);
+            const float c0 = x0;
+            const float c1 = 0.5f * (x1 - xm1);
+            const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+            const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+            const float sample = ((c3 * readPosFrac + c2) * readPosFrac + c1) * readPosFrac + c0;
 
             output[s] += sample * env * g.amplitude;
 

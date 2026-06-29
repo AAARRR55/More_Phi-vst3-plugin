@@ -44,6 +44,18 @@ public:
 
     ~HostedPluginWindow() override
     {
+        // Phase 4 (editor-lifetime safety): destroy the hosted editor BEFORE
+        // releasing the plugin lease. The editor (set via setContentOwned) is
+        // the one object that depends on the hosted plugin instance being alive.
+        // The base DocumentWindow destructor would eventually delete the content
+        // too, but only AFTER this destructor body runs — so if we released the
+        // lease here first, activePluginUsers_ could momentarily reach zero,
+        // letting PluginHostManager's deferred-doom queue destroy the plugin,
+        // and THEN the editor's destructor would run against freed memory.
+        // Clearing content here forces the editor to die while we still hold
+        // the lease; the lease release below then drops the last reference.
+        clearContentComponent();
+
         if (releasePluginCallback_ && !releaseCalled_)
         {
             releaseCalled_ = true;

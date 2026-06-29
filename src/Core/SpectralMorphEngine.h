@@ -122,6 +122,16 @@ public:
     /** Latency in samples at the current sample rate (= fftSize + hopSize). */
     [[nodiscard]] int  getLatencyInSamples() const noexcept;
 
+    /**
+     * AUDIT-FIX: worst-case tail length in seconds the engine contributes after
+     * input stops. The overlap-add output buffer holds up to (fftSize + hopSize)
+     * samples of residual energy (windowed tails from the last analysis frames),
+     * so the tail equals the latency. Returns 0 when the engine is inactive.
+     * Used by MorePhiProcessor::getTailLengthSeconds() so the DAW compensates
+     * offline-bounce tails correctly when audio-domain morph is engaged.
+     */
+    [[nodiscard]] double getTailLengthSeconds() const noexcept;
+
     /** True when the engine is active (spectral processing occurs). */
     [[nodiscard]] bool isActive()            const noexcept;
 
@@ -216,7 +226,13 @@ private:
                               float* magOut,
                               int numBins, float alpha) noexcept;
 
+    // AUDIT-FIX (phase locking): magnitude inputs drive identity phase locking —
+    // each bin's phase advances by the instantaneous frequency of whichever source
+    // dominates it (magnitude × (1−α) vs α), instead of a physically-meaningless
+    // blended IF. Reduces the classic phase-vocoder "phasiness" on polyphonic
+    // material (Laroche & Dolson 1999).
     void interpolatePhase(const float* phaseA, const float* phaseB,
+                          const float* magA,    const float* magB,
                           float* prevPhaseA,   float* prevPhaseB,
                           float* synthPhase,
                           int numBins, float alpha) noexcept;

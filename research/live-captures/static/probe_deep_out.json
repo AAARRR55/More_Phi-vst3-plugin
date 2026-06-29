@@ -1,0 +1,39 @@
+{
+  "targets": [
+    "0xeabdb0",
+    "0xeab020",
+    "0xfbd0b0",
+    "0x1072860",
+    "0x163dfa0",
+    "0xd4b830",
+    "0xe9f4f0",
+    "0xea4fd0",
+    "0x17ff6f0",
+    "0x1052380",
+    "0x10790f0"
+  ],
+  "upward_from_eab020": {
+    "0xeab020": 0,
+    "0xe9f4f0": 1,
+    "0xea4fd0": 2,
+    "0xea4d50": 3,
+    "0xea1b20": 4,
+    "0xe9fc30": 5,
+    "0xd58a20": 6,
+    "0xd572f0": 7
+  },
+  "upward_from_fbd0b0": {
+    "0xfbd0b0": 0,
+    "0x17ff6f0": 1,
+    "0x1052380": 2,
+    "0x1056120": 3
+  },
+  "upward_from_1072860": {
+    "0x1072860": 0,
+    "0x10790f0": 1
+  },
+  "common_ctrl_ds1": [],
+  "common_ctrl_ds2": [],
+  "common_all": [],
+  "common_disp_ds": []
+}

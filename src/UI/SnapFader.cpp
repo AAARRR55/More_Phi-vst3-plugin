@@ -9,6 +9,11 @@ namespace more_phi {
 
 SnapFader::SnapFader(MorePhiProcessor& p) : proc_(p)
 {
+    setTooltip("Morph Fader: drag to morph linearly through occupied snapshot slots. "
+               "Arrow Up/Down (or Page Up/Down) nudge the position.");
+    setWantsKeyboardFocus(true);   // AUDIT-FIX (accessibility)
+    setComponentID("SnapFader");
+    setName("Morph Fader");
     startTimerHz(15);
 }
 
@@ -78,6 +83,18 @@ void SnapFader::paint(juce::Graphics& g)
     g.fillRoundedRectangle(trackX - 10, thumbY - 5, 20, 10, 5.0f);
     g.setColour(juce::Colour(0xffe5c057));
     g.fillRoundedRectangle(trackX - 6, thumbY - 1.5f, 12, 3, 1.5f);
+
+    // H6: capture-confirmation flash overlay
+    const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+    if (flashEndMs_ > nowMs && flashText_.isNotEmpty())
+    {
+        const float age = static_cast<float>(flashEndMs_ - nowMs) / 2000.0f;
+        const float alpha = juce::jlimit(0.0f, 1.0f, age * 2.0f);  // fade in first 500ms, hold, fade last 500ms
+        g.setColour(juce::Colour(0xffe5c057).withAlpha(alpha * 0.9f));
+        g.setFont(juce::jmax(bounds.getWidth() * 0.11f, 9.0f));
+        g.drawText(flashText_, bounds.toNearestInt(),
+                   juce::Justification::centredBottom);
+    }
 }
 
 void SnapFader::mouseDown(const juce::MouseEvent& e)
@@ -96,6 +113,79 @@ void SnapFader::mouseUp(const juce::MouseEvent&)
     dragging_ = false;
 }
 
+bool SnapFader::keyPressed(const juce::KeyPress& key)
+{
+    // AUDIT-FIX (accessibility): keyboard control of the fader mirroring a drag
+    // (up increases value, down decreases), routed through the same APVTS path.
+    float delta = 0.0f;
+    if      (key.isKeyCode(juce::KeyPress::upKey))        delta =  0.02f;
+    else if (key.isKeyCode(juce::KeyPress::downKey))      delta = -0.02f;
+    else if (key.isKeyCode(juce::KeyPress::pageUpKey))    delta =  0.1f;
+    else if (key.isKeyCode(juce::KeyPress::pageDownKey))  delta = -0.1f;
+    else if (key.isKeyCode(juce::KeyPress::homeKey))      delta =  1.0f;   // jump to top
+    else if (key.isKeyCode(juce::KeyPress::endKey))       delta = -1.0f;   // jump to bottom
+    else return false;
+
+    auto* p = proc_.getAPVTS().getParameter("faderPos");
+    if (p == nullptr) return false;
+
+    const float clamped = juce::jlimit(0.0f, 1.0f, p->getValue() + delta);
+    p->beginChangeGesture();
+    p->setValueNotifyingHost(clamped);
+    p->endChangeGesture();
+
+    // FIX: mirror the APVTS write into the faderPos_ atomic — see updateValue()
+    // for why setValueNotifyingHost alone doesn't reach faderPos_.
+    proc_.setFaderPos(clamped);
+
+    ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
+    proc_.setMorphSource(1);  // fader mode
+    return true;
+}
+
+std::unique_ptr<juce::AccessibilityHandler> SnapFader::createAccessibilityHandler()
+{
+    // R4: expose the fader position (0-100%) to assistive tech via a value
+    // interface. Keyboard operability is provided by keyPressed above; this adds
+    // a readable value string so screen readers announce "Morph fader, 50%".
+    class FaderValueInterface : public juce::AccessibilityValueInterface
+    {
+    public:
+        explicit FaderValueInterface(SnapFader& owner) : owner_(owner) {}
+
+        bool isReadOnly() const override { return true; }
+        double getCurrentValue() const override
+        {
+            return juce::jlimit(0.0, 100.0, owner_.proc_.getFaderPos() * 100.0);
+        }
+        void setValue(double) override {}
+        juce::String getCurrentValueAsString() const override
+        {
+            const int pct = juce::roundToInt(juce::jlimit(0.0f, 1.0f, owner_.proc_.getFaderPos()) * 100.0);
+            return juce::String(pct) + "%";
+        }
+        void setValueAsString(const juce::String&) override {}
+        AccessibleValueRange getRange() const override
+        {
+            // AUDIT (pre-existing-build-unblock, 2026-06-25): construct MinAndMax
+            // explicitly. MSVC failed to resolve the prior nested brace-init
+            // `return { { 0.0, 100.0 }, 0.01 };` (C2039 'NormalisedRange' spew),
+            // blocking the full MorePhi build. Behaviour unchanged.
+            return { juce::AccessibilityValueInterface::AccessibleValueRange::MinAndMax{ 0.0, 100.0 }, 0.01 };
+        }
+
+    private:
+        SnapFader& owner_;
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FaderValueInterface)
+    };
+
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this,
+        juce::AccessibilityRole::slider,
+        juce::AccessibilityActions{},
+        juce::AccessibilityHandler::Interfaces { std::make_unique<FaderValueInterface>(*this) });
+}
+
 void SnapFader::updateValue(float yPos)
 {
     float trackTop = 10.0f;
@@ -106,6 +196,15 @@ void SnapFader::updateValue(float yPos)
     // Route through APVTS so DAW automation captures the change.
     if (auto* p = proc_.getAPVTS().getParameter("faderPos"))
         p->setValueNotifyingHost(normalised);
+
+    // FIX: write the faderPos_ atomic directly. The APVTS→atomic bridge
+    // (syncStateFromAPVTS, gated by apvtsStateDirty_) only runs once at startup
+    // — nothing re-marks it dirty — so setValueNotifyingHost alone never reached
+    // faderPos_, leaving the thumb frozen and the audio-thread morph reading a
+    // stale value. Mirrors the setMorphSource call below and the BreedingPanel
+    // precedent (proc_.setMorphX/Y). getFaderPos() and the paint/morph paths now
+    // see the drag in real time.
+    proc_.setFaderPos(normalised);
 
     ParameterBinding::setChoiceIndexWithGesture(proc_.getAPVTS(), "morphSource", 1, 2);
     proc_.setMorphSource(1);  // Switch to fader mode
@@ -124,6 +223,24 @@ uint16_t SnapFader::getOccupiedSnapshotMask() const
 
 void SnapFader::timerCallback()
 {
+    // H6: detect snapshot captures (mask change) and show a brief flash
+    const uint16_t currentMask = getOccupiedSnapshotMask();
+    if (currentMask != lastSnapshotMask_)
+    {
+        // Find which slot was newly occupied (compare bit by bit)
+        for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+        {
+            const uint16_t bit = uint16_t{1} << i;
+            if ((currentMask & bit) != 0 && (lastSnapshotMask_ & bit) == 0)
+            {
+                flashText_ = "Slot " + juce::String(i + 1) + " < capture";
+                flashEndMs_ = juce::Time::getMillisecondCounter() + 2000;
+                break;
+            }
+        }
+        lastSnapshotMask_ = currentMask;
+    }
+
     if (hasExternalStateChanged())
         repaint();
 }

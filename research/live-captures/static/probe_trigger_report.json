@@ -1,0 +1,840 @@
+{
+ "dll": "C:\\Program Files\\Common Files\\VST3\\iZotope\\iZOzonePro.dll",
+ "phase_users": {},
+ "state_helper_call_sites": {
+  "0xead2e0": [
+   {
+    "caller_fn": "0xead2e0",
+    "call_site": "0xead337",
+    "r8_value": null,
+    "r8_set_rva": null
+   },
+   {
+    "caller_fn": "0xead3e0",
+    "call_site": "0xead44f",
+    "r8_value": null,
+    "r8_set_rva": "0xead447"
+   },
+   {
+    "caller_fn": "0xead930",
+    "call_site": "0xead9bb",
+    "r8_value": null,
+    "r8_set_rva": "0xead9b2"
+   },
+   {
+    "caller_fn": "0x166aa00",
+    "call_site": "0x166aa2a",
+    "r8_value": "0x1",
+    "r8_set_rva": "0x166aa1f"
+   }
+  ],
+  "0xead360": [
+   {
+    "caller_fn": "0xead360",
+    "call_site": "0xead3b7",
+    "r8_value": null,
+    "r8_set_rva": null
+   },
+   {
+    "caller_fn": "0xead3e0",
+    "call_site": "0xead500",
+    "r8_value": null,
+    "r8_set_rva": "0xead4f8"
+   },
+   {
+    "caller_fn": "0xead930",
+    "call_site": "0xeada8f",
+    "r8_value": null,
+    "r8_set_rva": "0xeada86"
+   }
+  ]
+ },
+ "candidates": [
+  {
+   "func_begin": "0xead930",
+   "func_end": "0xeadf66",
+   "size": 1590,
+   "score": 5,
+   "reasons": [
+    "calls-state(['state_helper_a (cmp 0x16)', 'state_helper_b (cmp 3)'])",
+    "sparse-caller/rich-callee(2/13)"
+   ],
+   "callers": [
+    "0xeabdb0",
+    "0x166ca90"
+   ],
+   "callers_count": 2,
+   "callees_count": 13,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f390",
+    "0xd50740",
+    "0xe41c50",
+    "0xe43f40",
+    "0xead2e0",
+    "0xead360",
+    "0xeadf70",
+    "0xeb5310",
+    "0xec6080",
+    "0xed07f0",
+    "0xed0850",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "state_helper_a (cmp 0x16)",
+    "state_helper_b (cmp 3)"
+   ]
+  },
+  {
+   "func_begin": "0xeabdb0",
+   "func_end": "0xeac1ff",
+   "size": 1103,
+   "score": 5,
+   "reasons": [
+    "calls-state(['apply_secondary', 'state_poller'])",
+    "sparse-caller/rich-callee(1/12)"
+   ],
+   "callers": [
+    "0xeab020"
+   ],
+   "callers_count": 1,
+   "callees_count": 12,
+   "callees": [
+    "0xd26760",
+    "0xd77c00",
+    "0xd77ce0",
+    "0xea9650",
+    "0xeac200",
+    "0xead3e0",
+    "0xead930",
+    "0xec6080",
+    "0xeec5c0",
+    "0x101aaf0",
+    "0x1a20440",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "apply_secondary",
+    "state_poller"
+   ]
+  },
+  {
+   "func_begin": "0xead3e0",
+   "func_end": "0xead923",
+   "size": 1347,
+   "score": 5,
+   "reasons": [
+    "calls-state(['state_helper_a (cmp 0x16)', 'state_helper_b (cmp 3)'])",
+    "sparse-caller/rich-callee(2/8)"
+   ],
+   "callers": [
+    "0xeabdb0",
+    "0x166ca90"
+   ],
+   "callers_count": 2,
+   "callees_count": 8,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f390",
+    "0xd50740",
+    "0xead2e0",
+    "0xead360",
+    "0xec6080",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "state_helper_a (cmp 0x16)",
+    "state_helper_b (cmp 3)"
+   ]
+  },
+  {
+   "func_begin": "0x166ca90",
+   "func_end": "0x166cd47",
+   "size": 695,
+   "score": 5,
+   "reasons": [
+    "calls-state(['apply_secondary', 'state_poller'])",
+    "sparse-caller/rich-callee(2/6)"
+   ],
+   "callers": [
+    "0xd4b830",
+    "0x163dfa0"
+   ],
+   "callers_count": 2,
+   "callees_count": 6,
+   "callees": [
+    "0xd1f150",
+    "0xd20c80",
+    "0xead3e0",
+    "0xead930",
+    "0x166cd50",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "apply_secondary",
+    "state_poller"
+   ]
+  },
+  {
+   "func_begin": "0x166e520",
+   "func_end": "0x166f765",
+   "size": 4677,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/47)"
+   ],
+   "callers": [
+    "0xd4be20"
+   ],
+   "callers_count": 1,
+   "callees_count": 47,
+   "callees": [
+    "0xd1dfb0",
+    "0xd1e330",
+    "0xd1ee40",
+    "0xd1f150",
+    "0xd1f260",
+    "0xd1f390",
+    "0xd20920",
+    "0xd243c0",
+    "0xd349c0",
+    "0xd38cc0",
+    "0xd4c1f0",
+    "0xd4c350",
+    "0xd6c230",
+    "0xd70280",
+    "0xd70350",
+    "0xea7db0",
+    "0xf2ce60",
+    "0xf31820",
+    "0x1096010",
+    "0x166e2d0",
+    "0x166f770",
+    "0x166f800",
+    "0x1670000",
+    "0x1670030",
+    "0x1670110",
+    "0x16708f0",
+    "0x1670c20",
+    "0x1670f50",
+    "0x1671080",
+    "0x16711b0",
+    "0x1671300",
+    "0x1671430",
+    "0x1671560",
+    "0x1671690",
+    "0x16717d0",
+    "0x1671900",
+    "0x1671a30",
+    "0x1671be0",
+    "0x1671d30",
+    "0x1671ef0",
+    "0x1672020",
+    "0x1672150",
+    "0x1672280",
+    "0x1672360",
+    "0x1a40524",
+    "0x1a5e670",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x168e470",
+   "func_end": "0x168ef4a",
+   "size": 2778,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "no-caller/root-rich-callee(32)"
+   ],
+   "callers": [],
+   "callers_count": 0,
+   "callees_count": 32,
+   "callees": [
+    "0xd1e990",
+    "0xd1ea80",
+    "0xd1ead0",
+    "0xd1ed10",
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f260",
+    "0xd1f390",
+    "0xd20920",
+    "0xd20c80",
+    "0xd364f0",
+    "0xd3a660",
+    "0xd50920",
+    "0xd50b00",
+    "0xd50bd0",
+    "0xd50ce0",
+    "0xd50db0",
+    "0xd50e20",
+    "0xd50f30",
+    "0xd54820",
+    "0xd55140",
+    "0xd55330",
+    "0xf12f60",
+    "0x13475e0",
+    "0x166aa00",
+    "0x166abc0",
+    "0x166b240",
+    "0x166be10",
+    "0x166bec0",
+    "0x166bf70",
+    "0x1a5e57c",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x168a390",
+   "func_end": "0x168b3dc",
+   "size": 4172,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/26)"
+   ],
+   "callers": [
+    "0x164d510"
+   ],
+   "callers_count": 1,
+   "callees_count": 26,
+   "callees": [
+    "0xd1ed10",
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f260",
+    "0xd1f390",
+    "0xd24480",
+    "0xd25630",
+    "0xd265e0",
+    "0xd33c40",
+    "0xd34a00",
+    "0xd3ed20",
+    "0xdada40",
+    "0x10a29e0",
+    "0x10a2db0",
+    "0x10a2f70",
+    "0x10a37a0",
+    "0x10a3810",
+    "0x11b9860",
+    "0x11b9b80",
+    "0x168beb0",
+    "0x168c5e0",
+    "0x168d590",
+    "0x168dfc0",
+    "0x1a5e210",
+    "0x1a5ef40",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xd53360",
+   "func_end": "0xd54231",
+   "size": 3793,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(3/23)"
+   ],
+   "callers": [
+    "0xd576b0",
+    "0xd57780",
+    "0xd57850"
+   ],
+   "callers_count": 3,
+   "callees_count": 23,
+   "callees": [
+    "0xd1e330",
+    "0xd1e990",
+    "0xd1ed10",
+    "0xd1f150",
+    "0xd1f260",
+    "0xd1f390",
+    "0xd3a660",
+    "0xd50740",
+    "0xd50810",
+    "0xd50920",
+    "0xd509f0",
+    "0xd50e20",
+    "0xd50f30",
+    "0xd54240",
+    "0xd54490",
+    "0xd54820",
+    "0xd550b0",
+    "0xd55140",
+    "0xd55330",
+    "0x13475e0",
+    "0x1a3fb3c",
+    "0x1a5e670",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xd58a20",
+   "func_end": "0xd59d10",
+   "size": 4848,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/22)"
+   ],
+   "callers": [
+    "0xd572f0"
+   ],
+   "callers_count": 1,
+   "callees_count": 22,
+   "callees": [
+    "0xd1e330",
+    "0xd1e970",
+    "0xd1f260",
+    "0xd1f390",
+    "0xd20c80",
+    "0xd24590",
+    "0xd3a660",
+    "0xd50740",
+    "0xd50890",
+    "0xd50a70",
+    "0xd50c50",
+    "0xd50ea0",
+    "0xd54980",
+    "0xd55f80",
+    "0xd5a5c0",
+    "0xd5a920",
+    "0xd5caf0",
+    "0xe9fc30",
+    "0x1668440",
+    "0x1679db0",
+    "0x1a3fb3c",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x1669980",
+   "func_end": "0x1669e59",
+   "size": 1241,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(3/13)"
+   ],
+   "callers": [
+    "0xd2adf0",
+    "0xd36e90",
+    "0xd4c940"
+   ],
+   "callers_count": 3,
+   "callees_count": 13,
+   "callees": [
+    "0xd1e330",
+    "0xd1f150",
+    "0xd248d0",
+    "0xd38ab0",
+    "0xd3a660",
+    "0xd50740",
+    "0x165fc90",
+    "0x1669f00",
+    "0x1a3fccc",
+    "0x1a3fd2c",
+    "0x1a401a4",
+    "0x1a5e670",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x168c5e0",
+   "func_end": "0x168cbc6",
+   "size": 1510,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/13)"
+   ],
+   "callers": [
+    "0x168a390"
+   ],
+   "callers_count": 1,
+   "callees_count": 13,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f390",
+    "0x10a2db0",
+    "0x10a37a0",
+    "0x10a3810",
+    "0x10a3960",
+    "0x10fa1e0",
+    "0x166aa00",
+    "0x168beb0",
+    "0x168cf40",
+    "0x168db20",
+    "0x1a5ef40"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xd54490",
+   "func_end": "0xd547f7",
+   "size": 871,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/12)"
+   ],
+   "callers": [
+    "0xd53360"
+   ],
+   "callers_count": 1,
+   "callees_count": 12,
+   "callees": [
+    "0xd1e330",
+    "0xd20920",
+    "0xd3a660",
+    "0xd4a640",
+    "0xd50740",
+    "0xd50bd0",
+    "0xd50db0",
+    "0xdc7400",
+    "0x1662450",
+    "0x1668800",
+    "0x1679db0",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xd56600",
+   "func_end": "0xd56c51",
+   "size": 1617,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "no-caller/root-rich-callee(11)"
+   ],
+   "callers": [],
+   "callers_count": 0,
+   "callees_count": 11,
+   "callees": [
+    "0xd1e330",
+    "0xd1ed10",
+    "0xd1f260",
+    "0xd39ea0",
+    "0xd431a0",
+    "0xd51000",
+    "0xd51080",
+    "0x1a20440",
+    "0x1a204a8",
+    "0x1a3fb3c",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x16968d0",
+   "func_end": "0x1697184",
+   "size": 2228,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/8)"
+   ],
+   "callers": [
+    "0x1697ad0"
+   ],
+   "callers_count": 1,
+   "callees_count": 8,
+   "callees": [
+    "0xd1e330",
+    "0xd248d0",
+    "0xd250e0",
+    "0xd38ab0",
+    "0xd3a660",
+    "0xd50740",
+    "0x1697360",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x169bb20",
+   "func_end": "0x169be1e",
+   "size": 766,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "no-caller/root-rich-callee(7)"
+   ],
+   "callers": [],
+   "callers_count": 0,
+   "callees_count": 7,
+   "callees": [
+    "0xd1e330",
+    "0xd39ea0",
+    "0xd431a0",
+    "0x1a20440",
+    "0x1a204a8",
+    "0x1a3fb3c",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x168d590",
+   "func_end": "0x168d9cf",
+   "size": 1087,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/6)"
+   ],
+   "callers": [
+    "0x168a390"
+   ],
+   "callers_count": 1,
+   "callees_count": 6,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f390",
+    "0x10a2db0",
+    "0x168d9d0",
+    "0x1a5ef40"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x168dfc0",
+   "func_end": "0x168e465",
+   "size": 1189,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/6)"
+   ],
+   "callers": [
+    "0x168a390"
+   ],
+   "callers_count": 1,
+   "callees_count": 6,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f150",
+    "0xd1f390",
+    "0xd24480",
+    "0x10a2db0",
+    "0x1a5ef40"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xe02f30",
+   "func_end": "0xe03731",
+   "size": 2049,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/6)"
+   ],
+   "callers": [
+    "0xe06070"
+   ],
+   "callers_count": 1,
+   "callees_count": 6,
+   "callees": [
+    "0xd1ed10",
+    "0xd1f260",
+    "0xd8d160",
+    "0xd909c0",
+    "0xd942b0",
+    "0x1a40524"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xe03740",
+   "func_end": "0xe03f41",
+   "size": 2049,
+   "score": 4,
+   "reasons": [
+    "master-assistant-cluster",
+    "sparse-caller/rich-callee(1/6)"
+   ],
+   "callers": [
+    "0xe05fb0"
+   ],
+   "callers_count": 1,
+   "callees_count": 6,
+   "callees": [
+    "0xd1ed10",
+    "0xd1f260",
+    "0xd8d160",
+    "0xd909c0",
+    "0xd942b0",
+    "0x1a40524"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x166aa00",
+   "func_end": "0x166aa9e",
+   "size": 158,
+   "score": 3,
+   "reasons": [
+    "calls-state(['state_helper_a (cmp 0x16)'])"
+   ],
+   "callers": [
+    "0x163d8d0",
+    "0x166d790",
+    "0x168c5e0",
+    "0x168cf40",
+    "0x168e470",
+    "0x169cac0"
+   ],
+   "callers_count": 6,
+   "callees_count": 3,
+   "callees": [
+    "0xd1ea80",
+    "0xead2e0",
+    "0x1a5e57c"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "state_helper_a (cmp 0x16)"
+   ]
+  },
+  {
+   "func_begin": "0xead2e0",
+   "func_end": "0xead358",
+   "size": 120,
+   "score": 3,
+   "reasons": [
+    "calls-state(['state_helper_a (cmp 0x16)'])"
+   ],
+   "callers": [
+    "0xead2e0",
+    "0xead3e0",
+    "0xead930",
+    "0x166aa00"
+   ],
+   "callers_count": 4,
+   "callees_count": 1,
+   "callees": [
+    "0xead2e0"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "state_helper_a (cmp 0x16)"
+   ]
+  },
+  {
+   "func_begin": "0xead360",
+   "func_end": "0xead3d8",
+   "size": 120,
+   "score": 3,
+   "reasons": [
+    "calls-state(['state_helper_b (cmp 3)'])"
+   ],
+   "callers": [
+    "0xead360",
+    "0xead3e0",
+    "0xead930"
+   ],
+   "callers_count": 3,
+   "callees_count": 1,
+   "callees": [
+    "0xead360"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": [
+    "state_helper_b (cmp 3)"
+   ]
+  },
+  {
+   "func_begin": "0xc6c0a0",
+   "func_end": "0xc6c31d",
+   "size": 637,
+   "score": 2,
+   "reasons": [
+    "master-assistant-cluster"
+   ],
+   "callers": [],
+   "callers_count": 0,
+   "callees_count": 4,
+   "callees": [
+    "0xd1ee80",
+    "0xd1f150",
+    "0xe43ac0",
+    "0x1a401a4"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0x1661430",
+   "func_end": "0x1661539",
+   "size": 265,
+   "score": 2,
+   "reasons": [
+    "master-assistant-cluster"
+   ],
+   "callers": [],
+   "callers_count": 0,
+   "callees_count": 3,
+   "callees": [
+    "0xd1ed10",
+    "0x1a20440",
+    "0x1a6a6cc"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  },
+  {
+   "func_begin": "0xe02420",
+   "func_end": "0xe02b1a",
+   "size": 1786,
+   "score": 2,
+   "reasons": [
+    "master-assistant-cluster"
+   ],
+   "callers": [
+    "0xd8aac0"
+   ],
+   "callers_count": 1,
+   "callees_count": 3,
+   "callees": [
+    "0xd1ed10",
+    "0xe04f40",
+    "0x1a40524"
+   ],
+   "phase_refs": [],
+   "state_helper_calls": []
+  }
+ ]
+}

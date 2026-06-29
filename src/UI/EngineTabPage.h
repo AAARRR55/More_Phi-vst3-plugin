@@ -1,8 +1,8 @@
 /*
  * More-Phi — UI/EngineTabPage.h
- * Container component that arranges the three V2 engine sub-panels
- * (SpectralControlPanel, GranularControlPanel, HybridBlendPanel) inside
- * the "Engine" tab of the main editor.
+ * Container component that arranges the five V2 engine sub-panels
+ * (HybridBlendPanel, PerformancePanel, DriftControlPanel, SpectralControlPanel,
+ * GranularControlPanel) inside the "Engine" tab of the main editor.
  */
 #pragma once
 

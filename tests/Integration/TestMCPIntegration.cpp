@@ -389,7 +389,7 @@ TEST_CASE("MCP tools/list and tools/call wrappers work with legacy handlers", "[
     {
         if (tool["name"].get<std::string>() == "analysis.get_summary")
             foundSummary = true;
-        if (tool["name"].get<std::string>() == "ozone_run_assistant")
+        if (tool["name"].get<std::string>() == "morephi_ipc_run_assistant")
             foundIpcAssistant = true;
     }
     REQUIRE(foundSummary);

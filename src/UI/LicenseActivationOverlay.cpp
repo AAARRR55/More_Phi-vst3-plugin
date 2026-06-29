@@ -18,8 +18,8 @@ LicenseActivationOverlay::LicenseActivationOverlay(MorePhiProcessor& processor)
     titleLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(titleLabel_);
 
-    descLabel_.setText("Please enter your More-Phi license key to unlock the plugin.\n"
-                       "Obtain your license key from your account dashboard on the website and paste it here.", juce::dontSendNotification);
+    descLabel_.setText("Enter your license key to activate premium AI features, or continue in demo mode\n"
+                       "with full audio processing. Obtain a key from your account dashboard and paste it here.", juce::dontSendNotification);
     descLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(descLabel_);
 
@@ -34,20 +34,35 @@ LicenseActivationOverlay::LicenseActivationOverlay(MorePhiProcessor& processor)
     addAndMakeVisible(statusLabel_);
 
     // Configure Buttons
+    activateBtn_.setTooltip("Validate the entered license key online and unlock premium AI features.");
     activateBtn_.onClick = [this] { onActivateClicked(); };
     addAndMakeVisible(activateBtn_);
 
+    buyBtn_.setTooltip("Open the More-Phi store page in your browser to purchase a license key.");
     buyBtn_.onClick = [this] { onBuyClicked(); };
     addAndMakeVisible(buyBtn_);
 
     // Refresh (shown when licensed-but-grace/expired by refreshStateCopy)
+    refreshBtn_.setTooltip("Re-validate the existing license online without re-entering the key.");
     refreshBtn_.onClick = [this] { onRefreshClicked(); };
     addChildComponent(refreshBtn_);
 
     // Offline activation entry — for air-gapped machines that obtained a
     // signed certificate elsewhere.
+    offlineBtn_.setTooltip("Import a signed certificate file for offline activation on air-gapped machines.");
     offlineBtn_.onClick = [this] { onOfflineClicked(); };
     addAndMakeVisible(offlineBtn_);
+
+    // R4: non-blocking escape. A bad/expired cert must never brick the plugin —
+    // audio is never muted for lack of a license, only premium AI features are
+    // gated, so demo mode is fully usable. Hides the overlay for this session;
+    // the editor timer honors isDismissedForSession().
+    demoBtn_.setTooltip(
+        "Close this dialog and use More-Phi without premium AI features for this "
+        "session. Audio, morphing, snapshots and modulation keep working. You can "
+        "activate a license any time from the footer.");
+    demoBtn_.onClick = [this] { onDemoClicked(); };
+    addAndMakeVisible(demoBtn_);
 
     refreshStateCopy();
 }
@@ -65,7 +80,7 @@ void LicenseActivationOverlay::paint(juce::Graphics& g)
     g.fillAll(bg.withAlpha(0.85f));
 
     // Centered dialog container
-    auto dialogArea = getLocalBounds().withSize(460, 340).withCentre(getLocalBounds().getCentre());
+    auto dialogArea = getLocalBounds().withSize(460, 372).withCentre(getLocalBounds().getCentre());
 
     // Draw outer glow/shadow
     g.setColour(juce::Colours::black.withAlpha(0.4f));
@@ -82,7 +97,7 @@ void LicenseActivationOverlay::paint(juce::Graphics& g)
 
 void LicenseActivationOverlay::resized()
 {
-    auto dialogArea = getLocalBounds().withSize(460, 340).withCentre(getLocalBounds().getCentre());
+    auto dialogArea = getLocalBounds().withSize(460, 372).withCentre(getLocalBounds().getCentre());
 
     // Visual styling helper for custom colors
     auto* lnf = dynamic_cast<MorePhiLookAndFeel*>(&getLookAndFeel());
@@ -132,6 +147,12 @@ void LicenseActivationOverlay::resized()
     offlineBtn_.setBounds(inner.removeFromTop(24).reduced(120, 0));
     offlineBtn_.setColour(juce::TextButton::textColourOffId, textDim);
     offlineBtn_.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+
+    // R4: demo escape — full-width, bottom-most, visually de-emphasized.
+    inner.removeFromTop(4);
+    demoBtn_.setBounds(inner.removeFromTop(28).reduced(24, 0));
+    demoBtn_.setColour(juce::TextButton::textColourOffId, textDim);
+    demoBtn_.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
 }
 
 void LicenseActivationOverlay::onActivateClicked()
@@ -173,6 +194,15 @@ void LicenseActivationOverlay::onActivateClicked()
 void LicenseActivationOverlay::onBuyClicked()
 {
     juce::URL(juce::String(more_phi::STORE_URL)).launchInDefaultBrowser();
+}
+
+void LicenseActivationOverlay::onDemoClicked()
+{
+    // R4: dismiss for this session only. The overlay will reappear next time the
+    // plugin is opened (dismissedForSession_ resets per construction). This
+    // guarantees a bad/expired cert can never permanently lock the user out.
+    dismissedForSession_ = true;
+    setVisible(false);
 }
 
 void LicenseActivationOverlay::onOfflineClicked()
@@ -219,7 +249,8 @@ void LicenseActivationOverlay::handleActivationResult(const licensing::Validatio
     auto* lnf = dynamic_cast<MorePhiLookAndFeel*>(&getLookAndFeel());
     if (result.enablesPremiumFeatures)
     {
-        statusLabel_.setText("License activated successfully!", juce::dontSendNotification);
+        // R6: glyph prefix (check/ballot-X) so success/failure isn't green-vs-red only.
+        statusLabel_.setText(juce::String::charToString(0x2713) + " License activated successfully!", juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, lnf ? lnf->accentGreen : juce::Colours::green);
 
         // Hide overlay dynamically
@@ -227,7 +258,8 @@ void LicenseActivationOverlay::handleActivationResult(const licensing::Validatio
     }
     else
     {
-        statusLabel_.setText(result.message.isNotEmpty() ? result.message : "Activation failed.", juce::dontSendNotification);
+        const auto base = result.message.isNotEmpty() ? result.message : "Activation failed.";
+        statusLabel_.setText(juce::String::charToString(0x2715) + " " + base, juce::dontSendNotification);
         statusLabel_.setColour(juce::Label::textColourId, lnf ? lnf->accentCoral : juce::Colours::red);
     }
 }
@@ -286,6 +318,19 @@ void LicenseActivationOverlay::refreshStateCopy()
             keyInput_.setVisible(true);
             activateBtn_.setVisible(true);
             break;
+    }
+}
+
+void LicenseActivationOverlay::visibilityChanged()
+{
+    if (isVisible())
+    {
+        // Auto-focus the key input when the overlay appears.
+        if (auto* focused = juce::Component::getCurrentlyFocusedComponent();
+            focused == nullptr || !focused->isVisible())
+        {
+            keyInput_.grabKeyboardFocus();
+        }
     }
 }
 

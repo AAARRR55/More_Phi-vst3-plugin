@@ -14,10 +14,12 @@
 #include "Core/SnapshotBank.h"
 #include "Core/InterpolationEngine.h"
 #include "Core/MorphProcessor.h"
+#include "Core/WaypointEngine.h"
 #include "Core/GeneticEngine.h"
 #include "Core/LockFreeQueue.h"
 #include "Core/ParameterClassifier.h"
 #include "Core/DiscreteParameterHandler.h"
+#include "Core/UndoRedoManager.h"
 #include "Host/PluginHostManager.h"
 #include "Host/ParameterBridge.h"
 #include "MIDI/MIDIRouter.h"
@@ -33,9 +35,20 @@
 #include "Core/HybridBlend.h"
 #include "Core/OversamplingWrapper.h"
 #include "Core/LatencyManager.h"
+#include "Core/BrickwallLimiter.h"
 #include "Core/PerformanceProfiler.h"
+#include "Core/MorePhiDiagnostics.h"
 #include "Core/AutoMasteringEngine.h"
 #include "AI/NeuralMasteringController.h"
+#include "AI/OnnxNeuralMasteringRunner.h"
+#include "AI/SonicMasterAnalysisEngine.h"
+#include "AI/SonicMasterDecisionRunner.h"
+#include "AI/SonicMasterHttpInferenceSource.h"
+#include "AI/GenreMasteringProfile.h"
+#if MORE_PHI_HAS_ONNX
+#include "SonicMasterModelHash.h"
+#include "BinaryData.h"
+#endif
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
 #include "Licensing/LicenseManager.h"
@@ -49,9 +62,20 @@ namespace more_phi {
 class VST3IPCBridge;
 
 namespace standalone_mcp {
-class IZotopeIPCAssistant;
-class IZotopeIPCDiscovery;
+class MorePhiIPCAssistant;
+class MorePhiIPCDiscovery;
 }
+
+namespace agents {
+class AgentRuntime;
+class DefaultToolInvoker;
+class IAgentLogger;            // M2: store by interface so we can wire StructuredAgentLogger in production
+class ILlmClient;              // AUDIT-FIX: hold by interface so RestLlmClient or DeterministicFallback can be wired
+class DeterministicFallbackLlmClient;
+class BlackboardBridge;
+} // namespace agents
+
+enum class AutonomyLevel;      // H6: defined in AI/AutomationControlPlane.h; persisted/restored across state IO
 
 class MorePhiProcessor : public juce::AudioProcessor,
                           private juce::Timer
@@ -71,10 +95,24 @@ public:
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) noexcept override;
 
+    // BP-3 FIX (audit): expose the "bypass" APVTS parameter as the processor's
+    // official bypass parameter. Hosts that drive bypass via the dedicated VST3
+    // bypass path (rather than writing the bypass param directly) will then
+    // route through it, which applyOutputGainAndMetering reads — running the
+    // C-6 wet/dry crossfade instead of a hard JUCE default bypass (which would
+    // skip all processing and click). Cached in the constructor (APVTS owns the
+    // parameter; the pointer is stable for the processor's lifetime).
+    juce::AudioProcessorParameter* getBypassParameter() const override;
+    void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) noexcept override;
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "More-Phi"; }
+    // Canonical plugin name matches CMake PRODUCT_NAME ("MorePhi") so preset,
+    // automation, and host identity are consistent across the binary, the
+    // VST3 component, and the AudioProcessor. The hyphenated "More-Phi" is
+    // a marketing-only spelling.
+    const juce::String getName() const override { return "MorePhi"; }
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -87,7 +125,13 @@ public:
     int getCurrentProgram() override;
     void setCurrentProgram(int index) override;
     const juce::String getProgramName(int index) override;
-    void changeProgramName(int, const juce::String&) override         {}
+    void changeProgramName(int /*index*/, const juce::String& /*newName*/) override
+    {
+        // Not yet supported — snapshot names are auto-generated from slot numbers
+        // (see getProgramName). A future implementation would store custom names
+        // in a parallel std::array<juce::String, SnapshotBank::NUM_SLOTS> and
+        // update getProgramName to return them when non-empty.
+    }
 
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
@@ -98,17 +142,26 @@ public:
     ParameterBridge&   getParameterBridge()               { return paramBridge; }
     SnapshotBank&      getSnapshotBank()                  { return snapshotBank; }
     MorphProcessor&    getMorphProcessor()                 { return morphProcessor; }
+    WaypointEngine&    getWaypointEngine()                 { return waypointEngine_; }
     MCPServer&         getMCPServer()                      { return mcpServer; }
     const MCPServer&   getMCPServer() const                { return mcpServer; }
     VST3IPCBridge*     getVST3IPCBridge() noexcept         { return vst3IpcBridge_.get(); }
     const VST3IPCBridge* getVST3IPCBridge() const noexcept { return vst3IpcBridge_.get(); }
-    standalone_mcp::IZotopeIPCDiscovery& getIZotopeIPCDiscovery();
-    standalone_mcp::IZotopeIPCAssistant& getIZotopeIPCAssistant();
+    standalone_mcp::MorePhiIPCDiscovery& getMorePhiIPCDiscovery();
+    standalone_mcp::MorePhiIPCAssistant& getMorePhiIPCAssistant();
     const InstanceIdentity& getInstanceIdentity() const   { return instanceIdentity_; }
     licensing::LicenseRuntimeState& getLicenseRuntimeState() noexcept { return licenseRuntimeState_; }
     const licensing::LicenseRuntimeState& getLicenseRuntimeState() const noexcept { return licenseRuntimeState_; }
     licensing::LicenseManager& getLicenseManager() noexcept { return *licenseManager_; }
     const licensing::LicenseManager& getLicenseManager() const noexcept { return *licenseManager_; }
+
+    // ── Multi-agent orchestration layer (Phase 4 wiring) ─────────────────────
+    // Returns nullptr until startMCPServerIfNeeded() has constructed the runtime.
+    agents::AgentRuntime* getAgentRuntime() const noexcept { return agentRuntime_.get(); }
+    // Resolves the AutomationRuntime that backs the agent runtime + MCP server.
+    // Used by agents.* MCP helpers (e.g. agents.blackboard.recent) to read recent
+    // bus events without exposing the runtime object directly.
+    AutomationRuntime* getAutomationRuntimeForAgents() noexcept;
 
 #if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
     void startPendingMCPServerForTesting() { startMCPServerIfNeeded(); }
@@ -128,6 +181,8 @@ public:
     FormantMorphEngine&    getFormantEngine()         { return formantEngine_; }
     OversamplingWrapper&   getOversampling()          { return oversampling_; }
     LatencyManager&        getLatencyManager()        { return latencyManager_; }
+    // Output-protection limiter on the main wet path (diagnostics / tests).
+    BrickwallLimiter&      getMorphOutputLimiter()    { return morphOutputLimiter_; }
 
     // Audio-domain morph controls
     void setAudioDomainEnabled(bool v)
@@ -153,7 +208,15 @@ public:
         UI,
         Assistant,
         MCP,
-        Snapshot
+        Snapshot,
+        // AUDIT (E2, 2026-06-25): the SonicMaster neural path previously passed
+        // ::MCP like manual hosted edits, making the two hosted-parameter writers
+        // indistinguishable. A distinct Neural value lets ParameterBridge's
+        // per-parameter source stamp distinguish an automated neural plan write
+        // from a manual MCP edit to the same hosted control, and lets a write
+        // precedence conflict (two different sources editing the same param
+        // within a settle window) be observed/counted.
+        Neural
     };
 
     struct ParamCommand {
@@ -163,11 +226,33 @@ public:
         int   snapshotSlot = -1;        // Applicable if isSnapshotMarker is true
         ParameterEditSource source = ParameterEditSource::Unknown;
         bool  holdAgainstMorph = false;
+        // P3.10 (AUDIT): plan transaction marker. Set on the LAST command of a
+        // neural/AI plan so the audio-thread drain and observers can detect a
+        // partial apply (a plan enqueued but not fully drained when a new block
+        // boundary / snapshot recall interrupts it). Unlike isSnapshotMarker this
+        // does NOT block draining mid-plan — true cross-block all-or-nothing would
+        // require buffering the plan on the audio thread — but it makes a partial
+        // plan detectable so the assistant can re-issue or wait. planId lets a
+        // caller correlate the boundary with the plan it closed.
+        bool  isPlanBoundary = false;
+        std::uint64_t planId = 0;
     };
     bool enqueueParameterSet(int paramIndex,
                              float normalizedValue,
                              ParameterEditSource source = ParameterEditSource::UI,
                              bool holdAgainstMorph = true);
+    // P3.10 (AUDIT): enqueue a plan-transaction boundary marker as the LAST
+    // command of an AI/neural plan. Returns true if pushed. The audio-thread drain
+    // pops it like any command (it carries paramIndex=-1 so it writes nothing) and
+    // bumps lastDrainedPlanId_ so callers can detect that a full plan committed.
+    bool enqueuePlanBoundary(std::uint64_t planId,
+                             ParameterEditSource source = ParameterEditSource::MCP);
+    // P3.10: id of the most recent plan boundary the audio thread drained.
+    // 0 before any plan drained. Read from any thread (atomic). A caller that
+    // enqueued a plan can compare its planId to this to detect a partial apply
+    // (enqueued but not yet drained) without polling the queue depth.
+    [[nodiscard]] std::uint64_t getLastDrainedPlanId() const noexcept
+    { return lastDrainedPlanId_.load(std::memory_order_acquire); }
     bool enqueueParameterBatch(const std::vector<ParamCommand>& commands);
     int enqueueParameterState(const std::vector<float>& normalizedValues,
                               ParameterEditSource source = ParameterEditSource::UI,
@@ -182,6 +267,16 @@ public:
 
     bool captureSnapshotToSlot(int slot, bool includeStateChunk = true);
     bool recallSnapshot(int slot, SnapshotRecallMode mode);
+
+    // ── A/B Compare (snapshot-based, uses internal buffer, not SnapshotBank) ──
+    /** Capture current hosted-plugin state as the "A" reference. */
+    void captureABCompareRef();
+    /** Toggle between live ("A") and captured ("B") state. Returns the new active state. */
+    bool toggleABCompare();
+    /** Returns true if the captured "B" state is currently active. */
+    bool isABCompareActive() const noexcept { return abCompareActive_.load(std::memory_order_relaxed); }
+    /** Returns true if a reference has been captured at least once. */
+    bool hasABCompareRef() const noexcept { return abCompareHasRef_.load(std::memory_order_relaxed); }
 
     void setMorphPositionExternal(float x, bool hasX,
                                   float y, bool hasY,
@@ -211,6 +306,7 @@ public:
         bool exclusiveAccessTimedOut = false;
         int retryCount = 0;
         int waitedMs = 0;
+        int outOfRangeCount = 0;   // AUDIT-FIX 4.7: commands dropped because index >= plugin param count
     };
 
     ParameterCommandFlushResult flushPendingParameterCommandsForAssistant(int maxCommands = 2048,
@@ -222,6 +318,9 @@ public:
     void resetProfiler() { profiler_.reset(); }
     juce::String getProfilingReport() const;  // Get formatted profiling report
     void dumpProfilingReportToConsole() const; // Log profiling report to DBG output
+
+    // ── Undo/Redo ────────────────────────────────────────────────────────────
+    UndoRedoManager& getUndoRedoManager() noexcept { return undoRedoManager_; }
 
     // ── Morph state: UI/MCP writes, audio thread reads ───────────────────────
     void  setMorphX(float v)
@@ -311,6 +410,13 @@ public:
     void setRecallToggle(bool full)  { recallToggle_.store(full ? 1 : 0, std::memory_order_relaxed); }
     bool getRecallToggle() const     { return recallToggle_.load(std::memory_order_relaxed) != 0; }
 
+    // AUDIT-2026-06-25: Expert mode (UI only — not automatable, persisted in state)
+    bool isExpertMode() const noexcept
+    {
+        return rawParams_.expertMode != nullptr
+            && rawParams_.expertMode->load(std::memory_order_relaxed) >= 0.5f;
+    }
+
     // Refresh discrete parameter map (call after plugin load/change)
     void refreshDiscreteMap();
     void refreshHostedMasteringApplicators(const juce::PluginDescription& desc);
@@ -329,6 +435,16 @@ public:
     // ── Automated mastering engine ────────────────────────────────────────────
     AutoMasteringEngine& getAutoMasteringEngine() noexcept { return autoMasteringEngine_; }
     const AutoMasteringEngine& getAutoMasteringEngine() const noexcept { return autoMasteringEngine_; }
+    SonicMasterAnalysisEngine& getSonicMasterEngine() noexcept { return sonicMasterEngine_; }
+    const SonicMasterAnalysisEngine& getSonicMasterEngine() const noexcept { return sonicMasterEngine_; }
+
+    // AUDIT (C2, 2026-06-25): SonicMaster ONNX inference latency, measured
+    // around session->Run(). last = most recent run; max = running high-water
+    // mark. 0.0 before the first run / when ONNX is unavailable. The analysis
+    // cycle budget is 3 s, so a sustained last value approaching that indicates
+    // the model can no longer keep up at the configured cadence.
+    float getSonicMasterLastInferenceMs() const noexcept { return sonicMasterRunner_.getLastInferenceMs(); }
+    float getSonicMasterMaxInferenceMs() const noexcept  { return sonicMasterRunner_.getMaxInferenceMs(); }
     NeuralMasteringController& getNeuralMasteringController() noexcept { return neuralMasteringController_; }
     const NeuralMasteringController& getNeuralMasteringController() const noexcept { return neuralMasteringController_; }
     bool hasLastSafeNeuralMasteringPlan() const noexcept { return autoMasteringEngine_.hasLastSafeNeuralMasteringPlan(); }
@@ -339,6 +455,21 @@ public:
     NeuralMasteringFallbackMode getNeuralMasteringFallbackMode() const noexcept
     {
         return neuralMasteringController_.getLastStatus().fallbackMode;
+    }
+    // AUDIT (W1, 2026-06-25): surface OzonePlanApplicator mapping readiness to
+    // the MCP tool layer WITHOUT exposing the raw unique_ptr. When no hosted
+    // plugin is loaded (or the hosted plugin's parameter names don't match the
+    // Ozone-shaped discovery in buildFromHostedPlugin), the applicator is null
+    // and these report false/0 — the exact "silent no-op" condition the
+    // sonicmaster_decision tool now surfaces as mapping_status.ozone_mapped.
+    bool hasOzonePlanApplicator() const noexcept { return ozonePlanApplicator_ != nullptr; }
+    bool ozoneMappingReady() const noexcept
+    {
+        return ozonePlanApplicator_ != nullptr && ozonePlanApplicator_->isReady();
+    }
+    int ozoneMappedSlotCount() const noexcept
+    {
+        return ozoneParamMap_ != nullptr ? ozoneParamMap_->mappedSlotCount() : 0;
     }
     NeuralMasteringEvidenceLevel getNeuralMasteringEvidenceLevel() const noexcept
     {
@@ -433,20 +564,28 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState apvts;
-    PluginHostManager  hostManager;
+    mutable PluginHostManager  hostManager;  // mutable: acquirePluginForUse mutates atomics only (logically const)
     ParameterBridge    paramBridge;
     SnapshotBank       snapshotBank;
     MorphProcessor     morphProcessor;
+    WaypointEngine     waypointEngine_;
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
     std::unique_ptr<VST3IPCBridge> vst3IpcBridge_;
-    std::unique_ptr<standalone_mcp::IZotopeIPCDiscovery> ipcDiscovery_;
-    std::unique_ptr<standalone_mcp::IZotopeIPCAssistant> ipcAssistant_;
+    std::unique_ptr<standalone_mcp::MorePhiIPCDiscovery> ipcDiscovery_;
+    std::unique_ptr<standalone_mcp::MorePhiIPCAssistant> ipcAssistant_;
     LinkBroadcaster    linkBroadcaster_;
     InstanceIdentity   instanceIdentity_;
     juce::uint64       processorGenerationToken_ = 0;
+    // P3.10 (AUDIT): id of the last plan-boundary command drained on the audio
+    // thread. Written (release) when the drain pops an isPlanBoundary command,
+    // read (acquire) by getLastDrainedPlanId(). Lets a caller detect that a full
+    // AI/neural plan committed vs. is still partial in the queue.
+    std::atomic<std::uint64_t> lastDrainedPlanId_ { 0 };
     licensing::LicenseRuntimeState licenseRuntimeState_;
-    std::unique_ptr<licensing::LicenseManager> licenseManager_;
+    // L-5 FIX: shared_ptr so detached refresh threads can safely extend the
+    // manager's lifetime past processor destruction.
+    std::shared_ptr<licensing::LicenseManager> licenseManager_;
 
     // ── New v3.3.0 components ────────────────────────────────────────────────
     ParameterClassifier      parameterClassifier_;
@@ -454,11 +593,64 @@ private:
     TokenOptimizer           tokenOptimizer_;
     std::unique_ptr<AIAssistant> aiAssistant_;
 
-    // ── Ozone 11 mastering integration ───────────────────────────────────────
+    // ── Multi-agent orchestration layer (Phase 4 wiring) ─────────────────────
+    // Owned Pimpl-style (full types live in PluginProcessor.cpp's TU). The runtime
+    // borrows the four holders by raw reference, so declaration order is critical:
+    // holders must be declared BEFORE the runtime so the runtime is destroyed
+    // FIRST (C++ destroys members in reverse declaration order).
+    std::unique_ptr<agents::DefaultToolInvoker>          agentTools_;
+    std::unique_ptr<agents::IAgentLogger>                agentLogger_;   // M2: StructuredAgentLogger in production
+    std::unique_ptr<agents::ILlmClient>                  agentLlm_;      // AUDIT-FIX: RestLlmClient when an API key is configured, else DeterministicFallback
+    std::unique_ptr<agents::BlackboardBridge>            agentBlackboard_;
+    std::unique_ptr<agents::AgentRuntime>                agentRuntime_;
+    // H6: autonomy chosen by the user (Assist/CoPilot/Autopilot), captured in
+    // getStateInformation and replayed onto the permission kernel when the agent
+    // runtime is rebuilt. Defaults to Assist.
+    AutonomyLevel pendingAgentAutonomy_;
+
+    // ── Ozone 11 mastering integration & v2 feature→delta path ───────────────
     AutoMasteringEngine                  autoMasteringEngine_;
     NeuralMasteringController            neuralMasteringController_;
+    OnnxNeuralMasteringRunner            onnxNeuralRunner_;
     std::unique_ptr<OzoneParameterMap>   ozoneParamMap_;
     std::unique_ptr<OzonePlanApplicator> ozonePlanApplicator_;
+
+    // Timer-driven v2 controller cycle: fires ~30Hz (timer default). The cycle
+    // runs every kNeuralMasteringV2CycleTicks ticks (~2s).
+    static constexpr std::uint64_t      kNeuralMasteringV2CycleTicks = 60;
+    std::uint64_t                       neuralMasteringFeatureTick_ = 0;
+
+    // Running EMA state for transient density estimation (message thread only).
+    // Updated every timer tick from the current spectral flux reading.
+    static constexpr float              kFluxEmaAlpha = 0.05f;
+    float                               v2FluxMean_ = 0.0f;
+
+    // ── SonicMaster realtime neural mastering (preview, default OFF) ──────────
+    SonicMasterDecisionRunner            sonicMasterRunner_;
+    SonicMasterAnalysisEngine            sonicMasterEngine_;
+    SonicMasterRunnerInferenceSource     sonicMasterSource_ { sonicMasterRunner_ };
+    SonicMasterHttpInferenceSource       sonicMasterHttpSource_;
+
+    // ONNX-first fallback: tries to load the masteringbrainv2 ONNX model from
+    // alongside the plugin binary; falls back to the HTTP inference server.
+    void initializeSonicMaster();
+
+    // PLUGGABLE GENRE MODEL (Phase C, 2026-06-27): searches %APPDATA%/MorePhi/models
+    // then the plugin binary dir for genre_classifier.onnx and loads it into the
+    // AutoMasteringEngine's GenreClassifier. No-op (heuristic stays active) when
+    // the file is absent or ORT validation fails. No embedding / no SHA pinning.
+    void initializeGenreClassifier();
+
+    // V2: wire the feature→delta ONNX path (63→72 model). Searches for a
+    // matching model alongside the plugin binary; falls through to the
+    // DeterministicBaseline runner if none is found.
+    void initializeNeuralMasteringV2();
+
+    // Derived feature helpers for the v2 snapshot (timer callback).
+    // All accept nullptr for unavailable meter data and return 0.0f gracefully.
+    static float computeMonoFoldDownDeltaDb(const StereoFieldAnalyzer::StereoFieldSnapshot* stereo) noexcept;
+    static float computeHarmonicRisk(const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept;
+    float        computeTransientDensity(const RealtimeSpectrumAnalyzer::SpectrumSnapshot* spectrum) noexcept;
 
     // ── V2 components ──────────────────────────────────────────────────────
     PluginHostManager  hostManagerB_;
@@ -471,8 +663,29 @@ private:
     OversamplingWrapper oversamplingB_;
     LatencyManager      latencyManager_;
 
+    // Output-protection brickwall limiter on the main wet path. Sits AFTER the
+    // hosted plugin + HybridBlend + output gain and BEFORE the wet/dry crossfade,
+    // so morph-driven overshoots (high-gain snapshots, correlated-peak sums)
+    // cannot clip past the configured ceiling. Default ON via the outputProtect
+    // APVTS param; lookahead reported to the DAW through latencyManager_.
+    BrickwallLimiter    morphOutputLimiter_;
+
     // Performance profiler for CPU spike diagnosis
     PerformanceProfiler profiler_;
+    MorePhiDiagnostics diagnostics_;
+
+    // Undo/redo for snapshot operations
+    UndoRedoManager undoRedoManager_;
+
+public:
+    /** Diagnostic accessor (profiling builds only; otherwise the object is inert). */
+    MorePhiDiagnostics& getDiagnostics() noexcept { return diagnostics_; }
+
+    // C-6 FIX (audit): current bypass wet/dry mix (1.0 = fully wet/hosted,
+    // 0.0 = fully dry/bypassed). Read-only diagnostic for UI meters + tests;
+    // the value ramps across blocks on bypass toggle (kBypassRampBlocks).
+    float getBypassMix() const noexcept { return bypassMix_.load(std::memory_order_relaxed); }
+private:
 
     // Audio-domain morph state
     std::atomic<bool>  audioDomainEnabled_{false};
@@ -490,6 +703,16 @@ private:
     juce::AudioBuffer<float> paramOut_;
     juce::AudioBuffer<float> spectralOut_;
     juce::AudioBuffer<float> granularOut_;
+    // C-6 FIX (audit): Dry-signal snapshot captured before the hosted plugin
+    // runs, so applyOutputGainAndMetering can crossfade wet↔dry across the
+    // bypass transition instead of hard-switching (which clicks). Pre-allocated
+    // in prepareToPlay alongside the other scratch buffers — no audio-thread
+    // allocation.
+    juce::AudioBuffer<float> dryBuffer_;
+    // M-2 FIX: scratch gain arrays for the SIMD bypass crossfade.
+    // Resized in applyOutputGainAndMetering (analysis thread — not audio-critical).
+    std::vector<float> wetGainScratch_;
+    std::vector<float> dryGainScratch_;
     std::array<float*, OversamplingWrapper::kMaxChannels> osParamPtrs_{};
     std::array<float*, OversamplingWrapper::kMaxChannels> osBPtrs_{};
     // C-P3 FIX: Re-used MIDI buffer — retains capacity across clear() calls
@@ -515,6 +738,27 @@ private:
     int morphStableBlocks_ = 0;
     static constexpr int MORPH_STABLE_THRESHOLD = 2; // Skip after N identical blocks
 
+    // H-1 FIX: cached block-start timestamp (wall-clock ms). Computed once at the
+    // top of processBlock() from juce::Time::getMillisecondCounter() and passed to
+    // ParameterBridge's now-taking overloads — avoids repeated kernel syscalls on
+    // the audio thread. Relaxed ordering: only consumed within the same block
+    // invocation (no cross-thread sync needed).
+    std::atomic<juce::uint32> blockTimestampMs_{0};
+
+    // L-2 FIX: hosted-plugin wall-clock watchdog. Counts the number of blocks
+    // where hostManager.processBlock() took longer than a configurable threshold
+    // (default 10 ms — half a 128-sample block at 44.1 kHz). The MCP diagnostic
+    // tools can read this counter to flag plugins that exceed the real-time
+    // budget. Saturates at UINT64_MAX to avoid wrap-around.
+    std::atomic<uint64_t> hostedPluginOverrunCount_{0};
+    static constexpr int kHostedPluginOverrunThresholdMs = 10;
+
+    // TEMPORARY: morph-health diagnostic probe tick counter (JUCE_DEBUG only).
+    // See the probe block at the top of timerCallback(). Remove with the probe.
+#if JUCE_DEBUG
+    int morphHealthTick_ = 0;
+#endif
+
     // Touch detection: prevents morph from overwriting manual knob changes
     // CRITICAL: These vectors are accessed from both audio thread (read/write in processBlock)
     // and message thread (write in recallSnapshotQueued). Use spinlock for synchronization.
@@ -523,12 +767,27 @@ private:
     std::vector<float> touchMorphX_;        // Morph X position when touch was detected
     std::vector<float> touchMorphY_;        // Morph Y position when touch was detected
     mutable juce::SpinLock touchStateLock_; // Protects lastApplied_ and touchCooldown_
+    // PERF-BATCH: scratch + dirty bitmap for coalescing the audio-thread command
+    // drain into a single ParameterBridge::applyParameterState call instead of
+    // one setParameterNormalized (acquire+throttle+syscall) per queued command.
+    // Audio thread only; written under touchStateLock_ alongside lastApplied_.
+    std::vector<float> drainScratch_;      // last-write-wins value per param index
+    std::vector<uint8_t> drainTouched_;    // 1 = index written this drain
+    std::vector<float> recallScratch_;     // M4: pre-allocated scratch for recallSnapshotQueued
     static constexpr float TOUCH_THRESHOLD = 0.005f;   // Min delta to detect manual touch
     static constexpr float MORPH_POS_THRESHOLD = 0.01f; // Min morph position change to resume
     // M-6 FIX: Dynamic cooldown — computed in prepareToPlay from sample rate & block size.
     // At 48kHz/512 ≈ 19 blocks, at 96kHz/1024 ≈ 19 blocks, at 44.1k/128 ≈ 69 blocks.
     // Always ~200ms regardless of host configuration.
     int touchCooldownBlocks_ = 10;
+
+    // PERF-IA: Interleaved touch sampling — instead of calling getValue() on all
+    // 2,048 parameters every block (the dominant CPU cost), only sample 1/N
+    // params per block using a rotating offset. Touch detection latency increases
+    // to N blocks but the getValue virtual-call cost drops by N×.
+    // kTouchSamplingStride=4 → 75% reduction in getValue calls, ~20ms touch latency.
+    static constexpr int kTouchSamplingStride = 4;
+    int touchSamplingPhase_ = 0; // rotates 0..kTouchSamplingStride-1 each block
 
     // Live external edits are held against morph output until the user moves
     // the morph cursor or explicitly recalls a snapshot. Audio thread only.
@@ -537,14 +796,35 @@ private:
     std::vector<float> liveEditY_;
     std::vector<float> liveEditFader_;
 
+    // ── A/B Compare state ──────────────────────────────────────────────────
+    std::vector<float> abCompareState_;
+    std::atomic<bool>  abCompareActive_ { false };
+    std::atomic<bool>  abCompareHasRef_ { false };
+
     void clearLiveEditHoldsAudioThread() noexcept;
     bool shouldReleaseLiveEditHold(int index, float x, float y, float fader) const noexcept;
-    int drainParameterCommandQueue(int cachedParamCount,
-                                   int maxCommands,
-                                   juce::AudioPluginInstance* exclusivePlugin = nullptr) noexcept;
-    void drainParameterCommandQueue(int cachedParamCount, bool canTouchHostedParameters) noexcept;
+    // C4 FIX: Drop the cached "last applied" value for every parameter so the
+	    // next morph pass treats the just-recalled snapshot values as the new
+	    // baseline instead of overwriting them. Called on the audio thread right
+	    // after a recall path (MIDI note trigger, MCP recall) writes hosted params
+	    // directly via ParameterBridge, bypassing lastApplied_ bookkeeping. Without
+	    // this, applyMorphAndParameters() in the same block sees a stale lastApplied_
+	    // and writes the morph output right back over the recalled snapshot.
+	    void invalidateAppliedCacheAudioThread() noexcept;
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
+	public:
+#endif
+	    int drainParameterCommandQueue(int cachedParamCount,
+	                                   int maxCommands,
+	                                   juce::AudioPluginInstance* exclusivePlugin = nullptr,
+	                                   int* outOfRangeCount = nullptr,
+	                                   juce::uint32 now = 0) noexcept;
+#if defined(MORE_PHI_TEST_MODE) && MORE_PHI_TEST_MODE
+		private:
+#endif
+		    void drainParameterCommandQueue(int cachedParamCount, bool canDrainCommands, juce::uint32 now) noexcept;
     void processMIDIAndSidechain(juce::MidiBuffer& midi, juce::AudioBuffer<float>& buffer) noexcept;
-    void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters) noexcept;
+    void applyMorphAndParameters(juce::AudioBuffer<float>& buffer, int cachedParamCount, bool canTouchHostedParameters, juce::uint32 now) noexcept;
     void applyOutputGainAndMetering(juce::AudioBuffer<float>& buffer, bool isBypassed) noexcept;
     void requestFullStateRecallFromAudioThread(int slot) noexcept;
     // Named capacity constant (avoids magic number in queue declaration).
@@ -569,6 +849,11 @@ private:
     std::atomic<bool> isRestoring_{false};
     // Buffered hosted plugin state to apply after async reload completes
     juce::MemoryBlock pendingHostedState_;
+    // P3 FIX: This spinlock protects a MemoryBlock copy that may heap-allocate.
+    // It is only acquired on the message thread (setStateInformation, loadHostedPluginFromState)
+    // and the state-save path (getStateInformation on message thread); never on the audio thread.
+    // A CriticalSection would be more appropriate here, but the spinlock is acceptable since
+    // contention is negligible (single-threaded message loop) and MemoryBlock copy is fast.
     juce::SpinLock pendingStateMutex_;
     // Preserved MCP identity for port reuse across export cycles
     InstanceIdentity pendingIdentity_;
@@ -607,9 +892,13 @@ private:
     void loadCachedLicenseIfNeeded();
     void refreshLicenseIfNeeded(); // auto-renew once nextOnlineCheckAtUnix passes
     void startMCPServerIfNeeded();
+    void startAgentRuntimeIfNeeded();  // Phase 4: lazily build + register the agent cast
     void reconfigureAudioDomainProcessing();
     void updateReportedLatency();
     void applyPendingFullStateRecall();
+    // H3 FIX: Apply forward migration when loading state from an older version.
+    // Returns false if the data is from an unsupported version that cannot be migrated.
+    bool applyStateMigration(juce::XmlElement& stateXml, const juce::String& version);
 
     struct RawParameters
     {
@@ -645,13 +934,29 @@ private:
         std::atomic<float>* morphAlpha = nullptr;
         std::atomic<float>* bypass = nullptr;
         std::atomic<float>* outputGain = nullptr;
+        // Output-protection brickwall limiter on the main wet path (default ON).
+        // outputProtect gates the limiter; outputCeiling is the target dBTP.
+        std::atomic<float>* outputProtect = nullptr;
+        std::atomic<float>* outputCeiling = nullptr;
         std::atomic<float>* driftOutputX = nullptr;
         std::atomic<float>* driftOutputY = nullptr;
         std::atomic<float>* coarseParameterWrites = nullptr;
         std::atomic<float>* disableTouchDetection = nullptr;
         std::atomic<float>* throttleParamCommits = nullptr;
+        std::atomic<float>* cpuSaver = nullptr;
+        std::atomic<float>* dawWrite = nullptr;
+        std::atomic<float>* sonicMasterEnabled = nullptr;
+        std::atomic<float>* expertMode = nullptr;
+        std::atomic<float>* waypointEnable = nullptr;
+        std::atomic<float>* waypointPlay = nullptr;
+        std::atomic<float>* waypointBPM = nullptr;
     };
     RawParameters rawParams_{};
+
+    // BP-3 FIX (audit): cached pointer to the APVTS "bypass" parameter,
+    // returned from getBypassParameter() so hosts route native bypass through
+    // it (and thus through the C-6 crossfade). Set once in the constructor.
+    juce::RangedAudioParameter* bypassParameter_ = nullptr;
 
     // Morph position (UI/MCP → audio thread)
     std::atomic<float> morphX_{0.5f};
@@ -663,6 +968,13 @@ private:
     std::atomic<bool> maintenanceTimerRequested_{false};
     std::atomic<bool> licenseLoadPending_{true};
     std::atomic<bool> licenseRefreshInFlight_{false}; // guards background refresh
+    // P2 FIX: Replaces unreliable callAsync with Timer-deferred APVTS notification.
+    // setMorphPositionExternal sets this flag; timerCallback picks it up on the
+    // message thread (where the timer reliably fires even with editor closed).
+    std::atomic<bool> morphPositionNotifyPending_{false};
+
+    // M3: Gate syncStateFromAPVTS — skip per-block sync when APVTS state is unchanged
+    std::atomic<bool> apvtsStateDirty_{true};
 
     std::atomic<bool> audioDomainConfigDirty_{false};
     std::atomic<bool> latencyConfigDirty_{false};
@@ -675,6 +987,9 @@ private:
     bool lastLatencyAudioDomainEnabled_ = false;
     bool lastLatencySpectralActive_ = false;
     bool lastLatencyGranularActive_ = false;
+    // Tracks the outputProtect toggle so toggling it dirties latency (the limiter
+    // adds/removes its 4 ms lookahead from the reported total).
+    bool lastOutputProtectEnabled_ = true;
 
     std::atomic<int> pendingFullStateRecallSlot_{-1};
     std::atomic<uint32_t> pendingFullStateRecallGeneration_{0};
@@ -701,6 +1016,9 @@ private:
     // Throttle Param Commits: compute morph every block but push setValue to the
     // hosted plugin only every Nth block (Drift/continuous-morph CPU relief).
     std::atomic<bool> throttleParamCommits_{false};
+    // PERF-CPU: When enabled, halves audio-domain FFT size and caps oversampling
+    // at x2. Reduces audio-domain CPU by ~40-60% at the cost of spectral resolution.
+    std::atomic<bool> cpuSaver_{false};
     int paramCommitCounter_{0}; // audio-thread only
 
     // Audio analysis (audio thread → UI)
@@ -708,9 +1026,37 @@ private:
     int rmsSkipCounter_ = 0;
     static constexpr int RMS_THROTTLE_BLOCKS = 8;
 
+    // ponytail: throttle the per-block LUFS/FFT/stereo analysis tap. It feeds the
+    // MCP/AI decision chain, which only acts every 30s — running full analysis on
+    // every audio block (750x/s at 64-sample/48k) was the idle-CPU cause of the
+    // host-wide lag. LUFS integrates over time, so ~8-block resolution is fine.
+    // H-8(b): Increased from 8 to 32 to reduce DSP overhead on audio thread since
+    // the downstream decision chain only acts every ~30s.
+    int analysisSkipCounter_ = 0;
+    static constexpr int ANALYSIS_THROTTLE_BLOCKS = 32;
+
     // M9 FIX: Output gain smoothing state (audio thread only)
     std::atomic<float> smoothedGain_{1.0f};
+    // P2 FIX: Audio-thread only — only accessed from applyOutputGainAndMetering().
+    // Not atomic by design; the surrounding atomics (smoothedGain_) are for
+    // cross-thread visibility from UI diagnostic reads, not synchronization.
     bool gainSmoothingInitialized_ = false;
+
+    // C-6 FIX (audit): Bypass wet/dry crossfade state. bypassMix_ is the
+    // current wet amount (1.0 = fully wet/hosted, 0.0 = fully dry/bypassed).
+    // Each block it ramps toward the target (isBypassed ? 0 : 1) and the dry
+    // and wet buffers are crossfaded by it, eliminating the hard-switch click
+    // on bypass toggle. Audio-thread only (like smoothedGain_); atomic only so
+    // UI diagnostics can read it. kBypassRampBlocks controls the fade length.
+public:
+    // AUDIT-FIX (pre-existing): public so unit tests can pin the fade length.
+    // Compile-time tuning constant (no encapsulated state); the bypass *state*
+    // (bypassMix_, bypassMixInitialized_) stays private below.
+    static constexpr int kBypassRampBlocks = 32;  // ~32 blocks ≈ fast, click-free fade
+
+private:
+    std::atomic<float> bypassMix_{1.0f};
+    bool bypassMixInitialized_ = false;
 
     // M11 FIX: Atomic flag for deferred state restore from audio thread
     std::atomic<bool> pendingStateRestore_{false};
@@ -739,6 +1085,20 @@ private:
 
     // C-5 FIX: Track currently selected program for DAW preset browser
     std::atomic<int> currentProgram_{0};
+
+    // H-5: Heap-allocated weak reference used by MIDI callbacks so they can
+    // detect if the processor has been destroyed. Allocated in constructor,
+    // deleted in destructor.
+    juce::WeakReference<MorePhiProcessor>* midiCallbackWeakRef_ = nullptr;
+
+    // C-2 FIX: Cached state for getStateInformation when called from the
+    // audio thread (e.g. offline render / export in some DAWs). The cache is
+    // updated by the message thread under cachedSavedStateMutex_ and returned
+    // directly to audio-thread callers to avoid heap allocation (XML + Base64
+    // encoding) on the real-time path. See getStateInformation() in
+    // PluginProcessor.cpp for the consumer logic.
+    mutable juce::MemoryBlock cachedSavedState_;
+    mutable juce::SpinLock cachedSavedStateMutex_;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE(MorePhiProcessor)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MorePhiProcessor)

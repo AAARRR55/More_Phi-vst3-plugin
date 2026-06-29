@@ -39,11 +39,14 @@
 
 namespace {
 
-// Cross-platform shared-object export macro.
+// Cross-platform shared-object export macro. Defined in the header (applied to
+// declarations there) so decl/def linkage matches under MSVC (C2375 guard).
+#ifndef MPHRENDER_EXPORT
 #if defined(_WIN32)
     #define MPHRENDER_EXPORT __declspec(dllexport)
 #else
     #define MPHRENDER_EXPORT __attribute__((visibility("default")))
+#endif
 #endif
 
 // Compile-time guards: fail the build loudly if the ABI drifts.

@@ -65,6 +65,14 @@ public:
         return true;
     }
 
+    // C-2 FIX: Atomic batch write under a single lock acquisition.
+    // The old chunked implementation released and re-acquired pushMutex_
+    // between 512-element fragments, leaving the queue in a partial-write
+    // state on overflow (first N elements committed, rest silently dropped).
+    // The new path checks that the FULL range fits, then copies all elements
+    // atomically under one lock scope — either the entire batch lands or
+    // nothing does. This also eliminates the chunk-loop overhead.
+
     template <typename Range>
     [[nodiscard]] bool pushRange(const Range& items)
     {
@@ -75,35 +83,23 @@ public:
         if (count == 0)
             return true;
 
-        constexpr size_t kChunkSize = 512;
-        size_t copied = 0;
-        auto it = std::begin(items);
+        const juce::SpinLock::ScopedLockType guard(pushMutex_);
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        const size_t used = (head - tail) & mask_;
+        const size_t available = usableCapacity() - used;
 
-        while (copied < count)
+        if (count > available)
+            return false;
+
+        size_t write = head;
+        for (auto it = std::begin(items); it != std::end(items); ++it)
         {
-            const juce::SpinLock::ScopedLockType guard(pushMutex_);
-            const size_t head = head_.load(std::memory_order_relaxed);
-            const size_t tail = tail_.load(std::memory_order_acquire);
-            const size_t used = (head - tail) & mask_;
-            const size_t available = usableCapacity() - used;
-
-            if (available == 0)
-                return false;
-
-            const size_t chunk = std::min(kChunkSize, count - copied);
-            if (chunk > available)
-                return false;
-
-            size_t write = head;
-            for (size_t i = 0; i < chunk; ++i)
-            {
-                buffer_[write] = *it++;
-                write = (write + 1) & mask_;
-            }
-
-            head_.store(write, std::memory_order_release);
-            copied += chunk;
+            buffer_[write] = *it;
+            write = (write + 1) & mask_;
         }
+
+        head_.store(write, std::memory_order_release);
         return true;
     }
 
@@ -112,35 +108,23 @@ public:
         if (count == 0)
             return true;
 
-        constexpr std::size_t kChunkSize = 512;
-        std::size_t copied = 0;
-        std::size_t idx = 0;
+        const juce::SpinLock::ScopedLockType guard(pushMutex_);
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        const size_t used = (head - tail) & mask_;
+        const size_t available = usableCapacity() - used;
 
-        while (copied < count)
+        if (count > available)
+            return false;
+
+        size_t write = head;
+        for (std::size_t i = 0; i < count; ++i)
         {
-            const juce::SpinLock::ScopedLockType guard(pushMutex_);
-            const size_t head = head_.load(std::memory_order_relaxed);
-            const size_t tail = tail_.load(std::memory_order_acquire);
-            const size_t used = (head - tail) & mask_;
-            const size_t available = usableCapacity() - used;
-
-            if (available == 0)
-                return false;
-
-            const std::size_t chunk = std::min(kChunkSize, count - copied);
-            if (chunk > available)
-                return false;
-
-            size_t write = head;
-            for (std::size_t i = 0; i < chunk; ++i)
-            {
-                buffer_[write] = items[idx++];
-                write = (write + 1) & mask_;
-            }
-
-            head_.store(write, std::memory_order_release);
-            copied += chunk;
+            buffer_[write] = items[i];
+            write = (write + 1) & mask_;
         }
+
+        head_.store(write, std::memory_order_release);
         return true;
     }
 

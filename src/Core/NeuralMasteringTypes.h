@@ -20,6 +20,55 @@ inline constexpr std::size_t kNeuralMasteringStereoBandCount = 8;
 inline constexpr std::size_t kNeuralMasteringGateCount = 10;
 inline constexpr std::size_t kNeuralMasteringIssueCapacity = 16;
 
+// AUDIT-2.1: number of compressor bands the neural mastering decision emits
+// (masteringbrainv2 contract). Declared in Core (not the AI decoder header) so
+// the ValidatedNeuralMasteringPlan sidecar below can carry the full per-band
+// param set without Core depending on AI.
+inline constexpr std::size_t kNeuralMasteringCompBandCount = 3;
+
+// AUDIT-FIX (L1-6, 2026-06-29): named normalization constants for the
+// compressor parameter decode path. Previously the decoder used magic
+// numbers (20.0, 8.0, 3.5, 2.5) without explanation, making it impossible
+// to verify the normalization without cross-referencing the training code.
+// These constants define the linear map from real units → [-1,1] and back:
+//   normalized = (value - center) / halfRange
+//   real_unit  = normalized * halfRange + center
+// The center/halfRange are chosen so the full [min, max] clamp band maps
+// onto approximately [-1, 1] with a small margin at the extremes.
+namespace CompNorm {
+    // Threshold normalization: real ∈ [-40, -6] dB, center = -20 dB, half-range = 8 dB
+    inline constexpr float kThresholdCenterDb  = -20.0f;
+    inline constexpr float kThresholdHalfRangeDb =   8.0f;
+    // Ratio normalization: real ∈ [1, 6], center = 3.5, half-range = 2.5
+    inline constexpr float kRatioCenter        =   3.5f;
+    inline constexpr float kRatioHalfRange     =   2.5f;
+    // Per-param clamp bounds (same values used in the decoder)
+    inline constexpr float kThresholdMinDb     = -40.0f;
+    inline constexpr float kThresholdMaxDb     =  -6.0f;
+    inline constexpr float kAttackMinMs        =   0.1f;
+    inline constexpr float kAttackMaxMs        = 100.0f;
+    inline constexpr float kReleaseMinMs       =  10.0f;
+    inline constexpr float kReleaseMaxMs       = 500.0f;
+    inline constexpr float kMakeupMinDb        =   0.0f;
+    inline constexpr float kMakeupMaxDb        =  12.0f;
+    inline constexpr float kKneeMinDb           =   0.0f;
+    inline constexpr float kKneeMaxDb           =  12.0f;
+} // namespace CompNorm
+
+// AUDIT-2.1: full per-band compressor params, in real units. The 44-float
+// SonicMaster decision carries all six (threshold,ratio,attack,release,makeup,
+// knee) per band, but the normalized MasteringTargetVector.dynamics array holds
+// only 2/band in [-1,1] delta space. The other four travel in this sidecar.
+struct NeuralMasteringCompBand
+{
+    float thresholdDb = -20.0f;  // = CompNorm::kThresholdCenterDb
+    float ratio       =   2.5f;
+    float attackMs    =  15.0f;
+    float releaseMs   = 150.0f;
+    float makeupDb    =   0.0f;
+    float kneeDb      =   2.0f;
+};
+
 enum class NeuralMasteringRuntimeMode : std::uint8_t
 {
     Offline,
@@ -106,6 +155,70 @@ enum class NeuralMasteringValidationIssue : std::uint8_t
     MaxDeltaProjected
 };
 
+// DIAGNOSTIC (2026-06-26): enum→string mapper for NeuralMasteringValidationIssue.
+// Until now no stringification existed anywhere, so a safety-policy rejection
+// surfaced only as a coarse "safety_rejected" with the specific issue discarded
+// (SonicMasterAnalysisEngine.cpp requestDecisionNow dropped verdict.issues[]).
+// This mapper lets the on-demand path report WHICH gate tripped — e.g.
+// LowConfidence (model out-of-distribution on a -7 LUFS input) vs TargetOutOfRange
+// (decoded EQ/loudness outside sanity bounds) vs NonFiniteValue (NaN from the
+// model) — so the assistant stops confabulating "transient, try again" and can
+// give an honest next step. snake_case keys for JSON; keep in sync with the enum.
+inline const char* neuralMasteringIssueKey(NeuralMasteringValidationIssue issue) noexcept
+{
+    switch (issue)
+    {
+        case NeuralMasteringValidationIssue::None:                  return "none";
+        case NeuralMasteringValidationIssue::SchemaVersionMismatch: return "schema_version_mismatch";
+        case NeuralMasteringValidationIssue::AudioCallbackRuntime:  return "audio_callback_runtime";
+        case NeuralMasteringValidationIssue::InvalidTimestamp:      return "invalid_timestamp";
+        case NeuralMasteringValidationIssue::StalePlan:             return "stale_plan";
+        case NeuralMasteringValidationIssue::LowConfidence:         return "low_confidence";
+        case NeuralMasteringValidationIssue::Abstain:               return "abstain";
+        case NeuralMasteringValidationIssue::ReviewOnly:            return "review_only";
+        case NeuralMasteringValidationIssue::UnsupportedLayout:     return "unsupported_layout";
+        case NeuralMasteringValidationIssue::NonFiniteValue:        return "non_finite_value";
+        case NeuralMasteringValidationIssue::TargetOutOfRange:      return "target_out_of_range";
+        case NeuralMasteringValidationIssue::DeltaOutOfRange:       return "delta_out_of_range";
+        case NeuralMasteringValidationIssue::IllegalMask:           return "illegal_mask";
+        case NeuralMasteringValidationIssue::HighRiskMask:          return "high_risk_mask";
+        case NeuralMasteringValidationIssue::MaxDeltaProjected:     return "max_delta_projected";
+    }
+    return "unknown";
+}
+
+// DIAGNOSTIC (2026-06-26): is this issue a HARD reject? Mirrors the file-static
+// isHardRejectIssue() in NeuralMasteringSafetyPolicy.cpp, exposed publicly so
+// the on-demand path can tell the assistant "this is a hard reject (retrying
+// won't help until the audio/plan changes)" vs "soft hold (retryable)." The
+// authoritative list lives in the policy .cpp; this public mirror must stay in
+// sync with it. Soft issues: StalePlan, LowConfidence, Abstain, ReviewOnly,
+// MaxDeltaProjected (informational). Everything else is hard.
+inline bool isHardRejectNeuralMasteringIssue(NeuralMasteringValidationIssue issue) noexcept
+{
+    switch (issue)
+    {
+        case NeuralMasteringValidationIssue::None:
+        case NeuralMasteringValidationIssue::StalePlan:
+        case NeuralMasteringValidationIssue::LowConfidence:
+        case NeuralMasteringValidationIssue::Abstain:
+        case NeuralMasteringValidationIssue::ReviewOnly:
+        case NeuralMasteringValidationIssue::MaxDeltaProjected:
+            return false;
+        case NeuralMasteringValidationIssue::SchemaVersionMismatch:
+        case NeuralMasteringValidationIssue::AudioCallbackRuntime:
+        case NeuralMasteringValidationIssue::InvalidTimestamp:
+        case NeuralMasteringValidationIssue::UnsupportedLayout:
+        case NeuralMasteringValidationIssue::NonFiniteValue:
+        case NeuralMasteringValidationIssue::TargetOutOfRange:
+        case NeuralMasteringValidationIssue::DeltaOutOfRange:
+        case NeuralMasteringValidationIssue::IllegalMask:
+        case NeuralMasteringValidationIssue::HighRiskMask:
+            return true;
+    }
+    return true;  // unknown enum value → treat as hard (fail-closed)
+}
+
 struct MasteringTargetVector
 {
     std::array<float, kNeuralMasteringEqTargetCount> eq {};
@@ -124,10 +237,14 @@ struct MasteringControlMask
     bool harmonic = false;
     bool limiter = false;
     bool loudness = false;
+    // IMPACT (Phase 3, 2026-06-26): transient shaper. Off by default; a genre
+    // profile or future decode slot can raise it. Sits in the mask so the safety
+    // policy and applyValidatedPlan treat it uniformly with the other stages.
+    bool impact = false;
 
     [[nodiscard]] bool any() const noexcept
     {
-        return eq || dynamics || stereo || harmonic || limiter || loudness;
+        return eq || dynamics || stereo || harmonic || limiter || loudness || impact;
     }
 };
 
@@ -187,6 +304,16 @@ struct NeuralMasteringPlanCandidate
     MasteringControlMask editableMask {};
     std::array<NeuralMasteringGateResult, kNeuralMasteringGateCount> gateResults {};
     NeuralMasteringFallbackMode requestedFallbackMode = NeuralMasteringFallbackMode::None;
+
+    // AUDIT-FIX: carry the full compressor sidecar through the safety policy
+    // so the verdict preserves the model's attack/release/makeup/knee values.
+    // Previously these were dropped because the candidate had no slot for them.
+    std::array<NeuralMasteringCompBand, kNeuralMasteringCompBandCount> compParams {};
+    bool hasCompParams = false;
+
+    // Staleness guard: capture instant (steady_clock ns) when the audio window
+    // was captured. Plans applied much later can be discarded.
+    std::uint64_t capturedAtSteadyClockNs = 0;
 };
 
 struct ValidatedNeuralMasteringPlan
@@ -199,6 +326,34 @@ struct ValidatedNeuralMasteringPlan
     NeuralMasteringEvidenceLevel evidenceLevel = NeuralMasteringEvidenceLevel::Planning;
     bool valid = false;
     bool projected = false;
+
+    // AUDIT-IX-8: steady-clock nanoseconds at which the audio window feeding this
+    // plan was captured. Set by SonicMasterAnalysisEngine at capture time; checked
+    // at apply time so a plan older than the staleness budget is discarded rather
+    // than applied against audio it no longer describes. 0 = untimestamped (legacy
+    // producers), which skips the check.
+    std::uint64_t capturedAtSteadyClockNs = 0;
+
+    // AUDIT-2.1: full per-band compressor params. Set by the SonicMaster decoder
+    // (it has all six from the decision vector); other plan producers leave this
+    // false and applyValidatedPlan falls back to the normalized dynamics pair.
+    std::array<NeuralMasteringCompBand, kNeuralMasteringCompBandCount> compParams {};
+    bool hasCompParams = false;
+
+    // AUDIT-FIX (H2): semantic guard. projectedTargets.loudness is a TARGET the
+    // model was asked to reach (the SonicMaster input is peak-normalized, so the
+    // model cannot measure absolute input LUFS — see SonicMasterAnalysisEngine
+    // AUDIT-7). It must NEVER be read as a measurement of the input. Genuine
+    // measurements live in SonicMasterMeasurementSnapshot (BS.1770-4 / true-peak).
+    // This flag is set false by every plan producer and asserted at decode time;
+    // any future path that genuinely measures input loudness must set it true.
+    bool loudnessIsMeasurement = false;
+
+    // AUDIT: opt-in flag. When true, applyValidatedPlan honours the limiter ceiling
+    // from the decoded SonicMaster decision, hard-clamped to [-3, -0.1] dB TP. The
+    // decoder leaves appliedMask.limiter OFF by default; callers (SonicMasterAnalysisEngine,
+    // MCP sonicmaster_decision tool) set this true when they want the ceiling applied.
+    bool applyLimiterCeiling = false;
 };
 
 } // namespace more_phi

@@ -65,8 +65,8 @@ void DiscreteParameterHandler::processDiscreteParameters(
     // to at least interpolatedValues.size() before calling this function.
     // outputScratch_ is pre-allocated in initialize() to MAX_PARAMETERS.
     if (outputValues.size() < interpolatedValues.size()) {
-        jassert(false);
-        outputValues.resize(interpolatedValues.size(), 0.0f); // safe fallback
+        jassertfalse;
+        return;  // skip discrete processing rather than heap-allocating
     }
 
     for (uint32_t i = 0; i < count; ++i)
@@ -214,11 +214,17 @@ float DiscreteParameterHandler::processDiscreteParameter(
 
 DiscreteParameterHandler::BlendStrategy DiscreteParameterHandler::getStrategyForParameter(int index) const
 {
-    // Check for override
-    for (const auto& override : strategyOverrides_)
+    // H-3: Audio thread uses try-lock to avoid blocking; message thread uses full lock.
+    // If the try-lock fails (writer active), fall through to the per-param strategy
+    // which is initialized once and stable — the override is a best-effort optimization.
+    const juce::SpinLock::ScopedTryLockType lock(strategyLock_);
+    if (lock.isLocked())
     {
-        if (override.parameterIndex == index)
-            return override.strategy;
+        for (const auto& override : strategyOverrides_)
+        {
+            if (override.parameterIndex == index)
+                return override.strategy;
+        }
     }
     
     // Return per-parameter or default
@@ -299,6 +305,7 @@ void DiscreteParameterHandler::setDefaultStrategy(BlendStrategy strategy)
 
 void DiscreteParameterHandler::addStrategyOverride(const StrategyOverride& override)
 {
+    const juce::SpinLock::ScopedLockType lock(strategyLock_);
     // Remove existing override for this parameter
     strategyOverrides_.erase(
         std::remove_if(strategyOverrides_.begin(), strategyOverrides_.end(),
@@ -313,6 +320,7 @@ void DiscreteParameterHandler::addStrategyOverride(const StrategyOverride& overr
 
 void DiscreteParameterHandler::clearStrategyOverrides()
 {
+    const juce::SpinLock::ScopedLockType lock(strategyLock_);
     strategyOverrides_.clear();
 }
 

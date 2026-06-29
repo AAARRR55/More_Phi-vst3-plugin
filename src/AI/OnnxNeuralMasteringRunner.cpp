@@ -9,16 +9,13 @@
  */
 #include "AI/OnnxNeuralMasteringRunner.h"
 #include "AI/NeuralMasteringModelMetadata.h"
+#include "Core/NeuralMasteringSafetyPolicy.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
 #include <numeric>   // std::accumulate (I/O shape validation in the ONNX path)
-
-#ifndef MORE_PHI_HAS_ONNX
-#define MORE_PHI_HAS_ONNX 0
-#endif
 
 #if MORE_PHI_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -84,6 +81,82 @@ bool sanitizeArray(std::array<float, N>& values) noexcept
         }
     }
     return changed;
+}
+
+template <std::size_t N>
+bool allFiniteArray(const std::array<float, N>& values) noexcept
+{
+    for (const auto value : values)
+        if (!std::isfinite(value))
+            return false;
+    return true;
+}
+
+bool hasPlausibleFeatureFrame(const NeuralMasteringFeatureFrame& frame) noexcept
+{
+    if (frame.schemaVersion != kNeuralMasteringFeatureSchemaVersion)
+        return false;
+
+    if (!std::isfinite(frame.sampleRate) || frame.sampleRate < 8000.0 || frame.sampleRate > 192000.0)
+        return false;
+
+    if (frame.channelCount != 1 && frame.channelCount != 2)
+        return false;
+
+    if (frame.blockSize < 16 || frame.blockSize > 8192)
+        return false;
+
+    const float scalars[] {
+        frame.integratedLUFS,
+        frame.shortTermLUFS,
+        frame.momentaryLUFS,
+        frame.loudnessRange,
+        frame.truePeakDbTp,
+        frame.crestFactorDb,
+        frame.spectralTilt,
+        frame.monoFoldDownDeltaDb,
+        frame.transientDensity,
+        frame.harmonicRisk,
+        frame.sourceQualityScore,
+    };
+    for (const auto value : scalars)
+        if (!std::isfinite(value))
+            return false;
+
+    if (frame.integratedLUFS < -90.0f || frame.integratedLUFS > 12.0f)
+        return false;
+    if (frame.truePeakDbTp < -120.0f || frame.truePeakDbTp > 24.0f)
+        return false;
+    if (frame.loudnessRange < 0.0f || frame.loudnessRange > 80.0f)
+        return false;
+    if (frame.sourceQualityScore < -0.01f || frame.sourceQualityScore > 1.01f)
+        return false;
+
+    return allFiniteArray(frame.spectralBands)
+        && allFiniteArray(frame.stereoCorrelation)
+        && allFiniteArray(frame.midSideRatio);
+}
+
+float maxAbsDelta(const float* values, std::size_t count) noexcept
+{
+    if (values == nullptr || count < kOnnxOutputDeltaCount)
+        return 0.0f;
+
+    float maxAbs = 0.0f;
+    for (std::size_t i = 0; i < kOnnxOutputDeltaCount; ++i)
+        maxAbs = std::max(maxAbs, std::abs(values[i]));
+    return maxAbs;
+}
+
+bool allFiniteDeltas(const float* values, std::size_t count) noexcept
+{
+    if (values == nullptr || count < kOnnxOutputDeltaCount)
+        return false;
+
+    for (std::size_t i = 0; i < kOnnxOutputDeltaCount; ++i)
+        if (!std::isfinite(values[i]))
+            return false;
+    return true;
 }
 
 // Sanitize deltas into [-1, 1]. Returns true if any value changed.
@@ -247,6 +320,56 @@ bool sanitizePlanCandidate(NeuralMasteringPlanCandidate& candidate) noexcept
     return changed;
 }
 
+NeuralMasteringProposalDisposition
+evaluateNeuralMasteringProposal(const float* deltaTensor,
+                                std::size_t count,
+                                const NeuralMasteringFeatureFrame& frame) noexcept
+{
+    NeuralMasteringProposalDisposition disposition {};
+
+    if (!hasPlausibleFeatureFrame(frame) || !allFiniteDeltas(deltaTensor, count))
+    {
+        disposition.confidence = 0.0f;
+        disposition.abstain = true;
+        disposition.reviewOnly = false;
+        disposition.requestedFallbackMode = NeuralMasteringFallbackMode::TransparentBypass;
+        return disposition;
+    }
+
+    const auto maxAbs = maxAbsDelta(deltaTensor, count);
+    if (maxAbs <= 0.01f)
+    {
+        // A plausible frame plus a near-zero neural proposal is a useful
+        // decision: "do nothing". Do not abstain, because abstention would hand
+        // the frame to a fallback correction heuristic that may move controls.
+        disposition.confidence = 0.96f;
+        disposition.abstain = false;
+        disposition.reviewOnly = false;
+        disposition.requestedFallbackMode = NeuralMasteringFallbackMode::None;
+        return disposition;
+    }
+
+    float confidence = 0.88f;
+    if (maxAbs > 0.35f)
+        confidence -= std::min(0.18f, (maxAbs - 0.35f) * 0.35f);
+    if (maxAbs > 0.70f)
+        confidence -= std::min(0.20f, (maxAbs - 0.70f) * 0.80f);
+
+    if (frame.sourceQualityScore < 0.5f)
+        confidence -= (0.5f - frame.sourceQualityScore) * 0.20f;
+    if (frame.channelCount == 1)
+        confidence -= 0.05f;
+
+    disposition.confidence = std::clamp(confidence, 0.0f, 1.0f);
+    disposition.abstain = false;
+    disposition.reviewOnly = disposition.confidence < NeuralMasteringSafetyPolicy::defaultConfig().minConfidence
+                          || maxAbs > 0.85f;
+    disposition.requestedFallbackMode = disposition.reviewOnly
+        ? NeuralMasteringFallbackMode::ReviewOnly
+        : NeuralMasteringFallbackMode::None;
+    return disposition;
+}
+
 // ── OnnxNeuralMasteringRunner ────────────────────────────────────────────────
 
 OnnxNeuralMasteringRunner::OnnxNeuralMasteringRunner() noexcept
@@ -342,8 +465,22 @@ bool OnnxNeuralMasteringRunner::loadModel(std::string_view absolutePath,
             return false;
         }
 
-        const auto inDims = inputTensor.GetShape();
-        const auto outDims = outputTensor.GetShape();
+        // Query dimensions via GetDimensionsCount/GetDimensions rather than the
+        // convenience GetShape() wrapper. Against ORT 1.22.1's cxx headers the
+        // returned-by-value GetShape() path segfaults on exported graphs with a
+        // symbolic 'batch' dim (verified on the waveform->decision runner — see
+        // SonicMasterDecisionRunner::loadModel, commit a28b621); the lower-level
+        // GetDimensions call on the same handle is stable. Same data, no fault.
+        // GetElementType() above is unaffected because it does not touch the
+        // dimension storage. This runner is currently seam-only (ORT not linked
+        // into its path) but the fix is applied preemptively so a future
+        // feature-frame model wiring cannot reintroduce the segfault.
+        const auto inDimCount = inputTensor.GetDimensionsCount();
+        const auto outDimCount = outputTensor.GetDimensionsCount();
+        std::vector<int64_t> inDims(inDimCount, -1);
+        inputTensor.GetDimensions(inDims.data(), inDimCount);
+        std::vector<int64_t> outDims(outDimCount, -1);
+        outputTensor.GetDimensions(outDims.data(), outDimCount);
         // Accept [1, N] or [N]; require the trailing product to match the schema.
         const auto totalIn = std::accumulate(inDims.begin(), inDims.end(), int64_t { 1 },
                                              [](int64_t a, int64_t b) { return a * (b > 0 ? b : 1); });
@@ -443,6 +580,8 @@ OnnxNeuralMasteringRunner::proposePlan(const NeuralMasteringFeatureFrame& frame)
     // it is safe to invoke from the message-thread timer at 1-5 Hz indefinitely.
     serializeFeatureFrame(frame, inputBuffer_.data(), inputBuffer_.size());
 
+    bool inferenceSucceeded = false;
+
 #if MORE_PHI_HAS_ONNX
     // Inference: build a tensor view over the pre-allocated input buffer, run,
     // copy the output floats into the pre-allocated output buffer. The Ort::Value
@@ -471,6 +610,7 @@ OnnxNeuralMasteringRunner::proposePlan(const NeuralMasteringFeatureFrame& frame)
             const size_t outCount = std::min(outputBuffer_.size(),
                                              outputs[0].GetTensorTypeAndShapeInfo().GetElementCount());
             std::copy(outData, outData + outCount, outputBuffer_.begin());
+            inferenceSucceeded = outCount >= outputBuffer_.size();
         }
         else
         {
@@ -490,16 +630,22 @@ OnnxNeuralMasteringRunner::proposePlan(const NeuralMasteringFeatureFrame& frame)
     std::fill(outputBuffer_.begin(), outputBuffer_.end(), 0.0f);
 #endif
 
+    const auto disposition = inferenceSucceeded
+        ? evaluateNeuralMasteringProposal(outputBuffer_.data(), outputBuffer_.size(), frame)
+        : NeuralMasteringProposalDisposition { 0.0f, true, false, NeuralMasteringFallbackMode::TransparentBypass };
+
     result.candidate = buildPlanCandidate(outputBuffer_.data(),
                                           outputBuffer_.size(),
                                           frame,
-                                          /*confidence=*/0.80f,
+                                          disposition.confidence,
                                           NeuralMasteringEvidenceLevel::PrototypeMeasured,
                                           editableMask_);
-    result.candidate.abstain = false;
+    result.candidate.abstain = disposition.abstain;
+    result.candidate.reviewOnly = disposition.reviewOnly;
+    result.candidate.requestedFallbackMode = disposition.requestedFallbackMode;
     result.producedCandidate = true;
     result.usedModel = true;
-    result.fallbackMode = NeuralMasteringFallbackMode::None;
+    result.fallbackMode = disposition.requestedFallbackMode;
     return result;
 }
 

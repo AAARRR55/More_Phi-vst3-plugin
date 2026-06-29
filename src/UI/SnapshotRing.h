@@ -11,10 +11,16 @@ namespace more_phi {
 
 class MorePhiProcessor;
 
-class SnapshotRing : public juce::Component
+class SnapshotRing : public juce::Component,
+                     public juce::SettableTooltipClient
 {
 public:
-    explicit SnapshotRing(MorePhiProcessor& p) : proc_(p) {}
+    explicit SnapshotRing(MorePhiProcessor& p) : proc_(p)
+    {
+        setTooltip(
+            "Click a numbered dot to recall that snapshot. "
+            "Right-click a dot to capture the current plugin state to that slot.");
+    }
 
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;

@@ -24,7 +24,7 @@ void ABCompareEngine::commitCandidate()
     stopTimer();
     comparing_.store(false, std::memory_order_relaxed);
     hasPending_.store(false, std::memory_order_relaxed);
-    juce::Logger::writeToLog("ABCompare: candidate committed.");
+    DBG("ABCompare: candidate committed.");
 }
 
 void ABCompareEngine::rollbackCandidate()
@@ -34,7 +34,7 @@ void ABCompareEngine::rollbackCandidate()
         restoreFunc_(kReservedSlot);
     comparing_.store(false, std::memory_order_relaxed);
     hasPending_.store(false, std::memory_order_relaxed);
-    juce::Logger::writeToLog("ABCompare: rolled back to checkpoint.");
+    DBG("ABCompare: rolled back to checkpoint.");
 }
 
 ABCompareEngine::Metrics ABCompareEngine::readCurrentMetrics() const noexcept
@@ -45,7 +45,7 @@ ABCompareEngine::Metrics ABCompareEngine::readCurrentMetrics() const noexcept
         m.lufsIntegrated = meter_->getIntegrated();
         m.lra            = meter_->getLRA();
     }
-    m.spectralScore = 0.f;  // populated by SpectralBalanceAnalyser when integrated
+    m.spectralScore = 0.f;  // placeholder — see compareAndDecide()
     return m;
 }
 
@@ -62,27 +62,25 @@ void ABCompareEngine::compareAndDecide()
     const Metrics candidate = readCurrentMetrics();
     int worseCount = 0;
 
-    // Compare LUFS: candidate should be closer to target (0 dB deviation = better)
-    // We compare absolute deviation — a candidate that is too loud or too quiet is worse
-    const float lufsBaselineDev   = std::abs(baseline_.lufsIntegrated);
-    const float lfusCandidateDev  = std::abs(candidate.lufsIntegrated);
-    if (lfusCandidateDev > lufsBaselineDev + 0.5f) ++worseCount;
+    // Compare LUFS: candidate should not deviate significantly from baseline loudness
+    const float lufsDeviation = std::abs(candidate.lufsIntegrated - baseline_.lufsIntegrated);
+    if (lufsDeviation > 0.5f) ++worseCount;
 
     // Compare LRA: prefer candidate with LRA closer to genre target (simplified: prefer higher)
     if (candidate.lra < baseline_.lra - 1.0f) ++worseCount;
 
-    // Compare spectral score
-    if (candidate.spectralScore < baseline_.spectralScore - 0.5f) ++worseCount;
+    // spectralScore is reserved for a future SpectralBalanceAnalyser integration;
+    // excluded from decision until populated.
 
     if (worseCount >= 2)
     {
-        juce::Logger::writeToLog("ABCompare: candidate worse on " +
+        DBG("ABCompare: candidate worse on " +
                                   juce::String(worseCount) + " metrics — rolling back.");
         rollbackCandidate();
     }
     else
     {
-        juce::Logger::writeToLog("ABCompare: candidate accepted.");
+        DBG("ABCompare: candidate accepted.");
         commitCandidate();
     }
 

@@ -14,7 +14,7 @@ class MeterWindowAccumulator
 {
 public:
     static constexpr int kCapacity = 300;
-    static constexpr int kMaxMetrics = 11;
+    static constexpr int kMaxMetrics = 13;
 
     enum MetricIndex
     {
@@ -28,7 +28,9 @@ public:
         spectralCentroidHz,
         spectralTiltDBPerOctave,
         stereoWidth,
-        midBandCorrelation
+        midBandCorrelation,
+        thdPercent,
+        crestFactorProgram
     };
 
     struct MeterSample
@@ -45,6 +47,8 @@ public:
         float spectralTiltDBPerOctave = 0.0f;
         float stereoWidth = 0.0f;
         float midBandCorrelation = 0.0f;
+        float thdPercent = 0.0f;
+        float crestFactorProgram = 0.0f;
     };
 
     struct MetricStatistics

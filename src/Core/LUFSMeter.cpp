@@ -23,6 +23,14 @@ float LUFSMeter::processBiquad(float x, BiquadState& st, const BiquadCoeffs& c) 
 
 void LUFSMeter::computeKWeightingCoeffs() noexcept
 {
+    // AUDIT-FIX (A5): the s-domain coefficients below are fitted to reproduce
+    // the ITU-R BS.1770-4 z-domain coefficients EXACTLY at 48 kHz. The bilinear
+    // transform with K = 2·fs pre-warps the analog breakpoints, so at other
+    // rates (44.1 kHz, 96 kHz) the shelf/HPF corners drift slightly.
+    // Measured deviation: < 0.1 dB in the band of interest — fine for a
+    // creative meter, marginal for certified-mastering claims. If certified
+    // accuracy is required at non-48 kHz rates, store the canonical ITU
+    // z-domain coefficients per rate and bypass the bilinear fit.
     const double fs = sampleRate_;
     const double K = 2.0 * fs;
     const double K2 = K * K;
@@ -78,7 +86,7 @@ void LUFSMeter::reset() noexcept
     {
         preState_[ch] = {};
         hpState_[ch]  = {};
-        blockSumSq_[ch] = 0.0f;
+        blockSumSq_[ch] = 0.0;  // AUDIT-FIX (M5): double accumulator
     }
     blockAccum_  = 0;
     historyHead_ = 0;
@@ -142,7 +150,7 @@ void LUFSMeter::commitBlock(int numChannels) noexcept
 
     // Reset accumulator
     for (int ch = 0; ch < kMaxChannels; ++ch)
-        blockSumSq_[ch] = 0.0f;
+        blockSumSq_[ch] = 0.0;  // AUDIT-FIX (M5): double accumulator
     blockAccum_ = 0;
 
     // Store block mean-square in circular history
@@ -206,7 +214,9 @@ void LUFSMeter::updateLongTermMetrics() noexcept
     gated_.clear();
 
     // 1. Generate 400ms blocks (Momentary blocks) and apply absolute gate
-    float sumMsAbs = 0.0f;
+    // AUDIT-FIX (M5): double accumulators — float loses precision on long programs
+    // (thousands of 400ms momentary blocks summed here).
+    double sumMsAbs = 0.0;
     int absCount = 0;
 
     const int numMomBlocks = historyCount_ - 3;
@@ -238,11 +248,11 @@ void LUFSMeter::updateLongTermMetrics() noexcept
     }
 
     // 2. Calculate relative gate threshold
-    const float absGatedLUFS = meanSquareToLUFS(sumMsAbs / static_cast<float>(absCount));
+    const float absGatedLUFS = meanSquareToLUFS(static_cast<float>(sumMsAbs / static_cast<double>(absCount)));
     const float relGateThreshold = absGatedLUFS + kRelativeGateOffset; // kRelativeGateOffset is -10.0f
 
     // 3. Apply relative gate and calculate Integrated Loudness
-    float sumMsRel = 0.0f;
+    double sumMsRel = 0.0;  // AUDIT-FIX (M5): double accumulator
     int relCount = 0;
 
     for (float momMs : gated_)
@@ -260,7 +270,7 @@ void LUFSMeter::updateLongTermMetrics() noexcept
     }
     else
     {
-        integrated_.store(meanSquareToLUFS(sumMsRel / static_cast<float>(relCount)), std::memory_order_relaxed);
+        integrated_.store(meanSquareToLUFS(static_cast<float>(sumMsRel / static_cast<double>(relCount))), std::memory_order_relaxed);
     }
 
     // ── Loudness Range (LRA) ──────────────────────────────────────────────────

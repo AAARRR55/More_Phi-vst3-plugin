@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(MorePhi VERSION 3.3.0 LANGUAGES C CXX)
+project(MorePhi VERSION 3.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,11 +7,53 @@ option(MORE_PHI_COPY_PLUGIN_AFTER_BUILD "Copy plugin bundle to system folder aft
 option(MORE_PHI_BUILD_TESTS "Configure and build tests in tests/." ON)
 option(MORE_PHI_ENABLE_SANITIZERS "Enable ASAN/UBSAN in Debug builds (Clang/GCC only)" OFF)
 option(MORE_PHI_SAFE_BUILD_MODE "Enable conservative build settings for local stability" ON)
-set(MORE_PHI_MSVC_MP "2" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
+# Production Ed25519 public key injection (Phase 1 licensing ship-blocker).
+# The plugin ships with the DEV keypair's public half in src/Licensing/SigningKeys.cpp
+# so local end-to-end activation tests work against a dev backend. A genuine shipping
+# build MUST inject the production public key via:
+#   cmake -DMORE_PHI_PROD_ED25519_KEY_HEX=8e1aa28c... (64 hex chars, no separators)
+# When set, CMake generates a configured header that overrides the dev key, and the
+# compile-time static_assert in SigningKeys.cpp passes for Release. When unset, the
+# dev key remains and Release builds are correctly blocked (tests/Debug exempt).
+# NEVER commit the production key — inject it at build time from CI secrets.
+set(MORE_PHI_PROD_ED25519_KEY_HEX "" CACHE STRING "Production Ed25519 public key (64 hex chars) injected at build time; empty = use dev key (Release builds blocked)")
+# /MP process count: defaults to the host's logical-core count so MSVC compiles
+# that many .cpp files in parallel. Was hard-capped at 2, leaving most cores idle.
+# Override per-machine with -DMORE_PHI_MSVC_MP=N (0 disables /MP = serial).
+# ponytail: no new option, no default machinery — std::thread::hardware_concurrency
+# is the right default and already available in the CMake context.
+include(ProcessorCount)
+ProcessorCount(N)
+if(N LESS 1)
+    set(N 4)   # sane fallback if detection fails
+endif()
+set(MORE_PHI_MSVC_MP "${N}" CACHE STRING "MSVC /MP process count (set 0 to disable /MP).")
 option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
+option(MORE_PHI_ENABLE_PROFILING "Enable PerformanceProfiler instrumentation and the MorePhiDiagnostics 10s message-thread sampler (writes diagnostics-<pid>.log)" OFF)
+
+# AUDIT-2026-06-25: security / commercial-viability opt-ins.
+# The embedded MCP server and the standalone Python IPC bridge expose a
+# localhost-only JSON-RPC surface. They are enabled by default for Debug and
+# test builds (so the existing test suite keeps working), but default OFF for
+# Release builds to minimise attack surface. Explicit -D overrides are honored.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(_MORE_PHI_MCP_DEFAULT OFF)
+else()
+    set(_MORE_PHI_MCP_DEFAULT ON)
+endif()
+option(MORE_PHI_ENABLE_MCP_SERVER "Start the embedded MCP server and VST3 IPC bridge" ${_MORE_PHI_MCP_DEFAULT})
+
+# The HTTP inference fallback contacts 127.0.0.1:8765 when the bundled ONNX
+# model is unavailable. It is opt-in because it silently depends on an external
+# server process and leaks traffic even on localhost.
+option(MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK "Allow SonicMaster to fall back to the local HTTP inference server" OFF)
+
 set(MORE_PHI_ONNX_VERSION "1.22.1" CACHE STRING "ONNX Runtime prebuilt release version (used when MORE_PHI_ENABLE_ONNX=ON)")
+# Pinned at 1.22.1: GetShape() returned-by-value path segfaults against this
+# exported graph's ONNX Runtime cxx headers; the runner uses a raw C-API
+# invocation as a workaround (see SonicMasterDecisionRunner.cpp:89-99).
 
 if(MORE_PHI_ENABLE_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "clang-tidy")
@@ -147,7 +189,8 @@ include(cmake/PatchJuceForMSVC.cmake)
 # it as an imported target `more_phi::onnxruntime`. The prebuilt-binary route is
 # deliberately chosen over building ORT from source: source builds pull in onnx
 # + protobuf and add ~30+ minutes to configure, and the prebuilt static/dynamic
-# libs are the supported distribution for plugin embedding.
+# libs are the supported distribution for plugin embedding. Pin to ORT 1.22.1 —
+# later versions changed GetShape() semantics (see SonicMasterDecisionRunner.cpp:88-99).
 #
 # When OFF (default), none of this runs, the build is identical to pre-ONNX, and
 # OnnxNeuralMasteringRunner abstains (loadModel returns false).
@@ -157,32 +200,107 @@ if(MORE_PHI_ENABLE_ONNX)
     set(MORE_PHI_HAS_ONNX 1)
 endif()
 
+# ── SonicMaster ONNX model (bundled binary data) ──────────────────────────────
+# When MORE_PHI_ENABLE_ONNX=ON, embed the ONNX model and contract into the
+# plugin binary via juce_add_binary_data so initializeSonicMaster() can extract
+# the model at runtime without relying on a sibling file on disk. The expected
+# model file is models/sonicmaster/masteringbrain_v2_decision.onnx and its
+# sibling contract. Fail-closed at configure time if either file is absent.
+if(MORE_PHI_HAS_ONNX)
+    set(MOREPHI_SONICMASTER_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/sonicmaster")
+    set(MOREPHI_SONICMASTER_MODEL    "${MOREPHI_SONICMASTER_MODEL_DIR}/masteringbrain_v2_decision.onnx")
+    set(MOREPHI_SONICMASTER_CONTRACT "${MOREPHI_SONICMASTER_MODEL_DIR}/masteringbrain_v2_decision.contract.json")
 
-# Plugin formats: AU is macOS-only, do not emit it on other platforms
+    if(NOT EXISTS "${MOREPHI_SONICMASTER_MODEL}")
+        message(FATAL_ERROR "SonicMaster ONNX model not found at ${MOREPHI_SONICMASTER_MODEL}. "
+            "Place masteringbrain_v2_decision.onnx in models/sonicmaster/ or set MORE_PHI_ENABLE_ONNX=OFF.")
+    endif()
+    if(NOT EXISTS "${MOREPHI_SONICMASTER_CONTRACT}")
+        message(FATAL_ERROR "SonicMaster ONNX contract not found at ${MOREPHI_SONICMASTER_CONTRACT}. "
+            "Place masteringbrain_v2_decision.contract.json in models/sonicmaster/ or set MORE_PHI_ENABLE_ONNX=OFF.")
+    endif()
+
+    # AUDIT (2026-06-26, embedding fix): do NOT create a separate
+    # MorePhiSonicMasterModel BinaryData target. Two juce_add_binary_data targets
+    # in one link both define BinaryData::namedResourceList / originalFilenames
+    # (JUCE uses one shared BinaryData namespace per consumer), causing LNK2005
+    # multiply-defined symbols when both are linked into the .vst3. Instead,
+    # collect the model+contract sources here and append them to the single
+    # MorePhiFonts BinaryData below — one namespace, one set of lookup tables,
+    # and the model bytes ride along with the fonts (which are referenced by the
+    # UI and so never stripped).
+    set(MOREPHI_SONICMASTER_EMBED_SOURCES
+        "${MOREPHI_SONICMASTER_MODEL}"
+        "${MOREPHI_SONICMASTER_CONTRACT}")
+
+    # Generate a hash header at configure time so the runtime can verify
+    # the extracted model file matches the embedded source.
+    include(cmake/GenerateModelHash.cmake)
+    generate_model_hash("${MOREPHI_SONICMASTER_MODEL}"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/SonicMasterModelHash.h")
+endif()
+
+
+# Plugin formats: AU is macOS-only, do not emit it on other platforms.
+# AAX (Pro Tools) is opt-in: pass -DMORE_PHI_BUILD_AAX=ON with either the AAX
+# SDK installed at the JUCE-expected location OR -DAAX_SDK_PATH=/path/to/aax-sdk.
+# The SDK is fetched via FetchContent below when the option is on and no path is
+# supplied. (Building AAX needs no iLok; only SIGNING/distributing does.)
+option(MORE_PHI_BUILD_AAX "Build the AAX (Pro Tools) plugin format" OFF)
+
 if(APPLE)
-    set(MORE_PHI_PLUGIN_FORMATS VST3 AU)
+    set(MORE_PHI_PLUGIN_FORMATS VST3 AU Standalone)
 else()
-    set(MORE_PHI_PLUGIN_FORMATS VST3)
+    set(MORE_PHI_PLUGIN_FORMATS VST3 Standalone)
+endif()
+
+if(MORE_PHI_BUILD_AAX)
+    list(APPEND MORE_PHI_PLUGIN_FORMATS AAX)
+    # AAX_SDK_PATH may be supplied by the user, or set by the FetchContent block
+    # below. JUCE reads it via JUCE_AAX_SDK_PATH.
+    if(DEFINED AAX_SDK_PATH AND NOT DEFINED JUCE_AAX_SDK_PATH)
+        set(JUCE_AAX_SDK_PATH "${AAX_SDK_PATH}" CACHE PATH "Path to the AAX SDK" FORCE)
+    endif()
 endif()
 
 # ── Embedded Fonts (BinaryData) ───────────────────────────────────────────────
 # Bundle the landing-page brand typefaces so the GUI renders identically on every
 # machine (Syncopate = wordmark/section labels, Outfit = body/value text).
+# AUDIT (2026-06-26): when ONNX is enabled, ALSO embed the SonicMaster model +
+# contract into this same BinaryData target (one namespace — see the note above
+# on why two separate BinaryData targets collide). The fonts are referenced by
+# the UI so they're never linker-stripped, which transitively retains the model
+# bytes that share the namespace.
 juce_add_binary_data(MorePhiFonts
     SOURCES
         assets/fonts/Syncopate-Bold.ttf
         assets/fonts/Syncopate-Regular.ttf
         assets/fonts/Outfit-Regular.ttf
         assets/fonts/Outfit-SemiBold.ttf
+        ${MOREPHI_SONICMASTER_EMBED_SOURCES}
 )
 
 # ── Plugin Target ─────────────────────────────────────────────────────────────
+# AAX requires the Avid AAX SDK. It is license-gated (free, but requires an Avid
+# account + acceptance), so it cannot be auto-fetched like JUCE. Fail closed with
+# a clear instruction when AAX is requested but no SDK path resolves.
+if(MORE_PHI_BUILD_AAX)
+    if(NOT DEFINED JUCE_AAX_SDK_PATH OR JUCE_AAX_SDK_PATH STREQUAL "" OR NOT EXISTS "${JUCE_AAX_SDK_PATH}")
+        message(FATAL_ERROR
+            "MORE_PHI_BUILD_AAX=ON but the AAX SDK was not found.\n"
+            "Get the SDK from Avid (https://developer.avid.com/aax/downloading-the-aax-sdk.htm),\n"
+            "then configure with: cmake -B build -S . -DMORE_PHI_BUILD_AAX=ON -DAAX_SDK_PATH=/path/to/aax-sdk")
+    endif()
+    message(STATUS "AAX format enabled; SDK at ${JUCE_AAX_SDK_PATH}")
+endif()
+
 juce_add_plugin(MorePhi
     COMPANY_NAME            "MorePhi"
     PLUGIN_MANUFACTURER_CODE Mrph
     PLUGIN_CODE              Mrps
     FORMATS                  ${MORE_PHI_PLUGIN_FORMATS}
     PRODUCT_NAME             "MorePhi"
+    VERSION                  ${PROJECT_VERSION}
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         TRUE
     NEEDS_MIDI_OUTPUT        FALSE
@@ -190,6 +308,9 @@ juce_add_plugin(MorePhi
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD  ${MORE_PHI_COPY_PLUGIN_AFTER_BUILD}
     VST3_CATEGORIES          "Fx" "Tools"
+    # AAX plug-in category (Pro Tools). "Effect" maps to the AAX ePlugInCategory_PhaseVocoder
+    # group; the multi-agent/realtime-control surface does not need a separate category.
+    AAX_CATEGORIES           "Effect"
 )
 
 # ── Source Files ──────────────────────────────────────────────────────────────
@@ -214,6 +335,9 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/GeneticEngine.cpp
     src/Core/MorphProcessor.h
     src/Core/MorphProcessor.cpp
+    src/Core/VoronoiMorphEngine.h
+    src/Core/VoronoiMorphEngine.cpp
+    src/Core/WaypointEngine.h
     src/Core/LockFreeQueue.h
     src/Core/ThreadPool.h
     src/Core/ThreadPool.cpp
@@ -223,7 +347,8 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/SIMDAudio.cpp
     src/Core/PerformanceProfiler.h
     src/Core/PerformanceProfiler.cpp
-    src/Core/AllocationTracker.h
+    src/Core/MorePhiDiagnostics.h
+    src/Core/MorePhiDiagnostics.cpp
     src/Core/ParameterClassifier.h
     src/Core/ParameterClassifier.cpp
     src/Core/DiscreteParameterHandler.h
@@ -251,6 +376,8 @@ set(MORE_PHI_CORE_SOURCES
     src/Core/ModulationMatrix.cpp
     src/Core/OversamplingWrapper.h
     src/Core/LatencyManager.h
+    src/Core/UndoRedoManager.h
+    src/Core/UndoRedoManager.cpp
 )
 
 # ── Mastering chain sources (plugin + tests only, not CLI) ────────────────────
@@ -260,6 +387,14 @@ set(MORE_PHI_NEURAL_MASTERING_SOURCES
     src/Core/NeuralMasteringSafetyPolicy.cpp
     src/AI/OnnxNeuralMasteringRunner.h
     src/AI/OnnxNeuralMasteringRunner.cpp
+    src/AI/SonicMasterDecisionDecoder.h
+    src/AI/SonicMasterDecisionDecoder.cpp
+    src/AI/SonicMasterDecisionRunner.h
+    src/AI/SonicMasterDecisionRunner.cpp
+    src/AI/SonicMasterAnalysisEngine.h
+    src/AI/SonicMasterAnalysisEngine.cpp
+    src/AI/SonicMasterHttpInferenceSource.h
+    src/AI/SonicMasterHttpInferenceSource.cpp
 )
 
 set(MORE_PHI_MASTERING_SOURCES
@@ -274,6 +409,8 @@ set(MORE_PHI_MASTERING_SOURCES
     src/Core/StereoImager.cpp
     src/Core/HarmonicExciter.h
     src/Core/HarmonicExciter.cpp
+    src/Core/TransientShaper.h
+    src/Core/TransientShaper.cpp
     src/Core/TruePeakEstimator.h
     src/Core/TruePeakEstimator.cpp
     src/Core/BrickwallLimiter.h
@@ -311,6 +448,10 @@ set(MORE_PHI_LICENSING_SOURCES
     src/Licensing/LicenseVerifier.cpp
     src/Licensing/SecureLicenseStore.h
     src/Licensing/SecureLicenseStore.cpp
+    src/Licensing/LicenseEnvelopeCrypto.h
+    src/Licensing/LicenseEnvelopeCrypto.cpp
+    # Windows DPAPI wrapper (compiled only on Windows; the .cpp self-gates on JUCE_WINDOWS)
+    src/Licensing/LicenseDpapiWindows.cpp
     src/Licensing/MachineFingerprint.h
     src/Licensing/MachineFingerprint.cpp
     src/Licensing/ActivationClient.h
@@ -364,6 +505,45 @@ set(MORE_PHI_AI_DATASET_V3_SOURCES
 )
 
 set(MORE_PHI_AI_SOURCES
+    # ── Multi-agent orchestration layer (added per-task; see plan) ────────────
+    src/AI/Orchestrator/AgentOrchestrator.h
+    src/AI/Orchestrator/AgentOrchestrator.cpp
+    src/AI/Orchestrator/McpProtocol.h
+    src/AI/Orchestrator/McpProtocol.cpp
+    src/AI/Orchestrator/EcosystemConfig.h
+    src/AI/Orchestrator/EcosystemConfig.cpp
+    src/AI/Orchestrator/SecurityValidator.h
+    src/AI/Orchestrator/SecurityValidator.cpp
+    src/AI/Agents/Scheduler/PriorityScheduler.h
+    src/AI/Agents/Scheduler/PriorityScheduler.cpp
+    src/AI/Agents/Blackboard/BlackboardBridge.h
+    src/AI/Agents/Blackboard/BlackboardBridge.cpp
+    src/AI/Agents/Llm/DeterministicFallbackLlmClient.h
+    src/AI/Agents/Llm/DeterministicFallbackLlmClient.cpp
+    src/AI/Agents/Llm/RestLlmClient.h
+    src/AI/Agents/Llm/RestLlmClient.cpp
+    src/AI/Agents/Tooling/DefaultToolInvoker.h
+    src/AI/Agents/Tooling/DefaultToolInvoker.cpp
+    src/AI/Agents/AgentRegistry.h
+    src/AI/Agents/AgentRegistry.cpp
+    src/AI/Agents/AgentRuntime.h
+    src/AI/Agents/AgentRuntime.cpp
+    src/AI/Agents/Conductor/ConductorAgent.h
+    src/AI/Agents/Conductor/ConductorAgent.cpp
+    src/AI/Agents/Agents/AnalysisAgent.h
+    src/AI/Agents/Agents/AnalysisAgent.cpp
+    src/AI/Agents/Agents/OptimizationAgent.h
+    src/AI/Agents/Agents/OptimizationAgent.cpp
+    src/AI/Agents/Agents/CreativeAgent.h
+    src/AI/Agents/Agents/CreativeAgent.cpp
+    src/AI/Agents/Agents/RealtimeControlAgent.h
+    src/AI/Agents/Agents/RealtimeControlAgent.cpp
+    src/AI/Agents/Agents/QualitySafetyAgent.h
+    src/AI/Agents/Agents/QualitySafetyAgent.cpp
+    src/AI/Agents/Agents/MemoryAgent.h
+    src/AI/Agents/Agents/MemoryAgent.cpp
+    src/AI/Agents/Logging/StructuredAgentLogger.h
+    src/AI/Agents/Logging/StructuredAgentLogger.cpp
     src/AI/InstanceIdentity.h
     src/AI/InstanceRegistry.h
     src/AI/InstanceRegistry.cpp
@@ -379,10 +559,15 @@ set(MORE_PHI_AI_SOURCES
     src/AI/AIAssistant.cpp
     src/AI/EQParameterTranslator.h
     src/AI/EQParameterTranslator.cpp
+    src/AI/MelSpectrogram.h
+    src/AI/MelSpectrogram.cpp
     src/AI/GenreClassifier.h
     src/AI/GenreClassifier.cpp
     src/AI/ChainPlanExecutor.h
     src/AI/ChainPlanExecutor.cpp
+    src/AI/RuleBasedMasteringResolver.h
+    src/AI/RuleBasedMasteringResolver.cpp
+    src/AI/MasteringTargetCurves.h
     src/AI/MasteringCandidateScoring.h
     src/AI/NeuralMasteringModelMetadata.h
     src/AI/NeuralMasteringModelRunner.h
@@ -419,11 +604,11 @@ set(MORE_PHI_AI_SOURCES
     src/AI/OzoneParameterMap.cpp
     src/AI/OzonePlanApplicator.h
     src/AI/OzonePlanApplicator.cpp
-    src/AI/StandaloneMcp/OzonePluginBackend.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
+    src/AI/StandaloneMcp/MorePhiPluginBackend.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.cpp
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.h
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.cpp
     ${MORE_PHI_AI_DATASET_STABLE_SOURCES}
     ${MORE_PHI_AI_DATASET_V3_SOURCES}
 )
@@ -493,6 +678,8 @@ set(MORE_PHI_UI_SOURCES
     src/UI/PerformancePanel.cpp
     src/UI/ModulationMatrixPanel.h
     src/UI/ModulationMatrixPanel.cpp
+    src/UI/OnboardingOverlay.h
+    src/UI/OnboardingOverlay.cpp
     src/UI/V2PresetBrowserPanel.h
     src/UI/V2PresetBrowserPanel.cpp
 )
@@ -546,12 +733,12 @@ add_executable(MorePhiCLI
 
 set(MORE_PHI_STANDALONE_MCP_CORE_SOURCES
     src/AI/StandaloneMcp/JsonRpc.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.h
-    src/AI/StandaloneMcp/IZotopeIPCAssistant.cpp
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.h
-    src/AI/StandaloneMcp/IZotopeIPCDiscovery.cpp
-    src/AI/StandaloneMcp/OzonePluginBackend.h
-    src/AI/StandaloneMcp/OzonePluginBackend.cpp
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.h
+    src/AI/StandaloneMcp/MorePhiIPCAssistant.cpp
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.h
+    src/AI/StandaloneMcp/MorePhiIPCDiscovery.cpp
+    src/AI/StandaloneMcp/MorePhiPluginBackend.h
+    src/AI/StandaloneMcp/MorePhiPluginBackend.cpp
     src/AI/StandaloneMcp/StandaloneMcpServer.h
     src/AI/StandaloneMcp/StandaloneMcpServer.cpp
     ${MORE_PHI_HOST_SOURCES}
@@ -613,6 +800,29 @@ target_link_libraries(MorePhiMcpServer
         juce::juce_gui_basics
 )
 
+# ── HeadlessHost: GUI-initialized plugin host for headless R&D ──
+add_executable(HeadlessHost
+    src/Tools/HeadlessHost/HeadlessHostMain.cpp
+)
+target_link_libraries(HeadlessHost
+    PRIVATE
+        juce::juce_core
+        juce::juce_events
+        juce::juce_gui_basics
+        juce::juce_audio_basics
+        juce::juce_audio_processors
+)
+target_include_directories(HeadlessHost PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(HeadlessHost PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_PUSH_NOTIFICATIONS=0
+)
+
 target_compile_definitions(MorePhiCLI
     PUBLIC
         JUCE_WEB_BROWSER=0
@@ -662,6 +872,40 @@ target_link_libraries(MorePhi
 
 if(WIN32)
     target_link_libraries(MorePhi PRIVATE winhttp)
+    # Crypt32: DPAPI (CryptProtectData/CryptUnprotectData) for the encrypted
+    # license-cert envelope (LicenseDpapiWindows.cpp). The SharedCode lib
+    # references these symbols, so every consumer (plugin + tests + CLI) needs
+    # the lib on the link line.
+    target_link_libraries(MorePhi PUBLIC Crypt32)
+    if(TARGET MorePhiTests)
+        target_link_libraries(MorePhiTests PRIVATE Crypt32)
+    endif()
+    if(TARGET MorePhiCLI)
+        target_link_libraries(MorePhiCLI PRIVATE Crypt32)
+    endif()
+endif()
+
+# ── Production Ed25519 key injection (Phase 1) ───────────────────────────────
+# When MORE_PHI_PROD_ED25519_KEY_HEX is set (64 hex chars), generate a configured
+# header that supplies the production public key, overriding the dev placeholder.
+# The hex is validated for length=64 and [0-9a-fA-F] only; malformed input is a
+# hard configure error (fail closed — never silently ship a partial/garbage key).
+if(MORE_PHI_PROD_ED25519_KEY_HEX)
+    set(_keyhex "${MORE_PHI_PROD_ED25519_KEY_HEX}")
+    string(LENGTH "${_keyhex}" _keylen)
+    string(REGEX MATCH "^[0-9a-fA-F]+$" _keyvalid "${_keyhex}")
+    if(NOT (_keylen EQUAL 64 AND _keyvalid))
+        message(FATAL_ERROR
+            "MORE_PHI_PROD_ED25519_KEY_HEX must be exactly 64 hex chars [0-9a-fA-F]. "
+            "Got length=${_keylen}. Refusing to configure with a malformed production key.")
+    endif()
+    string(TOLOWER "${_keyhex}" _keyhex_lower)
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/src/Licensing/ProdSigningKey.h.in"
+        "${CMAKE_BINARY_DIR}/generated/licensing/ProdSigningKey.h"
+        @ONLY)
+    target_include_directories(MorePhi PUBLIC "${CMAKE_BINARY_DIR}/generated")
+    message(STATUS "More-Phi: production Ed25519 key injected (${_keyhex_lower}) — Release builds unblocked.")
 endif()
 
 # ── Compile Definitions ──────────────────────────────────────────────────────
@@ -676,6 +920,27 @@ target_compile_definitions(MorePhi
         JUCE_PUSH_NOTIFICATIONS=0   # Not used; disables WinRT pull-in on MSVC
 )
 
+# AUDIT-2026-06-25: gate optional network-exposed surfaces at compile time so
+# Release builds without them compile the affected branches out entirely.
+if(MORE_PHI_ENABLE_MCP_SERVER)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_MCP_SERVER=1)
+endif()
+if(MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_SONICMASTER_HTTP_FALLBACK=1)
+endif()
+
+# When the test suite is enabled, mark the shared-code lib with MORE_PHI_TEST_MODE
+# so the SigningKeys dev-key release-gate (an intentional ship blocker) is
+# exempted for test/lib builds — real shipping Release builds (tests OFF) still
+# enforce it. Without this, the test exe can't link the Release MorePhi lib.
+if(MORE_PHI_BUILD_TESTS)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_TEST_MODE=1)
+endif()
+
+if(MORE_PHI_ENABLE_PROFILING)
+    target_compile_definitions(MorePhi PUBLIC MORE_PHI_ENABLE_PROFILING=1)
+endif()
+
 if(APPLE)
     target_compile_definitions(MorePhi PUBLIC JUCE_PLUGINHOST_AU=1)
 endif()
@@ -687,7 +952,110 @@ endif()
 # default; flipping MORE_PHI_ENABLE_ONNX=ON is the single activation switch.
 if(MORE_PHI_HAS_ONNX)
     target_compile_definitions(MorePhi PRIVATE MORE_PHI_HAS_ONNX=1)
-    target_link_libraries(MorePhi PRIVATE more_phi::onnxruntime)
+    # ONNX Runtime linked PRIVATE (symbols don't leak into the plugin's public ABI).
+    # The model+contract are embedded via MorePhiFonts BinaryData (not a separate
+    # target — see the embedding note at the MorePhiFonts definition), so they're
+    # already linked via the unconditional MorePhiFonts link at line ~845.
+    target_link_libraries(MorePhi PRIVATE
+        more_phi::onnxruntime
+    )
+    target_include_directories(MorePhi PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+
+    # ── DLL-shadowing fix (Windows only) ─────────────────────────────────────
+    # The plugin links onnxruntime.lib as a DIRECT import. The VST3 SDK host
+    # loads the module with plain LoadLibraryW (no altered search path), so
+    # Windows resolves onnxruntime.dll via the host search order — System32
+    # BEFORE the plugin directory. C:\Windows\System32\onnxruntime.dll is an
+    # OLD Microsoft "Windows AI Runtime" (v1.17.1, ORT API [1,17]) that shadows
+    # the bundled v1.22.1, breaking GetPluginFactory → "unknown reason" in FL.
+    #
+    # Convert ORT to a DELAY-load import and ship a notify hook
+    # (OnnxRuntimeDelayLoadHook.cpp) that loads the bundled DLL from the
+    # plugin's own directory with LOAD_WITH_ALTERED_SEARCH_PATH. See that TU's
+    # header comment for the full diagnosis.
+    #
+    # The hook TU compiles into the MorePhi SharedCode lib (so it's linked by
+    # every consumer), guarded by MOREPHI_DELAYLOAD_ORT. The /DELAYLOAD flag
+    # and delayimp.lib MUST go on the FINAL link target (MorePhi_VST3 etc.) —
+    # link options on a static lib do NOT propagate to its consumers, so doing
+    # it on MorePhi alone leaves the import direct (verified during the fix).
+    if(WIN32)
+        target_compile_definitions(MorePhi PRIVATE MOREPHI_DELAYLOAD_ORT=1)
+        target_sources(MorePhi PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/Plugin/OnnxRuntimeDelayLoadHook.cpp"
+        )
+        # Apply the delay-load link flag + delayimp.lib to every final binary
+        # that links ORT via the SharedCode lib. The foreach consumers list is
+        # kept in sync with the ORT-DLL copy loop below.
+        foreach(_dl_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer HeadlessHost)
+            if(TARGET ${_dl_consumer})
+                target_link_options(${_dl_consumer} PRIVATE
+                    /DELAYLOAD:onnxruntime.dll
+                    # Force-retain the delay-load notify hook symbol. Without
+                    # this, /OPT:REF strips OnnxRuntimeDelayLoadHook.cpp (the
+                    # hook function appears unreferenced) and ORT falls back to
+                    # the default loader path — which loses to System32's 1.17.1.
+                    /INCLUDE:__pfnDliNotifyHook2)
+                target_link_libraries(${_dl_consumer} PRIVATE delayimp)
+            endif()
+        endforeach()
+        unset(_dl_consumer)
+    endif()
+    # AUDIT (2026-06-26): the model bytes share MorePhiFonts' BinaryData
+    # namespace, which the UI references (fonts), so the lookup tables are
+    # retained. But the model's DATA arrays could still be stripped if not
+    # referenced — keep the anchor TU (takes the address of the named-resource
+    # pointers) as belt-and-suspenders. Its include dir is the fonts BinaryData
+    # header, which (when ONNX on) also declares the model symbols.
+    set(_sm_anchor_src "${CMAKE_CURRENT_SOURCE_DIR}/src/Plugin/SonicMasterEmbeddedAnchor.cpp")
+    target_sources(MorePhi PRIVATE "${_sm_anchor_src}")
+    set_source_files_properties("${_sm_anchor_src}" PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src;${CMAKE_BINARY_DIR}/juce_binarydata_MorePhiFonts/JuceLibraryCode")
+
+    # Copy the ONNX Runtime shared lib next to the plugin/test binaries so the
+    # host process can resolve ONNX symbols at runtime (Windows DLL search path;
+    # Linux/macOS rpath convenience). FetchOnnxRuntime.cmake exposes the path in
+    # MORE_PHI_ONNX_RUNTIME_LIB; the copy must run POST_BUILD on every consumer
+    # of the SharedCode lib that links ORT.
+    if(WIN32)
+        set(_ort_dll_dir "${CMAKE_CURRENT_BINARY_DIR}/_deps/onnxruntime-prebuilt/onnxruntime-win-x64-${MORE_PHI_ONNX_VERSION}/lib")
+        foreach(_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer HeadlessHost)
+            if(TARGET ${_consumer})
+                add_custom_command(TARGET ${_consumer} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ort_dll_dir}/onnxruntime.dll"
+                        "$<TARGET_FILE_DIR:${_consumer}>/onnxruntime.dll"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ort_dll_dir}/onnxruntime_providers_shared.dll"
+                        "$<TARGET_FILE_DIR:${_consumer}>/onnxruntime_providers_shared.dll"
+                    COMMENT "Copying ONNX Runtime DLLs next to ${_consumer}")
+            endif()
+        endforeach()
+        unset(_ort_dll_dir)
+        unset(_consumer)
+    endif()
+
+    # ── V2 feature→delta ONNX model staging (optional) ────────────────────
+    # The 63→72 feature-delta model is staged alongside the VST3 binary
+    # (and standalone etc.) so OnnxNeuralMasteringRunner::initialize() can
+    # load it via a file-path search. The copy is conditional — if no model
+    # file exists, the runner gracefully falls through to DeterministicBaseline.
+    set(MOREPHI_V2_MODEL_SRC "${CMAKE_CURRENT_SOURCE_DIR}/models/sonicmaster/neural_mastering_v2.onnx")
+    if(EXISTS "${MOREPHI_V2_MODEL_SRC}")
+        foreach(_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer)
+            if(TARGET ${_consumer})
+                add_custom_command(TARGET ${_consumer} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${MOREPHI_V2_MODEL_SRC}"
+                        "$<TARGET_FILE_DIR:${_consumer}>/neural_mastering_v2.onnx"
+                    COMMENT "Staging neural_mastering_v2.onnx next to ${_consumer}")
+            endif()
+        endforeach()
+        unset(_consumer)
+    endif()
+    unset(MOREPHI_V2_MODEL_SRC)
 endif()
 
 # ── libsodium linkage (Ed25519 license-certificate verification) ──────────────
@@ -703,8 +1071,12 @@ more_phi_apply_build_tuning(MorePhi)
 more_phi_apply_build_tuning(MorePhiCLI)
 more_phi_apply_build_tuning(MorePhiMcpCore)
 more_phi_apply_build_tuning(MorePhiMcpServer)
+more_phi_apply_build_tuning(HeadlessHost)
 if(TARGET MorePhi_VST3)
     more_phi_apply_build_tuning(MorePhi_VST3)
+endif()
+if(TARGET MorePhi_Standalone)
+    more_phi_apply_build_tuning(MorePhi_Standalone)
 endif()
 if(TARGET MorePhi_AU)
     more_phi_apply_build_tuning(MorePhi_AU)

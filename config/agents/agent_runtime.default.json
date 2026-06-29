@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "workers": 2,
+    "blackboardPumpIntervalMs": 50,
+    "defaultPriority": "high",
+    "starvationGuard": {
+      "enabled": true,
+      "maxAgeMs": 5000
+    }
+  },
+  "autonomy": {
+    "default": "assist",
+    "levels": ["manual", "assist", "copilot", "autopilot"]
+  },
+  "toolInvoker": {
+    "maxCallsPerAgentPerSecond": 0,
+    "failClosedOnUnknownAgent": true
+  },
+  "agents": [
+    {
+      "role": "conductor",
+      "id": "conductor-1",
+      "enabled": true,
+      "priority": "high",
+      "llm": "deterministic-fallback",
+      "allowDelegation": true
+    },
+    {
+      "role": "analysis",
+      "id": "analysis-1",
+      "enabled": true,
+      "priority": "normal",
+      "reactive": {
+        "onClippingDetected": "publish",
+        "onLufsBreach": "publish"
+      }
+    },
+    {
+      "role": "optimization",
+      "id": "optimization-1",
+      "enabled": true,
+      "priority": "normal",
+      "renderBatch": {
+        "maxCandidates": 4
+      }
+    },
+    {
+      "role": "creative",
+      "id": "creative-1",
+      "enabled": true,
+      "priority": "background",
+      "requireApprovalRegardlessOfAutonomy": true
+    },
+    {
+      "role": "realtime",
+      "id": "realtime-1",
+      "enabled": true,
+      "priority": "realtime-critical",
+      "config": {
+        "maxCorrectionsPerParamPerSecond": 2,
+        "correctionBudgetPerRun": 64,
+        "clipTrimStepDb": -1.0,
+        "outputGainParamIndex": -1
+      }
+    },
+    {
+      "role": "quality",
+      "id": "quality-1",
+      "enabled": true,
+      "priority": "high",
+      "lufsTolerance": {
+        "target": -14.0,
+        "band": 1.0
+      }
+    },
+    {
+      "role": "memory",
+      "id": "memory-1",
+      "enabled": true,
+      "priority": "background",
+      "scope": "project"
+    }
+  ],
+  "blackboard": {
+    "maxEventsRetained": 256,
+    "eventTypes": [
+      "analysis.finding",
+      "analysis.clipping_detected",
+      "analysis.lufs_breach",
+      "optimization.candidate_selected",
+      "creative.proposal",
+      "realtime.correction_applied",
+      "quality.violation",
+      "memory.stored",
+      "agents.delegation_rejected"
+    ]
+  },
+  "logging": {
+    "backend": "structured-jsonl",
+    "directory": "${userApplicationData}/More-Phi/agent-logs",
+    "includeFields": ["agent", "level", "message", "taskId", "runId"]
+  },
+  "safety": {
+    "agentsNeverRunOnAudioThread": true,
+    "realtimeCriticalJumpsAgentQueueOnly": true,
+    "defaultToolInvokerWrapsMcpChokepoint": true
+  }
+}

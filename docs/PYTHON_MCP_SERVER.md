@@ -5,6 +5,11 @@ hosted VST3 plugin through the Model Context Protocol (MCP) stdio transport.
 It implements the architecture specified in the AI–MCP–VST3 Integration
 Technical Specification (v1.0).
 
+> **Note:** This Python stdio server is an alternative transport to the embedded C++
+> `MCPServer` (TCP, localhost:30001). For the primary orchestration layer that coordinates
+> the embedded MCP server with the multi-agent system, see `docs/ECOSYSTEM.md` and
+> `src/AI/Orchestrator/AgentOrchestrator.h`.
+
 ## Overview
 
 The AI host (Claude Desktop, local LLM runtime, etc.) spawns

@@ -21,13 +21,13 @@ void BrickwallLimiter::setCeiling(float dBTP) noexcept
 void BrickwallLimiter::setRelease(float ms) noexcept
 {
     releaseMs_.store(ms, std::memory_order_relaxed);
-    recomputeReleaseCoeff();
-}
-
-void BrickwallLimiter::recomputeReleaseCoeff() noexcept
-{
-    const float ms = releaseMs_.load(std::memory_order_relaxed);
-    releaseCoeff_ = std::exp(-1.0f / (ms * 0.001f * static_cast<float>(sampleRate_)));
+    // DEEP-DIVE FIX: pre-compute per-sample release coefficient so
+    // processBlock() reads an atomic instead of calling std::exp.
+    const float sr = static_cast<float>(sampleRate_);
+    if (sr > 0.0f)
+        releaseCoeffPerSample_.store(
+            std::exp(-1.0f / (ms * 0.001f * sr)),
+            std::memory_order_relaxed);
 }
 
 void BrickwallLimiter::prepare(double sampleRate, int maxBlockSize)
@@ -41,7 +41,8 @@ void BrickwallLimiter::prepare(double sampleRate, int maxBlockSize)
     windowPeakR_.fill(0.f);
     writePos_      = 0;
     gainSmoothed_  = 1.0f;
-    recomputeReleaseCoeff();
+    // DEEP-DIVE FIX: re-compute release coefficient for the new sample rate.
+    setRelease(releaseMs_.load(std::memory_order_relaxed));
 
     lookaheadBuf_.setSize(kMaxChannels, maxBlockSize + lookaheadSamples_ + 8);
     truePeak_.prepare(sampleRate, maxBlockSize + lookaheadSamples_ + 8);
@@ -114,11 +115,14 @@ void BrickwallLimiter::processBlock(juce::AudioBuffer<float>& buf) noexcept
                 targetGain = ceiling / peak;
 
             // ── 4. Smooth gain: instantaneous attack, exponential release ────
+            // DEEP-DIVE FIX: read pre-computed atomic instead of calling
+            // std::exp on every block (moved to setRelease()/prepare()).
+            const float releaseCoeff = releaseCoeffPerSample_.load(std::memory_order_relaxed);
             if (targetGain < gainSmoothed_)
                 gainSmoothed_ = targetGain;            // attack = instant
             else
-                gainSmoothed_ = gainSmoothed_ * releaseCoeff_
-                              + targetGain * (1.0f - releaseCoeff_);
+                gainSmoothed_ = gainSmoothed_ * releaseCoeff
+                              + targetGain * (1.0f - releaseCoeff);
 
             if (gainSmoothed_ < maxGainReduction)
                 maxGainReduction = gainSmoothed_;

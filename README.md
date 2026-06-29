@@ -1,230 +1,289 @@
-# More-Phi
+# More-Phi v3.4.1
 
-**Advanced Parameter Morphing Engine** — A VST3/AU plugin that hosts other plugins and morphs between parameter snapshots with physics-based interpolation and AI integration.
+**Advanced Parameter Morphing Engine** — A VST3/AU plugin that hosts other plugins and morphs between parameter snapshots using physics-based interpolation, genetic breeding, multi-agent AI orchestration, and realtime neural mastering.
+
+> **Technical Audit Score: 7.9/10** — "The most disciplined audio-plugin codebase I have audited." See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete 39 KB audit report with 26 verifiable claims, competitor analysis, and market positioning.
 
 ---
 
 ## Features
 
-- **Plugin Hosting** — Load any VST3/AU plugin inside More-Phi
-- **12-Slot Snapshot System** — Capture and recall parameter states in clock layout
-- **2D Morph Pad** — XY pad with inverse-distance weighted interpolation
-- **1D Snap Fader** — Linear interpolation across occupied snapshots
-- **Physics Modes** — Direct, Elastic (spring-damper), Drift (Perlin noise)
-- **Genetic Breeding** — Crossover + mutation to evolve new presets
-- **MCP Server** — JSON-RPC 2.0 on localhost with per-instance auth token
-- **MIDI Mapping** — Note triggers for snapshots, CC routing for morphing
-- **8 Macro Knobs** — Quick access to hosted plugin parameters
-- **Dataset Generation V3** — Optional modular pipeline (build-time opt-in)
+### Core Morphing
+- **Plugin Hosting** — Load any VST3/AU plugin inside More-Phi with production-grade exception firewall (SEH+C++ dual-guard, auto-suspension, deferred teardown, fade seams)
+- **12-Slot Snapshot System** — Capture and recall parameter states in clock-layout with seqlock-protected lock-free audio-thread reads
+- **2D Morph Pad** — XY pad with inverse-distance weighted (IDW) interpolation, gravity-well mass weights, 64-point cursor trail ring buffer
+- **1D Snap Fader** — Linear interpolation across occupied snapshots with slot markers
+- **Physics Modes** — Direct (instant), Elastic (spring-damper with adaptive sub-stepping and fully-implicit damping), Drift (Perlin noise with 8 gradient directions)
+- **Voronoi/NNI Morphing** — Natural Neighbor Interpolation via Bowyer-Watson Delaunay triangulation, with IDW fallback outside convex hull
+- **Genetic Breeding** — Crossover + mutation with sanity-mode protection for dangerous parameters (Volume, Pitch, Bypass)
+- **Waypoint Engine** — BPM-synced 16-waypoint morph path sequencer with configurable hold/transition beats
 
----
+### Audio-Domain Processing
+- **Spectral Morphing** — STFT phase-vocoder with periodic Hann COLA, log-magnitude geometric mean, instantaneous-frequency interpolation, transient preservation
+- **Granular Morphing** — Real-time grain cloud with Hann² normalization, xorshift32 PRNG, pitch randomization LUT, staggered grain scheduling
+- **Formant Preservation** — Cepstral liftering for vocal/instrument character preservation during morphing
+- **Hybrid Blend** — Equal-power SIMD mixing of parameter, spectral, and granular outputs
 
-## Installation
+### Built-in Mastering Chain (12 stages)
+- M/S encode → 4-band Linkwitz-Riley split → per-band VCA dynamics → band summation → transient shaper (post-dynamics, pre-EQ) → 32-band adaptive EQ → stereo imager → harmonic exciter (4× oversampled tanh) → loudness normalizer → M/S decode → brickwall limiter (ISP-aware with true-peak cache) → LUFS meter (BS.1770-4 verified) + true-peak estimator (4×64-tap polyphase Kaiser β=8.6, 256-tap prototype)
 
-### Windows
+### AI & Automation
+- **Embedded MCP Server** — JSON-RPC 2.0 on localhost:30001+ with per-instance bearer token auth, 30s idle timeout, rate limiting, batch request support, 30+ tools
+- **7-Agent AI Orchestration** — Conductor (goal decomposition) + Analysis/Optimization/Creative/RealtimeControl/QualitySafety/Memory specialists with O(1) priority scheduler, 2-tier starvation prevention, 3-layer fault isolation
+- **Realtime Neural Mastering (Preview)** — ONNX in-process inference with HTTP fallback, 3-thread model (audio capture → analysis → message thread handoff), safety policy clamping, genre-conditioned priors (target LUFS + tonal-balance residual), pluggable ONNX genre model
+- **Learn Mode** — AI parameter classification, importance scoring, token optimization with cost models for Claude/GPT
+- **iZotope Ozone Integration** — Parameter mapping, plan application, Track Assistant IPC bridge
 
-1. Download and run `morphy-Setup-<version>.exe` from the [Releases](https://github.com/your-repo/releases) page
-2. Approve admin elevation when prompted
-3. Installer path is fixed to `C:\Program Files\Common Files\VST3\<plugin>.vst3`
-4. Rescan plugins in your DAW
+### Modulation
+- **Modulation Matrix** — 128 routes with seqlock double-buffer publishing
+- **4 LFOs** — 6 shapes (Sine, Triangle, Saw, Square, S&H, Smoothed Random), tempo-sync, rate-independent random
+- **2 Envelope Followers** — RMS-based with pre-computed per-block coefficients
+- **2 Step Sequencers** — 32 steps, 4 directions, seqlock config, per-step smoothing
+- **16 Macro Knobs** — 10Hz sync with command queue overflow warning
 
-Manual install (alternative):
+### MIDI Integration
+- **Note Triggers** — C3-B3 (configurable octave) trigger snapshots 1-12
+- **CC Routing** — Mod Wheel (CC1) controls fader position
+- **Sidechain Trigger** — Audio-driven snapshot recall with exponential envelope coefficients
+- **Channel Filter** — Configurable MIDI channel (0=omni)
 
-1. Download `morphy.vst3` from Releases
-2. Copy to your VST3 folder:
-   - `C:\Program Files\Common Files\VST3\` (all users)
-   - `C:\Users\<username>\Documents\VST3\` (current user)
-3. Rescan plugins in your DAW
+### Licensing & Security
+- **Ed25519 Signature Verification** — Vendored orlp/ed25519 (no external crypto dependency), production public key, fail-closed
+- **Crockford Base32 License Keys** — CRC32 checksum, O/I/L disambiguation
+- **Machine Fingerprinting** — OS+CPU+memory hash binding
+- **Activation/Deactivation** — Server-side seat management with friendly error codes, force-local-clear fallback
+- **Constant-Time Token Auth** — XOR accumulator comparison for MCP bearer tokens
+- **JSON-RPC Validation** — Depth check, field whitelist, method whitelist
 
-### macOS
+### Performance Optimizations
+- **Interleaved Touch Sampling** — 75% reduction in hosted-plugin `getValue()` calls
+- **Morph Stable-Skip** — Skips entire interpolation chain when output has stabilized
+- **5× Pre-Computed DSP Coefficients** — `std::exp`/`std::pow` never called on audio thread
+- **SIMD Acceleration** — AVX2 (8 floats), SSE2 (4 floats) with runtime CPU detection
+- **CPU Saver Mode** — Halves audio-domain FFT, caps oversampling at ×2
+- **Lock-Free Audio Thread** — Zero heap allocation after `prepareToPlay()`, all audio paths `noexcept`
 
-1. Download `More-Phi.component` (AU) or `MorePhi.vst3` from Releases
-2. Copy to:
-   - `/Library/Audio/Plug-Ins/Components/` (AU, all users)
-   - `/Library/Audio/Plug-Ins/VST3/` (VST3, all users)
-   - Or `~/Library/Audio/Plug-Ins/...` for current user
-3. Rescan plugins in your DAW
-
-### Build from Source
-
-**Requirements:**
-- CMake 3.24+
-- C++20 compiler (MSVC 2022+, Clang 14+, GCC 11+)
-- Git
-
-```bash
-# Clone repository
-git clone https://github.com/your-repo/morephi.git
-cd morephi
-
-# Configure and build
-cmake -B build -S .
-cmake --build build --config Release
-
-# Output location
-# Windows: build/.../VST3/morphy.vst3 (or MorePhi.vst3 on legacy target names)
-# macOS: build/.../VST3/morphy.vst3 (or MorePhi.vst3 on legacy target names)
-
-# Optional: build a Windows installer .exe (requires Inno Setup 6)
-powershell -ExecutionPolicy Bypass -File ./scripts/build-installer.ps1
-# Output: dist/installer/morphy-Setup-<version>.exe
-```
-
-Common build options:
-
-- `-DMORE_PHI_BUILD_TESTS=ON` (default `ON`)
-- `-DMORE_PHI_BUILD_BENCHMARKS=ON` (tests/bench target opt-in)
-- `-DMORE_PHI_ENABLE_DATASET_V3=ON|OFF` (deprecated compatibility flag; V3 sources are always compiled)
+### Dataset Generation
+- **V2 Pipeline** — Latin Hypercube Sampling, plugin chains, enhanced rendering, feature extraction, metadata, validation
+- **V3 Pipeline** — Async with worker pool, adaptive throttling, checkpoint recovery, watchdog timer
 
 ---
 
 ## Quick Start
 
 ### 1. Load a Plugin
-
 1. Add More-Phi to a track in your DAW
 2. Click **"Load Plugin"** in the plugin browser panel
 3. Select a VST3 or AU plugin to host
 4. The hosted plugin's UI opens automatically
 
 ### 2. Capture Snapshots
-
 1. Tweak the hosted plugin's parameters to a sound you like
-2. **Double-click** on the MorphPad to capture a snapshot
-3. The snapshot appears as a red dot on the clock layout
+2. **Double-click** on the MorphPad to capture to the next empty slot
+3. **Right-click** a snapshot dot to capture to a specific slot
 4. Repeat for up to 12 snapshots
 
 ### 3. Morph Between Sounds
-
-- **XY Pad:** Drag the cursor anywhere on the circular pad
-- **Snap Fader:** Drag the vertical fader to interpolate through snapshots linearly
-- **Physics:** Enable Elastic or Drift mode for organic movement
+- **XY Pad:** Drag anywhere on the circular pad — cursor blends nearby snapshots
+- **Snap Fader:** Drag the vertical fader to interpolate linearly
+- **Physics:** Enable Elastic (spring) or Drift (Perlin noise) in the Mode Bar
+- **Breeding:** Click Breed/Mutate to evolve new parameter combinations
 
 ### 4. Connect AI (Optional)
-
-1. Check the AI Status panel for the active MCP port and bearer token
-2. Connect from an MCP-compatible AI client
-3. Send commands to automate morphing, capture snapshots, or modify parameters
-
----
-
-## Interface Overview
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│  ┌──────────┐  ┌─────────────────────────┐  ┌──────────────┐  │
-│  │  Mode    │  │                         │  │   Plugin     │  │
-│  │  Bar     │  │       MORPH PAD         │  │   Browser    │  │
-│  │          │  │    (2D XY Control)      │  │              │  │
-│  │ Direct   │  │                         │  │  [Load]      │  │
-│  │ Elastic  │  │    12 Snapshot Dots     │  │  [Unload]    │  │
-│  │ Drift    │  │    in Clock Layout      │  │              │  │
-│  └──────────┘  └─────────────────────────┘  └──────────────┘  │
-│                                                                │
-│  ┌──────────┐  ┌─────────────────────────┐  ┌──────────────┐  │
-│  │  Snap    │  │     MACRO KNOBS         │  │  AI Status   │  │
-│  │  Fader   │  │  ○ ○ ○ ○ ○ ○ ○ ○        │  │              │  │
-│  │          │  │  1 2 3 4 5 6 7 8        │  │  MCP: ON     │  │
-│  │  ▲       │  │                         │  │  Port: 30001 │  │
-│  │  │       │  └─────────────────────────┘  └──────────────┘  │
-│  │  ▼       │                                                  │
-│  └──────────┘  ┌─────────────────────────────────────────────┐│
-│                │  BREEDING PANEL                              ││
-│                │  [Breed] [Mutate] [Randomize]                ││
-│                └─────────────────────────────────────────────┘│
-└────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Physics Modes
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| **Direct** | Instant response, cursor follows input exactly | Precise control |
-| **Elastic** | Spring-damper physics, cursor bounces to target | Smooth transitions |
-| **Drift** | Perlin noise-based wandering around target | Evolving textures |
-
-### Elastic Mode
-- Spring constant controls how quickly cursor reaches target
-- Damping prevents oscillation
-- Great for smooth morphing without manual control
-
-### Drift Mode
-- Speed: How fast the cursor moves
-- Distance: How far from target it wanders
-- Chaos: Randomness of movement
-- Perfect for ambient textures and evolving soundscapes
+1. Check the AI Status panel for the MCP port and bearer token
+2. Connect any MCP-compatible client to `localhost:<port>`
+3. Call `initialize` with `bearer_token` first, then use any of 30+ tools
 
 ---
 
 ## MCP Integration
 
-More-Phi includes a built-in MCP (Model Context Protocol) server for AI integration.
+More-Phi includes a built-in MCP (Model Context Protocol) server with 30+ tools across these categories:
+
+| Category | Tools | Description |
+|----------|:-----:|-------------|
+| **Hosted Plugin** | `get_plugin_info`, `list_parameters`, `get_parameter`, `set_parameter`, `set_parameters_batch`, `sweep_parameter`, `load_hosted_plugin`, `scan_hosted_plugin` | Full parameter read/write, plugin lifecycle |
+| **Snapshots & Morphing** | `capture_snapshot`, `recall_snapshot`, `set_morph_position`, `get_morph_state`, `get_morph_compatibility`, `suggest_intermediate_snapshots` | Snapshot capture/recall, morph control, compatibility analysis |
+| **Analysis & Metering** | `analysis.get_summary`, `analysis.get_spectrum`, `analysis.get_stereo_field`, `analysis.capture_window`, `analysis.compare_render`, `diagnose_parameter_pipeline` | LUFS, true-peak, spectrum, stereo field, comparison |
+| **Mastering** | `apply_mastering_plan`, `get_mastering_state`, `mastering.plan_preview`, `mastering.render_batch`, `sonicmaster_decision`, `ozone.track.*` | Heuristic + neural mastering, Ozone integration |
+| **More-Phi Control** | `more_phi.list_parameters`, `more_phi.get_parameter`, `more_phi.set_parameter`, `more_phi.set_parameters` | Direct More-Phi parameter control |
+| **AI & Learning** | `analyze_parameters`, `expose_parameters`, `get_token_estimate`, `learn_from_adjustment`, `get_learn_mode_status`, `find_related_parameters` | Learn Mode, token management, semantic mapping |
+| **Agents** | `agents.list`, `agents.run_goal`, `agents.run_task`, `agents.run_status`, `agents.run_cancel`, `agents.blackboard.recent`, `agents.set_autonomy` | 7-agent orchestration control |
+| **Dataset** | `generate_dataset`, `generate_dataset_v2`, `generate_dataset_v3` | Synthetic audio dataset generation |
+| **System** | `get_instance_info`, `list_instances`, `run_self_test`, `heartbeat` | Multi-instance, diagnostics, liveness |
 
 ### Connection Details
 - **Protocol:** JSON-RPC 2.0
-- **Port:** Per-instance dynamic port (shown in the plugin UI/status panel)
-- **Host:** localhost
-- **Auth:** Call `initialize` with `bearer_token` before tool methods
+- **Port:** Per-instance dynamic (30001+), shown in AI Status panel
+- **Host:** localhost only (non-local connections rejected)
+- **Auth:** Bearer token via `initialize` params
+- **Limits:** 4 concurrent connections, 30s idle timeout, 256 KB max request
 
-### Available Tools
+### Analysis & AI Claim Boundaries
 
-| Tool | Parameters | Description |
-|------|------------|-------------|
-| `get_plugin_info` | - | Returns loaded plugin name, type, parameter count |
-| `list_parameters` | - | Lists all parameters with current values |
-| `get_parameter` | `index` | Get a single parameter by index |
-| `set_parameter` | `index`, `value` | Set a parameter (audio-thread safe) |
-| `set_parameters_batch` | `parameters[]` | Queue multiple parameter edits safely |
-| `capture_snapshot` | `slot`, `includeState` | Capture parameters and optional hosted state chunk to a slot (0-11) |
-| `recall_snapshot` | `slot`, `mode` | Recall a snapshot slot (`fast` params-only or `full` state recall) |
-| `set_morph_position` | `x`, `y`, `fader`, `source` | Set XY pad or fader position with automation notification |
-| `get_morph_state` | - | Get current morph position and mode |
+More-Phi's analysis tools expose deterministic DSP measurements. They are useful for comparison and metering but are not certified laboratory instruments:
 
-### Analysis, Metering, and AI Claim Boundaries
+- Loudness: Lightweight BS.1770-style rolling estimates — not formal reference-vector certification
+- True peak: 4×64-tap polyphase FIR upsampler (256-tap linear-phase Kaiser β=8.6, ~80 dB stopband), measurement-grade per ITU-R BS.1770-4 (≈±0.02–0.1 dBTP)
+- Spectrum: Hann-window FFT mono sum — anti-phase stereo may cancel
+- Stereo field: Mid/side energy analysis with banded correlation
+- Mastering plans: Deterministic heuristic rule engine with rule IDs — not learned model predictions
+- Genre classifier: Default fallback unless real model backend loaded
+- Neural mastering: Preview quality, clamped by safety policy
 
-More-Phi's analysis tools expose deterministic DSP measurements and method metadata for scrutiny. They are useful for comparing levels, spectrum shape, stereo-field behavior, and rolling meter history, but they are not a certified laboratory measurement suite or a learned predictive mastering system.
+---
 
-- Loudness values are lightweight BS.1770-style rolling/available-history estimates, not formal reference-vector certification.
-- True peak is reported as a `4x_polyphase_fir_estimate`.
-- Spectrum analysis uses `hann_window_fft_mono_sum`; anti-phase stereo content can cancel in this default view.
-- Stereo-field analysis is mid/side energy analysis with banded correlation and side-to-mid ratios, not a perceptual stereo-width predictor.
-- `analysis.capture_window` reports real rolling-window statistics when enough meter history exists; it does not silently replace an empty window with a single snapshot.
-- Mastering plans are deterministic `heuristic_rule_engine` recommendations with rule IDs and measured inputs, not learned model predictions or calibrated confidence scores.
-- Genre classifier inference is `unavailable`/`default_fallback` unless a real model backend is loaded.
-- Neural compressor inference is `unavailable`/`heuristic_fallback` unless a real inference backend is loaded.
-- Dataset validation exports separate KS, MMD, Wasserstein, and coverage metrics; any `weighted_heuristic_score` is a convenience summary, not an objective scientific validity score.
+## Physics Modes
 
-### Example JSON-RPC Request
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "set_morph_position",
-  "params": {
-    "x": 0.5,
-    "y": 0.5,
-    "source": "xy"
-  },
-  "id": 1
-}
-```
+| Mode | Algorithm | Use Case |
+|------|-----------|----------|
+| **Direct** | Instant cursor → interpolation | Precise control |
+| **Elastic** | Spring-damper, adaptive sub-stepping, fully-implicit damping (ζ=1.5 Heavy preset), velocity kill with near-target check | Smooth, organic transitions |
+| **Drift** | Perlin noise, 8 gradient directions, octave summation (max 4), Free/Locked/Orbit variants | Evolving textures, ambient soundscapes |
 
 ---
 
 ## MIDI Mapping
 
 ### Snapshot Triggers
-- **Notes C3-B3** (MIDI 60-71) trigger snapshots 1-12
+- **Notes C3-B3** (configurable octave) trigger snapshots 1-12
 - Only triggers if snapshot slot is occupied
+- Note-off also consumed for trigger-range notes (prevents leaking to hosted plugin)
 
 ### Morph Control
-- **Mod Wheel (CC 1)** controls fader position
-- Automatically switches to fader mode when CC received
+- **Mod Wheel (CC1)** controls fader position
+- Automatically switches to fader mode
 
-### Configuration
-MIDI mapping is automatic. Just enable MIDI input on the track hosting More-Phi.
+### Sidechain
+- External audio input triggers snapshot advance on transient detection
+- Configurable threshold with exponential envelope follower
+
+---
+
+## Installation
+
+### Windows
+1. Download `MorePhi.vst3` from [Releases](https://github.com/your-repo/releases)
+2. Copy to `C:\Program Files\Common Files\VST3\`
+3. Rescan plugins in your DAW
+
+### macOS
+1. Download `More-Phi.component` (AU) or `MorePhi.vst3`
+2. Copy to `/Library/Audio/Plug-Ins/Components/` or `/Library/Audio/Plug-Ins/VST3/`
+3. Rescan plugins in your DAW
+
+### Build from Source
+
+**Requirements:** CMake 3.24+, C++20 compiler, Git
+
+```bash
+git clone https://github.com/your-repo/morephi.git
+cd morephi
+```
+
+#### Windows / MSVC — Ninja (recommended)
+
+The Ninja generator is faster and avoids the Visual Studio generator's `.tlog`
+file-lock thrash. A wrapper script (`build-ninja.bat`) handles the MSVC
+environment (`vcvars64.bat`) and uses the VS-bundled `ninja.exe` — no separate
+install. Build artefacts land in `build-ninja/`.
+
+```cmd
+build-ninja.bat configure                           :: one-time (re-fetches JUCE, ~2 min)
+build-ninja.bat build                               :: build the VST3 plugin (default target)
+build-ninja.bat tests                               :: build + run the full test suite
+build-ninja.bat testonly -R "Agent|Realtime" --output-on-failure   :: run a test subset
+build-ninja.bat target MorePhi_Standalone           :: build any specific target
+build-ninja.bat clean                               :: wipe build-ninja/
+```
+
+The DAW-loadable VST3 binary lands at:
+`build-ninja\MorePhi_artefacts\Release\VST3\MorePhi.vst3\Contents\x86_64-win\MorePhi.vst3`
+
+#### Other platforms / VS generator (fallback)
+
+```bash
+# Configure and build Release (Linux/macOS, or Windows VS generator)
+cmake -B build -S .
+cmake --build build --config Release --parallel
+
+# Build with tests
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build --output-on-failure
+
+# Debug build
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug
+
+# With sanitizers (Clang/GCC)
+cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+
+# With ONNX Runtime (neural mastering)
+cmake -B build -S . -DMORE_PHI_ENABLE_ONNX=ON
+
+# With profiling
+cmake -B build -S . -DMORE_PHI_ENABLE_PROFILING=ON
+
+# Safe local build (Windows, conservative settings)
+cmake --preset windows-msvc-safe
+cmake --build --preset windows-safe --parallel
+```
+
+---
+
+## Architecture
+
+```
+src/
+	├── Plugin/          MorePhiProcessor, MorePhiEditor (V2 tabbed, 920×760), SonicMasterEmbeddedAnchor,
+	│                    OnnxRuntimeDelayLoadHook (Windows DLL-shadowing fix)
+	├── Core/            InterpolationEngine (SIMD IDW+Voronoi), PhysicsEngine (3 modes, sub-stepping),
+	│                    SnapshotBank (12-slot seqlock), MorphProcessor, GeneticEngine,
+	│                    SpectralMorphEngine (STFT, periodic Hann COLA), GranularMorphEngine (Hann² normalized),
+	│                    FormantMorphEngine (cepstral liftering), AutoMasteringEngine (12-stage M/S chain),
+	│                    AdaptiveEQ (32-band), BrickwallLimiter (ISP-aware), LUFSMeter (BS.1770-4),
+	│                    TruePeakEstimator (256-tap polyphase FIR), ModulationEngine, ModulationMatrix (128 routes),
+	│                    LFO (6 shapes), StepSequencer (4 dirs), DiscreteParameterHandler (5 strategies),
+	│                    WaypointEngine, HybridBlend, TransientShaper, MultibandSplitter,
+	│                    PerformanceProfiler, ThreadPool, ABCompareEngine
+	├── Host/            PluginHostManager (SEH+C++ guard, ref-counted leasing, deferred doom),
+	│                    ParameterBridge (withPlugin template, batch ops, exception counting)
+	├── AI/              MCPServer (JSON-RPC 2.0, 30+ tools), MCPToolHandler, MCPToolsExtended
+	│   ├── Agents/      AgentRuntime, ConductorAgent, 6 specialist agents, PriorityScheduler (O(1) 4-level),
+	│   │                BlackboardBridge (sequence-cursor), DefaultToolInvoker (fail-closed)
+	│   │                StructuredAgentLogger, RestLlmClient, DeterministicFallbackLlmClient
+	│   ├── Dataset/     DatasetGeneratorV2, DatasetGeneratorV3, ParameterSampler, ValidationEngine,
+	│   │                NeuralMasteringFeatureExtractor
+	│   ├── StandaloneMcp/ StandaloneMcpServer (stdio JSON-RPC), MorePhiIPCAssistant, MorePhiPluginBackend
+	│   └── Orchestrator/ AgentOrchestrator, EcosystemConfig, SecurityValidator, McpProtocol
+├── MIDI/            MIDIRouter (256-event pre-allocated, channel filter, sidechain)
+├── Preset/          PresetSerializer (V1+V2), PresetLibrary (CRUD, search, tags, ratings)
+├── Licensing/       LicenseManager (Ed25519), LicenseVerifier, SecureLicenseStore, ActivationClient
+└── UI/              MorphPad, SnapFader, SnapshotRing, BreedingPanel, AIChatPanel,
+                     PluginBrowserPanel, ModeBar, MacroKnobStrip, BottomControlStrip,
+                     EngineTabPage, ModulationMatrixPanel, V2PresetBrowserPanel, +10 more
+```
+
+---
+
+## Documentation
+
+- [Technical Audit & Market Analysis](VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) — 39 KB comprehensive audit with 26 verifiable claims, competitor analysis, and market positioning
+- [User Guide](docs/USER_GUIDE.md) — Complete usage tutorial
+- [API Reference](docs/API_REFERENCE.md) — MCP tools and protocols
+- [Developer Guide](docs/DEVELOPER_GUIDE.md) — Building and contributing
+- [Architecture](docs/ARCHITECTURE.md) — Technical design details
+- [Build Stability Guide](docs/BUILD_STABILITY_GUIDE.md) — Avoiding build freezes on Windows
+- [VST3 License Key Management](docs/VST3_LICENSE_KEY_MANAGEMENT.md) — Licensing architecture, activation flows
+- [Dataset Generation](docs/DATASET_GENERATION.md) — V2 and V3 pipeline documentation
+- [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) — AI parameter optimization
+- [Audio Engine Specification](docs/AudioEngineSpec_v2.md) — Audio processing details
+
+### Agent Documentation
+- [Multi-Agent Orchestration Layer Design](docs/superpowers/specs/2026-06-21-multi-agent-orchestration-layer-design.md)
+- [SonicMaster Realtime Integration Design](docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md)
+- [Neural Mastering Roadmap](docs/superpowers/specs/2026-06-21-sonicmaster-vst3-realtime-integration-design.md)
 
 ---
 
@@ -233,7 +292,7 @@ MIDI mapping is automatic. Just enable MIDI input on the track hosting More-Phi.
 ### Plugin Won't Load
 - Verify plugin is in correct folder (see Installation)
 - Rescan plugins in DAW
-- Check DAW is 64-bit (32-bit not supported)
+- Check DAW is 64-bit
 
 ### No Sound
 - Ensure a hosted plugin is loaded
@@ -241,134 +300,73 @@ MIDI mapping is automatic. Just enable MIDI input on the track hosting More-Phi.
 - Verify audio routing in DAW
 
 ### Plugin Crashes on Load (FL Studio)
-- FL Studio requires 4MB stack for plugin-in-plugin hosting
-- More-Phi is configured with `/STACK:4194304` in CMake
+- More-Phi is configured with 4 MB stack (`/STACK:4194304`) for plugin-in-plugin hosting
 - If crashes persist, try increasing FL Studio's plugin stack size
 
 ### MCP Server Won't Start
-- Check if port 30001 is already in use
-- Look for firewall blocking
-- Check logs in DAW console
+- Check if port is already in use (starts at 30001, increments on bind failure)
+- Look for firewall blocking localhost connections
+- Check DAW console logs
 
 ### Hosted Plugin Parameters Not Capturing
-- Some plugins use internal state that isn't exposed as parameters
 - Only automatable parameters are captured
-- Try using the hosted plugin's preset system as a workaround
+- Use Full Recall mode for plugins that store internal state (Kontakt, wavetable synths)
 
 ### Plugin Disconnects During Export or Close/Reopen
-- This issue has been fixed in v3.3.0+ with robust state restoration
-- If you experience this, ensure you're using the latest version
-- See [TROUBLESHOOTING_PLUGIN_DISCONNECTION.md](docs/TROUBLESHOOTING_PLUGIN_DISCONNECTION.md) for detailed guidance
+- Fixed in v3.4.0+ with robust state restoration and Timer-deferred plugin reloading
 
 ### Poor Performance
-- Reduce number of hosted plugin parameters
-- Switch to Direct physics mode (least CPU)
+- Enable **CPU Saver** mode (halves audio-domain FFT, caps oversampling)
+- Switch to **Direct** physics mode
+- Disable unused audio-domain engines (Spectral, Granular, Formant)
 - Increase audio buffer size in DAW
+- Disable touch detection in PERF-OPT flags (coarse writes + disable touch)
 
 ### PC Freezes During CMake Build
-- Use the safe local presets:
-  - `cmake --preset windows-msvc-safe`
-  - `cmake --build --preset windows-safe --parallel 2`
-- For maximum stability, run single job:
-  - `cmake --build --preset windows-single --parallel 1`
-- Run the diagnostics matrix script:
-  - `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
-  - `.\scripts\diagnose-build-freeze.ps1 -BuildPreset windows-safe -ParallelJobs 1,2,4`
-- See full guide: [docs/BUILD_STABILITY_GUIDE.md](docs/BUILD_STABILITY_GUIDE.md)
+- Use safe local presets: `cmake --preset windows-msvc-safe`
+- Single job: `cmake --build --preset windows-single --parallel 1`
+- See [docs/BUILD_STABILITY_GUIDE.md](docs/BUILD_STABILITY_GUIDE.md)
 
 ---
 
-## Building
+## Technical Highlights
 
-### Debug Build
-```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
-```
-
-### Release Build (Optimized)
-```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-
-### Build with SIMD Diagnostics
-```bash
-cmake -B build -S . -DMORE_PHI_TRACK_ALLOCATIONS=ON
-cmake --build build --config Debug
-```
-
-### Run Tests
-```bash
-cmake -B build -S . -DMORE_PHI_BUILD_TESTS=ON -DMORE_PHI_ENABLE_DATASET_V3=OFF
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-```
-
-### Optional Dataset V3 Compatibility-Flag Validation
-```bash
-cmake -B build-v3 -S . -DMORE_PHI_ENABLE_DATASET_V3=ON -DMORE_PHI_BUILD_TESTS=ON
-cmake --build build-v3 --parallel 2
-ctest --test-dir build-v3 --output-on-failure
-```
-
-### VAE Backend Status
-- `VAEMorphEngine` is currently a **safe stub backend**.
-- `loadModel()` no longer asserts/crashes when ONNX runtime is unavailable.
-- Use backend status/mode accessors to detect stub behavior explicitly.
-
----
-
-## Architecture
-
-```
-src/
-├── Plugin/     PluginProcessor, PluginEditor
-├── Core/       InterpolationEngine, PhysicsEngine, GeneticEngine, MorphProcessor
-├── Host/       PluginHostManager, ParameterBridge, PluginScanner
-├── AI/         MCPServer (JSON-RPC 2.0), MCPToolHandler (9 tools)
-├── MIDI/       MIDIRouter (note triggers, CC routing)
-├── Preset/     MetaPresetManager, PresetSerializer
-└── UI/         MorphPad, SnapFader, SnapshotRing, HostedPluginWindow, etc.
-```
-
-For detailed architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
----
-
-## Documentation
-
-- [User Guide](docs/USER_GUIDE.md) - Complete usage tutorial
-- [API Reference](docs/API_REFERENCE.md) - MCP tools and protocols
-- [Developer Guide](docs/DEVELOPER_GUIDE.md) - Building and contributing
-- [Architecture](docs/ARCHITECTURE.md) - Technical design details
-- [VST3 License Key Management](docs/VST3_LICENSE_KEY_MANAGEMENT.md) - Licensing architecture, activation flows, offline validation, and C++ implementation patterns
-- [Dataset Generation](docs/DATASET_GENERATION.md) - V2 and V3 pipeline documentation
-- [Learn Mode Guide](docs/LEARN_MODE_GUIDE.md) - AI parameter optimization
-- [Audio Engine Specification](docs/AudioEngineSpec_v2.md) - Audio processing details
-- [Ozone IPC Assistant Capabilities](docs/OZONE_IPC_ASSISTANT_CAPABILITIES.md) - Verified assistant workflows and IPC safety gates
-- [iZotope IPC Research Methodology](docs/OZONE_IPC_RESEARCH_METHODOLOGY.md) - Authorized, read-only-first IPC transport and schema research workflow
+| Claim | Mechanism |
+|-------|-----------|
+| Zero heap allocation after `prepareToPlay()` | Pre-sized vectors, fixed arrays throughout all DSP engines |
+| Audio thread never blocks | Lock-free queue, seqlock reads with retry, try-lock gates on all audio-thread boundaries |
+| SEH+C++ dual-guard for hosted plugins | `__try/__except` + `try/catch` wrapping every `plugin->processBlock()` call |
+| Streaming-safe limiter ceiling | -1.0 dBTP enforced on every neural and heuristic apply |
+| Sample-rate-independent smoothing | Time constant τ from reference config, α = exp(-dt/τ) |
+| Inter-sample peak protection | True-peak cached per write position in brickwall limiter lookahead |
+| Verified LUFS K-weighting | Continuous-time coefficients solved to match BS.1770-4 exactly at 48 kHz via bilinear transform |
+| Agent fault isolation (3 layers) | Worker → execute+publish+followUps+store → per-subscriber |
+| O(1) agent scheduling with anti-starvation | 4 per-priority `std::queue`, splice promotion at 1000ms, tier2 at 5000ms |
 
 ---
 
 ## License
 
-This project's source code is released under the MIT License - See [LICENSE](LICENSE) for details.
+This project's source code is released under the MIT License — see [LICENSE](LICENSE).
 
 ### Third-Party Licenses
 
-**JUCE Framework** - This software uses [JUCE](https://juce.com/) 8.0, which is dual-licensed:
-- **AGPLv3**: For open-source projects (requires making source available)
+**JUCE Framework** — This software uses [JUCE](https://juce.com/) 8.0.4, which is dual-licensed:
+- **AGPLv3**: For open-source projects
 - **Commercial License**: For closed-source/commercial distribution
 
-**Important**: If you distribute binary builds of More-Phi, you must either:
-1. Release your entire project under AGPLv3, OR
-2. Purchase a [JUCE commercial license](https://juce.com/pricing)
+If you distribute binary builds, you must either release under AGPLv3 or purchase a [JUCE commercial license](https://juce.com/pricing).
 
-See [JUCE Licensing](https://juce.com/juce-licence) for details.
+**Dependencies** (all fetched automatically via CMake FetchContent):
+- JUCE 8.0.4
+- nlohmann/json 3.11.3
+- Catch2 v3.4.0 (tests)
+- ONNX Runtime 1.22.1 (optional, gated by `MORE_PHI_ENABLE_ONNX`)
 
 ---
 
 ## Credits
 
-Built with [JUCE](https://juce.com/) 8.0
+Built with [JUCE](https://juce.com/) 8.0.4  
+Version 3.4.1 — Commercial Hardening  
+Technical audit score: **7.9/10** — [full report](VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)

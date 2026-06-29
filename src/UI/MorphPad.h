@@ -20,6 +20,7 @@ enum class VisualizationMode
 };
 
 class MorphPad : public juce::Component,
+                 public juce::SettableTooltipClient,
                  private juce::Timer
 {
 public:
@@ -33,6 +34,10 @@ public:
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
+    // AUDIT-FIX (accessibility): keyboard-operable + screen-reader labelled.
+    bool keyPressed(const juce::KeyPress& key) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
+
     // Visualization options
     void setGridVisible(bool shouldShow);
     void setPathVisible(bool shouldShow);
@@ -40,6 +45,13 @@ public:
 
     // Dirty flag for efficient repaint scheduling
     void markDirty() { snapshotStateDirty_ = true; }
+
+    /** Show a brief status message on the pad (e.g. capture/recall confirmation). */
+    void showFlash(const juce::String& message)
+    {
+        flashMessage_ = message;
+        flashTicks_ = 90;  // ~3 seconds at 30Hz
+    }
 
 private:
     void timerCallback() override;
@@ -64,6 +76,10 @@ private:
     bool showGrid_ = true;
     bool showPath_ = true;
     VisualizationMode visMode_ = VisualizationMode::Standard;
+
+    // Flash message for capture/recall feedback
+    juce::String flashMessage_;
+    int flashTicks_ = 0;
 
     float lastRepaintX_ = -1.0f;
     float lastRepaintY_ = -1.0f;

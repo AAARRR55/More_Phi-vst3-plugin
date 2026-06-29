@@ -26,6 +26,15 @@
     #endif
 #endif
 
+// AUDIT-FIX (Apple Silicon / ARM): NEON is mandatory on AArch64 (Apple Silicon,
+// all ARMv8-A), so compile-time selection is correct here — no runtime dispatch
+// needed for the ARM slice. Previously ARM builds fell through to the scalar
+// path because only x86 SIMD was detected.
+#if defined(__ARM_NEON__) || defined(__ARM_NEON) || (defined(_M_ARM64) && !defined(_M_ARM64EC))
+    #include <arm_neon.h>
+    #define MORE_PHI_USE_NEON 1
+#endif
+
 namespace more_phi {
 
 // ── CPU Feature Detection ─────────────────────────────────────────────────────
@@ -98,6 +107,8 @@ const char* InterpolationEngine::getCompiledSIMDPath() noexcept
     return "AVX2";
 #elif defined(MORE_PHI_USE_SSE)
     return "SSE2";
+#elif defined(MORE_PHI_USE_NEON)
+    return "NEON";
 #else
     return "Scalar";
 #endif
@@ -167,6 +178,27 @@ void InterpolationEngine::interpolateBatch_SIMD(
         dest[i] = srcA[i] * (1.0f - t) + srcB[i] * t;
     }
 
+#elif defined(MORE_PHI_USE_NEON)
+    // NEON implementation - 4 floats at once (ARM / Apple Silicon)
+    float32x4_t tVec = vdupq_n_f32(t);
+
+    size_t simdCount = count - (count % 4);
+
+    for (size_t i = 0; i < simdCount; i += 4)
+    {
+        float32x4_t a = vld1q_f32(srcA + i);
+        float32x4_t b = vld1q_f32(srcB + i);
+        // result = a + t*(b - a) = a*(1-t) + b*t  (fused-multiply-add, one insn)
+        float32x4_t result = vmlaq_f32(a, tVec, vsubq_f32(b, a));
+        vst1q_f32(dest + i, result);
+    }
+
+    // Handle remaining elements
+    for (size_t i = simdCount; i < count; ++i)
+    {
+        dest[i] = srcA[i] * (1.0f - t) + srcB[i] * t;
+    }
+
 #else
     // Scalar fallback
     interpolateBatch_Scalar(srcA, srcB, dest, t, count);
@@ -175,10 +207,13 @@ void InterpolationEngine::interpolateBatch_SIMD(
 
 // ── Clock Positions ────────────────────────────────────────────────────────────
 
-// H-4 FIX: Cache the unit-radius clock positions as function-local static.
-// The radius parameter is always 1.0 in practice — the caller can scale.
-// Avoids 12 trig ops per call (std::cos/std::sin not guaranteed RT-safe on all platforms).
-const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions(float radius)
+// W6 FIX: Return by value. Unit-radius positions are still computed once via
+// a function-local static and copied out (12 Points = 96 B); scaled-radius
+// positions are now computed into a local rather than a thread_local static,
+// eliminating the "holding a ref across another call invalidates it" footgun.
+// (std::cos/std::sin only run on the very first call for the unit-radius
+// cache; subsequent calls are a copy.)
+std::array<juce::Point<float>, 12> InterpolationEngine::getClockPositions(float radius)
 {
     static const auto kUnitPositions = []()
     {
@@ -192,16 +227,12 @@ const std::array<juce::Point<float>, 12>& InterpolationEngine::getClockPositions
         return pos;
     }();
 
-    // If caller requests unit radius, return the cached array directly
     if (std::abs(radius - 1.0f) < 1e-6f)
         return kUnitPositions;
 
-    // Fallback for non-unit radius — compute dynamically (rare path)
-    static thread_local std::array<juce::Point<float>, 12> scaled;
+    std::array<juce::Point<float>, 12> scaled;
     for (int i = 0; i < 12; ++i)
-    {
         scaled[i] = { kUnitPositions[i].x * radius, kUnitPositions[i].y * radius };
-    }
     return scaled;
 }
 
@@ -238,7 +269,7 @@ static void computeWithRetry(const SnapshotBank& bank, Fn&& fn) noexcept
 
 void InterpolationEngine::compute1D(float faderPos,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output) noexcept
+                                     std::span<float> output) noexcept
 {
     // FIX C7: NaN guard — NaN faderPos would otherwise produce UB in jlimit/index math.
     if (!std::isfinite(faderPos))
@@ -247,10 +278,16 @@ void InterpolationEngine::compute1D(float faderPos,
         return;
     }
 
+    // W-1 FIX (audit): do NOT pre-fill output here. computeWithRetry leaves
+    // output untouched on seqlock exhaustion, so a pre-fill would clobber the
+    // caller's previous-frame morph result (the "hold previous" invariant the
+    // retry helper relies on). The lambda below writes every element on a
+    // successful read — including the occupied==0 neutral case (0.5f) — so
+    // output is always fully defined when the read succeeds.
+
     computeWithRetry(bank,
         [&output, faderPos](const auto& slots)
         {
-            std::fill(output.begin(), output.end(), 0.5f);
             std::array<int, SnapshotBank::NUM_SLOTS> occupiedSlots{};
             int occupiedCount = 0;
 
@@ -300,7 +337,7 @@ void InterpolationEngine::compute1D(float faderPos,
 
 void InterpolationEngine::compute2D(float cursorX, float cursorY,
                                      const SnapshotBank& bank,
-                                     std::vector<float>& output) noexcept
+                                     std::span<float> output) noexcept
 {
     // FIX C8: NaN guard — NaN cursor coordinates would poison all IDW weights.
     if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
@@ -317,8 +354,7 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
             std::array<float, SnapshotBank::NUM_SLOTS> weights{};
             float totalWeight = 0.0f;
 
-            // Epsilon² for squared-distance comparison (avoids sqrt entirely)
-            constexpr float kEpsilonSq = kEpsilon * kEpsilon;
+            // AUDIT-FIX (C7): kEpsilonSq is now the unified class constant.
 
             for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
             {
@@ -339,10 +375,11 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
                     return;
                 }
 
-                // IDW power=2: w = 1/d² = 1/distSq
-                // Clamp denominator to avoid Inf when distSq is tiny but above the
-                // epsilon short-circuit threshold (e.g. float rounding on cursor move).
-                weights[i] = 1.0f / std::max(distSq, kEpsilonSq);
+                // IDW power=2 with per-slot mass (Gravity Well):
+                // w = mass / d² = slots[i].mass / max(distSq, epsilonSq)
+                // High mass expands the snapshot's zone of influence; low mass shrinks it.
+                // Mass is clamped to [0.1, 3.0] by SnapshotBank::setMass.
+                weights[i] = slots[i].mass / std::max(distSq, kEpsilonSq);
                 totalWeight += weights[i];
             }
 
@@ -376,6 +413,151 @@ void InterpolationEngine::compute2D(float cursorX, float cursorY,
 #elif defined(MORE_PHI_USE_SSE)
                 const __m128 wVec = _mm_set1_ps(w);
                 const size_t simdCount = count - (count % 4);
+                for (size_t p = 0; p < simdCount; p += 4)
+                {
+                    __m128 acc = _mm_loadu_ps(output.data() + p);
+                    __m128 src = _mm_loadu_ps(slot.data() + p);
+                    acc = _mm_add_ps(acc, _mm_mul_ps(src, wVec));
+                    _mm_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#else
+                for (size_t p = 0; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#endif
+            }
+        });
+}
+
+// ── 2D Voronoi/NNI Interpolation ──────────────────────────────────────────────
+
+void InterpolationEngine::compute2D_Voronoi(float cursorX, float cursorY,
+                                             const SnapshotBank& bank,
+                                             const VoronoiMorphEngine& engine,
+                                             std::span<float> output) noexcept
+{
+    if (!std::isfinite(cursorX) || !std::isfinite(cursorY))
+    {
+        std::fill(output.begin(), output.end(), 0.5f);
+        return;
+    }
+
+    // Fall back to IDW when triangulation is invalid (<3 occupied slots)
+    if (!engine.isValid())
+    {
+        compute2D(cursorX, cursorY, bank, output);
+        return;
+    }
+
+    const auto positions = getClockPositions();
+
+    // Compute NNI weights and blend in a single seqlock read for atomicity.
+    // Captures masses + values in one consistent snapshot.
+    computeWithRetry(bank,
+        [&](const auto& slots)
+        {
+            // Read masses
+            std::array<float, SnapshotBank::NUM_SLOTS> masses{};
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+                masses[static_cast<size_t>(i)] = slots[i].mass;
+
+            // Compute NNI weights
+            std::array<float, SnapshotBank::NUM_SLOTS> weights{};
+            float totalWeight = 0.0f;
+            engine.computeWeights(cursorX, cursorY, positions, masses, weights, totalWeight);
+
+            // AUDIT-FIX (C2): crossfade barycentric (inside hull) and IDW (outside)
+            // over a narrow signed-distance band. Without this the transition is a
+            // hard step — a C0 discontinuity in which/how many snapshots contribute
+            // whenever the cursor crosses the convex hull of occupied snapshots.
+            // alpha = 1 → pure barycentric; alpha = 0 → pure IDW.
+            constexpr float kHullBlendEps = 0.02f;  // ±2% of pad half-width
+            const float signedDist = engine.signedDistanceToHull(cursorX, cursorY, positions);
+            float alpha = 1.0f;
+            if (std::isfinite(signedDist))
+            {
+                // smoothstep over [-eps, +eps]
+                const float t = std::clamp((signedDist + kHullBlendEps) / (2.0f * kHullBlendEps), 0.0f, 1.0f);
+                alpha = t * t * (3.0f - 2.0f * t);
+            }
+            else if (totalWeight < 1e-6f)
+            {
+                // No hull (degenerate geometry) and no barycentric result → pure IDW.
+                alpha = 0.0f;
+            }
+
+            const bool needBarycentric = (alpha > 1e-4f) && (totalWeight >= 1e-6f);
+            const bool needIDW = (alpha < 1.0f - 1e-4f);
+
+            // Compute IDW weights when needed (inside-band or outside).
+            std::array<float, SnapshotBank::NUM_SLOTS> idwWeights{};
+            float idwTotal = 0.0f;
+            bool onSnapshotIDW = false;
+            int onSnapshotIdx = -1;
+            if (needIDW)
+            {
+                for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+                {
+                    if (!slots[i].occupied) continue;
+                    const float dx = cursorX - positions[i].x;
+                    const float dy = cursorY - positions[i].y;
+                    const float distSq = dx * dx + dy * dy;
+
+                    if (distSq < kEpsilonSq)
+                    {
+                        // Cursor directly on a snapshot — exclusive, no blend needed.
+                        onSnapshotIDW = true;
+                        onSnapshotIdx = i;
+                        break;
+                    }
+
+                    idwWeights[i] = slots[i].mass / std::max(distSq, kEpsilonSq);
+                    idwTotal += idwWeights[i];
+                }
+            }
+
+            if (onSnapshotIDW)
+            {
+                const size_t c = juce::jmin(static_cast<size_t>(slots[onSnapshotIdx].size()), output.size());
+                for (size_t p = 0; p < c; ++p)
+                    output[p] = slots[onSnapshotIdx].data()[p];
+                return;
+            }
+
+            if (!needBarycentric && idwTotal < 1e-12f) return;  // nothing to contribute
+            if (needBarycentric && !needIDW && totalWeight < 1e-6f) return;
+
+            // Emit blended output: alpha * barycentric + (1 - alpha) * IDW.
+            std::fill(output.begin(), output.end(), 0.0f);
+            for (int i = 0; i < SnapshotBank::NUM_SLOTS; ++i)
+            {
+                if (!slots[i].occupied) continue;
+                float w = 0.0f;
+                if (needBarycentric)
+                    w += alpha * (weights[static_cast<size_t>(i)] / totalWeight);
+                if (needIDW && idwTotal > 1e-12f)
+                    w += (1.0f - alpha) * (idwWeights[i] / idwTotal);
+                if (w < 1e-8f) continue;
+
+                const auto& slot = slots[i];
+                const size_t count = juce::jmin(static_cast<size_t>(slot.size()), output.size());
+
+#if defined(MORE_PHI_USE_AVX)
+                const __m256 wVec = _mm256_set1_ps(w);
+                size_t simdCount = count - (count % 8);
+                for (size_t p = 0; p < simdCount; p += 8)
+                {
+                    __m256 acc = _mm256_loadu_ps(output.data() + p);
+                    __m256 src = _mm256_loadu_ps(slot.data() + p);
+                    acc = _mm256_add_ps(acc, _mm256_mul_ps(src, wVec));
+                    _mm256_storeu_ps(output.data() + p, acc);
+                }
+                for (size_t p = simdCount; p < count; ++p)
+                    output[p] += slot.data()[p] * w;
+#elif defined(MORE_PHI_USE_SSE)
+                const __m128 wVec = _mm_set1_ps(w);
+                size_t simdCount = count - (count % 4);
                 for (size_t p = 0; p < simdCount; p += 4)
                 {
                     __m128 acc = _mm_loadu_ps(output.data() + p);

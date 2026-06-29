@@ -10,7 +10,10 @@
  *   Band 3: High  — fc2 … Nyquist
  *
  * LR4 design: two cascaded 2nd-order Butterworth stages at the same fc.
- * Property: LP + HP = flat (0 dB, 0° phase shift at all frequencies).
+ * Property: LP + HP sums to flat magnitude (0 dB) at all frequencies.
+ * Phase at the crossover frequency is 180° (not 0°) — inherent to
+ * the LR4 topology. Magnitude flatness is all that matters here
+ * because bands pass through independent dynamics before recombination.
  *
  * Implementation: serial cascade — each stage's LP and HP outputs feed the
  * next crossover.  Flat summation of all 4 bands is guaranteed by the LR4

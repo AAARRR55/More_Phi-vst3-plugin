@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "input_layout": "deinterleaved_chw",
+  "normalization": "peak_to_-1dBFS",
+  "dtype": "float32",
+  "sample_rate": 44100,
+  "segment_frames": 262138,
+  "peak_target_linear": 0.89125094,
+
+  "modelId": "masteringbrain-v2-fullchain-best",
+  "inputName": "waveform",
+  "outputName": "decision",
+  "inputShape": [1, 2, 262138],
+  "outputShape": [1, 44],
+  "sampleRate": 44100,
+  "targetLufsDefault": -14.0
+}

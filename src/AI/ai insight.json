@@ -893,21 +893,21 @@
               },
               {
                 "status": "compliant",
-                "message": "K-weighted loudness measurement -14.39 LUFS is accurate per ITU-R BS.1770-4 algorithm with proper channel weighting and gating behavior.",
+                "message": "K-weighted loudness -14.39 LUFS (model-estimated by masteringbrainv2; the SonicMaster path peak-normalizes input to -1 dBFS before inference, so this is the model's target-derived estimate, NOT an ITU-R BS.1770-4 measurement of the input waveform). For a traceable BS.1770-4 measurement use the AutoMasteringEngine LUFS meter (getLUFSIntegrated).",
                 "measured": -14.39,
                 "severity": "info",
-                "standard": "ITU-R BS.1770-4",
-                "parameter": "K-weighted Measurement",
+                "standard": "model_estimate_not_measurement",
+                "parameter": "K-weighted Estimate",
                 "reference": -23.0,
                 "correction": null
               },
               {
                 "status": "non_compliant",
-                "message": "True peak -0.84 dBTP measured with 4x oversampling per BS.1770-4, but exceeds -1.0 dBTP limit.",
+                "message": "True peak -0.84 dBTP (decoded from the model's limiter-ceiling output; the SonicMaster analysis path measures sample-peak only, not 4x-oversampled true peak. For a BS.1770-4 true-peak reading use AutoMasteringEngine::getTruePeak_dBTP). Exceeds -1.0 dBTP limit.",
                 "measured": -0.84,
                 "severity": "critical",
-                "standard": "ITU-R BS.1770-4",
-                "parameter": "True Peak Measurement",
+                "standard": "model_estimate_not_measurement",
+                "parameter": "True Peak Estimate",
                 "reference": -1.0,
                 "correction": null
               },
@@ -1688,13 +1688,15 @@
           "itu_bs1770_4": {
             "findings": [
               {
-                "note": "Measurement per BS.1770-4 K-weighting with dual-gate algorithm",
+                "note": "AUDIT-FIX-1: value shown is the masteringbrainv2 model estimate, NOT a BS.1770-4 measurement. The SonicMaster path peak-normalizes the input to -1 dBFS before inference, destroying absolute loudness; the model cannot measure input LUFS. For a true BS.1770-4 K-weighted dual-gate measurement use AutoMasteringEngine::getLUFSIntegrated().",
                 "measured": -14.39,
-                "parameter": "k_weighted_loudness"
+                "parameter": "k_weighted_loudness_estimate"
               }
             ],
             "compliant": true,
             "measured_lufs": -14.39,
+            "measurement_basis": "model_estimate",
+            "true_measurement_available_via": "AutoMasteringEngine::getLUFSIntegrated",
             "gate_relative_lu": -10.0,
             "gate_absolute_dbfs": -70.0
           },

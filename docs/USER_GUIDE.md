@@ -2,8 +2,6 @@
 
 Welcome to More-Phi, an AI-ready parameter morphing engine for sound design, performance, and exploratory mixing. This guide teaches workflows: start with a hosted plugin, capture sounds, morph between them, and use advanced tools when you are ready.
 
-> Screenshot placeholder: `[Screenshot: More-Phi loaded in a DAW with a hosted synth or effect]`
-
 ## Quick Navigation
 
 - [First-Time Setup](#first-time-setup)
@@ -15,6 +13,7 @@ Welcome to More-Phi, an AI-ready parameter morphing engine for sound design, per
 - [Use Genetic Sound Design](#use-genetic-sound-design)
 - [Control More-Phi with MIDI](#control-more-phi-with-midi)
 - [Use AI and MCP Features](#use-ai-and-mcp-features)
+- [Use Multi-Agent Orchestration](#use-multi-agent-orchestration)
 - [Advanced Feature Walkthroughs](#advanced-feature-walkthroughs)
 - [Best Practices](#best-practices)
 
@@ -44,7 +43,6 @@ You need:
    - Bottom tab section.
    - AI status bar.
 
-> Screenshot placeholder: `[Screenshot: Empty More-Phi instance before loading a hosted plugin]`
 
 ### Success Check
 
@@ -336,6 +334,70 @@ Recommended workflow:
 6. Save the returned `snapshot_id`.
 7. If the result is not better, call `plugin_profile.restore_safe_snapshot`.
 
+### Use the Agent Orchestrator (see full guide below)
+
+For collaborative AI-driven sound design, use the new **Agent Orchestration** system. After starting MCP, open the AI tab and submit a goal such as "make this track louder and brighter." The Conductor agent will coordinate Analysis, Optimization, Creative, RealtimeControl, and QualitySafety agents to carry out the plan. See the [Use Multi-Agent Orchestration](#use-multi-agent-orchestration) section for details.
+
+## Use Multi-Agent Orchestration
+
+More-Phi v3.4.1 introduces a multi-agent orchestration layer that lets you describe high-level musical goals and watch a team of specialized agents collaborate to achieve them. The orchestrator runs on top of the MCP server and is visible through the AI tab and AI status bar.
+
+### Meet the Seven Built-In Agents
+
+When you submit a goal, the **Conductor** agent automatically activates and delegates tasks to the other six agents.
+
+| Agent | Role | Default Behavior |
+|---|---|---|
+| **Conductor** | Coordinates all other agents, breaks down user goals, and approves or rejects proposed plans. | Always active when orchestration is enabled. |
+| **Analysis** | Reads audio measurements, spectrum, stereo field, and parameter states. | Read-only; it never changes parameters directly. |
+| **Optimization** | Drafts detailed parameter plans (EQ moves, gain changes, width adjustments) to satisfy a goal. | Proposes plans only; changes are applied only through Conductor approval. |
+| **Creative** | Generates novel snapshot ideas, suggests unconventional parameter combinations, and explores variations. | Always requires your explicit approval before applying changes, regardless of autonomy settings. |
+| **RealtimeControl** | Manages time-critical adjustments such as gain staging or limiting during playback. | Operates automatically on **RealtimeCritical** priority; does not wait for manual approval. |
+| **QualitySafety** | Monitors every proposed change against safety policies and clamps or rejects dangerous values. | Runs automatically in the background. |
+| **Memory** | Persists and recalls cross-session learning — genre profiles, user preferences, and successful parameter plans. | Stores context in the blackboard for reuse by other agents. |
+
+### Submit a Goal
+
+1. Start MCP from the AI status bar.
+2. Open the AI tab and locate the **Agent Status** panel.
+3. Type a goal in plain language, for example:
+   - "make this track louder and brighter"
+   - "find a darker pad variation"
+   - "tighten the low end and add shimmer to the highs"
+4. Click **Submit Goal** (or press Enter).
+5. The Conductor agent breaks the goal into sub-tasks and delegates them.
+
+### Monitor Agent Status
+
+The **AI status panel** now shows:
+
+- **Orchestrator state** — running, paused, or stopped.
+- **Agent states** — idle, planning, waiting for approval, executing, or error.
+- **Scheduler statistics** — queue depth, tasks completed, and average task latency.
+- **Current plan** — a collapsible view of the Conductor's latest plan and which agent owns each step.
+
+Click any agent row to expand its reasoning log or proposed plan. If an agent is waiting for approval, a notification badge appears on the AI tab.
+
+### Understand Agent Autonomy Levels
+
+Not all agents act on their own. The system uses three autonomy levels to keep you in control:
+
+| Level | Agents | Effect |
+|---|---|---|
+| **Automatic** | RealtimeControl, QualitySafety | Act immediately without user intervention. |
+| **Approval-required** | Creative | Always prompts you before applying changes. You can approve, modify, or reject each proposal. |
+| **Conductor-gated** | Optimization | Drafts plans, but the Conductor queues them for your review or auto-approves based on your trust settings. |
+
+> [!NOTE]
+> The **Analysis** agent is purely read-only. It inspects audio and parameters but never mutates state, so it does not need an autonomy level.
+
+### Tips for Working with Agents
+
+- Start with simple, concrete goals (e.g., "add 2 dB of high shelf") while you learn how the agents respond.
+- Use the **Cancel** button in the AI tab to stop an in-progress plan at any time.
+- Keep rollback snapshots after each approved plan. The system saves one automatically, but you can also capture your own.
+- If the Creative agent proposes something extreme, you can edit its plan before approving instead of accepting it outright.
+
 ## Advanced Feature Walkthroughs
 
 ### Walkthrough: Build an Evolving Pad Texture
@@ -401,4 +463,4 @@ If nothing changes when you morph:
 5. Check that audio or MIDI is reaching the track.
 
 
-_Updated 2026-06-18._
+_Updated 2026-06-27._

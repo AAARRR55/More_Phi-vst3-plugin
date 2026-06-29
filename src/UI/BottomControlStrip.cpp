@@ -31,6 +31,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
 
     sanityToggle_.setColour(juce::TextButton::buttonOnColourId,
                             juce::Colour(0xffe5c057));
+    sanityToggle_.setTooltip(
+        "Safety mode: protects Volume, Pitch, and Bypass parameters from being changed "
+        "during morphing, breeding, or randomization.");
 
     if (auto* param = processor.getAPVTS().getParameter("sanityEnabled"))
     {
@@ -41,6 +44,10 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     // ── RecallMode buttons ─────────────────────────────────────────────────
     recallFastBtn_.setClickingTogglesState(false);
     recallFullBtn_.setClickingTogglesState(false);
+    recallFastBtn_.setTooltip(
+        "Fast Recall: instantly loads parameter values only (snappiest transitions).");
+    recallFullBtn_.setTooltip(
+        "Full Recall: loads parameters plus plugin internal state (slower but complete).");
     recallFastBtn_.onClick = [this]() {
         if (auto* param = processor.getAPVTS().getParameter("recallMode"))
             ParameterBinding::setValueWithGesture(*param, 0.0f);  // Fast = index 0
@@ -58,6 +65,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     // ── Sidechain controls ─────────────────────────────────────────────────
     sidechainToggle_.setColour(juce::ToggleButton::tickColourId,
                                 juce::Colour(0xffe5c057));
+    sidechainToggle_.setTooltip(
+        "Sidechain: uses an external audio input to modulate the morph position "
+        "based on amplitude envelope.");
     addAndMakeVisible(sidechainToggle_);
 
     if (auto* param = processor.getAPVTS().getParameter("sidechainEnabled"))
@@ -70,6 +80,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     thresholdKnob_.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     thresholdKnob_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 14);
     thresholdKnob_.setTextValueSuffix(" dB");
+    thresholdKnob_.setTooltip("Sidechain threshold: morph modulation activates when the external input exceeds this level.");
     addAndMakeVisible(thresholdKnob_);
 
     if (auto* param = processor.getAPVTS().getParameter("sidechainThreshold"))
@@ -86,6 +97,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     // ── Listen Mode toggle ────────────────────────────────────────────────
     listenToggle_.setColour(juce::TextButton::buttonOnColourId,
                             juce::Colour(0xff4fc3f7));
+    listenToggle_.setTooltip(
+        "Learn Mode: automatically maps hosted plugin parameters that you manually adjust, "
+        "so they become part of the morph target set.");
 
     if (auto* param = processor.getAPVTS().getParameter("listenMode"))
     {
@@ -97,6 +111,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     recallToggle_.setColour(juce::ToggleButton::tickColourId,
                             juce::Colour(0xff81c784));
     recallToggle_.setToggleState(true, juce::dontSendNotification);  // Default: on
+    recallToggle_.setTooltip(
+        "Sustain: holds currently-playing MIDI notes across snapshot switches "
+        "instead of retriggering.");
     addAndMakeVisible(recallToggle_);
 
     if (auto* param = processor.getAPVTS().getParameter("recallToggle"))
@@ -108,6 +125,10 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
     // ── Link Mode toggle ───────────────────────────────────────────────────
     linkToggle_.setColour(juce::TextButton::buttonOnColourId,
                           juce::Colour(0xffffb74d));
+    linkToggle_.setTooltip(
+        "Link Mode: couples snapshot A/B selection across two plugin instances. "
+        "Load More-Phi on two tracks, enable Link on both, then set the same Link ID "
+        "in the Host parameters to pair them.");
 
     if (auto* param = processor.getAPVTS().getParameter("linkMode"))
     {
@@ -127,6 +148,7 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
                                juce::Colour(0xffeeeef2));
     outputGainKnob_.setColour(juce::Slider::textBoxOutlineColourId,
                                juce::Colours::transparentBlack);
+    outputGainKnob_.setTooltip("Output gain trim applied after all morphing and hosted-plugin processing.");
     addAndMakeVisible(outputGainKnob_);
 
     if (auto* param = processor.getAPVTS().getParameter("outputGain"))
@@ -150,6 +172,9 @@ BottomControlStrip::BottomControlStrip(MorePhiProcessor& p)
                           juce::Colour(0xffeeeef2));
     bypassBtn_.setColour(juce::TextButton::textColourOnId,
                           juce::Colours::white);
+    bypassBtn_.setTooltip(
+        "Bypass: temporarily disables all More-Phi processing and passes audio "
+        "through the hosted plugin unchanged.");
     addAndMakeVisible(bypassBtn_);
 
     if (auto* param = processor.getAPVTS().getParameter("bypass"))
@@ -197,7 +222,8 @@ void BottomControlStrip::paint(juce::Graphics& g)
         g.drawText("SAFETY", 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("RECALL", midX + 10, 3, midX - 20, 12, juce::Justification::centredLeft);
         g.drawText("OUTPUT", 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
-        g.drawText("SC", midX + 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
+        // M11: "Side" reads in the narrow compact layout (was cryptic "SC").
+        g.drawText("Side", midX + 10, midY + 3, midX - 20, 12, juce::Justification::centredLeft);
         return;
     }
 
@@ -217,7 +243,7 @@ void BottomControlStrip::paint(juce::Graphics& g)
     g.drawText("SAFETY", 10, 3, divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("RECALL", divX1 + 10, 3, divX2 - divX1 - 20, 12, juce::Justification::centredLeft);
     g.drawText("OUTPUT", divX2 + 10, 3, divX3 - divX2 - 20, 12, juce::Justification::centredLeft);
-    g.drawText("SC", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
+        g.drawText("SIDECHAIN", divX3 + 10, 3, getWidth() - divX3 - 20, 12, juce::Justification::centredLeft);
 }
 
 void BottomControlStrip::resized()

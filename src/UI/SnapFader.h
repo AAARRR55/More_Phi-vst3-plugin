@@ -12,6 +12,7 @@ namespace more_phi {
 class MorePhiProcessor;
 
 class SnapFader : public juce::Component,
+                  public juce::SettableTooltipClient,
                   private juce::Timer
 {
 public:
@@ -20,6 +21,10 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+
+    // AUDIT-FIX (accessibility): keyboard-operable + screen-reader labelled.
+    bool keyPressed(const juce::KeyPress& key) override;
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
 #if MORE_PHI_TEST_MODE
     bool isAutoRefreshTimerRunningForTests() const { return isTimerRunning(); }
@@ -37,6 +42,9 @@ private:
     float lastPaintedFaderPos_ = -1.0f;
     int lastPaintedMorphSource_ = -1;
     uint16_t lastSnapshotMask_ = 0xffff;
+    // H6: capture-flash overlay state
+    juce::String flashText_;
+    juce::uint32 flashEndMs_ = 0;
 };
 
 } // namespace more_phi

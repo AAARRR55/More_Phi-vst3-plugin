@@ -40,13 +40,13 @@ auto collectNames = [](const nlohmann::json& arr, bool isAnthropic) {
 // regression has reintroduced the blocklist and the in-plugin AI assistant
 // has lost "full unrestricted" tool access.
 const std::vector<std::string> kPreviouslyBlockedToolNames = {
-    "izotope_ipc_attach",
-    "izotope_ipc_detach",
-    "izotope_ipc_status",
-    "izotope_ipc_snapshot",
-    "izotope_ipc_dump",
-    "izotope_ipc_capture",
-    "ozone_run_assistant",
+    "morephi_ipc_attach",
+    "morephi_ipc_detach",
+    "morephi_ipc_status",
+    "morephi_ipc_snapshot",
+    "morephi_ipc_dump",
+    "morephi_ipc_capture",
+    "morephi_ipc_run_assistant",
     "hosted_plugin_scan",
     "hosted_plugin_load",
     "plugin_profile_save",
@@ -185,7 +185,7 @@ TEST_CASE("LLM chat client system prompt encodes underscore naming and confirmat
     CHECK(prompt.contains("hosted_plugin_load"));
     CHECK(prompt.contains("mastering_render_batch"));
     CHECK(prompt.contains("generate_dataset"));
-    CHECK(prompt.contains("izotope_ipc_"));
+    CHECK(prompt.contains("morephi_ipc_"));
 
     // The prompt must explicitly warn the LLM away from the dotted form (which
     // would route through resolveApi... as unmapped and silently fail). The
@@ -202,6 +202,10 @@ TEST_CASE("LLM chat client system prompt encodes underscore naming and confirmat
     CHECK_FALSE(prompt.contains("plugin_profile.save"));
     CHECK_FALSE(prompt.contains("more_phi.set_parameters"));
     CHECK_FALSE(prompt.contains("more_phi.parameters"));
+
+    // The neural mastering tool must be referenced so the LLM knows to call it
+    // as the primary mastering source (see the "Mastering decisions" guidance).
+    CHECK(prompt.contains("sonicmaster_decision"));
 
     // Confirm the dotted negative example appears AT MOST ONCE - i.e. it is
     // only the warning sentence and was not duplicated elsewhere in the prompt.
@@ -880,6 +884,10 @@ TEST_CASE("Chat-filtered tool surface is smaller than full surface (OpenAI)", "[
     // Heavy/rarely-used tools should NOT be in the chat subset
     CHECK(names.count("mastering_render_batch") == 0);
     CHECK(names.count("mastering_render_status") == 0);
+
+    // The neural mastering decision tool must be exposed to chat (it is the
+    // assistant's primary mastering source per the system prompt).
+    CHECK(names.count("sonicmaster_decision") == 1);
 
     // All names must still be unique
     CHECK(names.size() == chatTools.size());

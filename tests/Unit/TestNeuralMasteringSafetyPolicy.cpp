@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <cmath>
 #include <limits>
@@ -225,6 +226,14 @@ TEST_CASE("NeuralMasteringSafety projects bounded plans and selects fallback mod
         auto candidate = validCandidate();
         candidate.targets.eq[0] = 0.9f;
         candidate.deltas.eq[0] = 0.4f;
+        // AUDIT-FIX (AI-4, Phase 3a): confidence-weighted delta caps. The
+        // candidate confidence is 0.9 (from validCandidate), so the per-cycle
+        // delta envelope is scaled by 0.9 before projection. The expected
+        // projected value accounts for this: previous == 0.0 (first plan), delta
+        // capped at config.maxDeltaPerPlan.eq[0]=0.15, then scaled by 0.9 -> 0.135.
+        // Setting confidence to 1.0 disables the scaling and exercises the raw
+        // max-delta projection path this test was originally written for.
+        candidate.confidence = 1.0f;
 
         const auto result = policy.validate(candidate, runtime);
 
@@ -234,6 +243,24 @@ TEST_CASE("NeuralMasteringSafety projects bounded plans and selects fallback mod
         CHECK(result.plan.projectedTargets.eq[0] == 0.15f);
         CHECK(result.hasIssue(more_phi::NeuralMasteringValidationIssue::MaxDeltaProjected));
         CHECK(hasGateStatus(result, more_phi::NeuralMasteringGateId::G07, more_phi::NeuralMasteringGateStatus::Pass));
+    }
+
+    SECTION("confidence-weighted delta caps tighten projection at lower confidence")
+    {
+        // AUDIT-FIX (AI-4, Phase 3a): a plan at confidence 0.9 gets its delta
+        // envelope scaled by 0.9. The previous baseline is 0.0, the raw delta
+        // cap is 0.15, so the projected value is 0.0 + 0.15*0.9 = 0.135.
+        auto candidate = validCandidate();
+        candidate.targets.eq[0] = 0.9f;
+        candidate.deltas.eq[0] = 0.4f;
+        candidate.confidence = 0.9f;
+
+        const auto result = policy.validate(candidate, runtime);
+
+        CHECK(result.accepted);
+        CHECK(result.plan.valid);
+        CHECK(result.plan.projected);
+        CHECK(result.plan.projectedTargets.eq[0] == Catch::Approx(0.135f).margin(0.001f));
     }
 
     SECTION("high-risk controls are blocked by mask policy")

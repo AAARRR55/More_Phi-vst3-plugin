@@ -1,0 +1,41 @@
+{
+  "corpusName": "morephi_renders_eval",
+  "createdBy": "control/build_manifest.py",
+  "featureExtractor": "features.py (parity with C++ analyzers)",
+  "items": [
+    {
+      "id": "dry_source_0000_0000",
+      "licenseStatus": "approved",
+      "pairingMode": "synthesize-mastered",
+      "provenanceComplete": true,
+      "referenceQuality": "synthetic",
+      "sampleRate": 48000,
+      "segmentSeconds": 4.0,
+      "sourceId": "dry_source",
+      "sourcePath": "G:\\morephi_renders_bg\\dry_source.wav",
+      "split": "val",
+      "startSample": 0,
+      "unsupportedMaterial": false
+    },
+    {
+      "id": "dry_source_0000_0001",
+      "licenseStatus": "approved",
+      "pairingMode": "synthesize-mastered",
+      "provenanceComplete": true,
+      "referenceQuality": "synthetic",
+      "sampleRate": 48000,
+      "segmentSeconds": 4.0,
+      "sourceId": "dry_source",
+      "sourcePath": "G:\\morephi_renders_bg\\dry_source.wav",
+      "split": "val",
+      "startSample": 192000,
+      "unsupportedMaterial": false
+    }
+  ],
+  "labelSource": "labels.py synthesize_deltas (parity with AutoMasteringEngine::applyValidatedPlan)",
+  "lufsDependency": "in-house BS.1770-4 (features.compute_loudness)",
+  "referenceQuality": "synthetic",
+  "sampleRate": 48000,
+  "schemaVersion": 1,
+  "segmentSeconds": 4.0
+}

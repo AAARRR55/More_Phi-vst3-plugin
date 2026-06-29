@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -9,6 +12,8 @@
 #include "AI/InstanceIdentity.h"
 #include "AI/MCPServer.h"
 #include "AI/MasteringCandidateScoring.h"
+#include "AI/SonicMasterAnalysisEngine.h"
+#include "AI/SonicMasterDecisionDecoder.h"
 #include "AI/TrackAssistantStore.h"
 #include "Plugin/PluginProcessor.h"
 
@@ -76,6 +81,65 @@ const nlohmann::json* findSemanticControl(const nlohmann::json& values, const st
             return &value;
     }
     return nullptr;
+}
+
+class StubSonicMasterSource final : public more_phi::ISonicMasterInferenceSource
+{
+public:
+    [[nodiscard]] bool isAvailable() const noexcept override { return true; }
+
+    bool infer(const float*, float* outDecision, std::size_t outCapacity) noexcept override
+    {
+        if (outDecision == nullptr || outCapacity < more_phi::kSonicMasterDecisionWidth)
+            return false;
+
+        decision_.fill(0.0f);
+        decision_[more_phi::kSonicMasterEqGainOffset] = more_phi::kAdaptiveEqMaxGainDb;
+        decision_[more_phi::kSonicMasterTargetLufsIdx] = -8.0f;
+        decision_[more_phi::kSonicMasterTruePeakIdx] = -0.5f;
+
+        for (std::size_t b = 0; b < more_phi::kSonicMasterCompBandCount; ++b)
+        {
+            const auto o = more_phi::kSonicMasterCompOffset + b * more_phi::kSonicMasterCompBandWidth;
+            decision_[o + 0] = -20.0f;
+            decision_[o + 1] = 2.5f;
+            decision_[o + 2] = 15.0f;
+            decision_[o + 3] = 150.0f;
+            decision_[o + 4] = 0.0f;
+            decision_[o + 5] = 2.0f;
+        }
+
+        decision_[more_phi::kSonicMasterCompOffset + 0] = -6.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 1] = 4.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 2] = 1.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 3] = 2.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 4] = 3.0f;
+        decision_[more_phi::kSonicMasterCompOffset + 5] = 4.0f;
+        decision_[more_phi::kSonicMasterStereoOffset + 0] = 0.5f;
+        decision_[more_phi::kSonicMasterStereoOffset + 1] = -0.25f;
+
+        std::copy_n(decision_.data(), more_phi::kSonicMasterDecisionWidth, outDecision);
+        return true;
+    }
+
+private:
+    std::array<float, more_phi::kSonicMasterDecisionWidth> decision_ {};
+};
+
+void feedSonicMasterWindow(more_phi::SonicMasterAnalysisEngine& engine, double sampleRate)
+{
+    const auto frames = static_cast<std::size_t>(
+        std::llround(more_phi::kSonicMasterSegmentFrames * sampleRate / 44100.0)) + 1024;
+    std::vector<float> left(frames, 0.0001f);
+    std::vector<float> right(frames, 0.0001f);
+    constexpr std::size_t kBlock = 512;
+
+    engine.setActive(true);
+    for (std::size_t offset = 0; offset < frames; offset += kBlock)
+    {
+        const auto count = std::min(kBlock, frames - offset);
+        engine.capture(left.data() + offset, right.data() + offset, count);
+    }
 }
 
 juce::var toVar(const nlohmann::json& value)
@@ -205,11 +269,11 @@ TEST_CASE("MCP tools/list exposes standard and mastering workflow tools", "[mcp]
         }
         if (name == "analysis.get_stereo_field")
             foundStereoField = true;
-        if (name == "izotope_ipc_status")
+        if (name == "morephi_ipc_status")
             foundIpcStatus = true;
-        if (name == "izotope_ipc_snapshot")
+        if (name == "morephi_ipc_snapshot")
             foundIpcSnapshot = true;
-        if (name == "ozone_run_assistant")
+        if (name == "morephi_ipc_run_assistant")
             foundIpcRunAssistant = true;
         if (name == "more_phi.parameters")
             foundMorePhiParameters = true;
@@ -318,6 +382,81 @@ TEST_CASE("MCP More-Phi runtime parameter tools list, read, and write APVTS cont
         more_phi::MCPToolHandler::handle("more_phi.get_parameter", juce::var(getParams.get()), processor, identity).toStdString());
     REQUIRE(after["success"].get<bool>());
     REQUIRE(std::abs(after["value"].get<float>() - 0.25f) < 0.0001f);
+}
+
+// AUDIT Q9: per-tool input schemas are enforced before dispatch (2026-06-27).
+TEST_CASE("MCP per-tool input schemas reject malformed params", "[mcp][schema]")
+{
+    more_phi::MorePhiProcessor processor;
+    more_phi::InstanceIdentity identity;
+
+    SECTION("missing required parameter is rejected")
+    {
+        // agents.run_task requires "agent".
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("intent", "do something");
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("agents.run_task", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res["error"].get<std::string>() == "invalid_params");
+        REQUIRE(res["message"].get<std::string>().find("agent") != std::string::npos);
+    }
+
+    SECTION("wrong-typed required parameter is rejected")
+    {
+        // more_phi.set_parameter requires numeric "value"; a string fails.
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("parameter_id", "morphX");
+        params->setProperty("value", "not-a-number");
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("more_phi.set_parameter", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res["error"].get<std::string>() == "invalid_params");
+    }
+
+    SECTION("enum violation is rejected")
+    {
+        // agents.set_autonomy level must be one of the declared enum.
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("level", "skynet");
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("agents.set_autonomy", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res["error"].get<std::string>() == "invalid_params");
+    }
+
+    SECTION("numeric enum value is accepted (regression: schema gate rejected all numeric enums)")
+    {
+        // analysis.get_spectrum's resolution is an integer enum [32,64,128,256].
+        // The validator previously only matched string enum entries, so every
+        // numeric-enum tool was unreachable. A valid numeric value must pass the
+        // gate and reach the handler (success present, not an invalid_params error).
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("resolution", 64);
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("analysis.get_spectrum", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res.contains("success"));
+        REQUIRE(res["success"].is_boolean());
+        REQUIRE_FALSE(res.contains("error"));
+    }
+
+    SECTION("a valid call still succeeds (no false positive)")
+    {
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("parameter_id", "morphX");
+        params->setProperty("value", 0.5); // valid numeric
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("more_phi.set_parameter", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res["success"].get<bool>());
+    }
+
+    SECTION("extra/unknown property is allowed (alias keys keep working)")
+    {
+        // parameterId is not in the schema but aliases must pass the gate.
+        juce::DynamicObject::Ptr params = new juce::DynamicObject();
+        params->setProperty("parameterId", "morphX");
+        params->setProperty("value", 0.5);
+        const auto res = nlohmann::json::parse(
+            more_phi::MCPToolHandler::handle("more_phi.set_parameter", juce::var(params.get()), processor, identity).toStdString());
+        REQUIRE(res["success"].get<bool>());
+    }
 }
 
 TEST_CASE("MCP More-Phi runtime batch tool reports partial rejection", "[mcp][more-phi]")
@@ -640,14 +779,14 @@ TEST_CASE("VST3 MCP handler exposes IPC assistant status and write gate", "[mcp]
     more_phi::InstanceIdentity identity;
 
     const auto status = nlohmann::json::parse(
-        more_phi::MCPToolHandler::handle("izotope_ipc_status", {}, processor, identity).toStdString());
+        more_phi::MCPToolHandler::handle("morephi_ipc_status", {}, processor, identity).toStdString());
     REQUIRE(status.contains("attached"));
     REQUIRE_FALSE(status["attached"].get<bool>());
 
     juce::DynamicObject::Ptr runParams = new juce::DynamicObject();
     runParams->setProperty("allow_unsafe_write", false);
     const auto blocked = nlohmann::json::parse(
-        more_phi::MCPToolHandler::handle("ozone_run_assistant", juce::var(runParams.get()), processor, identity).toStdString());
+        more_phi::MCPToolHandler::handle("morephi_ipc_run_assistant", juce::var(runParams.get()), processor, identity).toStdString());
 
     REQUIRE_FALSE(blocked["success"].get<bool>());
     REQUIRE(blocked["error"].get<std::string>() == "approval_required");
@@ -882,6 +1021,285 @@ TEST_CASE("MCP analysis summary reports deterministic methodology and model stat
         "lufs_values_are_rolling_available_history_estimates_not_external_lab_certification"));
 }
 
+TEST_CASE("sonicmaster_decision separates raw model telemetry from projected engine mapping",
+          "[mcp][sonicmaster]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);  // PERF-MEM: lazy ring allocation on first activation
+    feedSonicMasterWindow(sonicMaster, 48000.0);
+
+    more_phi::InstanceIdentity identity;
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle(
+            "sonicmaster_decision",
+            toVar(nlohmann::json{{"target_lufs", -14.0}}),
+            processor,
+            identity).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    REQUIRE(response["success"].get<bool>());
+    REQUIRE(response["applied"].get<bool>() == false);
+    REQUIRE(response["response_schema_version"].get<int>() == 2);
+    REQUIRE(response["raw_model_decision"]["field_semantics"].get<std::string>()
+            == "raw_model_telemetry_not_applied_parameters");
+    REQUIRE(response["projected_plan"]["applied_mask"]["limiter"].get<bool>() == false);
+    REQUIRE(response["actual_engine_mapping"]["limiter"]["applied_if_confirmed"].get<bool>() == false);
+
+    const auto rawEqDb = response["raw_model_decision"]["eq_bands"][0]["gainDb"].get<double>();
+    const auto projectedEq = response["projected_plan"]["eq_normalized"][0].get<double>();
+    const auto mappedEqDb = response["actual_engine_mapping"]["eq_bands"][0]["gainDb"].get<double>();
+    CHECK(std::abs(rawEqDb - 12.0) < 1.0e-6);
+    // AUDIT-FIX (2026-06-27): the projected EQ target is confidence-scaled by the
+    // safety policy (per-cycle delta cap maxDeltaPerPlan.eq = 0.15, scaled by the
+    // effective confidence and bounded by the editable-mask/target-range clamps).
+    // The unscaled value would be 0.15; the confidence-scaled value is strictly
+    // less. mappedEqDb == projectedEq * kAdaptiveEqMaxGainDb (12.0). The prior
+    // expectations (0.15 / 1.8) predated the confidence-scaling feature (7860dec)
+    // and were stale. We assert the confidence-scaled relationship rather than a
+    // point value, because the exact projection depends on the heuristic genre
+    // confidence derived from the captured window (which varies with the
+    // background-cycle timing in a unit-test process).
+    REQUIRE(projectedEq > 0.0);                  // a plan was projected, not zeroed
+    REQUIRE(projectedEq < 0.15);                 // strictly below the unscaled cap
+    REQUIRE(mappedEqDb > 0.0);
+    REQUIRE(mappedEqDb < 1.8);                   // and below the unscaled mapped dB
+    REQUIRE(std::abs(mappedEqDb - projectedEq * 12.0) < 1.0e-3); // mapping = *12
+
+    CHECK(std::abs(response["raw_model_decision"]["compressor_bands"][0]["attackMs"].get<double>() - 1.0) < 1.0e-6);
+    // AUDIT-FIX: engineMapping now reads the model's decoded compParams
+    // sidecar directly, so attackMs is a plain number (not a nested object
+    // with a "source" key). The stub returns attackMs=1.0 for band 0.
+    CHECK(std::abs(response["actual_engine_mapping"]["dynamics_bands"][0]["attackMs"].get<double>() - 1.0) < 1.0e-6);
+    REQUIRE(jsonArrayContainsString(
+        response["actual_engine_mapping"]["dynamics_bands"][0]["direct_model_controls"],
+        "thresholdDb"));
+    // AUDIT-FIX: all 6 compressor params are now direct_model_controls;
+    // raw_telemetry_only_controls was removed.
+    REQUIRE(jsonArrayContainsString(
+        response["actual_engine_mapping"]["dynamics_bands"][0]["direct_model_controls"],
+        "attackMs"));
+    REQUIRE(jsonArrayContainsString(
+        response["warnings"],
+        "decision_contains_raw_model_telemetry_not_applied_parameters"));
+    // AUDIT-FIX: the warning "compressor_attack_release_makeup_knee_are_raw_telemetry"
+    // was removed because the engineMapping now reports actual model values from
+    // the compParams sidecar, not stale DSP state.
+
+    // Legacy aliases remain available for older clients.
+    REQUIRE(response["decision"]["eq_bands"].is_array());
+    REQUIRE(response["plan_eq_normalized"].is_array());
+
+    // AUDIT (W1, 2026-06-25): the sonicmaster_decision tool must surface the
+    // OzonePlanApplicator mapping status so a caller can tell WHY a plan applied
+    // zero parameters. This bare processor hosts no plugin, so the map is absent
+    // (ozone_mapped==false). Previously this condition was invisible — only a
+    // DBG line that never reached the assistant.
+    REQUIRE(response["mapping_status"].is_object());
+    REQUIRE(response["mapping_status"]["field_semantics"].get<std::string>()
+            == "static_hosted_plugin_parameter_discovery");
+    REQUIRE(response["mapping_status"]["ozone_mapped"].get<bool>() == false);
+    REQUIRE(response["mapping_status"]["has_applicator"].get<bool>() == false);
+    REQUIRE(response["mapping_status"]["mapped_slot_count"].get<int>() == 0);
+    REQUIRE(response["mapping_status"]["max_slot_count"].get<int>() == 50);
+    // No apply has run on this decision-only call, so the per-slot outcome
+    // fields read their zero defaults.
+    REQUIRE(response["mapping_status"]["last_apply_enqueued"].get<int>() == 0);
+    REQUIRE(response["mapping_status"]["last_apply_was_partial"].get<bool>() == false);
+
+    // Stage E (2026-06-26): the closed-loop state is surfaced so the assistant
+    // can report convergence. On a fresh engine with no apply yet, the loop is
+    // inactive with neutral defaults.
+    REQUIRE(response["closed_loop_state"].is_object());
+    REQUIRE(response["closed_loop_state"]["feedback_active"].get<bool>() == false);
+    REQUIRE(response["closed_loop_state"]["semantics"].get<std::string>()
+            == "closed_loop_lufs_servo_on_background_cycle");
+    REQUIRE(response["closed_loop_state"].contains("last_lufs_error"));
+    REQUIRE(response["closed_loop_state"].contains("next_target_lufs"));
+
+    // AUDIT-F1.5: the background cycle skip reason is surfaced (None on success).
+    REQUIRE(response["closed_loop_state"].contains("last_lufs_error"));
+    REQUIRE(response.contains("last_cycle_skip_reason"));
+    REQUIRE(response["last_cycle_skip_reason"].get<std::string>() == "ok");
+
+    // AUDIT-F1.1 (2026-06-27): the loudness-target path is surfaced so the
+    // assistant knows the ONNX loudness recommendation is computed against the
+    // baked -14 and the applied target may diverge from the HTTP path. Default
+    // target_lufs=-14, no feedback yet -> model_default_or_genre_prior path.
+    REQUIRE(response["raw_model_decision"].contains("loudness_target_path"));
+    REQUIRE(response["raw_model_decision"]["loudness_target_path"].get<std::string>()
+            == "model_default_or_genre_prior");
+    REQUIRE(response["raw_model_decision"].contains("loudness_path_divergence_note"));
+    REQUIRE(response["raw_model_decision"].contains("onnx_baked_target_lufs"));
+    REQUIRE_THAT(response["raw_model_decision"]["onnx_baked_target_lufs"].get<double>(),
+                Catch::Matchers::WithinAbs(-14.0, 1e-6));
+}
+
+// AUDIT-F1.1: an explicit on-demand target_lufs != -14 surfaces as the
+// explicit_on_demand_override path, with a divergence note warning that the
+// ONNX recommendation (baked at -14) may not match the HTTP path for this input.
+TEST_CASE("sonicmaster_decision surfaces loudness_target_path for explicit override (F1.1)",
+          "[mcp][sonicmaster][Audit-F1-1]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);
+    feedSonicMasterWindow(sonicMaster, 48000.0);
+
+    more_phi::InstanceIdentity identity;
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle(
+            "sonicmaster_decision",
+            toVar(nlohmann::json{{"target_lufs", -11.0}}),  // != baked -14
+            processor,
+            identity).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    REQUIRE(response["success"].get<bool>());
+    REQUIRE(response["raw_model_decision"]["loudness_target_path"].get<std::string>()
+            == "explicit_on_demand_override");
+    REQUIRE_THAT(response["raw_model_decision"]["onnx_baked_target_lufs"].get<double>(),
+                Catch::Matchers::WithinAbs(-14.0, 1e-6));
+}
+
+
+// REGRESSION (CAPTURE-DECOUPLE 2026-06-26): the production failure was that
+// sonicmaster_decision returned "Inference failed or model unavailable." every
+// time, even after the user played audio for well over 6 s. Root cause had two
+// compounding gates on capture(): (1) it bailed when active_ (the preview
+// toggle) was off — its default, and (2) the capture ring was lazily allocated
+// only on first setActive(true)/requestDecisionNow, so during playback the ring
+// was null and capture() was a no-op. The assistant then called
+// requestDecisionNow -> ensureRing() on an empty ring -> "no fresh audio."
+//
+// This test reproduces the EXACT production scenario via the full MCP path
+// (MCPToolHandler::handle, not the engine directly): preview OFF, the ring
+// filled only by feeding audio (no setActive), then sonicmaster_decision must
+// return success=true. Under the buggy code this returned success=false. It is
+// the headless equivalent of "play 6 s, then ask the assistant to analyze."
+TEST_CASE("sonicmaster_decision succeeds with preview OFF after playback (CAPTURE-DECOUPLE)",
+          "[mcp][sonicmaster][regression]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+
+    // PRODUCTION SCENARIO: do NOT call setActive(true). The preview toggle stays
+    // off (its default). Every other sonicmaster_decision test calls setActive,
+    // which masked this bug for the entire test history.
+    REQUIRE_FALSE(sonicMaster.isActive());
+
+    // Feed a full ~6 s window of audio (host-rate equivalent of the model
+    // segment), in real block sizes, WITHOUT enabling preview. This is what
+    // the user's playback does. Under the fix, capture() fills the ring.
+    {
+        const auto frames = static_cast<std::size_t>(
+            std::llround(more_phi::kSonicMasterSegmentFrames * 48000.0 / 44100.0)) + 1024;
+        std::vector<float> left(frames, 0.0001f);
+        std::vector<float> right(frames, 0.0001f);
+        constexpr std::size_t kBlock = 512;
+        for (std::size_t offset = 0; offset < frames; offset += kBlock)
+        {
+            const auto count = std::min(kBlock, frames - offset);
+            sonicMaster.capture(left.data() + offset, right.data() + offset, count);
+        }
+    }
+
+    more_phi::InstanceIdentity identity;
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle(
+            "sonicmaster_decision",
+            toVar(nlohmann::json{{"target_lufs", -14.0}}),
+            processor,
+            identity).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    // The headline assertion: the on-demand decision must succeed with preview
+    // off. Under the buggy code this was success=false with the generic
+    // "Inference failed or model unavailable." error that the assistant then
+    // mis-attributed to the inference server.
+    REQUIRE(response["success"].get<bool>());
+    REQUIRE(response["applied"].get<bool>() == false);  // decision-only, not apply
+    REQUIRE(response["raw_model_decision"].is_object());
+    // The stub emits target_lufs=-8.0; decode honors the caller's -14.0 override
+    // (Stage A), so the projected loudness band reflects the requested target.
+    REQUIRE(response["projected_plan"].is_object());
+}
+
+//
+// Calls masteringNeuralApply DIRECTLY (not via handle()) to test the method's
+// state logic in isolation — the dispatch wrapper's approval gate (Manual
+// autonomy → approval_required for MediumWrite) is exercised by other tests.
+TEST_CASE("mastering.neural_apply reports no_hosted_plugin when nothing is hosted",
+          "[mcp][sonicmaster][StageB]")
+{
+    StubSonicMasterSource source;
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);
+    feedSonicMasterWindow(sonicMaster, 48000.0);
+
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::masteringNeuralApply(
+            toVar(nlohmann::json{{"target_lufs", -14.0}}), processor).toStdString());
+
+    sonicMaster.release();
+    processor.getAutoMasteringEngine().reset();
+
+    REQUIRE(response["success"].get<bool>() == false);
+    REQUIRE(response["applied"].get<bool>() == false);
+    REQUIRE(response["state"].get<std::string>() == "no_hosted_plugin");
+    REQUIRE(response["available"].get<bool>() == true);  // model IS available; just nowhere to land
+    REQUIRE(response["mapping_status"].is_object());
+    REQUIRE(response["mapping_status"]["has_applicator"].get<bool>() == false);
+}
+
+// Stage B: even when the model is unavailable, the state must be "model_unavailable"
+// (NOT "server isn't running" — the in-process ONNX is the primary path post-C1).
+TEST_CASE("mastering.neural_apply reports model_unavailable when no source is wired",
+          "[mcp][sonicmaster][StageB]")
+{
+    more_phi::MorePhiProcessor processor;
+    processor.getAutoMasteringEngine().prepare(48000.0, 512, false);
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.prepare(48000.0, 512);
+    // Explicitly NO setInferenceSource → engine.isAvailable() == false regardless
+    // of any default the processor may wire.
+    sonicMaster.setInferenceSource(nullptr);
+
+    const auto response = nlohmann::json::parse(
+        more_phi::MCPToolHandler::masteringNeuralApply(
+            toVar(nlohmann::json{{"target_lufs", -14.0}}), processor).toStdString());
+
+    REQUIRE(response["success"].get<bool>() == false);
+    REQUIRE(response["state"].get<std::string>() == "model_unavailable");
+    REQUIRE(response["available"].get<bool>() == false);
+}
+
 TEST_CASE("MCP capture window reports no samples before analysis tap has data", "[mcp][analysis][MeterWindow]")
 {
     more_phi::MorePhiProcessor processor;
@@ -957,8 +1375,14 @@ TEST_CASE("MCP dry-run mastering candidates can be selected and applied", "[mcp]
     REQUIRE(batch["planner_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["planner_metadata"]["recommendation_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["planner_metadata"]["confidence"].is_null());
-    REQUIRE_FALSE(batch["score_available"].get<bool>());
-    REQUIRE(batch["score_basis"].get<std::string>() == "not_scored_without_audio_render");
+    // P3.9 (AUDIT): render_batch now reports score_available=true even in dry-run
+    // because it computes a real lufs_error = |targetLUFS - measuredLUFS| proxy per
+    // candidate (previously every candidate read infinity → no scoring → a no-op).
+    // The score_basis is honest about it being a target-distance proxy, not a
+    // rendered-audio score. The prior assertion (score_available==false /
+    // "not_scored_without_audio_render") encoded the pre-P3.9 no-op behavior.
+    REQUIRE(batch["score_available"].get<bool>() == true);
+    REQUIRE(batch["score_basis"].get<std::string>() == "lufs_target_distance_proxy");
     REQUIRE(batch["candidates"][0]["recommendation_type"].get<std::string>() == "heuristic_rule_engine");
     REQUIRE(batch["candidates"][0]["planner_metadata"]["confidence"].is_null());
     REQUIRE(batch["candidates"][0]["measured_inputs"].is_object());
@@ -1030,4 +1454,192 @@ TEST_CASE("TrackAssistantStore persists local track records", "[mcp][track-assis
     REQUIRE(info["success"].get<bool>());
     REQUIRE(info["history"].is_array());
     REQUIRE(info["history"].size() >= 2);
+}
+
+// ── Multi-agent orchestration: agents.* risk classification ──────────────────
+TEST_CASE("PermissionKernel classifies agents.* tools", "[agents][mcp][permissions]")
+{
+    more_phi::PermissionKernel kernel;
+    using R = more_phi::RiskLevel;
+    REQUIRE(kernel.classifyTool("agents.list", {})              == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.run_goal", {})          == R::LowWrite);
+    REQUIRE(kernel.classifyTool("agents.run_task", {})          == R::MediumWrite);
+    REQUIRE(kernel.classifyTool("agents.run_status", {})        == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.run_cancel", {})        == R::LowWrite);
+    REQUIRE(kernel.classifyTool("agents.blackboard.recent", {}) == R::ReadOnly);
+    REQUIRE(kernel.classifyTool("agents.set_autonomy", {})      == R::HighImpact);
+}
+
+// ===========================================================================
+// FALLBACK (2026-06-27): sonicmaster_decision opt-in heuristic fallback.
+// When the neural model refuses (safety_rejected/low_confidence/target_out_of_range
+// — common on already-hot material the loudness-blind model can't handle) and the
+// caller passes fallback_to_heuristic=true, the tool falls through to the
+// measurement-driven RuleBasedMasteringResolver and applies its plan, returning a
+// success-shaped result with path="heuristic_fallback". These tests pin that
+// contract plus the provenance honesty (path field on both success and fallback)
+// and the default-off behavior (no fallback unless opted in).
+// ===========================================================================
+
+// Helper: invoke sonicmaster_decision with given params, return parsed JSON.
+static nlohmann::json callSonicmasterDecision(more_phi::MorePhiProcessor& processor,
+                                              const nlohmann::json& params)
+{
+    juce::DynamicObject::Ptr p = new juce::DynamicObject();
+    for (auto it = params.begin(); it != params.end(); ++it)
+    {
+        if (it.value().is_boolean())
+            p->setProperty(juce::String(it.key()), it.value().get<bool>());
+        else if (it.value().is_number_float())
+            p->setProperty(juce::String(it.key()), it.value().get<double>());
+        else if (it.value().is_number_integer())
+            p->setProperty(juce::String(it.key()), it.value().get<int>());
+        else
+            p->setProperty(juce::String(it.key()),
+                           juce::String(it.value().get<std::string>()));
+    }
+    more_phi::InstanceIdentity identity;
+    return nlohmann::json::parse(
+        more_phi::MCPToolHandler::handle("sonicmaster_decision", juce::var(p.get()),
+                                         processor, identity).toStdString());
+}
+
+TEST_CASE("sonicmaster_decision surfaces refusal WITHOUT fallback by default",
+          "[mcp][sonicmaster][fallback]")
+{
+    // Default (fallback_to_heuristic absent/false): a neural refusal is surfaced
+    // as a failure with the structured reason. This is the regression guard —
+    // existing callers see NO behavior change from the fallback feature.
+    more_phi::MorePhiProcessor processor;
+    // AUDIT-FIX (2026-06-27): wire an available inference source and prepare the
+    // engine WITHOUT feeding audio, so the refusal path actually fires. A bare
+    // processor yields model_unavailable (a leaner response with no failure_reason,
+    // asserted separately); to reach InsufficientAudio/NotPrepared the engine must
+    // be available but starved.
+    StubSonicMasterSource source;
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);
+    const auto result = callSonicmasterDecision(processor, { {"target_lufs", -14.0} });
+
+    // Without ~6s of captured audio in a unit test, the engine will refuse with
+    // InsufficientAudio or NotPrepared (not a heuristic-eligible refusal). Either
+    // way: success must be false, and there must be NO heuristic_fallback path.
+    REQUIRE(result.contains("success"));
+    REQUIRE_FALSE(result["success"].get<bool>());
+    REQUIRE_FALSE(result.value("path", "") == "heuristic_fallback");
+    // The opaque refusal must carry the structured reason we built earlier.
+    REQUIRE(result.contains("failure_reason"));
+    sonicMaster.release();
+}
+
+TEST_CASE("sonicmaster_decision refusal is non-fatal when fallback_to_heuristic is set",
+          "[mcp][sonicmaster][fallback]")
+{
+    // With the flag on, even a non-refusal failure (insufficient audio here, since
+    // the unit-test processor has no captured audio) must NOT crash or hang, and
+    // must NOT apply a heuristic plan inappropriately (insufficient_audio is NOT a
+    // refusal — the heuristic would run on empty meters). Pins the isRefusal gate.
+    more_phi::MorePhiProcessor processor;
+    StubSonicMasterSource source;
+    auto& sonicMaster = processor.getSonicMasterEngine();
+    sonicMaster.setInferenceSource(&source);
+    sonicMaster.prepare(48000.0, 512);
+    sonicMaster.setActive(true);
+    const auto result = callSonicmasterDecision(processor, {
+        {"target_lufs", -14.0},
+        {"fallback_to_heuristic", true}
+    });
+
+    REQUIRE(result.contains("success"));
+    // Insufficient audio → not a refusal → no fallback → still a failure.
+    REQUIRE_FALSE(result["success"].get<bool>());
+    REQUIRE_FALSE(result.value("path", "") == "heuristic_fallback");
+    REQUIRE(result.contains("failure_reason"));
+    sonicMaster.release();
+}
+
+TEST_CASE("sonicmaster_decision schema advertises the fallback parameters",
+          "[mcp][sonicmaster][fallback]")
+{
+    // Pin that the tool description + schema expose the new opt-in surface so the
+    // assistant knows it exists. This guards against a refactor that silently
+    // drops the params from the schema (which would make the flag unreachable).
+    const auto listed = nlohmann::json::parse(
+        more_phi::MCPToolHandler::getToolList().toStdString());
+    REQUIRE(listed.contains("tools"));
+    REQUIRE(listed["tools"].is_array());
+
+    // Find the sonicmaster_decision entry in the tools array.
+    nlohmann::json sm;
+    bool found = false;
+    for (const auto& t : listed["tools"])
+    {
+        if (t.value("name", std::string{}) == "sonicmaster_decision")
+        {
+            sm = t;
+            found = true;
+            break;
+        }
+    }
+    REQUIRE(found);
+
+    const std::string desc = sm.value("description", std::string{});
+    const std::string schema = sm.value("inputSchema", nlohmann::json::object()).dump();
+
+    // The description must mention the fallback semantics + the path field.
+    CHECK(desc.find("fallback_to_heuristic") != std::string::npos);
+    CHECK(desc.find("heuristic_fallback") != std::string::npos);
+    CHECK(desc.find("path") != std::string::npos);
+    // The JSON schema must declare both new params with correct defaults.
+    CHECK(schema.find("\"fallback_to_heuristic\"") != std::string::npos);
+    CHECK(schema.find("\"fallback_target_lufs\"") != std::string::npos);
+    CHECK(schema.find("\"default\":false") != std::string::npos);     // fallback default off
+    CHECK(schema.find("\"default\":-14.0") != std::string::npos);     // fallback target default
+}
+
+// ── AUDIT-FIX (L3-7, 2026-06-29): JSON-RPC "id":null handling ────────────
+
+TEST_CASE("MCPServer responds to explicit id:null (not a notification)",
+          "[mcp][protocol]")
+{
+    // JSON-RPC 2.0 §4: a notification is a request WITHOUT an "id" member.
+    // An explicit "id": null IS a request and MUST receive a response.
+    // Previously, both absent-id and id:null were treated as notifications
+    // (response suppressed). Now, only absent-id suppresses the response.
+    ScopedTrackAssistantStore store;
+    more_phi::MorePhiProcessor proc;
+    more_phi::MCPServer server(proc);
+
+    // Build a request with explicit "id": null
+    nlohmann::json request = {
+        {"jsonrpc", "2.0"},
+        {"method", "initialize"},
+        {"params", {
+            {"authToken", "test-auth-token"},
+            {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}
+        }},
+        {"id", nullptr}
+    };
+
+    bool authenticated = false;
+    auto respStr = server.processRequestForTesting(juce::String(request.dump()), authenticated);
+    // With the fix, id:null should produce a response (not drop it).
+    CHECK(respStr.isNotEmpty());
+
+    auto resp = nlohmann::json::parse(respStr.toStdString());
+    CHECK(resp.contains("id"));
+    CHECK(resp["id"].is_null());
+
+    // Contrast: a notification (no "id" key at all) should produce NO response.
+    nlohmann::json notification = {
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/cancelled"},
+        {"params", {{"requestId", 1}}}
+        // No "id" key → this is a notification
+    };
+    bool notifAuth = false;
+    auto notifResp = server.processRequestForTesting(juce::String(notification.dump()), notifAuth);
+    CHECK(notifResp.isEmpty());  // notification → no response
 }

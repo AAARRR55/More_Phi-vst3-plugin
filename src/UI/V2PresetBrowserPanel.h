@@ -40,7 +40,7 @@ public:
     juce::Colour colSelected     { 0x30ec415d };
     juce::Colour colText         { 0xffeeeef2 };
     juce::Colour colDim          { 0xff8e8f95 };
-    juce::Colour colTags         { 0xff3a3a40 };
+    juce::Colour colTags         { 0xff8e8f95 };  // ponytail: was 0xff3a3a40 (~1.6:1, unreadable); reuse kTextDim (AA-passing)
     juce::Colour colStarFilled   { 0xfff9e596 };
     juce::Colour colStarEmpty    { 0xff3a3a40 };
 

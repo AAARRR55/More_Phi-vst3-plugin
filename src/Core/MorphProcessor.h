@@ -10,12 +10,16 @@
 
 #include "SnapshotBank.h"
 #include "InterpolationEngine.h"
+#include "VoronoiMorphEngine.h"
 #include "PhysicsEngine.h"
 #include <vector>
 #include <array>
 #include <atomic>
 #include <memory>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <span>
 
 namespace more_phi {
 
@@ -34,9 +38,11 @@ public:
     // rawX, rawY ∈ [0,1], faderPos ∈ [0,1]
     // dt = blockSize / sampleRate
     // noexcept: All buffers pre-allocated in prepare(), no allocations or throwing ops
+    // H-3 FIX: std::span<float> guarantees the callee cannot resize the output
+    // buffer — compile-time enforcement of the "no realloc on audio thread" rule.
     void process(float rawX, float rawY, float faderPos,
                  MorphSource source, MorphMode mode,
-                 float dt, std::vector<float>& output) noexcept;
+                 float dt, std::span<float> output) noexcept;
 
     // Physics tuning (ATS-M7+M8: all atomics for cross-thread safety)
     void setElasticPreset(ElasticPreset p) { elasticPreset_.store(static_cast<int>(p), std::memory_order_relaxed); }
@@ -66,7 +72,12 @@ public:
     bool getListenMode() const { return listenMode_.load(std::memory_order_relaxed); }
 
     // ATS-H2: Double-buffer pattern — truly lock-free (no shared_ptr ref-count contention)
-    void setDiscreteMap(const std::vector<bool>& map)
+    // W5 FIX: take the map by value. The previous && overload forwarded back
+    // into the const& overload by name (decaying to an lvalue ref), so no move
+    // ever happened — the signature was misleading. By-value is honest: callers
+    // can pass an lvalue (copied once) or a moved/temporary (move-constructed
+    // into this parameter), and the body always iterates a contiguous vector.
+    void setDiscreteMap(std::vector<bool> map)
     {
         int current = discreteActiveIndex_.load(std::memory_order_acquire);
         int next = 1 - current;
@@ -78,10 +89,6 @@ public:
             buf[i] = map[i] ? 1u : 0u;
         discreteActiveIndex_.store(next, std::memory_order_release);
     }
-    void setDiscreteMap(std::vector<bool>&& map)
-    {
-        setDiscreteMap(map);
-    }
 
     // Sentinel value written to morph output for params that should NOT be applied
     static constexpr float SKIP_SENTINEL = -1.0f;
@@ -90,28 +97,78 @@ public:
     float getProcessedX() const { return processedX_.load(std::memory_order_relaxed); }
     float getProcessedY() const { return processedY_.load(std::memory_order_relaxed); }
 
+    // Interpolation mode: 0=IDW (legacy), 1=Voronoi/NNI (Phase 2)
+    void setInterpolationMode(int mode) { interpolationMode_.store(mode, std::memory_order_relaxed); }
+    int getInterpolationMode() const { return interpolationMode_.load(std::memory_order_relaxed); }
+
+    // Rebuild Delaunay triangulation for Voronoi morphing.
+    // Must be called on the message thread (allocates).
+    void rebuildVoronoi();
+    const VoronoiMorphEngine& getVoronoiEngine() const { return voronoiEngine_; }
+
     // Cursor trail ring buffer (written by audio, read by UI)
+    // C3 FIX: Each trail point is published as a single atomic 64-bit value
+    // (two floats packed together) so the UI paint thread reads a consistent
+    // {x,y} pair with no torn-read data race. The old std::array<TrailPoint>
+    // was written element-wise by the audio thread and read element-wise by
+    // the UI thread — UB under the C++ memory model.
     static constexpr int TRAIL_SIZE = 64;
     struct TrailPoint { float x, y; };
-    const std::array<TrailPoint, TRAIL_SIZE>& getTrail() const { return trail_; }
+    TrailPoint getTrailPoint(int index) const
+    {
+        const uint64_t packed = trail_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
+        TrailPoint p;
+        std::memcpy(&p, &packed, sizeof(p));   // type-pun via memcpy (no aliasing UB)
+        return p;
+    }
     int getTrailHead() const { return trailHead_.load(std::memory_order_relaxed); }
 
 private:
     void updatePhysics(float targetX, float targetY, MorphMode mode, float dt) noexcept;
+
+    VoronoiMorphEngine voronoiEngine_;
+    std::atomic<int> interpolationMode_{0};
     // Fix 2.1: dt is the block duration in seconds (blockSize / sampleRate).
     // The one-pole coefficient is derived from the smoothing time constant τ
     // via α = exp(-dt/τ), making the smoothing behavior independent of host
     // sample rate and block size.
-    void applySmoothing(std::vector<float>& output, float dt) noexcept;
+    // C-4 FIX (audit): applySmoothing now takes an explicit one-pole rate
+    // (computed by computeSmoothingRateFor below) so Direct mode can opt into
+    // a guaranteed fast de-zipper without affecting Elastic/Drift behavior.
+    void applySmoothing(std::span<float> output, float rate) noexcept;
 
-    // Reference block config used to convert the legacy smoothing coefficient
-    // into a time constant (see setSmoothingRate). 512 samples @ 44.1 kHz.
-    static constexpr float kRefDt = 512.0f / 44100.0f;
+    // C-4 FIX (audit): Derives the per-block one-pole rate from the user's
+    // smoothTau_ and the active morph mode. Non-Direct modes honor smoothTau_
+    // (0 → instant, >0 → τ-second one-pole). Direct mode ALWAYS applies a
+    // minimum de-zipper (kDirectMinSmoothingTau) so a discontinuous pad move
+    // / automation step can't produce a full-vector jump → click, while still
+    // feeling effectively instant (~2 ms settle). Returns the clamped rate.
+    float computeSmoothingRateFor(MorphMode mode, float dt) noexcept;
+
+    // C-4 FIX (audit): minimum de-zipper time constant for Direct mode.
+    // ~2 ms: fast enough to feel instant, slow enough to suppress clicks from
+    // discontinuous cursor moves on unsmoothed hosted params (gain, output).
+    static constexpr float kDirectMinSmoothingTau = 0.002f;
+
+    // W-3 FIX (audit): minimum safety de-zipper for Drift mode when the user
+    // has disabled smoothing (smoothTau_ <= 0). Without it, updateDrift writes
+    // a fresh Perlin sample into the cursor every block, so with smoothing off
+    // the cursor (and thus every interpolated param) jumps block-to-block →
+    // zipper noise / clicks. This slower-than-Direct floor (~20 ms) preserves
+    // Drift's organic feel while guaranteeing a continuous cursor trajectory.
+    static constexpr float kDriftMinSmoothingTau = 0.020f;
+
+    // Reference block config — kRefDt is defined in ParameterState.h as a
+    // namespace-level constant shared by all consumers.
 
     SnapshotBank& bank_;
 
     // Physics state (ATS-M7+M8: enum/float params now atomic for thread safety)
     ElasticState elasticState_;
+    // W-2 FIX (audit): tracks the mode used on the previous updatePhysics call
+    // so a transition INTO Elastic re-seeds elasticState_ from the current
+    // cursor (no one-block jump from stale spring state). Audio-thread only.
+    MorphMode lastPhysicsMode_{ MorphMode::Direct };
     std::atomic<int> elasticPreset_{static_cast<int>(ElasticPreset::Medium)};
     std::atomic<int> driftMode_{static_cast<int>(DriftMode::Free)};
     std::atomic<float> driftSpeed_{0.3f};
@@ -131,12 +188,13 @@ private:
     std::vector<float> smoothedValues_;
 
     // Trail
-    std::array<TrailPoint, TRAIL_SIZE> trail_{};
+    // C3 FIX: atomic-packed trail points (two floats per uint64_t) — see getTrailPoint.
+    std::array<std::atomic<uint64_t>, TRAIL_SIZE> trail_{};
     std::atomic<int> trailHead_{0};
     float trailTimer_ = 0.0f;
     static constexpr float TRAIL_INTERVAL = 0.016f;  // ~60 Hz trail sampling
 
-    bool prepared_ = false;
+    std::atomic<bool> prepared_{false};
 
     // Listen Mode
     std::atomic<bool> listenMode_{false};
@@ -144,7 +202,7 @@ private:
     using DiscreteMask = std::vector<uint8_t>;
     std::array<std::unique_ptr<DiscreteMask>, 2> discreteBuffers_{};
     std::atomic<int> discreteActiveIndex_{0};
-    void applyListenFilter(std::vector<float>& output) noexcept;
+    void applyListenFilter(std::span<float> output) noexcept;
 };
 
 } // namespace more_phi

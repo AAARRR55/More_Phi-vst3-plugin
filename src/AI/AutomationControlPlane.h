@@ -4,7 +4,6 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -161,6 +160,10 @@ struct IntegrationEvent
     juce::String transactionId;
     nlohmann::json payload = nlohmann::json::object();
     juce::Time timestamp;
+    // Monotonic, gap-free per-bus sequence stamped by IntegrationEventBus::publish().
+    // Used by BlackboardBridge to cursor forward without losing or re-delivering
+    // events when the bus's bounded ring evicts old entries (audit C1).
+    uint64_t sequence = 0;
 };
 
 struct SyncEnvelope
@@ -228,6 +231,10 @@ struct ApprovalRequest
     juce::String explanation;
     juce::Time createdAt;
     juce::String status = "pending";
+    // AUDIT-FIX (L3-1, 2026-06-29): session/connection ID that created this
+    // approval request. Used to prevent self-approval: the approve() method
+    // rejects if the approver's session matches the originator.
+    juce::String originatingSessionId;
 };
 
 struct ParameterDiff
@@ -307,7 +314,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<AutomationTransaction> transactions_;
 };
 
@@ -319,11 +326,20 @@ public:
     void setAutonomyLevel(AutonomyLevel level);
     AutonomyLevel getAutonomyLevel() const;
     RiskLevel classifyTool(const juce::String& toolName, const nlohmann::json& params) const;
+    // AUDIT-FIX (L3-1, 2026-06-29): added callerSessionId param. Stored into the
+    // ApprovalRequest so that approve() can reject self-approval (where the calling
+    // session matches the approval's originating session).
     PermissionDecision evaluate(const juce::String& toolName,
                                 const nlohmann::json& params,
-                                const juce::String& workflowRunId = {});
+                                const juce::String& workflowRunId = {},
+                                const juce::String& callerSessionId = {});
     nlohmann::json listApprovals() const;
-    bool approve(const juce::String& approvalId);
+    // AUDIT-FIX (L3-1, 2026-06-29): added approverSessionId param to prevent
+    // self-approval — if the approver is the same session that created the
+    // approval request, the call is rejected. Empty sessionId string disables
+    // the origin check for backward compat (e.g. programmatic approval from the
+    // UI confirmation dialog, which has no session affinity).
+    bool approve(const juce::String& approvalId, const juce::String& approverSessionId = {});
     bool reject(const juce::String& approvalId);
     bool updateApprovalPreview(const juce::String& approvalId, const nlohmann::json& predictedDiff);
     nlohmann::json describeState() const;
@@ -335,7 +351,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     AutonomyLevel autonomyLevel_ = AutonomyLevel::Assist;
     std::vector<ApprovalRequest> approvals_;
 };
@@ -347,15 +363,23 @@ public:
 
     IntegrationEvent publish(IntegrationEvent event);
     nlohmann::json listRecent(int limit) const;
+    // Returns events with sequence > sinceSequence, oldest-first (causal order),
+    // capped at limit. Lets a cursor-based consumer advance forward without
+    // re-delivering events even when the bounded ring has evicted old entries.
+    nlohmann::json listRecentSince(uint64_t sinceSequence, int limit) const;
+    // Highest sequence number published so far (0 before any event). A consumer
+    // can cheaply check whether new work exists without pulling the full window.
+    uint64_t lastSequence() const;
     SyncEnvelope exportState(const juce::String& instanceId, const juce::String& sessionId) const;
     IntegrationEvent applyEnvelope(const SyncEnvelope& envelope);
     uint64_t revision() const;
 
 private:
     size_t capacity_ = 256;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<IntegrationEvent> events_;
     uint64_t revision_ = 0;
+    uint64_t sequenceCounter_ = 0;   // gap-free; advanced under mutex_ in publish()
 };
 
 class WorkflowOrchestrator
@@ -377,11 +401,13 @@ private:
     void load();
     void persist() const;
     void replaceStoredRun(const WorkflowRun& run);
+    nlohmann::json serializeRunsToJson() const;
+    void persistInternal(const nlohmann::json& root) const;
 
     juce::File directory_;
     juce::File file_;
 
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<WorkflowRun> runs_;
 };
 
@@ -406,6 +432,8 @@ public:
 private:
     void load();
     void persist() const;
+    nlohmann::json serializeRecordsToJson() const;
+    void persistInternal(const nlohmann::json& root) const;
     int scoreRecord(const MemoryRecord& record,
                     MemoryScope scope,
                     const juce::String& subjectId,
@@ -413,7 +441,7 @@ private:
 
     juce::File directory_;
     juce::File file_;
-    mutable std::mutex mutex_;
+    mutable juce::SpinLock mutex_;
     std::vector<MemoryRecord> records_;
 };
 

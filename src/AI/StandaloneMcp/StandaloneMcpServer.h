@@ -1,8 +1,8 @@
 #pragma once
 
-#include "IZotopeIPCAssistant.h"
-#include "IZotopeIPCDiscovery.h"
-#include "OzonePluginBackend.h"
+#include "MorePhiIPCAssistant.h"
+#include "MorePhiIPCDiscovery.h"
+#include "MorePhiPluginBackend.h"
 
 #include <nlohmann/json.hpp>
 
@@ -27,9 +27,9 @@ class StandaloneMcpServer
 {
 public:
     explicit StandaloneMcpServer(
-        std::unique_ptr<OzonePluginBackend> backend = createOzonePluginBackend(),
-        std::unique_ptr<IZotopeIPCDiscovery> ipcDiscovery = createIZotopeIPCDiscovery(),
-        std::unique_ptr<IZotopeIPCAssistant> ipcAssistant = createIZotopeIPCAssistant());
+        std::unique_ptr<MorePhiPluginBackend> backend = createMorePhiPluginBackend(),
+        std::unique_ptr<MorePhiIPCDiscovery> ipcDiscovery = createMorePhiIPCDiscovery(),
+        std::unique_ptr<MorePhiIPCAssistant> ipcAssistant = createMorePhiIPCAssistant());
 
     nlohmann::json processJson(const nlohmann::json& request);
     std::optional<nlohmann::json> processLine(const std::string& line);
@@ -45,9 +45,9 @@ private:
 
     static nlohmann::json invalidParams(const nlohmann::json& id, const std::string& message);
 
-    std::unique_ptr<OzonePluginBackend> backend;
-    std::unique_ptr<IZotopeIPCDiscovery> ipcDiscovery;
-    std::unique_ptr<IZotopeIPCAssistant> ipcAssistant;
+    std::unique_ptr<MorePhiPluginBackend> backend;
+    std::unique_ptr<MorePhiIPCDiscovery> ipcDiscovery;
+    std::unique_ptr<MorePhiIPCAssistant> ipcAssistant;
     std::vector<ToolDescriptor> tools;
     std::mutex writeMutex;
     bool initialized = false;

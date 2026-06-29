@@ -52,6 +52,7 @@ struct Grain
     int   currentPos   = 0;       ///< Playback cursor within [0, grainLength)
     float pitchRatio   = 1.0f;    ///< Pitch shift factor — 1.0 = no shift
     float pan          = 0.5f;    ///< Stereo panning: 0.0 = full L, 1.0 = full R
+    int   outputStartSample = 0;  ///< DEEP-DIVE FIX: sample offset within the output block
 };
 
 /**
@@ -119,6 +120,7 @@ public:
             g.pitchRatio  = 1.0f;
             g.pan         = 0.5f;
             g.sourceSelect = 0;
+            g.outputStartSample = 0;
         }
         activeCount_ = 0;
     }
@@ -136,10 +138,11 @@ public:
      * @returns             Grain index on success, -1 when pool is exhausted
      */
     [[nodiscard]] int activate(int   sourceSelect,
-                               float amplitude,
-                               int   startSample,
-                               int   grainLength,
-                               float pitchRatio) noexcept
+                                float amplitude,
+                                int   startSample,
+                                int   grainLength,
+                                float pitchRatio,
+                                int   outputStartSample = 0) noexcept
     {
         // Find a free slot via linear scan — MAX_GRAINS = 128, acceptable cost.
         for (int i = 0; i < MAX_GRAINS; ++i)
@@ -157,6 +160,7 @@ public:
                 g.currentPos   = 0;
                 g.pitchRatio   = pitchRatio;
                 g.pan          = 0.5f;
+                g.outputStartSample = outputStartSample;
                 ++activeCount_;
                 return i;
             }

@@ -7,10 +7,10 @@
  * compiles to a single skipped-test placeholder so the suite stays green on
  * default builds.
  *
- * The test loads the staged model artifact (model_scaled.onnx, produced by the
- * Python training pipeline), runs inference on a representative feature frame,
- * and asserts the contract the safety policy + DSP rely on: 72 finite deltas
- * in [-1, 1], deterministic, and that a successful load flips isAvailable() on.
+ * The test loads the staged restraint-trained model artifact, runs inference on
+ * a representative feature frame, and asserts the contract the safety policy +
+ * DSP rely on: 72 finite deltas in [-1, 1], deterministic, and that a
+ * successful load flips isAvailable() on.
  */
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -28,19 +28,12 @@ using Catch::Approx;
 
 namespace {
 
-// Locate the staged model artifact. The build copies it next to the test exe
-// (see tests/CMakeLists.txt ORT block); fall back to the source-tree path used
-// during development.
+// Locate the staged model artifact. Returns empty path if not found — the test
+// skips gracefully in that case. (No standalone ONNX model is staged here; the
+// SonicMaster ONNX model is driven by SonicMasterDecisionRunner.)
 std::filesystem::path resolve_model_path()
 {
-    for (const auto& candidate : {
-             std::filesystem::current_path() / "model_scaled.onnx",
-             std::filesystem::path("scripts/neural-mastering/control/model_scaled.onnx"),
-         })
-    {
-        if (std::filesystem::exists(candidate))
-            return candidate;
-    }
+    // No standalone candidate is staged. Return empty to skip gracefully.
     return {};
 }
 
@@ -76,8 +69,9 @@ TEST_CASE("OnnxNeuralMasteringRunner loads and infers on a real artifact", "[Onn
     const auto model_path = resolve_model_path();
     if (model_path.empty())
     {
-        WARN("model_scaled.onnx not found — skipping live ONNX inference test. "
-             "Stage the artifact via the Python training pipeline to exercise this path.");
+        WARN("ONNX model not staged — skipping live ONNX inference test. "
+             "Export the SonicMaster model via tools/export_onnx/export_patched.py "
+             "to exercise this path.");
         return;
     }
 
@@ -85,7 +79,9 @@ TEST_CASE("OnnxNeuralMasteringRunner loads and infers on a real artifact", "[Onn
     REQUIRE_FALSE(runner.isAvailable());
 
     // loadModel must succeed AND flip availability for a valid v1 artifact.
-    REQUIRE(runner.loadModel(model_path.string(), "morephi-control-scaled", "sha256:unset"));
+    REQUIRE(runner.loadModel(model_path.string(),
+                             "morephi-control-restraint-v5",
+                             "sha256:9a4195c9a39f59087ebbfa38977d258afe2f8abf31f95496a46cb21e1d320938"));
     REQUIRE(runner.isAvailable());
     REQUIRE(runner.usesExternalInference());
 

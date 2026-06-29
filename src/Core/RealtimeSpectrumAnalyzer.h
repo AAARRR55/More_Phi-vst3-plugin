@@ -24,7 +24,22 @@ public:
         float spectralRolloff = 0.0f;
         float spectralFlux = 0.0f;
         float crestFactor = 0.0f;
+        // AUDIT-FIX (A7): THD and program-crest are now COMPUTED in processFrame()
+        // (previously RESERVED stubs — always 0.0f — yet reported by getLiveMeasure-
+        // ments() as if valid, implying zero distortion / zero crest).
+        //   thdPercent        = 100 * sqrt(Σ_{h=2..5} |X(fund·h)|²) / |X(fund)|
+        //   crestFactorProgram = EMA-smoothed per-frame crestFactor (~1 s window)
+        float thdPercent = 0.0f;
+        float crestFactorProgram = 0.0f;
         float spectralTilt = 0.0f;
+        // AUDIT-FIX (DSP-3, Phase 4a): noise floor and SNR metrics. noiseFloorDb
+        // is a running exponential average of the per-bin magnitude during silent
+        // passages (frame RMS < -60 dBFS). signalToNoiseDb is the difference between
+        // the peak signal magnitude and the noise floor. Both are -120 dB (kMinDB)
+        // before a valid estimate exists (first ~1 s of audio, or constantly-loud
+        // material with no silence).
+        float noiseFloorDb = -120.0f;
+        float signalToNoiseDb = 0.0f;
         uint64_t frameIndex = 0;
         double sampleRate = 0.0;
         int fftSize = 0;
@@ -46,6 +61,10 @@ private:
     static constexpr int kDefaultFFTSize = 2048;
     static constexpr int kDefaultHopSize = 512;
     static constexpr int kMaxReadRetries = 8;
+    // AUDIT-FIX (A7): program-level crest factor EMA time constant (~1 s).
+    // alpha is recomputed in prepare() from sampleRate_/hopSize_ so the smoothing
+    // window tracks the actual analysis frame rate.
+    static constexpr double kCrestProgramTauSeconds = 1.0;
 
     void processFrame() noexcept;
     void publishSnapshot(const SpectrumSnapshot& snapshot) noexcept;
@@ -58,14 +77,49 @@ private:
     int writePos_ = 0;
     int hopCounter_ = 0;
     uint64_t frameIndex_ = 0;
+    // AUDIT (crest/RMS, 2026-06-25): total mono samples pushed into the ring
+    // since prepare()/reset(). The program-crest EMA must NOT seed from a frame
+    // that still includes the ring's initial zero-fill — that transient
+    // contaminates the first frame's RMS and seeds the EMA to a wrong value
+    // (~2.8 crest for a pure sine instead of ~1.4), which then takes a full EMA
+    // tau to unlearn. Gate seeding on samplesCaptured_ >= fftSize_ so the first
+    // reported crest is from a genuinely full ring.
+    uint64_t samplesCaptured_ = 0;
 
     std::unique_ptr<juce::dsp::FFT> fft_;
     std::vector<float> window_;
+    // AUDIT-FIX (A3): precomputed window gains for amplitude/energy-correct
+    // magnitudes. Hann coherent gain = Σw/N = 0.5; energy gain = Σw²/N = 0.375.
+    // Dividing raw |X(k)| by (N * windowCoherentGain_) yields the true tone
+    // amplitude (currently the /N-only division biases absolute dB by ~-6 dB).
+    float windowCoherentGain_ = 1.0f;
+    float windowEnergyGain_   = 1.0f;
     std::vector<float> inputBuffer_;
     std::vector<float> linearFrame_;
+    // AUDIT-FIX (M2): un-windowed copy of the current frame. crestFactor /
+    // peak / RMS must be computed on the raw signal, not the Hann-windowed
+    // linearFrame_ (the window biases peak down by up to −6 dB and skews RMS).
+    std::vector<float> rawFrame_;
+    // M-1 FIX: DC-removed scratch buffer for SIMD peak detection in processFrame().
+    // Allocated once in prepare(), reused every frame on the analysis thread.
+    std::vector<float> dcRemovedFrame_;
     std::vector<float> fftScratch_;
     std::vector<float> rawMagnitude_;
-    std::vector<float> previousMagnitude_;
+    std::vector<float> previousMagnitudeDb_;
+    // AUDIT-FIX (A7): program-level crest EMA state + per-frame smoothing coeff.
+    float crestProgramEma_ = 0.0f;
+    float crestProgramAlpha_ = 0.0f;
+
+    // AUDIT-FIX (DSP-3, Phase 4a): noise floor tracking state.
+    // noiseFloorDb_ is an exponential average updated only during silent frames
+    // (peak < kSilenceThreshold). noiseFloorValid_ is set after the first silent
+    // frame. peakSignalDb_ tracks the highest signal level seen.
+    static constexpr float kSilenceThreshold   = 0.001f;   // ~-60 dBFS peak
+    static constexpr float kNoiseFloorAlpha     = 0.01f;    // slow tracking (~100 frames)
+    static constexpr float kPeakSignalAlpha     = 0.001f;   // very slow decay
+    float noiseFloorDb_    = -120.0f;
+    float peakSignalDb_    = -120.0f;
+    bool  noiseFloorValid_ = false;
 
     mutable std::atomic<uint32_t> version_ { 0 };
     SpectrumSnapshot publishedSnapshot_;

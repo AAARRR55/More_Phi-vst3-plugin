@@ -15,16 +15,51 @@ BreedingPanel::BreedingPanel(MorePhiProcessor& processor)
     : proc_(processor)
 {
     breedButton_.onClick = [this]() { breedSnapshots(); };
+    breedButton_.setTooltip(
+        "Breed: crosses two randomly selected occupied snapshots using genetic "
+        "crossover, storing the result in the next empty slot.");
     mutateButton_.onClick = [this]() { mutateSnapshot(); };
+    mutateButton_.setTooltip(
+        "Mutate: applies random perturbation to a randomly selected snapshot's "
+        "parameters, stored in the next empty slot. Only affects learned/exposed parameters.");
     randomizeButton_.onClick = [this]() { randomizeMorphPosition(); };
+    randomizeButton_.setTooltip(
+        "Randomize: jumps the morph cursor to a random position on the pad "
+        "for unexpected sound exploration.");
+
+    waypointStartStop_.setClickingTogglesState(true);
+    waypointStartStop_.setTooltip(
+        "Toggle waypoint playback. Waypoints define a timed sequence of morph positions "
+        "for automated morph animation.");
+    waypointStartStop_.onClick = [this] {
+        auto& wp = proc_.getWaypointEngine();
+        wp.setPlaying(waypointStartStop_.getToggleState());
+        statusLabel_.setText(waypointStartStop_.getToggleState()
+            ? "Waypoint playback started"
+            : "Waypoint playback stopped", juce::dontSendNotification);
+    };
+
+    clearWaypoints_.setTooltip(
+        "Clear all waypoints and reset the waypoint sequence.");
+    clearWaypoints_.onClick = [this] {
+        auto& wp = proc_.getWaypointEngine();
+        wp.configure({});
+        waypointStartStop_.setToggleState(false, juce::dontSendNotification);
+        statusLabel_.setText("Waypoints cleared", juce::dontSendNotification);
+    };
 
     statusLabel_.setJustificationType(juce::Justification::centredLeft);
     statusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffa0a0b0));
     statusLabel_.setText("Snapshot genetics ready", juce::dontSendNotification);
 
+    // C2: update button enabled states every 2 seconds
+    startTimerHz(2);
+
     addAndMakeVisible(breedButton_);
     addAndMakeVisible(mutateButton_);
     addAndMakeVisible(randomizeButton_);
+    addAndMakeVisible(waypointStartStop_);
+    addAndMakeVisible(clearWaypoints_);
     addAndMakeVisible(statusLabel_);
 }
 
@@ -44,8 +79,25 @@ void BreedingPanel::resized()
     mutateButton_.setBounds(area.removeFromLeft(76));
     area.removeFromLeft(6);
     randomizeButton_.setBounds(area.removeFromLeft(92));
+    area.removeFromLeft(6);
+    waypointStartStop_.setBounds(area.removeFromLeft(100));
+    area.removeFromLeft(4);
+    clearWaypoints_.setBounds(area.removeFromLeft(78));
     area.removeFromLeft(10);
     statusLabel_.setBounds(area);
+}
+
+void BreedingPanel::timerCallback()
+{
+    // C2: gate button enabled states so users don't click into silent no-ops
+    auto& bank = proc_.getSnapshotBank();
+    std::array<int, SnapshotBank::NUM_SLOTS> occupied{};
+    const int occupiedCount = bank.getOccupiedSlots(occupied);
+    const int wpCount = proc_.getWaypointEngine().getNumWaypoints();
+
+    breedButton_.setEnabled(occupiedCount >= 2);
+    mutateButton_.setEnabled(occupiedCount >= 1);
+    clearWaypoints_.setEnabled(wpCount > 1);  // default single waypoint always present
 }
 
 void BreedingPanel::breedSnapshots()
@@ -107,6 +159,12 @@ void BreedingPanel::breedSnapshots()
     }
 
     const int targetSlot = findNextEmptySlot();
+    if (targetSlot < 0)
+    {
+        statusLabel_.setText("All 12 slots are full — clear one before breeding.",
+                             juce::dontSendNotification);
+        return;
+    }
     bank.captureValues(targetSlot, blended);
 
     statusLabel_.setText("Bred slot " + juce::String(targetSlot + 1)
@@ -161,6 +219,12 @@ void BreedingPanel::mutateSnapshot()
     }
 
     const int targetSlot = findNextEmptySlot();
+    if (targetSlot < 0)
+    {
+        statusLabel_.setText("All 12 slots are full — clear one before mutating.",
+                             juce::dontSendNotification);
+        return;
+    }
     bank.captureValues(targetSlot, mutated);
 
     statusLabel_.setText("Mutated slot " + juce::String(sourceSlot + 1)
@@ -197,8 +261,10 @@ int BreedingPanel::findNextEmptySlot() const
             return i;
     }
 
-    // If all slots are full, recycle slot 0.
-    return 0;
+    // AUDIT-FIX: All slots occupied. Previously returned 0 and silently
+    // overwrote slot 0 — destructive data loss with no confirmation. Return
+    // -1 so callers can surface the condition instead of clobbering a snapshot.
+    return -1;
 }
 
 } // namespace more_phi

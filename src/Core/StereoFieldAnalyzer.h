@@ -70,6 +70,9 @@ private:
     std::array<float, kNumBands> sumR2_ {};
     std::array<float, kNumBands> sumM2_ {};
     std::array<float, kNumBands> sumS2_ {};
+    // AUDIT-FIX: Per-band L/R sums for unbiased correlation (DC subtraction).
+    std::array<float, kNumBands> sumL_ {};
+    std::array<float, kNumBands> sumR_ {};
 
     mutable std::atomic<uint32_t> version_ { 0 };
     StereoFieldSnapshot publishedSnapshot_;

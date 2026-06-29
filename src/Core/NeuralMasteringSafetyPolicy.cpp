@@ -185,6 +185,35 @@ void projectMaskedTargets(MasteringTargetVector& output,
         projectArray(output.loudness, previous.loudness, candidate.deltas.loudness, config.minTargets.loudness, config.maxTargets.loudness, config.maxDeltaPerPlan.loudness, projected);
 }
 
+// AUDIT-FIX (F4.1): clamp a plan's projectedTargets deltas to maxDeltaPerPlan
+// relative to the last safe baseline. Used by applyValidatedPlan so a direct
+// in-process caller that bypasses validate() cannot exceed the per-cycle slew
+// limit (e.g. >0.6 LU/cycle loudness). Only the dimensions the plan actually
+// applies (plan.appliedMask) are slew-limited; unmasked dimensions are left to
+// the caller. Returns the count of clamped dimensions for telemetry.
+template <std::size_t N>
+std::size_t clampDeltaArray(std::array<float, N>& current,
+                            const std::array<float, N>& previous,
+                            const std::array<float, N>& maxDelta) noexcept
+{
+    std::size_t clamped = 0;
+    for (std::size_t i = 0; i < current.size(); ++i)
+    {
+        const float delta = current[i] - previous[i];
+        const float bounded = std::clamp(delta, -maxDelta[i], maxDelta[i]);
+        if (bounded != delta)
+        {
+            current[i] = previous[i] + bounded;
+            ++clamped;
+        }
+    }
+    return clamped;
+}
+
+// enforceDeltaCaps moved out of the anonymous namespace (C2888: a class member
+// cannot be defined inside an anonymous namespace it wasn't declared in). See
+// the definition below, after the anon-namespace closes.
+
 bool isHardRejectIssue(NeuralMasteringValidationIssue issue) noexcept
 {
     switch (issue)
@@ -327,6 +356,36 @@ NeuralMasteringSafetyPolicyConfig NeuralMasteringSafetyPolicy::defaultConfig() n
     return config;
 }
 
+// AUDIT-FIX (F4.1): clamp a plan's projectedTargets deltas to maxDeltaPerPlan
+// relative to the last safe baseline. Defined OUTSIDE the anonymous namespace
+// (it's a class member; C2888 forbids member defs inside an anon namespace).
+// Uses clampDeltaArray which is internal-linkage and stays in the anon block.
+std::size_t NeuralMasteringSafetyPolicy::enforceDeltaCaps(
+    ValidatedNeuralMasteringPlan& current,
+    const ValidatedNeuralMasteringPlan& lastSafePlan,
+    bool hasLastSafe) noexcept
+{
+    if (!hasLastSafe)
+        return 0; // no baseline -> first apply is unconstrained (same as validate())
+
+    const auto& cfg = config_;
+    const auto& prev = lastSafePlan.projectedTargets;
+    std::size_t total = 0;
+    if (current.appliedMask.eq)
+        total += clampDeltaArray(current.projectedTargets.eq, prev.eq, cfg.maxDeltaPerPlan.eq);
+    if (current.appliedMask.dynamics)
+        total += clampDeltaArray(current.projectedTargets.dynamics, prev.dynamics, cfg.maxDeltaPerPlan.dynamics);
+    if (current.appliedMask.stereo)
+        total += clampDeltaArray(current.projectedTargets.stereo, prev.stereo, cfg.maxDeltaPerPlan.stereo);
+    if (current.appliedMask.harmonic)
+        total += clampDeltaArray(current.projectedTargets.harmonic, prev.harmonic, cfg.maxDeltaPerPlan.harmonic);
+    if (current.appliedMask.limiter)
+        total += clampDeltaArray(current.projectedTargets.limiter, prev.limiter, cfg.maxDeltaPerPlan.limiter);
+    if (current.appliedMask.loudness)
+        total += clampDeltaArray(current.projectedTargets.loudness, prev.loudness, cfg.maxDeltaPerPlan.loudness);
+    return total;
+}
+
 NeuralMasteringSafetyPolicy::NeuralMasteringSafetyPolicy(NeuralMasteringSafetyPolicyConfig config) noexcept
     : config_(config)
 {
@@ -342,6 +401,11 @@ NeuralMasteringValidationResult NeuralMasteringSafetyPolicy::validate(const Neur
     result.plan.fallbackMode = NeuralMasteringFallbackMode::None;
     result.plan.gateResults = makeDefaultGates();
     result.plan.evidenceLevel = candidate.evidenceLevel;
+    // AUDIT-FIX: propagate the compressor sidecar from the candidate so the
+    // verdict preserves the model's full per-band params. Previously dropped.
+    result.plan.compParams    = candidate.compParams;
+    result.plan.hasCompParams = candidate.hasCompParams;
+    result.plan.capturedAtSteadyClockNs = candidate.capturedAtSteadyClockNs;
 
     if (candidate.schemaVersion != config_.planSchemaVersion)
         result.addIssue(NeuralMasteringValidationIssue::SchemaVersionMismatch);
@@ -432,13 +496,40 @@ NeuralMasteringValidationResult NeuralMasteringSafetyPolicy::validate(const Neur
         return result;
     }
 
+    // AUDIT-FIX (AI-4, Phase 3a): confidence-weighted delta caps. When the plan's
+    // confidence is below 1.0 but above minConfidence (i.e., confidence was high
+    // enough to pass the LowConfidence gate above), scale the per-cycle delta caps
+    // by the confidence factor so lower-confidence plans are more conservatively
+    // applied. The weight bottoms out at config_.minConfidence so even a
+    // borderline plan (confidence = 0.75) still gets 75% of the normal delta
+    // envelope — never zero. A full-confidence plan (confidence = 1.0) gets the
+    // full envelope unchanged. This is a soft constraint applied only at the
+    // projection step, not a hard reject — the plan still runs.
+    NeuralMasteringSafetyPolicyConfig effectiveConfig = config_;
+    if (std::isfinite(candidate.confidence)
+        && candidate.confidence >= config_.minConfidence
+        && candidate.confidence < 1.0f)
+    {
+        const float scale = std::max(config_.minConfidence, candidate.confidence);
+        auto scaleArray = [scale](auto& arr)
+        {
+            for (auto& v : arr) v *= scale;
+        };
+        scaleArray(effectiveConfig.maxDeltaPerPlan.eq);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.dynamics);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.stereo);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.harmonic);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.limiter);
+        scaleArray(effectiveConfig.maxDeltaPerPlan.loudness);
+    }
+
     MasteringTargetVector previous {};
     if (hasLastSafePlan_)
         previous = lastSafePlan_.projectedTargets;
 
     bool projected = false;
     MasteringTargetVector projectedTargets {};
-    projectMaskedTargets(projectedTargets, previous, candidate, config_, projected);
+    projectMaskedTargets(projectedTargets, previous, candidate, effectiveConfig, projected);
     if (projected)
         result.addIssue(NeuralMasteringValidationIssue::MaxDeltaProjected);
 

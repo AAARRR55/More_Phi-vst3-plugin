@@ -19,22 +19,17 @@ PerformancePanel::PerformancePanel(MorePhiProcessor& proc)
 {
     auto& apvts = proc_.getAPVTS();
 
-    setupToggleButton(coarseWritesToggle_);
-    coarseWritesToggle_.setTooltip(
-        "Larger write deadband: fewer setValue() calls to the hosted plugin during morphing.");
-    ParameterBinding::bindToggleButton(coarseWritesToggle_, apvts, "coarseParameterWrites");
-
     setupToggleButton(disableTouchToggle_);
     disableTouchToggle_.setTooltip(
-        "Skip the per-block batch parameter read and touch-detection logic (pure morph output).");
+        "Ignore manual knob touches — let morphing fully control all parameters.");
     ParameterBinding::bindToggleButton(disableTouchToggle_, apvts, "disableTouchDetection");
 
     setupToggleButton(throttleCommitsToggle_);
     throttleCommitsToggle_.setTooltip(
-        "Push parameter updates to the hosted plugin only every 4th block (continuous-morph CPU relief).");
+        "Fewer parameter updates per second (saves CPU; morphs may feel slightly stepped). "
+        "Combines the former 'Lower Write Rate' and 'Update Every 4th Block' toggles.");
     ParameterBinding::bindToggleButton(throttleCommitsToggle_, apvts, "throttleParamCommits");
 
-    addAndMakeVisible(coarseWritesToggle_);
     addAndMakeVisible(disableTouchToggle_);
     addAndMakeVisible(throttleCommitsToggle_);
 }
@@ -50,7 +45,7 @@ void PerformancePanel::paint(juce::Graphics& g)
     g.setColour(border());
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.25f), 4.0f, 0.5f);
 
-    drawSectionLabel(g, "PERFORMANCE",
+    drawSectionLabel(g, "CPU SAVER",
                      juce::Rectangle<int>(0, 0, kLabelWidth, getHeight()));
 }
 
@@ -62,9 +57,6 @@ void PerformancePanel::resized()
 
     juce::FlexBox row;
     row.flexDirection = juce::FlexBox::Direction::row;
-    row.items.add(juce::FlexItem(coarseWritesToggle_)
-                      .withFlex(1)
-                      .withMargin(juce::FlexItem::Margin(0, 4, 0, 0)));
     row.items.add(juce::FlexItem(disableTouchToggle_)
                       .withFlex(1)
                       .withMargin(juce::FlexItem::Margin(0, 4, 0, 0)));

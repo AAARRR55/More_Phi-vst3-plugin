@@ -30,6 +30,11 @@ public:
     /** Programmatically select a tab without triggering onTabChanged. */
     void setSelectedTab(int tab);
 
+    // AUDIT-2026-06-25: standard/expert mode hides Engine, Modulation and AI tabs.
+    // Bits correspond to Tab enum values (1 << Classic, 1 << Engine, ...).
+    void setVisibleTabs(int visibleMask) noexcept;
+    [[nodiscard]] bool isTabVisible(int tab) const noexcept;
+
     /** Called whenever the active tab changes.  Argument is the new tab index. */
     std::function<void(int)> onTabChanged;
 
@@ -41,6 +46,7 @@ private:
 
     int selected_ = 0;
     int hovered_ = -1;
+    int visibleMask_ = (1 << Classic) | (1 << Engine) | (1 << Modulation) | (1 << Presets) | (1 << AI);
 
     static constexpr const char* tabNames[] = { "Classic", "Engine", "Modulation", "Presets", "AI" };
 

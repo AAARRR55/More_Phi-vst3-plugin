@@ -22,6 +22,16 @@
 
 #include <stdint.h>
 
+// Cross-platform shared-object export macro. MUST be applied consistently to
+// BOTH the declarations here and the definitions in the .cpp, otherwise MSVC
+// rejects the definition as "redefinition; different linkage" (C2375) — the
+// header decl (no attribute) and the .cpp def (dllexport) would disagree.
+#if defined(_WIN32)
+    #define MPHRENDER_EXPORT __declspec(dllexport)
+#else
+    #define MPHRENDER_EXPORT __attribute__((visibility("default")))
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -43,12 +53,12 @@ extern "C" {
 //
 // Returns 0 on success, nonzero on error.
 // ---------------------------------------------------------------------------
-int morephi_headless_init(double sampleRate, int maxBlockSize, int normalizerMode);
+MPHRENDER_EXPORT int morephi_headless_init(double sampleRate, int maxBlockSize, int normalizerMode);
 
 // Optional explicit teardown (releases the engine + JUCE MessageManager).
 // Safe to call multiple times. After this, init() must be called again before
 // any render() call.
-void morephi_headless_shutdown(void);
+MPHRENDER_EXPORT void morephi_headless_shutdown(void);
 
 // ---------------------------------------------------------------------------
 // render — render ONE candidate 72-delta vector through the mastering chain.
@@ -82,7 +92,7 @@ void morephi_headless_shutdown(void);
 // thread, serialized. For parallel CMA-ES populations, run multiple Python
 // processes (each loads its own .so).
 // ---------------------------------------------------------------------------
-int render(const float*  unmastered_pcm,
+MPHRENDER_EXPORT int render(const float*  unmastered_pcm,
            int           n_samples,
            double        sample_rate,
            const float*  delta72,
@@ -95,7 +105,7 @@ int render(const float*  unmastered_pcm,
 // when the harmonic delta enabled it) in samples at the current sample rate.
 // Edge-accurate renderers should feed `latency` trailing silence and discard
 // the first `latency` rendered samples.
-int morephi_headless_chain_latency(void);
+MPHRENDER_EXPORT int morephi_headless_chain_latency(void);
 
 #ifdef __cplusplus
 } // extern "C"

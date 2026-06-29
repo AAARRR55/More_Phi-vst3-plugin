@@ -12,9 +12,9 @@
 #include <cstdint>
 #include <mutex>
 
-namespace more_phi {
+#include "ParameterState.h"   // MAX_PARAMETERS
 
-constexpr int MAX_PARAMS = 2048;
+namespace more_phi {
 
 // Parameter type classification
 enum class ParameterType : uint8_t
@@ -148,7 +148,7 @@ public:
     void clearLearningData();
     
 private:
-    std::array<ParameterMetadata, MAX_PARAMS> metadata_;
+    std::array<ParameterMetadata, MAX_PARAMETERS> metadata_;
     std::atomic<uint32_t> parameterCount_{0};
     LearnConfiguration learnConfig_;
     mutable std::mutex mutex_;

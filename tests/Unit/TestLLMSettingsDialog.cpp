@@ -8,13 +8,14 @@ TEST_CASE("LLM settings dialog exposes exactly the approved provider names", "[u
 {
     const auto names = LLMSettingsDialog::providerNamesForMenu();
 
-    REQUIRE(names.size() == 6);
+    REQUIRE(names.size() == 7);
     CHECK(names[0] == "NVIDIA");
     CHECK(names[1] == "DeepSeek");
     CHECK(names[2] == "OpenAI");
     CHECK(names[3] == "Anthropic");
     CHECK(names[4] == "OpenRouter");
-    CHECK(names[5] == "OpenAI Compatible");
+    CHECK(names[5] == "Google Gemini");
+    CHECK(names[6] == "OpenAI Compatible");
 }
 
 TEST_CASE("LLM settings dialog only allows OpenAI Compatible base URL edits", "[unit][ui][llm]")
@@ -24,5 +25,6 @@ TEST_CASE("LLM settings dialog only allows OpenAI Compatible base URL edits", "[
     CHECK_FALSE(LLMSettingsDialog::isBaseUrlEditableForProvider(LLMProviderId::OpenAI));
     CHECK_FALSE(LLMSettingsDialog::isBaseUrlEditableForProvider(LLMProviderId::Anthropic));
     CHECK_FALSE(LLMSettingsDialog::isBaseUrlEditableForProvider(LLMProviderId::OpenRouter));
+    CHECK_FALSE(LLMSettingsDialog::isBaseUrlEditableForProvider(LLMProviderId::Gemini));
     CHECK(LLMSettingsDialog::isBaseUrlEditableForProvider(LLMProviderId::OpenAICompatible));
 }

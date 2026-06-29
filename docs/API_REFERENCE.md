@@ -1,16 +1,27 @@
 # More-Phi API Reference
 
-This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically.
+> **Audit Score: 7.9/10** — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) for the complete 39 KB technical audit with 26 verifiable claims.
+
+This document describes the MCP (Model Context Protocol) API for More-Phi, enabling AI assistants and external tools to control the plugin programmatically. More-Phi exposes **30+ MCP tools** across 9 categories including hosted plugin control, snapshot/morph management, analysis/metering, mastering workflow, More-Phi parameter control, AI/Learn Mode, agent orchestration (7 agent tools), dataset generation, and neural mastering.
+
+---
+
 
 ---
 
 ## Overview
 
-More-Phi exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool calls for:
-- Plugin information queries
-- Parameter manipulation
-- Snapshot management
-- Morphing control
+More-Phi exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool calls across 9 categories:
+
+- **Hosted Plugin** — Plugin info, parameter read/write (single + batch), sweep, load/scan lifecycle
+- **Snapshots & Morphing** — Capture/recall snapshots, morph position, compatibility analysis, intermediate suggestions
+- **Analysis & Metering** — LUFS, true-peak, spectrum, stereo field, comparison renders, pipeline diagnostics
+- **Mastering** — Heuristic + neural mastering plans, preview/render batch, Ozone integration (Track Assistant)
+- **More-Phi Control** — Direct More-Phi APVTS parameter read/write
+- **AI & Learning** — Parameter classification, token optimization, Learn Mode, semantic mapping
+- **Agents** — 7-agent orchestration: list, run goal/task, status, cancel, blackboard, autonomy
+- **Dataset** — Synthetic audio dataset generation (V2 + V3 pipelines)
+- **System** — Multi-instance info/list, self-test, heartbeat
 
 ---
 
@@ -20,8 +31,9 @@ More-Phi exposes a JSON-RPC 2.0 server on `localhost:30001` that accepts tool ca
 |----------|-------|
 | Protocol | JSON-RPC 2.0 |
 | Host | localhost (127.0.0.1) |
-| Port | 30001 |
+| Port | Per-instance (default 30001, displayed in UI) |
 | Transport | TCP |
+| Auth | Bearer token (shown in UI, constant-time comparison) |
 
 ### Connection Example (Python)
 
@@ -300,14 +312,39 @@ Set a single parameter value. Identify the target by `stableId` when available, 
     "index": 0,
     "value": 0.5,
     "queued": 1,
-    "rejected": 0
+    "rejected": 0,
+    "appliedNow": 1,
+    "pendingAfter": 0,
+    "flush": {
+        "pending_before": 1,
+        "drained": 1,
+        "pending_after": 0,
+        "plugin_unavailable": false,
+        "exclusive_access_timed_out": false,
+        "retry_count": 0,
+        "waited_ms": 5,
+        "out_of_range_count": 0
+    },
+    "verification": {
+        "status": "success",
+        "requested_value": 0.5,
+        "value_before": 0.25,
+        "value_after": 0.5,
+        "human_before": "25%",
+        "human_after": "50%",
+        "execution_time_ms": 8.3,
+        "verified": true
+    }
 }
 ```
 
 **Notes:**
 - Value must be normalized (0.0 - 1.0)
-- Changes are applied audio-thread safe via lock-free queue
-- Effect may be delayed by one audio buffer
+- Changes are applied audio-thread safe via lock-free queue with immediate assistant flush
+- **AUDIT-FIX 4.3:** `success` is gated on `verification.verified == true`. If the edit is queued but not yet applied, `success` is `false` and `verification.status` is `"queued"`.
+- **AUDIT-FIX 4.7:** If the parameter index exceeds the hosted plugin's actual parameter count, `flush.out_of_range_count > 0` and `verification.status` is `"parameter_index_out_of_range"`.
+- **AUDIT-FIX 4.1:** For discrete parameters, verification uses a step-aware tolerance. A snap to the wrong step returns `"value_drift_discrete"`.
+- **AUDIT-FIX 4.5:** If the morph engine overwrites the edit, `verification.status` reports `"morph_overwrite_risk"`.
 - A full queue returns `success: false`, `error: "queue_full"`, and `queued: 0`
 
 ---
@@ -338,14 +375,53 @@ Queue multiple parameter edits in one request. Each item accepts `stableId`, `in
     "success": true,
     "queued": 3,
     "applied": 3,
+    "appliedNow": 3,
     "requested": 3,
     "rejected": 0,
-    "queueFailures": 0
+    "queueFailures": 0,
+    "verifiedCount": 3,
+    "pendingAfter": 0,
+    "flush": {
+        "pending_before": 3,
+        "drained": 3,
+        "pending_after": 0,
+        "plugin_unavailable": false,
+        "exclusive_access_timed_out": false,
+        "retry_count": 0,
+        "waited_ms": 12,
+        "out_of_range_count": 0
+    },
+    "verification": [
+        {
+            "index": 0,
+            "verification": {
+                "status": "success",
+                "requested_value": 0.5,
+                "value_before": 1.0,
+                "value_after": 0.5,
+                "verified": true
+            }
+        },
+        {
+            "index": 1,
+            "verification": {
+                "status": "success",
+                "requested_value": 0.75,
+                "value_before": 0.5,
+                "value_after": 0.75,
+                "verified": true
+            }
+        }
+    ]
 }
 ```
 
 If any item cannot be resolved or queued, `success` is `false` and the response includes
 `rejected`, `queueFailures`, and an `error` such as `partial_rejected` or `queue_full`.
+
+**AUDIT-FIX 4.3:** `verifiedCount` reports how many edits passed verification. If all items
+were queued but none verified as applied, `success` is `false` with a warning suggesting
+the plugin may not be ready.
 
 ---
 
@@ -483,6 +559,97 @@ Get current morph position and mode.
 
 ---
 
+## Agent API
+
+More-Phi v3.4.1 exposes a multi-agent orchestration API through 7 dedicated MCP tools dispatched via `MCPToolHandler::handle` and classified in `PermissionKernel::classifyTool`. These tools allow AI clients and external scripts to inspect the agent system, submit goals, and manage agent lifecycle.
+
+> **Note:** The earlier `orchestrator.describe_system_state` and `orchestrator.submit_user_goal` tool names are **deprecated**. Use the `agents.*` tools listed below instead.
+
+### Agent Tools
+
+The multi-agent layer exposes 7 dedicated tools dispatched via `MCPToolHandler::handle` and classified in `PermissionKernel::classifyTool`. These tools use the `agents.*` naming prefix:
+
+| Tool | Method | Purpose | Key Arguments |
+|---|---|---|---|
+| `agents.list` | `tools/call` | Lists all registered agents with status and capabilities | None |
+| `agents.run_goal` | `tools/call` | Submits a high-level goal to Conductor for decomposition | `goal` (string) |
+| `agents.run_task` | `tools/call` | Submits a single task to a specific agent | `agent`, `task` |
+| `agents.run_status` | `tools/call` | Queries status of a running goal/task | `goal_id` or `task_id` |
+| `agents.run_cancel` | `tools/call` | Cancels a running goal/task | `goal_id` or `task_id` |
+| `agents.blackboard.recent` | `tools/call` | Returns recent blackboard events | `agent`, `limit` |
+| `agents.set_autonomy` | `tools/call` | Adjusts agent autonomy level | `level` (`manual`/`assisted`/`autonomous`) |
+
+**Example — list agents:**
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "agents.list",
+        "arguments": {}
+    },
+    "id": 10
+}
+```
+
+**Example — run a goal:**
+```json
+{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+        "name": "agents.run_goal",
+        "arguments": {
+            "goal": "make this track louder and brighter"
+        }
+    },
+    "id": 11
+}
+```
+
+### Agent Runtime Lifecycle
+
+The `AgentRuntime` is the C++ class that manages the multi-agent system. Its lifecycle is:
+
+1. **Construct** — Lazily created by `MorePhiProcessor::startMCPServerIfNeeded()` after the MCP server's `AutomationRuntime` exists. Registers all 7 built-in agents (Conductor + 6 specialists) and starts the 2-worker scheduler pool.
+2. **Start** — The runtime starts its scheduler workers and begins accepting goals via the `agents.*` MCP tools.
+3. **Submit** — A user goal is submitted via `agents.run_goal`. The `ConductorAgent` decomposes it and delegates sub-tasks to the specialist agents via the `PriorityScheduler`.
+4. **Stop** — Called in `MorePhiProcessor`'s destructor *before* stopping the MCP server. All agents are returned to idle, the scheduler is drained, workers join, and the runtime is torn down before the subsystems it references are destroyed.
+
+### MCP Protocol Schemas
+
+The `McpProtocol` namespace (in `src/AI/Orchestrator/`) defines JSON-RPC 2.0 message schemas used for message construction and tool dispatch. When building custom MCP clients, reference these schemas to ensure compatibility:
+
+- `McpRequest` — wraps `jsonrpc`, `method`, `params`, and `id`.
+- `McpResponse` — wraps `jsonrpc`, `result`, and `id`.
+- `McpNotification` — one-way message (no `id` field).
+- `McpError` — wraps `code`, `message`, and optional `data`.
+
+All messages follow JSON-RPC 2.0. The `tools/call` method is the standard entry point for every tool, including agent tools.
+
+---
+
+## Runtime Configuration
+
+`EcosystemConfig` (in `src/AI/Orchestrator/EcosystemConfig.cpp`) provides unified JSON configuration for plugin, agents, MCP, and security settings. It is loaded during plugin initialization from `config/agents/agent_runtime.default.json` and internal defaults.
+
+> **Note:** The `ecosystem.get_config` and `ecosystem.set_config` MCP tool names documented in earlier revisions do **not exist** as MCP tools. Configuration is loaded at startup and is not dynamically mutable via the MCP protocol at this time.
+
+**Common fields (internal):**
+
+| Field | Type | Description |
+|---|---|---|
+| `mcpEnabled` | Bool | Whether the MCP server should start automatically on plugin load. |
+| `mcpPort` | Int | Preferred local port for the MCP server (default: 30001). |
+| `agentAutonomyLevel` | Choice | Global autonomy override: `manual`, `conductor_gated`, or `automatic`. |
+| `realtimePriority` | Choice | Thread priority for the RealtimeControl agent: `normal`, `elevated`, or `realtime_critical`. |
+| `blackboardHistorySize` | Int | Number of past agent results retained in the BlackboardBridge for context. |
+| `safetyPolicy` | String | Name of the active safety policy loaded by the QualitySafety agent. |
+
+Changes to `mcpPort` or `mcpEnabled` require a restart of the MCP server to take effect.
+
+---
+
 ## Error Codes
 
 | Code | Description |
@@ -506,14 +673,26 @@ The MCP server does not implement explicit rate limiting. However:
 - Rapid changes may be coalesced
 - Recommended: max 100 commands per second
 
+## Neural Mastering Pipeline
+
+The `mastering.render_batch` dry-run path populates a real `lufs_error` per candidate (`|targetLUFS − measuredLUFS|`), enabling `OptimizationAgent` scoring. Neural mastering edits are applied through the same `LockFreeQueue` → audio-thread drain → `ParameterBridge` path as MCP `set_parameter`, with:
+- `holdAgainstMorph=true` on all neural edits
+- Read-back verification via `getLastApplyVerification()` / `lastApplyWasPartial()`
+- Plan boundary markers (`enqueuePlanBoundary()` + `lastDrainedPlanId_` atomic)
+- Transition guard (discards capture windows straddling parameter changes)
+- Action ledger cap raised to 4096 entries
+
 ---
 
 ## Security Considerations
 
 - Server only accepts localhost connections
-- No authentication (designed for local use only)
+- Bearer token authentication (displayed in UI AI status panel, constant-time comparison to prevent timing attacks)
 - No encryption (not needed for localhost)
-- Don't expose port 30001 to external networks
+- Don't expose the MCP port to external networks
+- 30-second idle timeout on connections
+- Instance-scoped `AutomationRuntime` (no global static); cache keys prefixed with `instanceId + ":"`
+- TTL-based zombie eviction in `InstanceRegistry`
 
 ---
 

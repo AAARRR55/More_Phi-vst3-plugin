@@ -42,6 +42,7 @@ public:
 
     explicit LLMChatClient(MorePhiProcessor& processor);
     LLMChatClient(MorePhiProcessor& processor, std::shared_ptr<ILLMHttpClient> httpClient);
+    ~LLMChatClient();
 
     /**
      * Send userMessage, run the tool agent loop, and call back with the final
@@ -60,6 +61,9 @@ public:
     /** Convert MCPToolHandler::getToolList() JSON into Anthropic tools array JSON. */
     static juce::String mcpToolsToAnthropicJson();
 
+    /** Convert MCPToolHandler::getToolList() JSON into Gemini functionDeclarations JSON. */
+    static juce::String mcpToolsToGeminiJson();
+
     /** Resolve an LLM API-safe tool alias back to the MCP tool name. */
     static juce::String resolveToolNameForTest(const juce::String& apiToolName);
 
@@ -75,6 +79,10 @@ public:
     /** Parse an OpenAI-format response body and return extracted tool calls as JSON.
      *  Exposed for testing the NVIDIA inline-token fallback parser. */
     static juce::String parseOpenAIResponseForTest(int statusCode, const juce::String& body);
+
+    /** Parse a Gemini-format response body and return extracted text/tool calls as JSON.
+     *  Exposed for testing. */
+    static juce::String parseGeminiResponseForTest(int statusCode, const juce::String& body);
 
     /** Return the max_tokens budget for a given model id. Reasoning models
      *  (DeepSeek-R1, Nemotron, QwQ, ...) need a larger budget because their
@@ -108,6 +116,11 @@ private:
                                                    const std::string& messagesJson,
                                                    const nlohmann::json& toolsArray);
 
+    static juce::String buildGeminiRequestBody(const LLMProviderSettings& ps,
+                                                const juce::String& model,
+                                                const std::string& messagesJson,
+                                                const nlohmann::json& toolsArray);
+
     static LLMHttpRequest buildHttpRequest(LLMProviderId id,
                                            const LLMProviderSettings& ps,
                                            const juce::String& body);
@@ -115,6 +128,7 @@ private:
     // ── Response parsing ───────────────────────────────────────────────────
     static ParsedResponse parseOpenAIResponse(int statusCode, const juce::String& body);
     static ParsedResponse parseAnthropicResponse(int statusCode, const juce::String& body);
+    static ParsedResponse parseGeminiResponse(int statusCode, const juce::String& body);
 
     // ── Anthropic message format conversion ────────────────────────────────
     /** Convert OpenAI-style message array (nlohmann::json) to Anthropic format.
@@ -132,6 +146,7 @@ private:
     MorePhiProcessor&               processor_;
     std::shared_ptr<ILLMHttpClient> httpClient_;
     mutable AutomationRuntime       automationRuntime_;
+    std::shared_ptr<bool>           alive_ { std::make_shared<bool>(true) };
 
     static constexpr int kMaxToolIterations  = 8;
     static constexpr int kMaxTokens          = 4096;

@@ -321,7 +321,7 @@ However, do not block the audio thread. Analysis must be buffered, offline, or d
 
 LIA claims awareness of instruments and presets. For More-Phi:
 
-- Reuse `PluginScanner` and `PluginHostManager` where this concerns hosted plugins.
+- Reuse `PluginHostManager` where this concerns hosted plugins (plugin scanning is handled internally by the host manager).
 - Add a local preset indexer for DAW stock devices where allowed.
 - Store metadata in a compact manifest:
 

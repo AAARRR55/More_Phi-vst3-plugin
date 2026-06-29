@@ -12,7 +12,7 @@ namespace more_phi {
 class ChatDisplay final : public juce::Component
 {
 public:
-    enum class Role { System, User, Assistant };
+    enum class Role { System, User, Assistant, Error };
 
     struct Message
     {
@@ -25,6 +25,8 @@ public:
     void addMessage(Role role, juce::String text);
     /** Replace the text of the last message. No-op if no messages exist. */
     void updateLastMessage(juce::String text);
+    /** Replace both role and text of the last message. No-op if no messages exist. */
+    void replaceLastMessage(Role role, juce::String text);
     void clearMessages();
 
     void resized() override;
@@ -40,6 +42,16 @@ public:
 
 private:
     // ── Scrollable canvas ────────────────────────────────────────────────────
+    // ponytail: each message is a read-only TextEditor so the user can select
+    // and copy arbitrary spans. The role label + bubble are still painted; the
+    // selectable text is the TextEditor's, not drawn.
+    class MessageEditor final : public juce::TextEditor
+    {
+    public:
+        MessageEditor();
+        void colourChanged() override;
+    };
+
     class Canvas final : public juce::Component
     {
     public:
@@ -48,6 +60,11 @@ private:
         void paint(juce::Graphics& g) override;
         /** Resize canvas height to fit all messages at the given viewport width. */
         void layout(int viewportWidth, int viewportHeight);
+        /** Rebuild the read-only TextEditors to match `messages`. */
+        void rebuildEditors();
+
+        // ponytail: one editor per message, kept in lockstep with `messages`.
+        juce::OwnedArray<MessageEditor> editors;
     };
 
     juce::Viewport viewport_;
@@ -58,6 +75,8 @@ private:
     void scrollBy(int deltaY);
     void scrollTo(int y);
     int getMaxScrollY() const;
+    /** Full transcript as "Role: text" lines, for copy-all-to-clipboard. */
+    juce::String getAllTranscriptText() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ChatDisplay)
 };

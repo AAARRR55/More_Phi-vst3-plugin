@@ -10,6 +10,13 @@
 #include <exception>
 #include <cmath>
 
+// C-1 FIX: EXCEPTION_EXECUTE_HANDLER is defined in <excpt.h> on Windows. Without
+// this include the __except expressions don't compile (C2065/C2184). Kept here
+// rather than the header to avoid pulling Windows headers into every includer.
+#if JUCE_WINDOWS
+#include <excpt.h>
+#endif
+
 namespace more_phi {
 
 namespace {
@@ -43,11 +50,73 @@ ParameterBridge::ParameterDescriptor buildDescriptor(int index, juce::AudioProce
 
 } // namespace
 
+bool ParameterBridge::setValueNoexcept(juce::AudioProcessorParameter* param, float value,
+                                         const ParameterBridge* bridge) noexcept
+{
+    if (param == nullptr) return false;
+#if JUCE_WINDOWS
+    // C-1 FIX: SEH avoids C++ heap allocation on exception. MSVC's C++ catch
+    // invokes operator new for the exception object + SEH unwind frames.
+    __try
+    {
+        param->setValue(value);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        if (bridge != nullptr)
+            bridge->bumpApplyException();
+        return false;
+    }
+#else
+    // Non-Windows: VST3 AudioProcessorParameter::setValue is noexcept per spec.
+    // Direct call — no catch needed. A throwing setValue is a hosted-plugin bug
+    // that will std::terminate, which is better than silent audio dropout.
+    param->setValue(value);
+    return true;
+#endif
+}
+
+float ParameterBridge::getValueNoexcept(juce::AudioProcessorParameter* param,
+                                         float fallback) noexcept
+{
+    if (param == nullptr) return fallback;
+#if JUCE_WINDOWS
+    __try
+    {
+        return param->getValue();
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return fallback;
+    }
+#else
+    return param->getValue();
+#endif
+}
+
 ParameterBridge::ParameterBridge(IPluginHostManager& host)
     : host_(host)
     , cachedConcreteHost_(dynamic_cast<PluginHostManager*>(&host))
 {
-    throttleStates_.resize(8192);
+    // PERF-MEM: Reduced from 8192 to 4096. The throttleStates_ vector is
+    // indexed by parameter index; 4096 is sufficient for any realistic
+    // VST3 plugin (most have < 2000 params) and saves ~64 KB.
+    throttleStates_.resize(4096);
+}
+
+void ParameterBridge::prepare(int actualParamCount) noexcept
+{
+    // M-5 FIX: trim throttleStates_ to the hosted plugin's actual parameter
+    // count. Called from prepareToPlay() on the message thread. Only resizes
+    // if actualParamCount is different from current size AND within
+    // [1, MAX_PARAMETERS]. This saves memory (~64 KB down to ~4-8 KB for
+    // typical plugins with 64-128 params).
+    if (actualParamCount <= 0 || actualParamCount > MAX_PARAMETERS)
+        return;
+    const auto currentSize = static_cast<int>(throttleStates_.size());
+    if (actualParamCount != currentSize)
+        throttleStates_.resize(static_cast<size_t>(actualParamCount));
 }
 
 template<typename Ret, typename Fn>
@@ -57,9 +126,22 @@ Ret ParameterBridge::withPlugin(IPluginHostManager& host, PluginHostManager* cac
     juce::AudioPluginInstance* plugin = nullptr;
 
     if (cachedHost != nullptr)
+    {
+        // Production path: ref-counted lease. Safe against concurrent unload.
         plugin = cachedHost->acquirePluginForUse();
+    }
     else
+    {
+        // A1b NOTE: raw-pointer fallback for non-concrete hosts (test stubs /
+        // mocks). NO lease — the pointer is only safe for single-call check-then-
+        // use with no intervening yield (per IPluginHostManager.h contract).
+        // Production never reaches here: MorePhiProcessor constructs ParameterBridge
+        // with a concrete PluginHostManager, so cachedConcreteHost_ is always set.
+        // A mock that unloads concurrently with a bridge call would race this
+        // pointer — don't do that in tests. Debug assert guards the assumption.
         plugin = host.getPlugin();
+        jassert(plugin == nullptr || host.hasPlugin());
+    }
 
     if (!plugin)
         return defaultValue;
@@ -120,23 +202,25 @@ float ParameterBridge::getParameterNormalized(juce::AudioPluginInstance& plugin,
 
 void ParameterBridge::setParameterNormalized(int index, float value) noexcept
 {
+    setParameterNormalized(index, value, juce::Time::getMillisecondCounter());
+}
+
+void ParameterBridge::setParameterNormalized(int index, float value, juce::uint32 now) noexcept
+{
     withPlugin(host_, cachedConcreteHost_, "setParameterNormalized", 0,
-        [this, index, value](juce::AudioPluginInstance& plugin) -> int
+        [this, index, value, now](juce::AudioPluginInstance& plugin) -> int
     {
         auto& params = plugin.getParameters();
         if (index < 0 || index >= (int)params.size()) return 0;
 
-        const float clamped = juce::jlimit(0.0f, 1.0f, value);
-        const auto now = juce::Time::getMillisecondCounter();
+        const float safeValue = std::isfinite(value) ? value : 0.0f;
+        const float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
 
         if (shouldThrottle(index, clamped, now))
             return 0;
 
-        try {
-            params[index]->setValue(clamped);
-        } catch (...) {
-            // Silent — hosted plugin setValue threw, but we can't log on audio thread
-        }
+        // C-1 FIX: use SEH wrapper — avoids C++ heap allocation on hosted-plugin throw.
+        setValueNoexcept(params[index], clamped, this);
 
         updateThrottleState(index, clamped, now);
         return 0;
@@ -145,22 +229,58 @@ void ParameterBridge::setParameterNormalized(int index, float value) noexcept
 
 void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value) noexcept
 {
+    setParameterNormalized(plugin, index, value, juce::Time::getMillisecondCounter());
+}
+
+void ParameterBridge::setParameterNormalized(juce::AudioPluginInstance& plugin, int index, float value, juce::uint32 now) noexcept
+{
     auto& params = plugin.getParameters();
     if (index < 0 || index >= (int)params.size()) return;
 
-    const float clamped = juce::jlimit(0.0f, 1.0f, value);
-    const auto now = juce::Time::getMillisecondCounter();
+    const float safeValue = std::isfinite(value) ? value : 0.0f;
+    const float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
 
     if (shouldThrottle(index, clamped, now))
         return;
 
-    try {
-        params[index]->setValue(clamped);
-    } catch (...) {
-        // Silent — hosted plugin setValue threw, but we can't log on audio thread
-    }
+    // C-1 FIX: use SEH wrapper
+    setValueNoexcept(params[index], clamped, this);
 
     updateThrottleState(index, clamped, now);
+}
+
+float ParameterBridge::snapNormalizedToStep(int index, float value) const noexcept
+{
+    // AUDIT-FIX (Fix 5): NaN -> 0, clamp to [0,1] first so the snap math is well
+    // defined. Booleans quantize to {0,1}; discrete params with numSteps>1 quantize
+    // to the nearest step (k/(numSteps-1)); everything else (continuous, or discrete
+    // with unknown steps) passes through unchanged so setParameterNormalized does
+    // the normal clamp+write.
+    const float safeValue = std::isfinite(value) ? value : 0.0f;
+    float clamped = juce::jlimit(0.0f, 1.0f, safeValue);
+
+    if (index < 0)
+        return clamped;
+
+    if (isBoolean(index))
+        return clamped >= 0.5f ? 1.0f : 0.0f;
+
+    if (isDiscrete(index))
+    {
+        const int numSteps = getParameterNumSteps(index);
+        if (numSteps > 1)
+        {
+            const float stepCount = static_cast<float>(numSteps - 1);
+            const float stepped = std::round(clamped * stepCount) / stepCount;
+            return juce::jlimit(0.0f, 1.0f, stepped);
+        }
+    }
+    return clamped;
+}
+
+void ParameterBridge::setParameterNormalizedSnapped(int index, float value) noexcept
+{
+    setParameterNormalized(index, snapNormalizedToStep(index, value));
 }
 
 juce::String ParameterBridge::getParameterName(int index) const
@@ -183,26 +303,38 @@ juce::String ParameterBridge::getParameterName(int index) const
 
 void ParameterBridge::applyParameterState(const std::vector<float>& values) noexcept
 {
-    applyParameterState(values.data(), static_cast<int>(values.size()));
+    applyParameterState(values.data(), static_cast<int>(values.size()), juce::Time::getMillisecondCounter());
+}
+
+void ParameterBridge::applyParameterState(const std::vector<float>& values, juce::uint32 now) noexcept
+{
+    applyParameterState(values.data(), static_cast<int>(values.size()), now);
 }
 
 void ParameterBridge::applyParameterState(const float* values, int count) noexcept
 {
+    applyParameterState(values, count, juce::Time::getMillisecondCounter());
+}
+
+void ParameterBridge::applyParameterState(const float* values, int count, juce::uint32 now) noexcept
+{
     if (!values || count <= 0) return;
 
     withPlugin(host_, cachedConcreteHost_, "applyParameterState", 0,
-        [this, values, count](juce::AudioPluginInstance& plugin) -> int
+        [this, values, count, now](juce::AudioPluginInstance& plugin) -> int
     {
         auto& params = plugin.getParameters();
         const int safeCount = juce::jmin(count, (int)params.size(), (int)throttleStates_.size());
-        const auto now = juce::Time::getMillisecondCounter();
 
         const juce::SpinLock::ScopedTryLockType throttleLock(throttleMutex_);
         const bool hasThrottleLock = throttleLock.isLocked();
 
         for (int i = 0; i < safeCount; ++i)
         {
-            const float clamped = juce::jlimit(0.0f, 1.0f, values[i]);
+            // W-7 FIX (audit): guard non-finite snapshot/morph values before
+            // jlimit (NaN would otherwise propagate into setValue as NaN).
+            const float raw = values[i];
+            const float clamped = juce::jlimit(0.0f, 1.0f, std::isfinite(raw) ? raw : 0.0f);
 
             bool throttled = false;
             if (hasThrottleLock)
@@ -216,13 +348,9 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
             if (throttled)
                 continue;
 
-            // FIX C3: Per-parameter try/catch so one misbehaving hosted parameter
-            // does not abort the entire snapshot recall batch.
-            try {
-                params[i]->setValue(clamped);
-            } catch (...) {
+            // C-1 FIX: use SEH wrapper — avoids C++ heap allocation on hosted-plugin throw.
+            if (!setValueNoexcept(params[i], clamped, this))
                 continue;
-            }
 
             if (hasThrottleLock)
                 throttleStates_[static_cast<size_t>(i)] = {clamped, now};
@@ -230,6 +358,99 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
 
         return 0;
     });
+}
+
+bool ParameterBridge::startRecallRamp(const float* targetValues, int count) noexcept
+{
+    // C-5 FIX (audit): Begin a ramped recall. Captures the hosted plugin's
+    // CURRENT per-parameter values as the ramp start, then stashes the target
+    // snapshot values. The audio-thread per-block loop calls processRecallRamp()
+    // to advance the ramp over kRecallRampBlocks blocks, eliminating the
+    // instant-snap click on continuous params (gain, cutoff, …).
+    //
+    // RT-safety: this runs on the audio thread (MIDI recall) or the message
+    // thread (MCP recall). It performs one ref-counted plugin lease and a
+    // single pass of getValue() (the same cost the touch-detection path pays
+    // every few blocks). All ramp buffers are fixed std::array — no allocation.
+    if (targetValues == nullptr || count <= 0) return false;
+
+    const int captured = withPlugin(host_, cachedConcreteHost_, "startRecallRamp", 0,
+        [this, targetValues, count](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, (int) params.size(), (int) MAX_PARAMETERS);
+        for (int i = 0; i < safeCount; ++i)
+        {
+            // Capture current value as the ramp start; clamp+store the target.
+            // C-1 FIX: use SEH wrapper for getValue
+            recallRampStart_[static_cast<size_t>(i)]  = juce::jlimit(0.0f, 1.0f, getValueNoexcept(params[i]));
+            recallRampTarget_[static_cast<size_t>(i)] = juce::jlimit(0.0f, 1.0f, targetValues[i]);
+        }
+        return safeCount;
+    });
+
+    if (captured <= 0) return false;
+
+    // Publish the ramp: step=0, count=captured. Stores above happen-before the
+    // release-store of count_ / active_ so the audio thread's acquire-load
+    // observes fully-populated buffers.
+    recallRampStep_.store(0, std::memory_order_relaxed);
+    recallRampCount_.store(captured, std::memory_order_release);
+    recallRampActive_.store(true, std::memory_order_release);
+    return true;
+}
+
+void ParameterBridge::processRecallRamp() noexcept
+{
+    // C-5 FIX (audit): advance the active recall ramp by one block and write
+    // the interpolated values to the hosted plugin. Audio-thread only.
+    // No-op (fast acquire-load bail) when no ramp is active — the steady-state
+    // morph path pays only the atomic load.
+    if (!recallRampActive_.load(std::memory_order_acquire))
+        return;
+
+    const int count = recallRampCount_.load(std::memory_order_relaxed);
+    int step = recallRampStep_.load(std::memory_order_relaxed);
+    if (count <= 0)
+    {
+        recallRampActive_.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Linear ramp fraction in [0,1]. On the final block (step == blocks) we
+    // write exactly the target so floating-point drift can't leave residual.
+    const float frac = (step >= kRecallRampBlocks) ? 1.0f
+        : static_cast<float>(step + 1) / static_cast<float>(kRecallRampBlocks);
+
+    withPlugin(host_, cachedConcreteHost_, "processRecallRamp", 0,
+        [this, count, frac](juce::AudioPluginInstance& plugin) -> int
+    {
+        auto& params = plugin.getParameters();
+        const int safeCount = juce::jmin(count, (int) params.size(), (int) MAX_PARAMETERS);
+        for (int i = 0; i < safeCount; ++i)
+        {
+            const float start  = recallRampStart_[static_cast<size_t>(i)];
+            const float target = recallRampTarget_[static_cast<size_t>(i)];
+            const float v = start + (target - start) * frac;
+            // C-1 FIX: use SEH wrapper
+            setValueNoexcept(params[i], juce::jlimit(0.0f, 1.0f, v), this);
+        }
+        return safeCount;
+    });
+
+    ++step;
+    if (step >= kRecallRampBlocks)
+    {
+        // Ramp complete. Clear active FIRST (release), then count — order
+        // ensures any later startRecallRamp sees a clean slate.
+        recallRampActive_.store(false, std::memory_order_release);
+        recallRampStep_.store(0, std::memory_order_relaxed);
+        recallRampCount_.store(0, std::memory_order_relaxed);
+    }
+    else
+    {
+        recallRampStep_.store(step, std::memory_order_relaxed);
+    }
 }
 
 std::vector<float> ParameterBridge::captureParameterState() const noexcept
@@ -362,6 +583,49 @@ void ParameterBridge::updateThrottleState(int index, float value, juce::uint32 n
             throttleStates_[index] = {value, now};
         throttleMutex_.exit();
     }
+}
+
+// AUDIT (E2, 2026-06-25): per-parameter write-source stamp. Called from the
+// audio-thread drain for every hosted write. Audio-safe: fixed array, relaxed
+// atomics, no locks, no logging. If a DIFFERENT source writes the same index
+// within kWritePrecedenceSettleMs of the previous write, count it as a
+// write-precedence observation (saturating counter). This does NOT arbitrate —
+// both hosted writers already share one FIFO command queue — it only makes a
+// same-parameter, different-source edit burst observable for debugging.
+void ParameterBridge::noteWriteSource(int index, HostedWriteSource source) noexcept
+{
+    noteWriteSource(index, source, juce::Time::getMillisecondCounter());
+}
+
+void ParameterBridge::noteWriteSource(int index, HostedWriteSource source, juce::uint32 now) noexcept
+{
+    if (index < 0 || index >= MAX_PARAMETERS)
+        return;
+
+    const auto prevSource = lastWriteSource_[static_cast<size_t>(index)]
+                                .exchange(source, std::memory_order_relaxed);
+    const auto prevMs = lastWriteMs_[static_cast<size_t>(index)]
+                            .exchange(now, std::memory_order_relaxed);
+
+    // Only count a conflict if: a different source wrote previously, that write
+    // was recent (within the settle window), and the clock actually advanced
+    // (guards against the very first write, where prevMs == 0).
+    if (prevSource != HostedWriteSource::Unknown
+        && prevSource != source
+        && prevMs != 0
+        && (now - prevMs) < static_cast<juce::uint32>(kWritePrecedenceSettleMs))
+    {
+        uint64_t cur = writePrecedenceConflictCount_.load(std::memory_order_relaxed);
+        if (cur != std::numeric_limits<uint64_t>::max())
+            writePrecedenceConflictCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+HostedWriteSource ParameterBridge::getLastWriteSource(int index) const noexcept
+{
+    if (index < 0 || index >= MAX_PARAMETERS)
+        return HostedWriteSource::Unknown;
+    return lastWriteSource_[static_cast<size_t>(index)].load(std::memory_order_relaxed);
 }
 
 juce::String ParameterBridge::getParameterLabel(int index) const

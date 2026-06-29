@@ -4,6 +4,7 @@
  */
 #include "LFO.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace more_phi {
@@ -13,6 +14,31 @@ namespace more_phi {
 static constexpr float kMinRate   =  0.01f;
 static constexpr float kMaxRate   = 50.0f;
 static constexpr float kTwoPi    =  6.283185307f;
+
+// ── Sine lookup table (AUDIT Q3 fix, 2026-06-27) ─────────────────────────────
+// Built once (function-local static → first call, off the audio thread) so the
+// per-sample sine() never calls std::sin. 2049 entries: index [0..2048] spans
+// one full period with a sentinel at the end so linear interp has no wrap
+// branch on the common path. Error vs std::sin ≤ ~2e-5 (2048-point LUT).
+// ponytail: linear-interp LUT, not a higher-order spline — the LFO is
+// sub-audible; 2e-5 is ~95 dB below full scale, inaudible. Upgrade to a
+// parabolic interp if this ever drives an audible-rate oscillator.
+static constexpr int kSineLUTSize = 2048;
+
+static const float* sineLUT() noexcept
+{
+    static const std::array<float, kSineLUTSize + 1> table = []()
+    {
+        std::array<float, kSineLUTSize + 1> t{};
+        for (int i = 0; i <= kSineLUTSize; ++i)
+            t[static_cast<size_t>(i)] = std::sin(static_cast<float>(i)
+                                                 / static_cast<float>(kSineLUTSize)
+                                                 * kTwoPi);
+        return t;
+    }();
+    return table.data();
+}
+
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -86,7 +112,13 @@ float LFO::nextRandom() noexcept
 
 float LFO::sine(float phase) noexcept
 {
-    return std::sin(phase * kTwoPi);
+    // LUT-based linear interpolation (AUDIT Q3): no std::sin on the audio thread.
+    const float* t = sineLUT();
+    float pos = phase * static_cast<float>(kSineLUTSize);
+    int   i0  = static_cast<int>(pos);
+    float f   = pos - static_cast<float>(i0);
+    int   i1  = i0 + 1; // [kSineLUTSize] sentinel covers the wrap
+    return t[i0] + f * (t[i1] - t[i0]);
 }
 
 float LFO::triangle(float phase) noexcept
@@ -170,13 +202,15 @@ float LFO::process(float dt) noexcept
             {
                 randTarget_ = nextRandom() * 2.0f - 1.0f;
             }
-            // MOD-5 FIX: smooth toward randTarget_ with a rate-INDEPENDENT time
-            // constant. The previous `1 - hz*dt*0.5` coupled smoothing to the LFO
-            // rate (and was inverted — higher rate gave LESS smoothing) and barely
-            // moved per call, leaving the output stuck near the old target. Use a
-            // fixed ~50 ms tau per process() call.
-            constexpr float kSmoothTauSec = 0.050f;
-            const float smoothCoeff = std::exp(-dt / kSmoothTauSec);
+            // DEEP-DIVE FIX: couple the smoothing time constant to the LFO
+            // period so the random waveform preserves its character across the
+            // full rate range. A fixed 50 ms tau worked well at ~10 Hz but
+            // smeared output into near-DC mush at 20 Hz (smoothing the whole
+            // cycle) and was imperceptible at 0.1 Hz. Using 10% of the period
+            // keeps the "random stair-step" shape rate-independent.
+            const float period = 1.0f / (hz + 1e-6f);
+            const float smoothTauSec = period * 0.1f;
+            const float smoothCoeff = std::exp(-dt / smoothTauSec);
             smoothRand_ = smoothRand_ * smoothCoeff + randTarget_ * (1.0f - smoothCoeff);
             output      = smoothRand_;
             break;

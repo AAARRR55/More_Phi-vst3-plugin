@@ -1,6 +1,7 @@
 #include "AutomationControlPlane.h"
 
 #include <algorithm>
+#include <mutex>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -14,6 +15,14 @@ namespace {
 
 std::mutex gStoreOverrideMutex;
 std::optional<juce::File> gStoreDirectoryOverride;
+
+// P2.5 (AUDIT): in-memory ledger ring cap. Was a hardcoded 256, which evicted
+// older AI/neural edits from the queryable window during a busy session even
+// though they were the most important to audit. Raised to 4096 — the ledger
+// still persists the full history to action_ledger.json on every record; this
+// only widens the fast in-memory query window. Keep load() capped to the same
+// value so a huge persisted file doesn't blow up memory on startup.
+constexpr size_t kLedgerMaxTransactions = 4096;
 
 juce::File resolveStoreDirectory()
 {
@@ -368,7 +377,8 @@ json toJson(const IntegrationEvent& value)
         {"workflowRunId", value.workflowRunId.toStdString()},
         {"transactionId", value.transactionId.toStdString()},
         {"payload", value.payload},
-        {"timestamp", isoTime(value.timestamp)}
+        {"timestamp", isoTime(value.timestamp)},
+        {"sequence", value.sequence}
     };
 }
 
@@ -658,9 +668,9 @@ AutomationTransaction ActionLedger::record(AutomationTransaction transaction)
     if (transaction.completedAt == juce::Time{})
         transaction.completedAt = juce::Time::getCurrentTime();
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     transactions_.push_back(transaction);
-    while (transactions_.size() > 256)
+    while (transactions_.size() > kLedgerMaxTransactions)
         transactions_.erase(transactions_.begin());
     persist();
     return transaction;
@@ -668,7 +678,7 @@ AutomationTransaction ActionLedger::record(AutomationTransaction transaction)
 
 std::optional<AutomationTransaction> ActionLedger::find(const juce::String& transactionId) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (const auto& transaction : transactions_)
         if (transaction.id == transactionId)
             return transaction;
@@ -677,7 +687,7 @@ std::optional<AutomationTransaction> ActionLedger::find(const juce::String& tran
 
 json ActionLedger::listRecent(int limit, const juce::String& workflowRunId) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const int safeLimit = juce::jlimit(1, 512, limit <= 0 ? 50 : limit);
     json out = json::array();
 
@@ -695,7 +705,7 @@ json ActionLedger::listRecent(int limit, const juce::String& workflowRunId) cons
 
 json ActionLedger::asJson() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     json out = json::array();
     for (const auto& transaction : transactions_)
         out.push_back(toJson(transaction));
@@ -704,14 +714,14 @@ json ActionLedger::asJson() const
 
 void ActionLedger::clearForTests()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     transactions_.clear();
     persist();
 }
 
 void ActionLedger::load()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     transactions_.clear();
 
     if (!file_.existsAsFile())
@@ -736,11 +746,14 @@ void ActionLedger::load()
         for (const auto& item : parsed)
             transactions_.push_back(automationTransactionFromJson(item));
 
-        while (transactions_.size() > 256)
+        while (transactions_.size() > kLedgerMaxTransactions)
             transactions_.erase(transactions_.begin());
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("ActionLedger::load(): JSON parse failed — clearing transactions");
+#endif
         transactions_.clear();
     }
 }
@@ -764,14 +777,14 @@ PermissionKernel::PermissionKernel(juce::File storeDirectory)
 
 void PermissionKernel::setAutonomyLevel(AutonomyLevel level)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     autonomyLevel_ = level;
     persist();
 }
 
 AutonomyLevel PermissionKernel::getAutonomyLevel() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     return autonomyLevel_;
 }
 
@@ -779,10 +792,10 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
 {
     const auto method = toolName.trim().toLowerCase();
 
-    if (method == "izotope_ipc_dump")
+    if (method == "morephi_ipc_dump")
         return RiskLevel::Destructive;
 
-    if (nameStartsWith(method, "izotope_ipc_") || method == "ozone_run_assistant" || method == "sync.apply_envelope")
+    if (nameStartsWith(method, "morephi_ipc_") || method == "morephi_ipc_run_assistant" || method == "sync.apply_envelope")
         return RiskLevel::External;
 
     if (method == "hosted_plugin.load" || method == "plugin_profile.save")
@@ -796,7 +809,8 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
 
     if (method == "capture_snapshot" || method == "recall_snapshot"
         || method == "hosted_plugin.capture_state" || method == "apply_mastering_plan"
-        || method == "mastering.apply_plan" || method == "plugin_adapter.apply_action")
+        || method == "mastering.apply_plan" || method == "mastering.neural_apply"
+        || method == "plugin_adapter.apply_action")
         return RiskLevel::MediumWrite;
 
     if (method == "set_parameter" || method == "set_parameters_batch"
@@ -820,18 +834,29 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
         || method == "workflow.cancel")
         return RiskLevel::LowWrite;
 
+    // ── Multi-agent orchestration layer: agents.* tools ───────────────────────
+    if (method == "agents.list" || method == "agents.run_status" || method == "agents.blackboard.recent")
+        return RiskLevel::ReadOnly;
+    if (method == "agents.run_goal" || method == "agents.run_cancel")
+        return RiskLevel::LowWrite;
+    if (method == "agents.run_task")
+        return RiskLevel::MediumWrite;
+    if (method == "agents.set_autonomy")
+        return RiskLevel::HighImpact;
+
     return RiskLevel::ReadOnly;
 }
 
 PermissionDecision PermissionKernel::evaluate(const juce::String& toolName,
                                               const json& params,
-                                              const juce::String& workflowRunId)
+                                              const juce::String& workflowRunId,
+                                              const juce::String& callerSessionId)
 {
     const auto risk = classifyTool(toolName, params);
     PermissionDecision decision;
     decision.risk = risk;
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const auto approvalId = params.is_object() && params.contains("approval_id") && params["approval_id"].is_string()
         ? juce::String(params["approval_id"].get<std::string>())
         : juce::String();
@@ -871,6 +896,7 @@ PermissionDecision PermissionKernel::evaluate(const juce::String& toolName,
     decision.approval.explanation =
         "Dispatch-layer PermissionPolicy requires approval for "
         + toString(risk) + " tool " + toolName + ".";
+    decision.approval.originatingSessionId = callerSessionId;  // AUDIT-FIX (L3-1)
     approvals_.push_back(decision.approval);
     while (approvals_.size() > 256)
         approvals_.erase(approvals_.begin());
@@ -880,20 +906,31 @@ PermissionDecision PermissionKernel::evaluate(const juce::String& toolName,
 
 json PermissionKernel::listApprovals() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     json out = json::array();
     for (const auto& approval : approvals_)
         out.push_back(toJson(approval));
     return out;
 }
 
-bool PermissionKernel::approve(const juce::String& approvalId)
+bool PermissionKernel::approve(const juce::String& approvalId, const juce::String& approverSessionId)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (auto& approval : approvals_)
     {
         if (approval.id == approvalId && approval.status == "pending")
         {
+            // AUDIT-FIX (L3-1, 2026-06-29): prevent self-approval. If the approver's
+            // session matches the originating session, reject the approval. This
+            // prevents a compromised or confused LLM from auto-approving its own
+            // high-impact operations. An empty approverSessionId disables the check
+            // (for UI confirmation dialogs that have no session affinity).
+            if (approverSessionId.isNotEmpty()
+                && approval.originatingSessionId.isNotEmpty()
+                && approverSessionId == approval.originatingSessionId)
+            {
+                return false;
+            }
             approval.status = "approved";
             persist();
             return true;
@@ -904,7 +941,7 @@ bool PermissionKernel::approve(const juce::String& approvalId)
 
 bool PermissionKernel::reject(const juce::String& approvalId)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (auto& approval : approvals_)
     {
         if (approval.id == approvalId && approval.status == "pending")
@@ -919,7 +956,7 @@ bool PermissionKernel::reject(const juce::String& approvalId)
 
 bool PermissionKernel::updateApprovalPreview(const juce::String& approvalId, const json& predictedDiff)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (auto& approval : approvals_)
     {
         if (approval.id == approvalId && approval.status == "pending")
@@ -934,7 +971,7 @@ bool PermissionKernel::updateApprovalPreview(const juce::String& approvalId, con
 
 json PermissionKernel::describeState() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     int pending = 0;
     for (const auto& approval : approvals_)
         if (approval.status == "pending")
@@ -980,7 +1017,7 @@ bool PermissionKernel::isAllowedWithoutApproval(RiskLevel risk, const juce::Stri
 
 void PermissionKernel::load()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     approvals_.clear();
 
     if (!file_.existsAsFile())
@@ -1011,6 +1048,9 @@ void PermissionKernel::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("PermissionKernel::load(): JSON parse failed — clearing approvals, resetting autonomy to Assist");
+#endif
         approvals_.clear();
         autonomyLevel_ = AutonomyLevel::Assist;
     }
@@ -1045,8 +1085,9 @@ IntegrationEvent IntegrationEventBus::publish(IntegrationEvent event)
     if (event.timestamp == juce::Time{})
         event.timestamp = juce::Time::getCurrentTime();
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     ++revision_;
+    event.sequence = ++sequenceCounter_;
     events_.push_back(event);
     while (events_.size() > capacity_)
         events_.erase(events_.begin());
@@ -1055,7 +1096,7 @@ IntegrationEvent IntegrationEventBus::publish(IntegrationEvent event)
 
 json IntegrationEventBus::listRecent(int limit) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const int safeLimit = juce::jlimit(1, 512, limit <= 0 ? 50 : limit);
     json out = json::array();
 
@@ -1065,9 +1106,38 @@ json IntegrationEventBus::listRecent(int limit) const
     return out;
 }
 
+json IntegrationEventBus::listRecentSince(uint64_t sinceSequence, int limit) const
+{
+    // Cursor-based forward read (audit C1): return only events with sequence >
+    // sinceSequence, oldest-first, capped at safeLimit. Because sequence is stamped
+    // under the lock and never recycled, a consumer that stores its last-seen
+    // sequence cannot lose events to ring eviction or re-deliver ones it already saw.
+    juce::SpinLock::ScopedLockType lock(mutex_);
+    const int safeLimit = juce::jlimit(1, 512, limit <= 0 ? 256 : limit);
+
+    auto it = events_.begin();
+    // Ring may have evicted older entries since our last cursor. Skip forward to
+    // the first live event past the cursor; events older than the oldest live one
+    // are simply lost (acceptable — they predate the consumer's window).
+    while (it != events_.end() && it->sequence <= sinceSequence)
+        ++it;
+
+    json out = json::array();
+    int emitted = 0;
+    for (; it != events_.end() && emitted < safeLimit; ++it, ++emitted)
+        out.push_back(toJson(*it));
+    return out;   // already oldest-first (events_ grows in publish order)
+}
+
+uint64_t IntegrationEventBus::lastSequence() const
+{
+    juce::SpinLock::ScopedLockType lock(mutex_);
+    return sequenceCounter_;
+}
+
 SyncEnvelope IntegrationEventBus::exportState(const juce::String& instanceId, const juce::String& sessionId) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     SyncEnvelope envelope;
     envelope.instanceId = instanceId;
     envelope.sessionId = sessionId;
@@ -1095,7 +1165,7 @@ IntegrationEvent IntegrationEventBus::applyEnvelope(const SyncEnvelope& envelope
 
 uint64_t IntegrationEventBus::revision() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     return revision_;
 }
 
@@ -1168,7 +1238,7 @@ WorkflowRun WorkflowOrchestrator::submitRun(WorkflowRun run)
     else if (run.state == WorkflowState::Draft)
         run.state = WorkflowState::Ready;
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     ++run.revision;
     const auto existing = std::find_if(runs_.begin(), runs_.end(),
         [&run](const WorkflowRun& candidate) { return candidate.id == run.id; });
@@ -1182,7 +1252,7 @@ WorkflowRun WorkflowOrchestrator::submitRun(WorkflowRun run)
 
 std::optional<WorkflowRun> WorkflowOrchestrator::getRun(const juce::String& runId) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (const auto& run : runs_)
         if (run.id == runId)
             return run;
@@ -1191,7 +1261,7 @@ std::optional<WorkflowRun> WorkflowOrchestrator::getRun(const juce::String& runI
 
 json WorkflowOrchestrator::listRuns() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     json out = json::array();
     for (const auto& run : runs_)
         out.push_back(toJson(run));
@@ -1202,7 +1272,7 @@ WorkflowRun WorkflowOrchestrator::executeRun(const juce::String& runId,
                                              const std::function<json(const WorkflowRun&, const WorkflowStep&)>& executor)
 {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        juce::SpinLock::ScopedLockType lock(mutex_);
         const auto it = std::find_if(runs_.begin(), runs_.end(),
             [&runId](const WorkflowRun& candidate) { return candidate.id == runId; });
 
@@ -1366,7 +1436,7 @@ WorkflowRun WorkflowOrchestrator::executeRun(const juce::String& runId,
 
 WorkflowRun WorkflowOrchestrator::cancelRun(const juce::String& runId)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     for (auto& run : runs_)
     {
         if (run.id == runId)
@@ -1452,7 +1522,7 @@ bool WorkflowOrchestrator::dependenciesComplete(const WorkflowRun& run, const Wo
 
 void WorkflowOrchestrator::load()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     runs_.clear();
 
     if (!file_.existsAsFile())
@@ -1481,37 +1551,53 @@ void WorkflowOrchestrator::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("WorkflowOrchestrator::load(): JSON parse failed — clearing runs");
+#endif
         runs_.clear();
     }
 }
 
-void WorkflowOrchestrator::persist() const
+json WorkflowOrchestrator::serializeRunsToJson() const
 {
-    directory_.createDirectory();
     json runs = json::array();
     for (const auto& run : runs_)
         runs.push_back(toJson(run));
 
-    const json root{
+    return json{
         {"schema_version", 1},
         {"backend", "json_workflow_store_v1"},
         {"runs", runs}
     };
+}
+
+void WorkflowOrchestrator::persistInternal(const json& root) const
+{
+    directory_.createDirectory();
     file_.replaceWithText(juce::String(root.dump(2)), false, false, "\n");
+}
+
+void WorkflowOrchestrator::persist() const
+{
+    persistInternal(serializeRunsToJson());
 }
 
 void WorkflowOrchestrator::replaceStoredRun(const WorkflowRun& run)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto copy = run;
-    ++copy.revision;
-    const auto existing = std::find_if(runs_.begin(), runs_.end(),
-        [&copy](const WorkflowRun& candidate) { return candidate.id == copy.id; });
-    if (existing != runs_.end())
-        *existing = copy;
-    else
-        runs_.push_back(copy);
-    persist();
+    json snapshot;
+    {
+        juce::SpinLock::ScopedLockType lock(mutex_);
+        auto copy = run;
+        ++copy.revision;
+        const auto existing = std::find_if(runs_.begin(), runs_.end(),
+            [&copy](const WorkflowRun& candidate) { return candidate.id == copy.id; });
+        if (existing != runs_.end())
+            *existing = copy;
+        else
+            runs_.push_back(copy);
+        snapshot = serializeRunsToJson();
+    }
+    persistInternal(snapshot);
 }
 
 MemoryStore::MemoryStore(juce::File storeDirectory)
@@ -1545,10 +1631,14 @@ MemoryRecord MemoryStore::remember(MemoryRecord record)
     if (record.lastUsedAt == juce::Time{})
         record.lastUsedAt = record.createdAt;
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    records_.push_back(record);
-    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
-    persist();
+    json snapshot;
+    {
+        juce::SpinLock::ScopedLockType lock(mutex_);
+        records_.push_back(record);
+        enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+        snapshot = serializeRecordsToJson();
+    }
+    persistInternal(snapshot);
     return record;
 }
 
@@ -1570,32 +1660,44 @@ MemoryRecord MemoryStore::recordOutcome(ActionOutcome outcome)
     record.createdAt = juce::Time::getCurrentTime();
     record.lastUsedAt = record.createdAt;
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (outcome.actionId.isNotEmpty())
+    json snapshot;
     {
-        const auto actionId = outcome.actionId.toStdString();
-        auto existing = std::find_if(records_.begin(), records_.end(),
-            [&actionId](const MemoryRecord& item)
-            {
-                return item.kind == "action_outcome"
-                    && item.content.is_object()
-                    && item.content.value("actionId", "") == actionId;
-            });
-
-        if (existing != records_.end())
+        juce::SpinLock::ScopedLockType lock(mutex_);
+        if (outcome.actionId.isNotEmpty())
         {
-            record.id = existing->id;
-            record.createdAt = existing->createdAt == juce::Time{} ? record.createdAt : existing->createdAt;
-            *existing = record;
-            persist();
-            return *existing;
+            const auto actionId = outcome.actionId.toStdString();
+            auto existing = std::find_if(records_.begin(), records_.end(),
+                [&actionId](const MemoryRecord& item)
+                {
+                    return item.kind == "action_outcome"
+                        && item.content.is_object()
+                        && item.content.value("actionId", "") == actionId;
+                });
+
+            if (existing != records_.end())
+            {
+                record.id = existing->id;
+                record.createdAt = existing->createdAt == juce::Time{} ? record.createdAt : existing->createdAt;
+                *existing = record;
+                snapshot = serializeRecordsToJson();
+            }
+            else
+            {
+                record.id = makeAutomationId("mem");
+                records_.push_back(record);
+                enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+                snapshot = serializeRecordsToJson();
+            }
+        }
+        else
+        {
+            record.id = makeAutomationId("mem");
+            records_.push_back(record);
+            enforceMemoryCapacity(records_);  // MCP-CONTROL-02
+            snapshot = serializeRecordsToJson();
         }
     }
-
-    record.id = makeAutomationId("mem");
-    records_.push_back(record);
-    enforceMemoryCapacity(records_);  // MCP-CONTROL-02
-    persist();
+    persistInternal(snapshot);
     return record;
 }
 
@@ -1605,7 +1707,7 @@ std::optional<MemoryRecord> MemoryStore::updateOutcomeFeedback(OutcomeFeedbackUp
     if (update.actionId.isEmpty() || normalizedStatus.isEmpty())
         return std::nullopt;
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const auto actionId = update.actionId.toStdString();
     auto existing = std::find_if(records_.begin(), records_.end(),
         [&actionId](const MemoryRecord& item)
@@ -1637,7 +1739,7 @@ json MemoryStore::search(MemoryScope scope,
                          const juce::String& query,
                          int limit)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const int safeLimit = juce::jlimit(1, 128, limit <= 0 ? 10 : limit);
 
     struct ScoredRecord
@@ -1680,7 +1782,7 @@ json MemoryStore::search(MemoryScope scope,
 
 json MemoryStore::listOutcomes(const juce::String& workflowRunId, int limit) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const int safeLimit = juce::jlimit(1, 256, limit <= 0 ? 50 : limit);
 
     std::vector<MemoryRecord> matches;
@@ -1709,7 +1811,7 @@ json MemoryStore::listOutcomes(const juce::String& workflowRunId, int limit) con
 
 bool MemoryStore::forget(const juce::String& id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     const auto oldSize = records_.size();
     records_.erase(std::remove_if(records_.begin(), records_.end(),
         [&id](const MemoryRecord& record) { return record.id == id; }), records_.end());
@@ -1747,7 +1849,7 @@ json MemoryStore::intentContext(const json& sessionContext, int limit)
 
 json MemoryStore::describeState() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     return json{
         {"backend", "json_local_store_v1"},
         {"sqlite_backend_loaded", false},
@@ -1759,14 +1861,14 @@ json MemoryStore::describeState() const
 
 void MemoryStore::clearForTests()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     records_.clear();
     persist();
 }
 
 void MemoryStore::load()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    juce::SpinLock::ScopedLockType lock(mutex_);
     records_.clear();
 
     if (!file_.existsAsFile())
@@ -1784,24 +1886,36 @@ void MemoryStore::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("MemoryStore::load(): JSON parse failed — clearing records");
+#endif
         records_.clear();
     }
 }
 
-void MemoryStore::persist() const
+json MemoryStore::serializeRecordsToJson() const
 {
-    directory_.createDirectory();
     json records = json::array();
     for (const auto& record : records_)
         records.push_back(toJson(record));
 
-    const json root{
+    return json{
         {"schema_version", 1},
         {"backend", "json_local_store_v1"},
         {"vector_index_loaded", false},
         {"records", records}
     };
+}
+
+void MemoryStore::persistInternal(const json& root) const
+{
+    directory_.createDirectory();
     file_.replaceWithText(juce::String(root.dump(2)), false, false, "\n");
+}
+
+void MemoryStore::persist() const
+{
+    persistInternal(serializeRecordsToJson());
 }
 
 int MemoryStore::scoreRecord(const MemoryRecord& record,

@@ -35,6 +35,7 @@
     #include <fcntl.h>
     #include <poll.h>
     #include <sys/socket.h>
+    #include <sys/stat.h>
     #include <sys/un.h>
     #include <unistd.h>
 #endif
@@ -391,6 +392,13 @@ private:
             ::close(fd);
             return -1;
         }
+
+        // AUDIT-2026-06-25: restrict the Unix domain socket so only the owning
+        // user can connect. The temp directory is world-readable/writable on
+        // most systems, which would otherwise let any local user attach to the
+        // MCP bridge. Windows named pipes default to the object's ACL and do
+        // not need this step.
+        ::chmod(path.toUTF8(), 0600);
 
         if (::listen(fd, 1) < 0)
         {

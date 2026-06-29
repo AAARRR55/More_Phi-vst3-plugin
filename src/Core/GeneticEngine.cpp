@@ -14,12 +14,18 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
                                      const SanityConfig& sanity)
 {
     ParameterState offspring;
-    // Use parameterCount (not values.size() which is always MAX_PARAMETERS)
-    const int count = juce::jmin(parentA.parameterCount, parentB.parameterCount);
-    // Parameter count mismatch is handled silently by using the minimum count.
+    // Use parameterCount (not values.size() which is always MAX_PARAMETERS).
+    // W-13 FIX (audit): breed across the FULL parameter range of both parents
+    // (max count), not the minimum. The old jmin silently zeroed any params
+    // present in the larger parent but absent in the smaller one — applying the
+    // offspring then snapped those hosted params to 0. Now crossover/blending
+    // runs over the shared range; the tail (present only in the larger parent)
+    // is inherited unchanged from that parent so nothing is unexpectedly zeroed.
+    const int sharedCount = juce::jmin(parentA.parameterCount, parentB.parameterCount);
+    const int maxCount = juce::jmax(parentA.parameterCount, parentB.parameterCount);
     juce::ignoreUnused(parentA.parameterCount, parentB.parameterCount);
 
-    for (int i = 0; i < count; ++i)
+    for (int i = 0; i < sharedCount; ++i)
     {
         // SanityMode: skip protected parameters — keep parentA's value unchanged
         if (sanity.enabled && sanity.protectedIndices.count(i) > 0)
@@ -34,8 +40,18 @@ ParameterState GeneticEngine::breed(const ParameterState& parentA,
         offspring.values[static_cast<size_t>(i)] = juce::jlimit(0.0f, 1.0f, blended + mutation);
     }
 
+    // W-13 FIX (audit): inherit the tail (params beyond the shared range) from
+    // whichever parent actually defines them, so the offspring doesn't zero
+    // hosted parameters that only one parent exposed.
+    for (int i = sharedCount; i < maxCount; ++i)
+    {
+        const float inherited = (i < parentA.parameterCount) ? parentA.values[static_cast<size_t>(i)]
+                                                              : parentB.values[static_cast<size_t>(i)];
+        offspring.values[static_cast<size_t>(i)] = inherited;
+    }
+
     offspring.occupied = true;
-    offspring.parameterCount = count;
+    offspring.parameterCount = maxCount;
     return offspring;
 }
 

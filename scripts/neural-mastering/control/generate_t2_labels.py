@@ -27,11 +27,15 @@ _CTRL_DIR = str(Path(__file__).resolve().parent)
 _HOST = None  # per-worker HeadlessRenderer
 
 
-def _init_worker(lib: str, sr: float) -> None:
+def _init_worker(lib: str, sr: float, normalizer_mode: int) -> None:
     global _HOST
     sys.path.insert(0, _CTRL_DIR)
     from morephi_render import HeadlessRenderer  # noqa: E402
-    _HOST = HeadlessRenderer(lib, sample_rate=sr, block_size=512, normalizer_mode=0)
+    # normalizer_mode=1 (ON) is REQUIRED for the loudness delta to be a live
+    # control during teacher search. In mode 0 the loudness[0] delta is a dead
+    # axis (setTargetLUFS on a disabled normalizer), so CMA-ES could only move
+    # loudness via EQ-abuse — the root cause of restraint_v5's over-correction.
+    _HOST = HeadlessRenderer(lib, sample_rate=sr, block_size=512, normalizer_mode=normalizer_mode)
 
 
 def _load_segment(source_path: str, start: int, seg_samples: int, sr: int):
@@ -54,15 +58,19 @@ def _relabel(task):
     from labels_t2 import recover_deltas_render  # noqa: E402
     from codec import control_deltas_to_vector  # noqa: E402
 
-    row, sr, seg_samples, genre, seed, source_dir = task
+    row, sr, seg_samples, genre, seed, source_dirs, normalizer_mode = task
     src = row.get("sourcePath")
     start = int(row.get("startSample", 0))
     src_path = Path(src) if src else None
     # build_manifest_parallel writes sourcePath as a temp-shard symlink that is
-    # cleaned up post-build -- resolve by basename in the real source dir.
+    # cleaned up post-build -- resolve by basename across the candidate dirs.
     if (not src_path) or (not src_path.exists()):
-        if src_path and source_dir:
-            src_path = Path(source_dir) / src_path.name
+        if src_path and source_dirs:
+            for sd in source_dirs:
+                cand = Path(sd) / src_path.name
+                if cand.exists():
+                    src_path = cand
+                    break
     if (not src_path) or (not src_path.exists()):
         return None
     src = str(src_path)
@@ -91,11 +99,15 @@ def main() -> int:
     p.add_argument("--genre", default="neutral")
     p.add_argument("--workers", type=int, default=24)
     p.add_argument("--seed", type=int, default=1337)
+    p.add_argument("--normalizer-mode", type=int, default=1, choices=(0, 1),
+                   help="render normalizer mode for teacher search: 1=ON (loudness delta is "
+                        "live; REQUIRED for balanced labels), 0=OFF (loudness delta dead -> EQ abuse)")
     p.add_argument("--source-dir", default="",
-                   help="dir holding the real audio (resolve stale temp-shard sourcePaths by basename)")
+                   help="comma-separated dirs holding real audio (resolves stale temp-shard sourcePaths by basename)")
     args = p.parse_args()
 
     seg_samples = int(round(args.segment_seconds * args.sr))
+    source_dirs = [s.strip() for s in args.source_dir.split(",") if s.strip()] if args.source_dir else []
     rows = []
     for line in open(args.in_manifest, encoding="utf-8"):
         line = line.strip()
@@ -103,11 +115,12 @@ def main() -> int:
             rows.append(json.loads(line))
     rows = rows[: args.max_segments]
     print(f"re-labeling {len(rows)} segments with T2 across {args.workers} workers "
-          f"(~{150} fevals/seg, CMA-ES)...")
+          f"(~{150} fevals/seg, CMA-ES, normalizer_mode={args.normalizer_mode})...")
 
-    tasks = [(r, args.sr, seg_samples, args.genre, args.seed, args.source_dir) for r in rows]
+    tasks = [(r, args.sr, seg_samples, args.genre, args.seed, source_dirs, args.normalizer_mode) for r in rows]
     out_rows, errors = [], 0
-    with Pool(args.workers, initializer=_init_worker, initargs=(args.render_lib, args.sr)) as pool:
+    with Pool(args.workers, initializer=_init_worker,
+              initargs=(args.render_lib, args.sr, args.normalizer_mode)) as pool:
         for i, result in enumerate(pool.imap_unordered(_relabel, tasks, chunksize=1)):
             if result is None or "_error" in result:
                 errors += 1

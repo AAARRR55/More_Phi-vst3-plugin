@@ -38,6 +38,10 @@ namespace more_phi {
 /** Shared memory layout for link state. */
 struct alignas(64) LinkStateBlock
 {
+    // C-4 FIX: Magic + version for integrity validation of shared memory reads.
+    static constexpr uint32_t kMagic = 0x4D50'484C; // "MPHL" in LE
+    std::atomic<uint32_t> magic{0};
+    std::atomic<uint32_t> version{0};   // Incremented on every write by leader
     std::atomic<uint32_t> seqlock{0};
     std::atomic<float> morphX{0.5f};
     std::atomic<float> morphY{0.5f};
@@ -45,7 +49,8 @@ struct alignas(64) LinkStateBlock
     uint32_t groupId      = 0;   // Link group ID (0 = default group)
     std::atomic<uint64_t> lastActivity{0}; // Milliseconds since epoch
     // Keep struct at exactly one cache line (64 bytes).
-    uint8_t padding[32] = {};
+    // Available padding shrinks by 8 bytes for magic+version.
+    uint8_t padding[24] = {};
 };
 
 static_assert(sizeof(LinkStateBlock) <= 64, "LinkStateBlock must fit in one cache line");

@@ -43,6 +43,8 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codec import (  # noqa: E402
+    HARMONIC_COUNT,
+    HARMONIC_SLICE,
     INPUT_FEATURE_COUNT,
     OUTPUT_DELTA_COUNT,
     SCALAR_FEATURE_COUNT,
@@ -70,15 +72,31 @@ class MasteringControlLoss(nn.Module):
       - overcorrect_weight: Fix 5 (restraint). Asymmetric penalty on
         over-correction — penalize |pred|>|target| more than |pred|<|target|, so
         the model is pushed to under-shoot when uncertain rather than saturate.
+      - eq_harmonic_l1_mult: Fix 7 (audio-domain-verified). The per-slot sweep
+        (evaluate_student_audio.py + sweep_all_slots.py) proved EQ[0..31] and
+        harmonic[0] are the slots that ACTUALLY drive output LUFS — a flat +0.5 EQ
+        lift lifts output ~11 dB. loudness[0]/limiter[0] are inert in
+        normalizer_mode=0. So to stop the model compensating for quiet input by
+        slamming a broad EQ/exciter boost, weight the L1 restraint on those slots
+        higher than the rest. >1 = stronger restraint on EQ+harmonic; 1 = uniform.
     """
 
     def __init__(self, eq_count: int, eq_smooth_weight: float = 0.05,
-                 delta_l1_weight: float = 0.02, overcorrect_weight: float = 0.0) -> None:
+                 delta_l1_weight: float = 0.02, overcorrect_weight: float = 0.0,
+                 eq_harmonic_l1_mult: float = 1.0, harmonic_slice: tuple = HARMONIC_SLICE) -> None:
         super().__init__()
         self.eq_count = eq_count
         self.eq_smooth_weight = eq_smooth_weight
         self.delta_l1_weight = delta_l1_weight
         self.overcorrect_weight = overcorrect_weight
+        self.eq_harmonic_l1_mult = float(eq_harmonic_l1_mult)
+        # Per-slot weight mask for the L1 term: 1.0 everywhere, mult on EQ[0:32]
+        # and harmonic slots (the audio-domain-verified LUFS drivers).
+        w = torch.ones(OUTPUT_DELTA_COUNT)
+        if self.eq_harmonic_l1_mult != 1.0:
+            w[:eq_count] = self.eq_harmonic_l1_mult            # EQ[0..31]
+            w[harmonic_slice[0]:harmonic_slice[1]] = self.eq_harmonic_l1_mult  # harmonic[0..7]
+        self.register_buffer("l1_weights", w)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
         mse = nn.functional.mse_loss(pred, target)
@@ -89,7 +107,9 @@ class MasteringControlLoss(nn.Module):
         pred_rough = (eq_pred[:, 1:] - eq_pred[:, :-1]).abs().mean()
         target_rough = (eq_target[:, 1:] - eq_target[:, :-1]).abs().mean()
         smooth = (pred_rough - target_rough).clamp_min(0.0)
-        l1 = pred.abs().mean()  # restraint prior toward neutral deltas
+        l1 = pred.abs().mean()  # uniform restraint prior toward neutral deltas
+        # Fix 7: per-group weighted L1 — extra restraint on EQ+harmonic (LUFS drivers).
+        l1_weighted = (pred.abs() * self.l1_weights).mean()
         # Fix 5: asymmetric over-correction penalty. excess = how far |pred|
         # exceeds |target| (only the overshoot counts); symmetric MSE already
         # penalizes under-shoot, so this biases against saturation when uncertain.
@@ -97,13 +117,14 @@ class MasteringControlLoss(nn.Module):
         loss = (
             mse
             + self.eq_smooth_weight * smooth
-            + self.delta_l1_weight * l1
+            + self.delta_l1_weight * l1_weighted
             + self.overcorrect_weight * excess
         )
         return loss, {
             "mse": float(mse.detach()),
             "eq_smooth": float(smooth.detach()),
             "l1": float(l1.detach()),
+            "l1_eqh": float(l1_weighted.detach()),
             "overcorrect": float(excess.detach()),
             "loss": float(loss.detach()),
         }
@@ -292,13 +313,14 @@ def train(args: argparse.Namespace) -> None:
         eq_smooth_weight=args.eq_smooth_weight,
         delta_l1_weight=args.delta_l1_weight,
         overcorrect_weight=args.overcorrect_weight,
+        eq_harmonic_l1_mult=args.eq_harmonic_l1_mult,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     best_val = math.inf
     for epoch in range(args.epochs):
         model.train()
-        train_metrics = {"loss": 0.0, "mse": 0.0, "eq_smooth": 0.0, "l1": 0.0, "overcorrect": 0.0}
+        train_metrics = {"loss": 0.0, "mse": 0.0, "eq_smooth": 0.0, "l1": 0.0, "l1_eqh": 0.0, "overcorrect": 0.0}
         n_batches = 0
         for feature, delta in train_loader:
             feature = feature.to(device)
@@ -315,7 +337,7 @@ def train(args: argparse.Namespace) -> None:
         train_metrics = {k: v / max(1, n_batches) for k, v in train_metrics.items()}
 
         model.eval()
-        val_metrics = {"loss": 0.0, "mse": 0.0, "l1": 0.0, "overcorrect": 0.0}
+        val_metrics = {"loss": 0.0, "mse": 0.0, "l1": 0.0, "l1_eqh": 0.0, "overcorrect": 0.0}
         n_val = 0
         with torch.no_grad():
             for feature, delta in val_loader:
@@ -326,6 +348,7 @@ def train(args: argparse.Namespace) -> None:
                 val_metrics["loss"] += metrics["loss"]
                 val_metrics["mse"] += metrics["mse"]
                 val_metrics["l1"] += metrics["l1"]
+                val_metrics["l1_eqh"] += metrics["l1_eqh"]
                 val_metrics["overcorrect"] += metrics["overcorrect"]
                 n_val += 1
         val_metrics = {k: v / max(1, n_val) for k, v in val_metrics.items()}
@@ -373,6 +396,11 @@ def parse_args() -> argparse.Namespace:
                         "Default 0.02 (on). 0=off; sweep 0.005-0.05 against val MSE + restraint metric.")
     p.add_argument("--overcorrect-weight", type=float, default=0.0,
                    help="Fix 5 (restraint): asymmetric penalty on |pred|>|target|. 0=off; try 0.05-0.1.")
+    p.add_argument("--eq-harmonic-l1-mult", type=float, default=1.0,
+                   help="Fix 7 (audio-domain-verified): multiplier on the L1 restraint term for EQ[0..31] "
+                        "+ harmonic slots — the slots a per-slot render sweep proved actually drive output "
+                        "LUFS (loudness[0]/limiter[0] are inert). >1 = stronger restraint on those slots to "
+                        "stop broad-EQ/exciter over-boost. 1=uniform. Try 3-8.")
     p.add_argument("--gated-head", action="store_true",
                    help="Fix 4 (restraint): gated residual head — a learned scalar gate can drive "
                         "the output to 0 on already-good audio. Contract stays 63->72/tanh.")

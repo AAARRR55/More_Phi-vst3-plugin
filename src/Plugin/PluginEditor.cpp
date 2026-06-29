@@ -7,6 +7,7 @@
 #include "UI/EngineTabPage.h"
 #include "UI/ModulationMatrixPanel.h"
 #include "UI/V2PresetBrowserPanel.h"
+#include "Version.h"  // AUDIT-FIX: VERSION_STRING (single source of truth for the painted version)
 
 namespace more_phi {
 
@@ -23,16 +24,85 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
       modeBar(p),
       paramPanel(p),
       controlStrip(p),
-      licenseOverlay(p)
+      licenseOverlay(p),
+      onboardingOverlay(p)
 {
     setLookAndFeel(&lnf);
     setSize(920, 760);
     setResizable(true, true);
-    setResizeLimits(720, 600, 1600, 1120);
+    setResizeLimits(760, 640, 1600, 1200);
+    // AUDIT-FIX (accessibility): make the editor a focus container so keyboard
+    // (Tab/arrow) traversal reaches the hosted controls (MorphPad, SnapFader, …).
+    setFocusContainerType(juce::Component::FocusContainerType::focusContainer);
 
-    paramToggleBtn_.setButtonText("Params >");
-    paramToggleBtn_.setTooltip("Show or hide hosted plugin parameters.");
+#if JUCE_WINDOWS
+    // HiDPI: scale the editor canvas to match the desktop scale factor.
+    // Only on Windows/FL-Studio where JUCE's built-in HiDPI support may not
+    // apply the desktop-scale transform automatically (macOS already scales).
+    {
+        auto& desktop = juce::Desktop::getInstance();
+        if (auto* display = desktop.getDisplays().getPrimaryDisplay())
+        {
+            const float scale = display->scale;
+            if (scale > 1.0f && scale < 3.0f)
+                setTransform(juce::AffineTransform::scale(scale));
+        }
+    }
+#endif
+
+    paramToggleBtn_.setButtonText("All Parameters >");
+    paramToggleBtn_.setTooltip("Show or hide all hosted plugin parameters with search and sliders.");
     openPluginBtn_.setTooltip("Open the hosted plugin editor in a separate window.");
+
+    // ── Bypass (title bar) ─────────────────────────────────────────────────────
+    bypassBtn_.setClickingTogglesState(true);
+    bypassBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    bypassBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentCoral);
+    bypassBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    bypassBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    bypassBtn_.setTooltip("Bypass: disable all More-Phi processing and pass audio through unchanged.");
+    if (auto* param = processor.getAPVTS().getParameter("bypass"))
+    {
+        bypassBtn_.onClick = [this, param]() {
+            param->setValueNotifyingHost(bypassBtn_.getToggleState() ? 1.0f : 0.0f);
+        };
+    }
+    addAndMakeVisible(bypassBtn_);
+
+    // AUDIT-2026-06-25: Expert mode toggle
+    expertBtn_.setClickingTogglesState(true);
+    expertBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    expertBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentGreen);
+    expertBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    expertBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    expertBtn_.setTooltip("Show advanced tabs (Engine, Modulation, AI) and Neural Master controls.");
+    if (auto* param = processor.getAPVTS().getParameter("expertMode"))
+    {
+        expertBtn_.onClick = [this, param]() {
+            param->setValueNotifyingHost(expertBtn_.getToggleState() ? 1.0f : 0.0f);
+            updateExpertModeUI();
+        };
+    }
+    addAndMakeVisible(expertBtn_);
+    updateExpertModeUI();
+
+    // ── A/B Compare toggle ─────────────────────────────────────────────────────
+    abCompareBtn_.setClickingTogglesState(true);
+    abCompareBtn_.setColour(juce::TextButton::buttonColourId,    lnf.surfaceColour);
+    abCompareBtn_.setColour(juce::TextButton::buttonOnColourId,  lnf.accentCoral);
+    abCompareBtn_.setColour(juce::TextButton::textColourOffId,   lnf.textPrimary);
+    abCompareBtn_.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
+    abCompareBtn_.setTooltip(
+        "A/B Compare: captures the current parameter state as the 'B' reference, "
+        "then toggles between live tweaks ('A') and the captured reference ('B'). "
+        "Click once to capture, click again to toggle.");
+    abCompareBtn_.onClick = [this]()
+    {
+        const bool nowActive = processor.toggleABCompare();
+        abCompareBtn_.setToggleState(nowActive, juce::dontSendNotification);
+        abCompareBtn_.setButtonText(nowActive ? "B" : "A/B");
+    };
+    addAndMakeVisible(abCompareBtn_);
 
     // ── Always-visible components ──────────────────────────────────────────────
     addAndMakeVisible(morphPad);
@@ -47,8 +117,26 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     addAndMakeVisible(modeBar);
     addAndMakeVisible(controlStrip);
 
+    // Accessibility: mark key components as accessible with explicit focus order.
+    morphPad.setAccessible(true);
+    morphPad.setExplicitFocusOrder(1);
+    snapFader.setAccessible(true);
+    snapFader.setExplicitFocusOrder(2);
+    macroStrip.setAccessible(true);
+    macroStrip.setExplicitFocusOrder(3);
+    modeBar.setAccessible(true);
+    modeBar.setExplicitFocusOrder(4);
+    controlStrip.setAccessible(true);
+    controlStrip.setExplicitFocusOrder(5);
+    tabBar_.setAccessible(true);
+    tabBar_.setExplicitFocusOrder(6);
+    snapshotRing.setAccessible(true);
+    snapshotRing.setExplicitFocusOrder(7);
+    bypassBtn_.setExplicitFocusOrder(8);
+
     // Parameter panel (initially hidden)
     addChildComponent(paramPanel);
+    paramPanel.setVisible(false);
 
     // Toggle button in plugin browser row
     paramToggleBtn_.onClick = [this]()
@@ -57,13 +145,33 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
         paramPanel.setVisible(paramPanelVisible_);
         paramToggleBtn_.setButtonText(
         paramPanelVisible_
-            ? juce::String("< Params")
-            : juce::String("Params >"));
+            ? juce::String("< All Parameters")
+            : juce::String("All Parameters >"));
         if (paramPanelVisible_)
             paramPanel.rebuildForPlugin();
         resized();
     };
     addAndMakeVisible(paramToggleBtn_);
+
+    // ── SonicMaster realtime neural mastering (preview) ───────────────────────
+    // Toggle is bound to the APVTS bool; disabled when no model is available.
+    // Status label is refreshed every timer tick (timerCallback).
+    sonicMasterToggle_.setTooltip(
+        "Continuously analyse ~6s of audio on a background thread and refresh "
+        "the built-in mastering chain from a neural decision model. Preview "
+        "(research-grade); off by default. Every prediction is clamped by the "
+        "safety policy, so a bad frame can never push the chain unsafe.");
+    sonicMasterToggle_.onClick = [this]()
+    {
+        if (auto* param = dynamic_cast<juce::AudioParameterBool*>(
+                processor.getAPVTS().getParameter("SonicMasterAnalysisEnabled")))
+            param->setValueNotifyingHost(sonicMasterToggle_.getToggleState() ? 1.0f : 0.0f);
+    };
+    addAndMakeVisible(sonicMasterToggle_);
+
+    sonicMasterStatus_.setJustificationType(juce::Justification::centredLeft);
+    sonicMasterStatus_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible(sonicMasterStatus_);
 
     // Open Plugin UI button
     openPluginBtn_.onClick = [this]() { openPluginWindow(); };
@@ -171,9 +279,23 @@ MorePhiEditor::MorePhiEditor(MorePhiProcessor& p)
     if (!isLicensed)
         licenseOverlay.toFront(false);
 
+    // Onboarding overlay — shown on first launch (no snapshot data present)
+    addChildComponent(onboardingOverlay);
+    if (!processor.getSnapshotBank().hasAnyOccupied())
+    {
+        onboardingOverlay.setVisible(true);
+        onboardingOverlay.toFront(false);
+    }
+
+    // ponytail: FL Studio composites an unbuffered plugin window every frame,
+    // re-running paint() (incl. a ColourGradient alloc) on the shared message
+    // thread — that's the host-wide UI lag. Buffering the editor to an image
+    // makes FL blit the cache and only re-paint invalidated regions (meter).
+    setBufferedToImage(true);
+
     // M-16 FIX: Reduced from 30Hz to 15Hz — sufficient for UI updates,
     // reduces CPU overhead and message-thread contention.
-    startTimerHz(30);  // 30 FPS for smooth meter-glide animation
+    startTimerHz(15);  // meter-glide + status refresh; 15Hz is plenty visible
 }
 
 MorePhiEditor::~MorePhiEditor()
@@ -202,11 +324,27 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("More-Phi", titleTextArea.removeFromLeft(96),
                juce::Justification::centredLeft, false);
 
-    // Version
+    // Version — AUDIT-FIX: render from the single source of truth (Version.h)
+    // instead of a hardcoded literal. Previously this was "v3.3.0" while
+    // CMakeLists.txt said 3.4.0 and Version.h said 3.4.0 — four version
+    // strings, two values. Now the editor, CMake, CI, and Version.h all agree.
     g.setColour(lnf.textDim);
     g.setFont(lnf.makeScaledFont(10.0f));
-    g.drawText("v3.3.0", titleTextArea.removeFromLeft(72).translated(0, 1),
+    g.drawText("v" + juce::String(more_phi::VERSION_STRING),
+               titleTextArea.removeFromLeft(72).translated(0, 1),
                juce::Justification::centredLeft, false);
+
+    // A/B Compare button (right side of title bar, before expert/bypass)
+    auto abArea = titleArea.removeFromRight(56).reduced(6, 12);
+    abCompareBtn_.setBounds(abArea);
+
+    // Expert mode toggle (right side, before A/B)
+    auto expertArea = titleArea.removeFromRight(70).reduced(6, 12);
+    expertBtn_.setBounds(expertArea);
+
+    // Bypass button (right side of title bar, before meter)
+    auto bypassArea = titleArea.removeFromRight(80).reduced(6, 12);
+    bypassBtn_.setBounds(bypassArea);
 
     // RMS meter — uses the eased level updated in timerCallback() for a smooth glide
     auto meterArea = titleArea.removeFromRight(120).reduced(10, 14);
@@ -233,9 +371,34 @@ void MorePhiEditor::paint(juce::Graphics& g)
     g.drawText("OUT", meterArea.translated(-28, 0).withWidth(24),
                juce::Justification::centredRight);
 
+    // Tick marks at key levels — shape+position fallback for color-only meter zones
+    {
+        const float tickLevels[] = { 40.0f / 60.0f, 50.0f / 60.0f, 54.0f / 60.0f };  // -20, -10, -6 dB
+        const juce::String tickLabels[] = { "-20", "-10", "-6" };
+        g.setFont(lnf.makeScaledFont(7.0f, 7.0f));
+        for (int i = 0; i < 3; ++i)
+        {
+            const float tx = meterArea.getX() + meterArea.getWidth() * tickLevels[i];
+            g.setColour(lnf.textDim.withAlpha(0.45f));
+            g.drawLine(tx, meterArea.getBottom() - 3.0f, tx, meterArea.getBottom(), 0.5f);
+            g.drawText(tickLabels[i],
+                       juce::Rectangle<float>(tx - 12.0f, meterArea.getBottom() + 1.0f, 24.0f, 10.0f),
+                       juce::Justification::centred);
+        }
+    }
+
     // Title bar border
     g.setColour(lnf.borderColour);
     g.drawLine(0, 48, static_cast<float>(getWidth()), 48, 1.0f);
+
+    // SonicMaster panel background
+    if (sonicMasterRowBounds_.getWidth() > 0)
+    {
+        g.setColour(lnf.surfaceColour.withAlpha(0.85f));
+        g.fillRoundedRectangle(sonicMasterRowBounds_.toFloat().reduced(4, 2), 4.0f);
+        g.setColour(lnf.borderColour);
+        g.drawRoundedRectangle(sonicMasterRowBounds_.toFloat().reduced(4, 2), 4.0f, 0.5f);
+    }
 }
 
 void MorePhiEditor::resized()
@@ -247,16 +410,25 @@ void MorePhiEditor::resized()
 
     // Title bar (painted) — increased from 44 to 48
     area.removeFromTop(48);
+    {
+        auto titleArea = getLocalBounds().removeFromTop(48);
+        auto abArea = titleArea.removeFromRight(56).reduced(6, 12);
+        abCompareBtn_.setBounds(abArea);
+        auto expertArea = titleArea.removeFromRight(70).reduced(6, 12);
+        expertBtn_.setBounds(expertArea);
+        auto bypassArea = titleArea.removeFromRight(80).reduced(6, 12);
+        bypassBtn_.setBounds(bypassArea);
+    }
 
-    // Position Deactivate License button in the title bar next to the level meter
-    deactivateBtn_.setBounds(getWidth() - 250, 10, 120, 28);
+    // Deactivate License — moved to bottom bar for less visual intrusion
+    // (positioned later, next to AI status)
 
-    // Parameter panel (right side, togglable)
-    const int paramWidth = paramPanelVisible_
-        ? juce::jlimit(240, 320, getWidth() / 3)
-        : 0;
+    // Parameter panel (overlay — floats on top, doesn't push content)
     if (paramPanelVisible_)
-        paramPanel.setBounds(area.removeFromRight(paramWidth));
+    {
+        const int pw = juce::jlimit(240, 320, getWidth() / 3);
+        paramPanel.setBounds(getWidth() - pw - 8, area.getY(), pw, area.getHeight());
+    }
 
     // Plugin browser row (FlexBox row) — 42px tall
     {
@@ -271,7 +443,17 @@ void MorePhiEditor::resized()
 
     // ── Bottom: AI status bar ──────────────────────────────────────────────────
     auto bottomBar = area.removeFromBottom(32);
-    aiPanel.setBounds(bottomBar);
+    {
+        auto aiArea = bottomBar.reduced(4, 2);
+        // Deactivate license on the far right of the bottom bar (small, low-profile)
+        deactivateBtn_.setBounds(aiArea.removeFromRight(130));
+        aiPanel.setBounds(aiArea);
+    }
+
+    // ── SonicMaster neural-mastering toggle + status (just above AI bar) ───────
+    sonicMasterRowBounds_ = area.removeFromBottom(30);
+    sonicMasterToggle_.setBounds(sonicMasterRowBounds_.removeFromLeft(200).reduced(4, 2));
+    sonicMasterStatus_.setBounds(sonicMasterRowBounds_.reduced(4, 2));
 
     // ── Tab bar ────────────────────────────────────────────────────────────────
     const bool compactWidth = area.getWidth() < 760;
@@ -287,8 +469,8 @@ void MorePhiEditor::resized()
     // 3px gap between tab content and tab bar
     area.removeFromBottom(3);
 
-    // Tab bar (28px, above gap)
-    auto tabBarArea = area.removeFromBottom(28);
+    // Tab bar (32px — L4: comfortable touch/high-DPI hit target; was 28)
+    auto tabBarArea = area.removeFromBottom(32);
     tabBar_.setBounds(tabBarArea);
 
     // ── Main area: Snap fader + square MorphPad ────────────────────────────────
@@ -346,8 +528,9 @@ void MorePhiEditor::resized()
     if (aiChatPage_)
         aiChatPage_->setBounds(tabContent);
 
-    // Cover the entire editor with licensing overlay if visible
+    // Cover the entire editor with licensing/onboarding overlay if visible
     licenseOverlay.setBounds(getLocalBounds());
+    onboardingOverlay.setBounds(getLocalBounds());
 }
 
 void MorePhiEditor::switchTab(int tabIndex)
@@ -398,11 +581,43 @@ void MorePhiEditor::setAITabVisible(bool visible)
         aiChatPage_->setVisible(visible);
 }
 
+// AUDIT-2026-06-25 (build unblock): updateExpertModeUI() was declared in the
+// header and called from the Expert toggle's onClick + ctor, but its body was
+// never written — an unresolved external at link time blocked the whole build.
+// Standard mode shows Classic + Presets; Expert mode additionally reveals the
+// Engine, Modulation and AI tabs (per V2TabBar's setVisibleTabs contract and
+// the Expert button tooltip: "Show advanced tabs (Engine, Modulation, AI)...").
+// We mirror the toggle's getToggleState() (kept in sync with the expertMode
+// APVTS param by the onClick handler) and force Classic as the active tab when
+// expert mode is switched off, so the editor never lands on a hidden tab.
+void MorePhiEditor::updateExpertModeUI()
+{
+    const bool expert = expertBtn_.getToggleState();
+    using Tab = V2TabBar;
+    const int visibleMask = (1 << Tab::Classic) | (1 << Tab::Presets)
+                          | (expert ? ((1 << Tab::Engine) | (1 << Tab::Modulation) | (1 << Tab::AI))
+                                    : 0);
+    tabBar_.setVisibleTabs(visibleMask);
+
+    // If the active tab is now hidden, fall back to Classic.
+    if (!tabBar_.isTabVisible(activeTab_))
+    {
+        switchTab(Tab::Classic);
+    }
+
+    resized();
+    repaint();
+}
+
 void MorePhiEditor::timerCallback()
 {
-    // Check license state changes
+    MSG_TRACE(processor.getDiagnostics(), "Editor::timerCallback");
+    // Check license state changes. R4: honor a session dismiss ("Continue in
+    // Demo") so the overlay isn't re-spawned every tick after the user chose to
+    // use the plugin without a license this session.
     const bool isLicensed = processor.getLicenseRuntimeState().premiumFeaturesEnabled.load(std::memory_order_relaxed);
-    if (licenseOverlay.isVisible() == isLicensed)
+    if (! licenseOverlay.isDismissedForSession()
+        && licenseOverlay.isVisible() == isLicensed)
     {
         licenseOverlay.setVisible(!isLicensed);
         if (!isLicensed)
@@ -429,6 +644,61 @@ void MorePhiEditor::timerCallback()
         lastDbLevel_ = smoothedDbLevel_;
         repaint(0, 0, getWidth(), 48);
     }
+
+    // Mirror bypass state from APVTS into title-bar button
+    if (auto* bp = dynamic_cast<juce::AudioParameterBool*>(
+            processor.getAPVTS().getParameter("bypass")))
+        bypassBtn_.setToggleState(bp->get(), juce::dontSendNotification);
+
+    // Throttled refresh of the SonicMaster toggle + status (cheap atomic reads).
+    refreshSonicMasterStatus();
+}
+
+void MorePhiEditor::refreshSonicMasterStatus()
+{
+    auto& engine = processor.getSonicMasterEngine();
+
+    // Mirror the APVTS bool into the toggle so host automation / preset recall
+    // keeps the button in sync (avoid feedback: don't fire onClick).
+    if (auto* param = dynamic_cast<juce::AudioParameterBool*>(
+            processor.getAPVTS().getParameter("SonicMasterAnalysisEnabled")))
+    {
+        const bool desired = param->get();
+        if (sonicMasterToggle_.getToggleState() != desired)
+            sonicMasterToggle_.setToggleState(desired, juce::dontSendNotification);
+    }
+
+    // Disable the toggle when no model is loaded (feature unavailable).
+    sonicMasterToggle_.setEnabled(engine.isAvailable());
+
+    juce::String text = "Neural Master: ";
+    if (!engine.isAvailable())
+    {
+        text += "not available";
+#if MORE_PHI_HAS_ONNX
+        sonicMasterStatus_.setTooltip(
+            "The bundled ONNX neural model file was not found. Place masteringbrain_v2_"
+            "decision.onnx next to the plugin binary, or rebuild with the model staged in "
+            "models/sonicmaster/, to enable this feature.");
+#else
+        sonicMasterStatus_.setTooltip(
+            "Neural Master is not included in this build. Rebuild with "
+            "-DMORE_PHI_ENABLE_ONNX=ON to enable it.");
+#endif
+    }
+    else
+    {
+        sonicMasterStatus_.setTooltip({});
+        switch (engine.getStatus())
+        {
+            case SonicMasterAnalysisEngine::Status::Disabled:           text += "off"; break;
+            case SonicMasterAnalysisEngine::Status::CollectingAudio:    text += juce::String(juce::CharPointer_UTF8("listening\u2026")); break;
+            case SonicMasterAnalysisEngine::Status::Applied:            text += "active #" + juce::String((int) engine.getLastPlanId()); break;
+            case SonicMasterAnalysisEngine::Status::HeldLowConfidence:  text += juce::String(juce::CharPointer_UTF8("waiting for clearer signal\u2026")); break;
+            case SonicMasterAnalysisEngine::Status::ErrorAutoDisabled:  text += juce::String(juce::CharPointer_UTF8("paused \u2014 check diagnostics")); break;
+        }
+    }
+    sonicMasterStatus_.setText(text, juce::dontSendNotification);
 }
 
 } // namespace more_phi
@@ -442,6 +712,21 @@ void more_phi::MorePhiEditor::openPluginWindow()
     auto* plugin = processor.getHostManager().acquirePluginForUse();
     if (!plugin) return;
 
+    // Phase 4 (lease-lifetime safety): RAII guard so that if the HostedPluginWindow
+    // constructor throws (e.g. the hosted plugin's createEditor() throws, or an
+    // allocation fails), the lease acquired above is always released. Without this,
+    // a thrown ctor left activePluginUsers_ > 0, causing unloadPlugin() to spin to
+    // its 500 ms timeout every time. The guard is disarmed only after the window
+    // is successfully constructed — on success the window's own destructor takes
+    // over lease release via its releasePluginCallback.
+    bool windowConstructed = false;
+    struct LeaseGuard
+    {
+        PluginHostManager& host;
+        bool& armed;
+        ~LeaseGuard() { if (armed) host.releasePluginFromUse(); }
+    } guard{ processor.getHostManager(), windowConstructed };
+
     juce::Component::SafePointer<MorePhiEditor> safeThis(this);
     processor.getHostManager().setWindowCloseCallback([safeThis]() {
         juce::MessageManager::callAsync([safeThis]() {
@@ -451,11 +736,15 @@ void more_phi::MorePhiEditor::openPluginWindow()
 
     hostedWindow_ = std::make_unique<HostedPluginWindow>(
         plugin,
+        [safeThis]() {
+            if (safeThis) safeThis->closePluginWindow();
+        },
         [safeThis, this]() {
             processor.getHostManager().releasePluginFromUse();
-            if (safeThis) safeThis->closePluginWindow();
-        }  // on-close callback
+        }  // release-on-close (HostedPluginWindow dtor)
     );
+
+    windowConstructed = true;  // disarm guard — window now owns the lease release
 }
 
 void more_phi::MorePhiEditor::closePluginWindow()

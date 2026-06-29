@@ -10,6 +10,7 @@ const std::array<LLMProviderDefinition, llmProviderCount> definitions {{
     { LLMProviderId::OpenAI, "openai", "OpenAI", "https://api.openai.com/v1", false },
     { LLMProviderId::Anthropic, "anthropic", "Anthropic", "https://api.anthropic.com", false },
     { LLMProviderId::OpenRouter, "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", false },
+    { LLMProviderId::Gemini, "gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta", false },
     { LLMProviderId::OpenAICompatible, "openai_compatible", "OpenAI Compatible", {}, true },
 }};
 
@@ -45,7 +46,8 @@ std::size_t llmProviderIndex(LLMProviderId id) noexcept
         case LLMProviderId::OpenAI: return 2;
         case LLMProviderId::Anthropic: return 3;
         case LLMProviderId::OpenRouter: return 4;
-        case LLMProviderId::OpenAICompatible: return 5;
+        case LLMProviderId::Gemini: return 5;
+        case LLMProviderId::OpenAICompatible: return 6;
     }
 
     jassertfalse;
@@ -77,7 +79,7 @@ juce::String toDisplayString(LLMProviderId id)
     return getLLMProviderDefinition(id).displayName;
 }
 
-juce::String toDisplayString(LLMValidationStatus status)
+juce::String statusLabel(LLMValidationStatus status)
 {
     switch (status)
     {
@@ -85,7 +87,26 @@ juce::String toDisplayString(LLMValidationStatus status)
         case LLMValidationStatus::Untested: return "Untested";
         case LLMValidationStatus::Testing: return "Testing";
         case LLMValidationStatus::Active: return "Active";
-        case LLMValidationStatus::Failed: return "Failed";
+        case LLMValidationStatus::Failed:  return "Failed";
+    }
+
+    jassertfalse;
+    return {};
+}
+
+juce::String toDisplayString(LLMValidationStatus status)
+{
+    // R6: glyph prefix gives shape redundancy so state isn't carried by colour
+    // alone (colourblind-safe). Kept ASCII-safe + ✓/✕ which JUCE's default
+    // fonts render reliably. The plain label is factored into statusLabel() so
+    // non-UI contexts (storage keys, logging, tests) don't carry the glyph.
+    switch (status)
+    {
+        case LLMValidationStatus::NoProviderConfigured: return "-- " + statusLabel(status);
+        case LLMValidationStatus::Untested: return "? " + statusLabel(status);
+        case LLMValidationStatus::Testing: return "... " + statusLabel(status);
+        case LLMValidationStatus::Active: return juce::String::charToString(0x2713) + " " + statusLabel(status);   // check mark
+        case LLMValidationStatus::Failed:  return juce::String::charToString(0x2715) + " " + statusLabel(status);  // ballot X
     }
 
     jassertfalse;

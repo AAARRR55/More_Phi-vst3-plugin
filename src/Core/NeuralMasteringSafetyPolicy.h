@@ -59,6 +59,19 @@ public:
     [[nodiscard]] const ValidatedNeuralMasteringPlan& getLastSafePlan() const noexcept { return lastSafePlan_; }
     [[nodiscard]] const NeuralMasteringSafetyPolicyConfig& getConfig() const noexcept { return config_; }
 
+    // AUDIT-FIX (F4.1, 2026-06-27): enforce the per-cycle delta caps against the
+    // last safe plan's projectedTargets, mutating `current.projectedTargets` in
+    // place. Caps run at DECODE time inside validate() (SonicMasterAnalysisEngine
+    // runCycle/requestDecisionNow), but applyValidatedPlan can be reached by a
+    // direct in-process caller that hand-builds a ValidatedNeuralMasteringPlan
+    // without going through validate() — that caller would otherwise bypass the
+    // 0.6 LU/cycle loudness slew limit. This method makes the cap invariant hold
+    // regardless of the entry point. Returns the number of dimensions clamped
+    // (for telemetry); 0 when there is no last-safe baseline (first apply).
+    std::size_t enforceDeltaCaps(ValidatedNeuralMasteringPlan& current,
+                                 const ValidatedNeuralMasteringPlan& lastSafePlan,
+                                 bool hasLastSafePlan) noexcept;
+
 private:
     NeuralMasteringSafetyPolicyConfig config_ {};
     ValidatedNeuralMasteringPlan lastSafePlan_ {};

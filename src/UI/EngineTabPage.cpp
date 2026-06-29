@@ -2,13 +2,17 @@
  * More-Phi — UI/EngineTabPage.cpp
  * Layout container for the Engine tab.
  *
- * Layout (180px total height):
+ * Layout (top → bottom, full width unless noted):
  *
  *   ┌─────────────────────────────────────────────────────────┐
- *   │  HybridBlendPanel  (full width, 56px)                   │
+ *   │  HybridBlendPanel     (full width, 56px)                │
+ *   ├─────────────────────────────────────────────────────────┤
+ *   │  PerformancePanel     (full width, 36px)                │
+ *   ├─────────────────────────────────────────────────────────┤
+ *   │  DriftControlPanel    (full width, 60px)                │
  *   ├──────────────────────────┬──────────────────────────────┤
  *   │  SpectralControlPanel    │  GranularControlPanel        │
- *   │  (50% width, ~120px)     │  (50% width, ~120px)         │
+ *   │  (50% width)             │  (50% width)                 │
  *   └──────────────────────────┴──────────────────────────────┘
  */
 #include "EngineTabPage.h"

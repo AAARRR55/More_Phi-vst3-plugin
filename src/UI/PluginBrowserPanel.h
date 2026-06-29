@@ -31,6 +31,9 @@ private:
 
     void showPluginListDialog();
     void loadSelectedPlugin(const juce::PluginDescription& desc);
+    // R2: the actual host load + (destructive) snapshot clear. Split out so the
+    // confirm dialog can invoke it from its async callback.
+    void performPluginLoad(const juce::PluginDescription& desc);
     void openPluginEditor();
     void closePluginEditor();
     void captureToNextSlot();
@@ -40,7 +43,7 @@ private:
 
     juce::TextButton loadBtn_{"Load Plugin..."};
     juce::TextButton showBtn_{"Show Editor"};
-    juce::TextButton captureBtn_{"Capture"};
+    juce::TextButton captureBtn_{"Capture >"};
     juce::Label pluginNameLabel_;
 
     std::unique_ptr<HostedPluginWindow> pluginWindow_;

@@ -23,6 +23,7 @@
 #include "Core/ModulationTypes.h"
 #include "../Mocks/MockV2Interfaces.h"
 #include "Core/EnvelopeFollower.h"
+#include "Core/LFO.h"
 
 #include <vector>
 #include <array>
@@ -97,6 +98,30 @@ TEST_CASE("LFO waveform generation: triangle is symmetric", "[modulation][lfo]")
         mean /= static_cast<float>(samples.size());
         REQUIRE(mean == Approx(0.0f).margin(0.01f));
     }
+}
+
+// AUDIT Q3 (2026-06-27): production LFO uses a LUT instead of per-sample std::sin.
+// Drive it through the four cardinal phase points (0, 0.25, 0.5, 0.75) by using
+// rate=1 Hz with dt=0.25 s, so each process() call lands exactly on a quarter cycle.
+TEST_CASE("Production LFO sine LUT hits cardinal phase points", "[modulation][lfo][lut]")
+{
+    more_phi::LFO lfo;
+    lfo.prepare(48000.0);
+    lfo.setShape(more_phi::LFOShape::Sine);
+    lfo.setRate(1.0f);          // 1 Hz → dt=0.25 advances phase by 0.25
+    lfo.setPhaseOffset(0.0f);
+    lfo.setTempoSync(false);
+
+    // process() advances phase BEFORE reading, so the first call reads phase 0.25.
+    const float peak     = lfo.process(0.25f); // phase 0.25 → +1
+    const float zeroDown = lfo.process(0.25f); // phase 0.50 →  0
+    const float trough   = lfo.process(0.25f); // phase 0.75 → -1
+    const float zeroUp   = lfo.process(0.25f); // phase 1.00 →  0 (wraps)
+
+    REQUIRE_THAT(peak,     WithinAbs( 1.0, 2e-3));
+    REQUIRE_THAT(zeroDown, WithinAbs( 0.0, 2e-3));
+    REQUIRE_THAT(trough,   WithinAbs(-1.0, 2e-3));
+    REQUIRE_THAT(zeroUp,   WithinAbs( 0.0, 2e-3));
 }
 
 TEST_CASE("LFO waveform generation: saw ramps from -1 to 1", "[modulation][lfo]")

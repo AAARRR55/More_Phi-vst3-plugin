@@ -123,12 +123,16 @@ private:
     // ---------------------------------------------------------------------------
 
     juce::Label    routeListHeader_;
+    // C1: column headers above the route list (was a wall of unlabeled widgets).
+    juce::Label    colSourceHeader_;
+    juce::Label    colDestHeader_;
+    juce::Label    colDepthHeader_;
     juce::Viewport routeViewport_;
     juce::Component routeContainer_;           // lives inside the viewport
     std::vector<std::unique_ptr<RouteRow>> routeRows_;
 
     juce::TextButton addRouteBtn_    { "Add Route" };
-    juce::TextButton removeRouteBtn_ { "Remove"    };
+    juce::TextButton removeRouteBtn_ { "Remove Last" };   // C2: honest label
     juce::TextButton clearAllBtn_    { "Clear All" };
     juce::Label      routeCountLabel_;
 
