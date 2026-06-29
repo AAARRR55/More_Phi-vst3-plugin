@@ -437,6 +437,10 @@ set(MORE_PHI_HOST_SOURCES
     src/Host/PluginHostManager.cpp
     src/Host/ParameterBridge.h
     src/Host/ParameterBridge.cpp
+    src/Host/DAWTransportForwarder.h
+    src/Host/DAWTransportForwarder.cpp
+    src/Host/PluginHealthMonitor.h
+    src/Host/PluginHealthMonitor.cpp
 )
 
 set(MORE_PHI_LICENSING_SOURCES
