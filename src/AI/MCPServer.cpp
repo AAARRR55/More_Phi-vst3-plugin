@@ -409,17 +409,25 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
 
     // Convert id to nlohmann::json
     json reqId = nullptr;
-    if (parsed.contains("id"))
+    bool idWasPresent = parsed.contains("id");
+    if (idWasPresent)
     {
         if (parsed["id"].is_number_integer())
             reqId = parsed["id"].get<int64_t>();
         else if (parsed["id"].is_string())
             reqId = parsed["id"].get<std::string>();
-        // else remains null
+        else if (parsed["id"].is_null())
+            reqId = nullptr;  // explicit null — still a request, not a notification
+        // else remains null (invalid type — will be caught below)
     }
 
-    // C-15 FIX: Suppress JSON-RPC notification responses.
-    if (reqId.is_null())
+    // AUDIT-FIX (L3-7, 2026-06-29): JSON-RPC 2.0 §4 specifies that a
+    // notification is a request object WITHOUT an "id" member. An explicit
+    // "id": null IS a request and MUST receive a response. Previously
+    // reqId.is_null() suppressed responses for both absent-id (notification)
+    // and explicit-null-id (valid request). Now we distinguish: absent id =
+    // notification (no response); present but null = request (respond).
+    if (reqId.is_null() && !idWasPresent)
     {
         return {};
     }

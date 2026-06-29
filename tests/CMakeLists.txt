@@ -114,6 +114,9 @@ add_executable(MorePhiTests
     Unit/TestNeuralPlanVerification.cpp
     Unit/TestMasteringMeters.cpp
     Unit/TestSonicMasterAnalysisEngine.cpp
+    # AUDIT-FIX (L1-5/L1-6, 2026-06-29): CompNorm constant self-consistency +
+    # resampler normalization coverage.
+    Unit/TestSonicMasterResampler.cpp
     # AUDIT-FIX (P0, 2026-06-27): full-chain E2E signal integrity test.
     Unit/TestEndToEndSignalIntegrity.cpp
     Unit/TestGenreLoudnessPrior.cpp

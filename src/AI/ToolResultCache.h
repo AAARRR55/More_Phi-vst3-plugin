@@ -92,12 +92,23 @@ public:
      *  is still evicted by a parameter write (safe by default). */
     static Scope scopeForTool(const juce::String& toolName);
 
+    /** Return the age of the most-recently-matched cache entry (seconds since
+     *  insertion). Returns -1.0 if no entry is found or the cache is empty.
+     *  AUDIT-FIX (P11, 2026-06-29): lets cache-hit responses report staleness
+     *  so clients can decide whether a cached decision is still fresh enough.
+     */
+    double getEntryAgeSeconds(const juce::String& toolName,
+                              const juce::var& params,
+                              uint64_t generationToken,
+                              const juce::String& instanceId = {});
+
 private:
     struct Entry
     {
         std::string key;
         nlohmann::json result;
         uint64_t generationToken = 0;
+        std::chrono::steady_clock::time_point insertedAt;
         std::chrono::steady_clock::time_point expiresAt;
         Scope scope = Scope::Parameters;
     };

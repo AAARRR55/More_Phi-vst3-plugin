@@ -59,6 +59,10 @@ public:
         nlohmann::json toolCalls = nlohmann::json::array();
         int tokensUsed = 0;
         juce::String errorCode;
+        // AUDIT-FIX (P16, 2026-06-29): extended-thinking models (Anthropic
+        // Claude 3.5+) may return a separate reasoning chain; store it here
+        // so callers can surface it for debugging / explainability.
+        juce::String reasoningContent;
     };
 
     virtual CompletionResponse complete(const CompletionRequest& request) = 0;

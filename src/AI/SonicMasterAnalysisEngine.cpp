@@ -35,6 +35,16 @@ float peakAbs(const float* a, std::size_t n) noexcept
 // Polyphase FIR resampler with arbitrary ratio. Uses a windowed-sinc kernel
 // (Kaiser, beta=6, 64 taps, 128 phases, ~60 dB stopband, transition ~2 kHz).
 // Designed for the analysis thread (~0.3 Hz); not for realtime.
+//
+// AUDIT-FIX (L1-5, 2026-06-29): HF cutoff limitation documented. The 64-tap
+// Kaiser(β=6) filter has a Nyquist-anchored cutoff at the OUTPUT sample rate
+// (44.1 kHz for model input). When resampling FROM a higher rate (96/192 kHz),
+// content above ~20 kHz is attenuated by the transition band. For the mastering
+// model this is acceptable (the model was trained on 44.1 kHz data and has no
+// representational bandwidth above ~22 kHz), but callers reusing this resampler
+// for full-bandwidth analysis should note the ~2 kHz transition zone and the
+// ~60 dB stopband floor. The true-peak estimator uses its OWN 4×/64-tap
+// polyphase FIR (separate from this one) and is unaffected.
 void resamplePolyphase(const float* src, std::size_t srcLen,
                        std::size_t dstLen, float* dst) noexcept
 {
@@ -360,11 +370,12 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     // analysis thread is joined (release() was called at the top of prepare).
     clearSafetyRejection_();
     // Stage D: reset the closed LUFS loop so a fresh prepare starts open-loop.
-    feedbackActive_ = false;
-    feedbackTargetLufs_ = -14.0f;
-    lastAppliedTargetLufs_ = -14.0f;
-    lastMeasuredLufs_ = 0.0f;
-    lastLufsError_ = 0.0f;
+    // AUDIT-FIX (L2-1): relaxed stores — safe after the analysis thread has joined.
+    feedbackActive_.store(false, std::memory_order_relaxed);
+    feedbackTargetLufs_.store(-14.0f, std::memory_order_relaxed);
+    lastAppliedTargetLufs_.store(-14.0f, std::memory_order_relaxed);
+    lastMeasuredLufs_.store(0.0f, std::memory_order_relaxed);
+    lastLufsError_.store(0.0f, std::memory_order_relaxed);
     stopRequested_.store(false, std::memory_order_release);
     prepared_.store(true, std::memory_order_release);
     status_.store(isAvailable() ? Status::CollectingAudio : Status::Disabled,
@@ -594,10 +605,10 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // time to flush after the change.
     if (paramChangePending_.load(std::memory_order_relaxed))
     {
-        const std::uint64_t changeNs = paramChangeNs_;  // relaxed read, advisory
+        const std::uint64_t changeNs = paramChangeNs_.load(std::memory_order_relaxed);  // AUDIT-FIX (L1-4): was plain read
         const double windowSeconds = static_cast<double>(hostFrames) / sampleRate_;
         const std::uint64_t windowNs = static_cast<std::uint64_t>(windowSeconds * 1e9);
-        const std::uint64_t settleNs = static_cast<std::uint64_t>(paramSettleSeconds_ * 1e9);
+        const std::uint64_t settleNs = static_cast<std::uint64_t>(paramSettleSeconds_.load(std::memory_order_relaxed) * 1e9);
         // Contaminated if the change occurred within [captureTimeNs - window, captureTimeNs + settle].
         const std::uint64_t windowStartNs =
             captureTimeNs_ > windowNs ? captureTimeNs_ - windowNs : 0;
@@ -705,8 +716,12 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // the first apply; until then the genre prior shapes the recommendation. The
     // decode-side hook (Stage A) honors whichever finite value wins here.
     const float genrePrior = genreTargetLufs_.load(std::memory_order_relaxed);
-    const float decodeTargetLufs = feedbackActive_
-        ? feedbackTargetLufs_
+    // AUDIT-FIX (L2-1): acquire loads for closed-loop state read on analysis thread.
+    // (These are also written by this thread, so relaxed would suffice for self-reads,
+    //  but acquire is correct and consistent with the getClosedLoopState pattern.)
+    const bool fbActive = feedbackActive_.load(std::memory_order_acquire);
+    const float decodeTargetLufs = fbActive
+        ? feedbackTargetLufs_.load(std::memory_order_acquire)
         : (std::isfinite(genrePrior) ? genrePrior : more_phi::kUseModelTargetLufs);
     if (!decodeSonicMasterDecision(decision_.data(), decision_.size(), sampleRate_, plan,
                                    decodeTargetLufs, buildEqPrior_()))
@@ -720,8 +735,9 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     plan.capturedAtSteadyClockNs = captureTimeNs_;  // stamp capture instant for staleness guard
     // Record the target this plan actually applied (pre-safety-projection value,
     // for the error calc). Inverse of the decoder map: lufs = -14 + value*6.
-    lastAppliedTargetLufs_ = std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f,
-                                        kFeedbackMinTargetLu, kFeedbackMaxTargetLu);
+    lastAppliedTargetLufs_.store(std::clamp(-14.0f + plan.projectedTargets.loudness[0] * 6.0f,
+                                        kFeedbackMinTargetLu, kFeedbackMaxTargetLu),
+                                  std::memory_order_release);
 
     // Safety gate. Wrap the decoded plan in a candidate the policy validates.
     NeuralMasteringRuntimeState runtime {};
@@ -803,25 +819,30 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
         // (zero) error instead of a misleading +inf.
         if (m.valid && std::isfinite(m.lufsIntegrated))
         {
-            lastMeasuredLufs_ = m.lufsIntegrated;
-            lastLufsError_ = lastAppliedTargetLufs_ - m.lufsIntegrated; // + = too quiet
-            if (std::abs(lastLufsError_) > kFeedbackDeadbandLu)
+            // AUDIT-FIX (L2-1): release stores for closed-loop state written on
+            // analysis thread, paired with acquire loads in getClosedLoopState().
+            lastMeasuredLufs_.store(m.lufsIntegrated, std::memory_order_release);
+            const float appliedTarget = lastAppliedTargetLufs_.load(std::memory_order_acquire);
+            const float lufsError = appliedTarget - m.lufsIntegrated; // + = too quiet
+            lastLufsError_.store(lufsError, std::memory_order_release);
+            if (std::abs(lufsError) > kFeedbackDeadbandLu)
             {
                 // Nudge the next target toward reducing the error. Sign: if signal
                 // is too quiet (error > 0), raise the target; if too loud, lower it.
-                const float nudge = std::clamp(lastLufsError_,
+                const float nudge = std::clamp(lufsError,
                                                -kFeedbackMaxCorrectionLu,
                                                kFeedbackMaxCorrectionLu);
-                feedbackTargetLufs_ = std::clamp(lastAppliedTargetLufs_ + nudge,
+                feedbackTargetLufs_.store(std::clamp(appliedTarget + nudge,
                                                  kFeedbackMinTargetLu,
-                                                 kFeedbackMaxTargetLu);
-                feedbackActive_ = true;
+                                                 kFeedbackMaxTargetLu),
+                                          std::memory_order_release);
+                feedbackActive_.store(true, std::memory_order_release);
             }
             else
             {
                 // On-target: lock the loop at the current target (no drift).
-                feedbackTargetLufs_ = lastAppliedTargetLufs_;
-                feedbackActive_ = true;
+                feedbackTargetLufs_.store(appliedTarget, std::memory_order_release);
+                feedbackActive_.store(true, std::memory_order_release);
             }
         }
         else
@@ -830,7 +851,7 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
             // crossed the LUFS gate yet): report a NEUTRAL error so the closed-loop
             // JSON never emits a misleading +inf, and leave the loop holding its
             // last good target rather than guessing.
-            lastLufsError_ = 0.0f;
+            lastLufsError_.store(0.0f, std::memory_order_release);
         }
         // If measurement is invalid (not enough signal), leave feedbackTargetLufs_
         // unchanged — the loop holds its last good target rather than guessing.

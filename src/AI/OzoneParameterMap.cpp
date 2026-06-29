@@ -316,6 +316,36 @@ OzoneParameterMap OzoneParameterMap::buildFromHostedPlugin(const IParameterBridg
                 m.dynamics.releaseIdx = index;
         }
 
+        // AUDIT-FIX (L4-1, 2026-06-29): discover per-band compressor parameters.
+        // Ozone 11 Advanced exposes per-band dynamics as "Comp Band N Threshold", etc.
+        // Also match "Compressor Band N" and "Dynamics Band N" naming variants.
+        // Band numbers are 1-based in Ozone's UI, but we store 0-based in compBands[].
+        {
+            const juce::String lower = name.toLowerCase();
+            if ((lower.contains("comp") || lower.contains("compressor") || lower.contains("dynamics"))
+                && lower.contains("band"))
+            {
+                // Extract band number from the parameter name.
+                int bandNum = -1;
+                if      (lower.contains("band 1") || lower.contains("low"))    bandNum = 0;
+                else if (lower.contains("band 2") || lower.contains("mid"))    bandNum = 1;
+                else if (lower.contains("band 3") || lower.contains("high"))   bandNum = 2;
+
+                if (bandNum >= 0 && bandNum < OzoneParameterMap::kCompBands)
+                {
+                    auto& cb = m.compBands[static_cast<std::size_t>(bandNum)];
+                    if      (cb.thresholdIdx < 0 && lower.contains("threshold")) cb.thresholdIdx = index;
+                    else if (cb.ratioIdx     < 0 && lower.contains("ratio"))    cb.ratioIdx     = index;
+                    else if (cb.attackIdx    < 0 && lower.contains("attack"))    cb.attackIdx    = index;
+                    else if (cb.releaseIdx   < 0 && lower.contains("release"))   cb.releaseIdx   = index;
+                    else if (cb.makeupIdx    < 0 && lower.contains("makeup"))    cb.makeupIdx    = index;
+                    else if (cb.kneeIdx      < 0 && lower.contains("knee"))      cb.kneeIdx      = index;
+                    else if (lower.contains("enable") || lower.contains("bypass") || lower.contains("active"))
+                        m.compEnableIdx = index;  // single enable for all bands
+                }
+            }
+        }
+
         if (name.contains("imager") && name.contains("width"))
         {
             if (m.imager.widthIdx[0] < 0 && containsAny(name, { "sub", "low bass", "band 1" }))

@@ -82,6 +82,7 @@ void ToolResultCache::put(const juce::String& toolName,
         // Update existing entry in place and move to front.
         it->second->result = result;
         it->second->generationToken = generationToken;
+        it->second->insertedAt = now;
         it->second->expiresAt = now + ttl;
         it->second->scope = scope;
         lru_.splice(lru_.begin(), lru_, it->second);
@@ -97,7 +98,7 @@ void ToolResultCache::put(const juce::String& toolName,
         ++stats_.evictions;
     }
 
-    lru_.push_front(Entry{key, result, generationToken, now + ttl, scope});
+    lru_.push_front(Entry{key, result, generationToken, now, now + ttl, scope});
     index_[key] = lru_.begin();
 }
 
@@ -189,6 +190,27 @@ ToolResultCache::Scope ToolResultCache::scopeForTool(const juce::String& toolNam
 
     // Unknown read tool: safe default — a parameter write will evict it.
     return Scope::Parameters;
+}
+
+double ToolResultCache::getEntryAgeSeconds(const juce::String& toolName,
+                                           const juce::var& params,
+                                           uint64_t generationToken,
+                                           const juce::String& instanceId)
+{
+    const auto key = makeKey(toolName, params, generationToken, instanceId);
+    const auto now = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = index_.find(key);
+    if (it == index_.end())
+        return -1.0;
+
+    if (it->second->generationToken != generationToken ||
+        it->second->expiresAt <= now)
+        return -1.0;
+
+    const double ageSec = std::chrono::duration<double>(now - it->second->insertedAt).count();
+    return ageSec >= 0.0 ? ageSec : -1.0;
 }
 
 } // namespace more_phi

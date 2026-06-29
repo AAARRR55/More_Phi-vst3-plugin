@@ -231,6 +231,10 @@ struct ApprovalRequest
     juce::String explanation;
     juce::Time createdAt;
     juce::String status = "pending";
+    // AUDIT-FIX (L3-1, 2026-06-29): session/connection ID that created this
+    // approval request. Used to prevent self-approval: the approve() method
+    // rejects if the approver's session matches the originator.
+    juce::String originatingSessionId;
 };
 
 struct ParameterDiff
@@ -322,11 +326,20 @@ public:
     void setAutonomyLevel(AutonomyLevel level);
     AutonomyLevel getAutonomyLevel() const;
     RiskLevel classifyTool(const juce::String& toolName, const nlohmann::json& params) const;
+    // AUDIT-FIX (L3-1, 2026-06-29): added callerSessionId param. Stored into the
+    // ApprovalRequest so that approve() can reject self-approval (where the calling
+    // session matches the approval's originating session).
     PermissionDecision evaluate(const juce::String& toolName,
                                 const nlohmann::json& params,
-                                const juce::String& workflowRunId = {});
+                                const juce::String& workflowRunId = {},
+                                const juce::String& callerSessionId = {});
     nlohmann::json listApprovals() const;
-    bool approve(const juce::String& approvalId);
+    // AUDIT-FIX (L3-1, 2026-06-29): added approverSessionId param to prevent
+    // self-approval — if the approver is the same session that created the
+    // approval request, the call is rejected. Empty sessionId string disables
+    // the origin check for backward compat (e.g. programmatic approval from the
+    // UI confirmation dialog, which has no session affinity).
+    bool approve(const juce::String& approvalId, const juce::String& approverSessionId = {});
     bool reject(const juce::String& approvalId);
     bool updateApprovalPreview(const juce::String& approvalId, const nlohmann::json& predictedDiff);
     nlohmann::json describeState() const;

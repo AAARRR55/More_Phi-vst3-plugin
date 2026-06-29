@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <array>
+#include <algorithm>
 
 namespace {
 
@@ -406,4 +407,78 @@ TEST_CASE("decodeSonicMasterDecision zero residualBlend disables blend",
                                                 plan, more_phi::kUseModelTargetLufs, prior));
     // blend 0 → no correction, band stays at model's 0 dB.
     CHECK_THAT(plan.projectedTargets.eq[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
+}
+
+// ── AUDIT-FIX (2026-06-29) tests: stereo 4-region fill + CompNorm usage ──
+
+TEST_CASE("decodeSonicMasterDecision extends stereo regions 2-3 from region 1",
+          "[SonicMaster][Decoder]")
+{
+    // AUDIT-FIX (P7/L1-5): the decoder should fill ALL 4 stereo regions,
+    // not just 2. Regions 2 and 3 are copies of region 1 (mid and mid-high).
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    fillIndexScaled(decision);
+
+    // Set specific stereo values: region 0 = 0.3, region 1 = -0.2
+    decision[more_phi::kSonicMasterStereoOffset + 0] =  0.3f;
+    decision[more_phi::kSonicMasterStereoOffset + 1] = -0.2f;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    REQUIRE(plan.appliedMask.stereo);
+
+    // Region 0 is the directly decoded value
+    CHECK_THAT(plan.projectedTargets.stereo[0], Catch::Matchers::WithinAbs(0.3f, 1e-5f));
+    // Region 1 is the directly decoded value
+    CHECK_THAT(plan.projectedTargets.stereo[1], Catch::Matchers::WithinAbs(-0.2f, 1e-5f));
+    // Regions 2-3 are copies of region 1 (P7 extension)
+    CHECK_THAT(plan.projectedTargets.stereo[2], Catch::Matchers::WithinAbs(-0.2f, 1e-5f));
+    CHECK_THAT(plan.projectedTargets.stereo[3], Catch::Matchers::WithinAbs(-0.2f, 1e-5f));
+}
+
+TEST_CASE("decodeSonicMasterDecision uses CompNorm constants for threshold normalization",
+          "[SonicMaster][Decoder]")
+{
+    // AUDIT-FIX (L1-6): the decoder should normalize threshold via
+    // (value - CompNorm::kThresholdCenterDb) / CompNorm::kThresholdHalfRangeDb,
+    // not (value + 20.0f) / 8.0f (the old magic-number form).
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    fillIndexScaled(decision);
+
+    // Set a specific threshold value: -12 dB
+    const float threshold = -12.0f;
+    decision[more_phi::kSonicMasterCompOffset + 0] = threshold;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    REQUIRE(plan.hasCompParams);
+
+    // Expected: (-12 - (-20)) / 8 = 8/8 = 1.0  (clamped from +1.0)
+    const float expected = (threshold - more_phi::CompNorm::kThresholdCenterDb)
+                           / more_phi::CompNorm::kThresholdHalfRangeDb;
+    CHECK_THAT(plan.projectedTargets.dynamics[0],
+               Catch::Matchers::WithinAbs(std::clamp(expected, -1.0f, 1.0f), 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision uses CompNorm constants for ratio normalization",
+          "[SonicMaster][Decoder]")
+{
+    // AUDIT-FIX (L1-6): the decoder should normalize ratio via
+    // (value - CompNorm::kRatioCenter) / CompNorm::kRatioHalfRange.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    fillIndexScaled(decision);
+
+    // Set a specific ratio: 2.0 (below center 3.5)
+    const float ratio = 2.0f;
+    decision[more_phi::kSonicMasterCompOffset + 1] = ratio;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    REQUIRE(plan.hasCompParams);
+
+    // Expected: (2.0 - 3.5) / 2.5 = -0.6
+    const float expected = (ratio - more_phi::CompNorm::kRatioCenter)
+                           / more_phi::CompNorm::kRatioHalfRange;
+    CHECK_THAT(plan.projectedTargets.dynamics[1],
+               Catch::Matchers::WithinAbs(std::clamp(expected, -1.0f, 1.0f), 1e-4f));
 }

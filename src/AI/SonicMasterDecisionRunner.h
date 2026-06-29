@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <atomic>
@@ -145,9 +146,12 @@ public:
     // only a false return. This surfaces the real ORT error string so the MCP
     // failure response can report it instead of "model unavailable." Capped at
     // 256 chars (no heap — a fixed buffer) so the audio/analysis threads never
-    // allocate. Read from any thread (relaxed); advisory.
+    // allocate. Read from any thread; advisory.
+    // AUDIT-FIX (L1-3, 2026-06-29): now guarded by errorBufMutex_ to prevent torn
+    // reads between the analysis thread's recordError() and any-thread callers.
     [[nodiscard]] std::string getLastRunError() const noexcept
     {
+        std::lock_guard<std::mutex> lock(errorBufMutex_);
         return std::string { lastRunError_.data(), errorLen_.load(std::memory_order_relaxed) };
     }
     [[nodiscard]] std::uint64_t getRunCount() const noexcept { return runCount_.load(std::memory_order_relaxed); }
@@ -155,16 +159,21 @@ public:
 
 private:
     std::unique_ptr<SonicMasterSessionHandle> session_;
-    bool available_ = false;
+    // AUDIT-FIX (L1-1, 2026-06-29): made atomic — written on message thread
+    // (loadModel/unloadModel), read on any thread (isAvailable). Release/acquire.
+    std::atomic<bool> available_ { false };
 
     std::atomic<float> lastInferenceMs_{ 0.0f };
     std::atomic<float> maxInferenceMs_{ 0.0f };
 
     // DIAG: last ORT exception message (truncated). Fixed buffer so writes from
     // the analysis thread never allocate.
+    // AUDIT-FIX (L1-3, 2026-06-29): added errorBufMutex_ to synchronize buffer
+    // writes (recordError, analysis thread) with reads (getLastRunError, any thread).
     static constexpr std::size_t kErrorBufLen = 256;
     std::array<char, kErrorBufLen> lastRunError_ {};
     std::atomic<std::size_t> errorLen_ { 0 };
+    mutable std::mutex errorBufMutex_;
     std::atomic<std::uint64_t> runCount_  { 0 };
     std::atomic<std::uint64_t> failCount_ { 0 };
 

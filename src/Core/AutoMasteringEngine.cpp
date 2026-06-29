@@ -142,7 +142,7 @@ void AutoMasteringEngine::reset() noexcept
     analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
     // P1.2: clear verification so it can't be read as a stale "last apply" result
     // across a prepare/reset cycle.
-    lastApplyVerification_ = {};
+    { const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_); lastApplyVerification_ = {}; }
     lastApplyWasPartial_.store(false, std::memory_order_release);
     clearLastSafeNeuralMasteringPlan();
     for (auto& b : bandBuffers_)
@@ -728,7 +728,7 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     // classifies as AppliedPartial. A processor-side post-drain flush hook can
     // later re-read to convert residual mismatched into confirmed verdicts; it is
     // not required for the signal to be truthful.
-    lastApplyVerification_ = chainPlanner_.getLastOzoneVerification();
+    { const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_); lastApplyVerification_ = chainPlanner_.getLastOzoneVerification(); }
     {
         const auto bd = chainPlanner_.getLastOzoneApplyBreakdown();
         // P1.2 partial heuristic: the apply was "partial" if fewer than 80% of the
@@ -805,8 +805,8 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
         sq.composite = 0.5f * sq.verificationFraction
                      + 0.2f * (1.0f - clampRatio)
                      + 0.3f * sq.loudnessReasonableness;
-        lastQualityScore_ = sq;
-    }
+	        { const juce::SpinLock::ScopedLockType lock(lastQualityScoreLock_); lastQualityScore_ = sq; }
+	    }
 
     lastSafeNeuralPlan_ = plan;
     hasLastSafeNeuralPlan_ = true;
@@ -861,6 +861,16 @@ MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
         const float avgRatio = ratioSum / static_cast<float>(kNeuralMasteringCompBandCount);
         // Map ratio [1..6] → [0..1].
         p.compressionNeed = std::clamp((avgRatio - 1.0f) / 5.0f, 0.0f, 1.0f);
+
+        // AUDIT-FIX (L4-1, 2026-06-29): copy the full per-band compressor sidecar
+        // into the bridge plan so OzonePlanApplicator::applyDynamicsPerBand() can
+        // route all 6 params per band directly (instead of collapsing to the scalar
+        // compressionNeed above). When the OzoneParameterMap lacks per-band mapping,
+        // applyDynamics() falls back to compressionNeed — so populating both paths
+        // is safe and preserves the fallback.
+        for (std::size_t b = 0; b < kNeuralMasteringCompBandCount; ++b)
+            p.compBandParams[b] = plan.compParams[b];
+        p.hasCompBandParams = true;
     }
     else
     {

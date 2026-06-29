@@ -184,6 +184,14 @@ int OzonePlanApplicator::applyEQ(const MultiEffectPlan& plan)
 
 int OzonePlanApplicator::applyDynamics(const MultiEffectPlan& plan)
 {
+    // AUDIT-FIX (L4-1, 2026-06-29): per-band compression path. When the hosted
+    // plugin exposes per-band compressor params AND the neural model produced
+    // per-band data, route each of the 3 bands × 6 params directly instead of
+    // collapsing to a single scalar. Falls back to the global-envelope scalar
+    // path when per-band mapping is absent or the model didn't produce compParams.
+    if (plan.hasCompBandParams && map_.hasPerBandCompMapping())
+        return applyDynamicsPerBand(plan);
+
     const auto& dm = map_.dynamics;
     int count = 0;
 
@@ -210,6 +218,67 @@ int OzonePlanApplicator::applyDynamics(const MultiEffectPlan& plan)
         0.0f, 1.0f);
     count += enqueueIfMapped(dm.attackIdx,  attackNorm,  "dynamics attack");
     count += enqueueIfMapped(dm.releaseIdx, releaseNorm, "dynamics release");
+
+    return count;
+}
+
+int OzonePlanApplicator::applyDynamicsPerBand(const MultiEffectPlan& plan)
+{
+    int count = 0;
+    static constexpr const char* kBandNames[3] = {
+        "comp band 1", "comp band 2", "comp band 3"
+    };
+
+    // Enable the per-band compressor module if an enable toggle exists.
+    count += enqueueIfMapped(map_.compEnableIdx, 1.0f, "comp enable");
+
+    for (int b = 0; b < static_cast<int>(MultiEffectPlan::kCompBandCount); ++b)
+    {
+        const auto& cb = map_.compBands[static_cast<std::size_t>(b)];
+        const auto& bp = plan.compBandParams[static_cast<std::size_t>(b)];
+        const auto prefix = kBandNames[b];
+
+        // Threshold dBFS → normalized [0,1] over [-60, 0]
+        count += enqueueIfMapped(cb.thresholdIdx,
+            OzoneParameterMap::normalizeThreshold(bp.thresholdDb),
+            juce::String(prefix) + " threshold");
+
+        // Ratio → normalized over [1, 20]
+        const float ratioNorm = std::clamp(
+            (bp.ratio - kOzoneRatioMin) / (kOzoneRatioMax - kOzoneRatioMin), 0.0f, 1.0f);
+        count += enqueueIfMapped(cb.ratioIdx, ratioNorm,
+            juce::String(prefix) + " ratio");
+
+        // Attack ms → normalized over [0.1, 100]
+        const float attackNorm = std::clamp(
+            (bp.attackMs - kOzoneAttackMin) / (kOzoneAttackMax - kOzoneAttackMin),
+            0.0f, 1.0f);
+        count += enqueueIfMapped(cb.attackIdx, attackNorm,
+            juce::String(prefix) + " attack");
+
+        // Release ms → normalized over [10, 1000]
+        const float releaseNorm = std::clamp(
+            (bp.releaseMs - kOzoneReleaseMin) / (kOzoneReleaseMax - kOzoneReleaseMin),
+            0.0f, 1.0f);
+        count += enqueueIfMapped(cb.releaseIdx, releaseNorm,
+            juce::String(prefix) + " release");
+
+        // Makeup gain dB → normalized over [0, 24] (Ozone range for makeup)
+        if (cb.makeupIdx >= 0)
+        {
+            const float makeupNorm = std::clamp(bp.makeupDb / 24.0f, 0.0f, 1.0f);
+            count += enqueueIfMapped(cb.makeupIdx, makeupNorm,
+                juce::String(prefix) + " makeup");
+        }
+
+        // Knee dB → normalized over [0, 24] (Ozone range for knee)
+        if (cb.kneeIdx >= 0)
+        {
+            const float kneeNorm = std::clamp(bp.kneeDb / 24.0f, 0.0f, 1.0f);
+            count += enqueueIfMapped(cb.kneeIdx, kneeNorm,
+                juce::String(prefix) + " knee");
+        }
+    }
 
     return count;
 }

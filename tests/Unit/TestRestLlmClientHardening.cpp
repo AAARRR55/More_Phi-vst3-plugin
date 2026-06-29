@@ -313,3 +313,185 @@ TEST_CASE("RestLlmClient isConfigured works for Gemini settings", "[agents][llm]
     LLMProviderSettings empty;
     REQUIRE_FALSE(RestLlmClient::isConfigured(empty));
 }
+
+// ── AUDIT-FIX (P16, 2026-06-29): Anthropic content-array + thinking blocks ──
+
+namespace {
+
+LLMProviderSettings anthropicSettings()
+{
+    LLMProviderSettings ps;
+    ps.apiKey = "sk-ant-test";
+    ps.selectedModel = "claude-3-5-sonnet";
+    return ps;
+}
+
+// Anthropic-shaped response with a thinking block BEFORE the text block.
+// Old code read content[0]["text"] which would fail on the thinking block.
+juce::String anthropicThinkingThenTextBody(const std::string& thinkingText,
+                                           const std::string& textContent,
+                                           int inputTokens, int outputTokens)
+{
+    json body;
+    body["content"] = json::array({
+        json::object({ {"type", "thinking"}, {"thinking", thinkingText} }),
+        json::object({ {"type", "text"}, {"text", textContent} })
+    });
+    body["usage"] = { {"input_tokens", inputTokens}, {"output_tokens", outputTokens} };
+    return juce::String(body.dump());
+}
+
+// Anthropic-shaped response with reasoning_content as a top-level field.
+juce::String anthropicReasoningContentBody(const std::string& textContent,
+                                            const std::string& reasoningText)
+{
+    json body;
+    body["content"] = json::array({
+        json::object({ {"type", "text"}, {"text", textContent} })
+    });
+    body["reasoning_content"] = reasoningText;
+    body["usage"] = { {"input_tokens", 10}, {"output_tokens", 20} };
+    return juce::String(body.dump());
+}
+
+// OpenAI-shaped response with content as an ARRAY (newer API style)
+juce::String openAiContentArrayBody(const std::string& textContent, int totalTokens)
+{
+    json body;
+    body["choices"] = json::array({
+        json::object({
+            { "message", json::object({
+                { "content", json::array({
+                    json::object({ {"type", "text"}, {"text", textContent} })
+                }) },
+                { "role", "assistant" }
+            }) }
+        })
+    });
+    body["usage"] = { { "total_tokens", totalTokens } };
+    return juce::String(body.dump());
+}
+
+// OpenAI o-series response with reasoning_content
+juce::String openAiReasoningContentBody(const std::string& textContent,
+                                         const std::string& reasoningText,
+                                         int totalTokens)
+{
+    json body;
+    body["choices"] = json::array({
+        json::object({
+            { "message", json::object({
+                { "content", textContent },
+                { "reasoning_content", reasoningText },
+                { "role", "assistant" }
+            }) }
+        })
+    });
+    body["usage"] = { { "total_tokens", totalTokens } };
+    return juce::String(body.dump());
+}
+
+} // namespace
+
+TEST_CASE("RestLlmClient extracts text from Anthropic thinking+text content array",
+          "[agents][llm][anthropic]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, anthropicThinkingThenTextBody(
+        "Let me reason about this...", R"({"steps":[{"agent":"analysis","goal":"check spectrum"}]})",
+        50, 100).toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Anthropic, anthropicSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    // The text field should contain the TEXT block's content, not the thinking block.
+    REQUIRE(resp.content.isNotEmpty());
+    REQUIRE(resp.content.contains("steps"));  // the actual JSON instruction
+    REQUIRE_FALSE(resp.content.contains("Let me reason"));  // not the thinking block
+}
+
+TEST_CASE("RestLlmClient captures Anthropic reasoning_content (P16)",
+          "[agents][llm][anthropic]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, anthropicReasoningContentBody(
+        R"({"steps":[{"agent":"optimization","goal":"reduce LUFS error"}]})",
+        "I need to consider the spectral balance first...").toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Anthropic, anthropicSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content.contains("steps"));
+    // reasoningContent should be populated from the top-level field
+    REQUIRE(resp.reasoningContent.isNotEmpty());
+    REQUIRE(resp.reasoningContent.contains("spectral balance"));
+}
+
+TEST_CASE("RestLlmClient handles Anthropic text-only content array",
+          "[agents][llm][anthropic]")
+{
+    // Simplest case: single text block (no thinking)
+    json body;
+    body["content"] = json::array({
+        json::object({ {"type", "text"}, {"text", "simple response"} })
+    });
+    body["usage"] = { {"input_tokens", 10}, {"output_tokens", 5} };
+
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, juce::String(body.dump()).toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Anthropic, anthropicSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content == "simple response");
+}
+
+TEST_CASE("RestLlmClient handles OpenAI content-array format (P16)",
+          "[agents][llm]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, openAiContentArrayBody("array-format content", 30).toStdString(), "" } };
+
+    auto client = makeClient(http);
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content == "array-format content");
+    REQUIRE(resp.tokensUsed == 30);
+}
+
+TEST_CASE("RestLlmClient captures OpenAI reasoning_content (P16)",
+          "[agents][llm]")
+{
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, openAiReasoningContentBody(
+        "final answer", "internal chain-of-thought", 40).toStdString(), "" } };
+
+    auto client = makeClient(http);
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content == "final answer");
+    REQUIRE(resp.reasoningContent == "internal chain-of-thought");
+    REQUIRE(resp.tokensUsed == 40);
+}
+
+TEST_CASE("RestLlmClient handles empty Anthropic content array gracefully",
+          "[agents][llm][anthropic]")
+{
+    json body;
+    body["content"] = json::array();  // empty
+    body["usage"] = { {"input_tokens", 10}, {"output_tokens", 0} };
+
+    auto http = std::make_shared<ScriptedHttpClient>();
+    http->responses = { { 200, juce::String(body.dump()).toStdString(), "" } };
+
+    RestLlmClient client{ LLMProviderId::Anthropic, anthropicSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(resp.content.isEmpty());  // no text block found
+}

@@ -95,8 +95,14 @@ private:
     /** Apply EQ prescription (parses plan.eqPrescriptionJSON). */
     int applyEQ(const MultiEffectPlan& plan);
 
-    /** Apply dynamics (compressionNeed → threshold/ratio/attack/release). */
+    /** Apply dynamics (compressionNeed → threshold/ratio/attack/release).
+     *  AUDIT-FIX (L4-1, 2026-06-29): when per-band comp mapping is available
+     *  and the plan carries compBandParams, delegates to applyDynamicsPerBand(). */
     int applyDynamics(const MultiEffectPlan& plan);
+
+    /** AUDIT-FIX (L4-1): apply per-band 3×6 compressor params directly.
+     *  Called by applyDynamics() when hasCompBandParams && hasPerBandCompMapping(). */
+    int applyDynamicsPerBand(const MultiEffectPlan& plan);
 
     /** Apply stereo imager (widthCurve[4] → per-band Ozone Imager width). */
     int applyStereoImager(const MultiEffectPlan& plan);

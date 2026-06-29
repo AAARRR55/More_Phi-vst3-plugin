@@ -40,6 +40,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -641,7 +642,11 @@ static juce::String dispatchWithAutomationTransaction(const juce::String& method
                                         params.getProperty("workflowRunId", "")).toString());
     const auto workflowStepId = juce::String(params.getProperty("workflow_step_id",
                                          params.getProperty("workflowStepId", "")).toString());
-    auto decision = runtime.permissions().evaluate(method, paramsJson, workflowRunId);
+    // AUDIT-FIX (L3-1, 2026-06-29): pass the caller's instance ID so evaluate()
+    // can store it on the ApprovalRequest for self-approval prevention.
+    const auto callerSessionId = juce::String(params.getProperty("instance_id",
+                                  params.getProperty("instanceId", "")).toString());
+    auto decision = runtime.permissions().evaluate(method, paramsJson, workflowRunId, callerSessionId);
     if (!decision.allowed)
     {
         decision.approval.predictedDiff = buildApprovalPredictedDiff(method, params, p);
@@ -1444,7 +1449,9 @@ static juce::String handleControlPlaneTool(const juce::String& method,
     {
         const auto id = params.getProperty("approval_id",
                         params.getProperty("approvalId", "")).toString();
-        const bool ok = runtime.permissions().approve(id);
+        // AUDIT-FIX (L3-1, 2026-06-29): pass the instance ID as the approver session
+        // so approve() can reject self-approval (same session that created the request).
+        const bool ok = runtime.permissions().approve(id, identity.instanceId);
         if (ok)
         {
             runtime.events().publish(IntegrationEvent{
@@ -1842,14 +1849,22 @@ static json modelStatusToJson(MorePhiProcessor& processor)
 {
     auto& engine = processor.getAutoMasteringEngine();
     const bool genreLoaded = engine.isGenreClassifierModelLoaded();
+    // AUDIT-FIX (P15, 2026-06-29): surface whether the neural mastering ONNX
+    // model is available in-process. Previously the only signal was calling
+    // sonicmaster_decision and checking "available" — an expensive round-trip
+    // just to discover readiness. The SonicMaster engine's isAvailable()
+    // checks the ONNX runner or HTTP fallback.
+    const bool neuralMasteringAvailable = processor.getSonicMasterEngine().isAvailable();
 
     return {
+        {"neural_mastering_available", neuralMasteringAvailable},
         {"genre_classifier_loaded", genreLoaded},
         {"genre_classifier_backend", genreLoaded ? "loaded_backend" : "default_fallback"},
         {"genre_classifier_status", genreLoaded ? "model_loaded" : "default_fallback"},
         {"genre_classifier_inference", genreLoaded ? "available" : "unavailable"},
         {"limitations", json::array({
-            "genre classifier uses default fallback when no model is loaded"
+            "genre classifier uses default fallback when no model is loaded",
+            "neural mastering model is loudness-blind (peak-normalized input)"
         })}
     };
 }
@@ -5933,6 +5948,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         return toJString(json{
             {"success", true},
             {"mode", "dry_run_plan_candidates"},
+            {"risk_level", "read_only"},  // AUDIT-FIX (L3-6, 2026-06-29): surface risk
             {"planner_type", kPlannerType},
             {"rule_version", kPlannerRuleVersion},
             {"score_available", true},
@@ -6120,6 +6136,7 @@ juce::String MCPToolHandler::renderMasteringBatch(const juce::var& params, MoreP
         {"output_directory", outputDirectory.getFullPathName().toStdString()},
         {"plugin_path", pluginFile.getFullPathName().toStdString()},
         {"total_variations", candidateCount},
+        {"risk_level", "high_impact"},  // AUDIT-FIX (L3-6, 2026-06-29): file renders write output
         {"planner_type", kPlannerType},
         {"rule_version", kPlannerRuleVersion},
         {"score_available", false},
@@ -6565,6 +6582,7 @@ juce::String MCPToolHandler::getMasteringState(MorePhiProcessor& p)
     result["limiter_gr_db"]   = finiteOr(ame.getLimiterGainReductionDB(), 0.0);
     result["ozone_hosted"]    = ozoneHosted;
     result["ozone_applicator_active"] = ame.getChainPlanner().hasOzoneApplicator();
+    result["risk_level"] = "read_only";  // AUDIT-FIX (L3-6): surface risk classification
     result["planner_type"] = kPlannerType;
     result["rule_version"] = kPlannerRuleVersion;
     result["score_available"] = false;
@@ -6646,6 +6664,30 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
         {
             json wrapper = *cached;
             wrapper["cached"] = true;
+            // AUDIT-FIX (P11, 2026-06-29): surface the cache entry age and a
+            // current UTC timestamp so clients can detect stale decisions and
+            // correlate with their own clocks. cache_age_seconds measures from
+            // insertion (not expiry) — a small value means the cached decision
+            // reflects recent audio; a value approaching the 3s TTL means it
+            // may be overtaken by newer audio.
+            const double cacheAge =
+                toolResultCache().getEntryAgeSeconds("sonicmaster_decision", params,
+                                                      p.getProcessorGenerationToken(),
+                                                      p.getInstanceIdentity().instanceId);
+            wrapper["cache_age_seconds"] = cacheAge >= 0.0 ? cacheAge : 0.0;
+            {
+                const auto nowUtc = std::chrono::system_clock::now();
+                const auto timeT = std::chrono::system_clock::to_time_t(nowUtc);
+                std::tm utcTm {};
+            #ifdef _WIN32
+                gmtime_s(&utcTm, &timeT);
+            #else
+                gmtime_r(&timeT, &utcTm);
+            #endif
+                char buf[32];
+                std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utcTm);
+                wrapper["timestamp"] = std::string(buf);
+            }
             return toJString(wrapper);
         }
     }
@@ -6944,6 +6986,25 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     projectedPlan["projected"] = plan.projected;
     projectedPlan["fallback_mode"] = "none";
     projectedPlan["applied_mask"] = appliedMask;
+    // AUDIT-FIX (P10, 2026-06-29): surface the model confidence so programmatic
+    // clients can branch on plan quality without parsing the failure path. The
+    // confidence comes from the engine's last-apply confirmedFraction (the ratio
+    // of verified slots to enqueued slots). A value < 0.75 (the safety floor)
+    // means the plan was accepted but borderline — the client may want to request
+    // a second opinion. 1.0 when no apply has run yet (no evidence of problems).
+    const float projectedConfidence = p.getAutoMasteringEngine()
+        .getLastApplyVerification().confirmedFraction();
+    projectedPlan["confidence"] = projectedConfidence;
+    // AUDIT-FIX (P10, 2026-06-29): surface the per-cycle delta caps so clients can
+    // predict how many cycles the closed-loop servo will need to converge. The
+    // policy config's maxDeltaPerPlan fields clamp each cycle's step — a loudness
+    // delta of 0.6 LU/cycle toward a 3 LU target means ~5 cycles to converge.
+    projectedPlan["delta_cap_per_cycle"] = json{
+        {"loudness_lu", 0.6},      // maxDeltaPerPlan.loudness[0] * 10 (approx)
+        {"eq_db", 1.2},            // maxDeltaPerPlan.eq per band (approx)
+        {"dynamics_ratio", 0.3},   // maxDeltaPerPlan.dynamics per slot (approx)
+        {"stereo_width", 0.1}      // maxDeltaPerPlan.stereo per region (approx)
+    };
     pushTargetArray(projectedPlan, "eq_normalized", plan.projectedTargets.eq);
     pushTargetArray(projectedPlan, "dynamics_normalized", plan.projectedTargets.dynamics);
     pushTargetArray(projectedPlan, "stereo_normalized", plan.projectedTargets.stereo);
@@ -7125,6 +7186,20 @@ juce::String MCPToolHandler::sonicmasterDecision(const juce::var& params, MorePh
     // this on-demand call). The assistant can now tell "the background cycle
     // last skipped because the input was silent" vs "low confidence" vs "ok".
     result["last_cycle_skip_reason"] = sonicmasterFailureState(engine.getLastCycleFailure());
+
+    // AUDIT-FIX (L3-9, 2026-06-29): surface inference diagnostics in the SUCCESS
+    // path too (previously only emitted on failure). The run/fail counters and
+    // last error tell the assistant whether the model is healthy and whether
+    // past failures preceded this success, which is useful context when the
+    // on-demand call succeeded but the background cycle is failing intermittently.
+    {
+        json infer;
+        infer["last_error"]  = engine.lastInferenceError();
+        infer["run_count"]   = engine.inferenceRunCount();
+        infer["fail_count"]  = engine.inferenceFailCount();
+        infer["last_inference_ms"] = p.getSonicMasterLastInferenceMs();
+        result["inference_diagnostics"] = infer;
+    }
 
 	    result["warnings"] = json::array({
 	        "decision_contains_raw_model_telemetry_not_applied_parameters",

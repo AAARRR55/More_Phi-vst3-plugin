@@ -751,6 +751,9 @@ void ActionLedger::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("ActionLedger::load(): JSON parse failed — clearing transactions");
+#endif
         transactions_.clear();
     }
 }
@@ -846,7 +849,8 @@ RiskLevel PermissionKernel::classifyTool(const juce::String& toolName, const jso
 
 PermissionDecision PermissionKernel::evaluate(const juce::String& toolName,
                                               const json& params,
-                                              const juce::String& workflowRunId)
+                                              const juce::String& workflowRunId,
+                                              const juce::String& callerSessionId)
 {
     const auto risk = classifyTool(toolName, params);
     PermissionDecision decision;
@@ -892,6 +896,7 @@ PermissionDecision PermissionKernel::evaluate(const juce::String& toolName,
     decision.approval.explanation =
         "Dispatch-layer PermissionPolicy requires approval for "
         + toString(risk) + " tool " + toolName + ".";
+    decision.approval.originatingSessionId = callerSessionId;  // AUDIT-FIX (L3-1)
     approvals_.push_back(decision.approval);
     while (approvals_.size() > 256)
         approvals_.erase(approvals_.begin());
@@ -908,13 +913,24 @@ json PermissionKernel::listApprovals() const
     return out;
 }
 
-bool PermissionKernel::approve(const juce::String& approvalId)
+bool PermissionKernel::approve(const juce::String& approvalId, const juce::String& approverSessionId)
 {
     juce::SpinLock::ScopedLockType lock(mutex_);
     for (auto& approval : approvals_)
     {
         if (approval.id == approvalId && approval.status == "pending")
         {
+            // AUDIT-FIX (L3-1, 2026-06-29): prevent self-approval. If the approver's
+            // session matches the originating session, reject the approval. This
+            // prevents a compromised or confused LLM from auto-approving its own
+            // high-impact operations. An empty approverSessionId disables the check
+            // (for UI confirmation dialogs that have no session affinity).
+            if (approverSessionId.isNotEmpty()
+                && approval.originatingSessionId.isNotEmpty()
+                && approverSessionId == approval.originatingSessionId)
+            {
+                return false;
+            }
             approval.status = "approved";
             persist();
             return true;
@@ -1032,6 +1048,9 @@ void PermissionKernel::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("PermissionKernel::load(): JSON parse failed — clearing approvals, resetting autonomy to Assist");
+#endif
         approvals_.clear();
         autonomyLevel_ = AutonomyLevel::Assist;
     }
@@ -1532,6 +1551,9 @@ void WorkflowOrchestrator::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("WorkflowOrchestrator::load(): JSON parse failed — clearing runs");
+#endif
         runs_.clear();
     }
 }
@@ -1864,6 +1886,9 @@ void MemoryStore::load()
     }
     catch (...)
     {
+#if JUCE_DEBUG
+        DBG("MemoryStore::load(): JSON parse failed — clearing records");
+#endif
         records_.clear();
     }
 }

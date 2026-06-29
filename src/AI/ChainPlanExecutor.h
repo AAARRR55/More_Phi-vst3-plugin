@@ -28,6 +28,7 @@
 #include <functional>
 #include <vector>   // AUDIT-FIX (Fix 6): OzoneApplyBreakdown::applied
 #include <juce_core/juce_core.h>
+#include "Core/NeuralMasteringTypes.h"  // AUDIT-FIX (L4-1): NeuralMasteringCompBand
 
 // Forward declarations — avoids header dependency loops
 namespace more_phi { class OzonePlanApplicatorBase; }
@@ -71,8 +72,16 @@ struct ApplyVerification;
 struct MultiEffectPlan
 {
     // Dynamics
-    float compressionNeed = 0.5f;    // [0=gentle, 1=aggressive]
+    float compressionNeed = 0.5f;    // [0=gentle, 1=aggressive] — scalar fallback
     bool  useNeuralComp   = false;
+
+    // AUDIT-FIX (L4-1, 2026-06-29): per-band compressor parameters from the neural
+    // model. When hasCompParams is true and the OzoneParameterMap has per-band
+    // mapping, applyDynamics() routes these directly instead of collapsing to the
+    // scalar compressionNeed. This preserves the full 3-band × 6-param fidelity.
+    static constexpr std::size_t kCompBandCount = 3;
+    std::array<more_phi::NeuralMasteringCompBand, kCompBandCount> compBandParams {};
+    bool hasCompBandParams = false;
 
     // EQ
     juce::String eqPrescriptionJSON;  // JSON for EQParameterTranslator

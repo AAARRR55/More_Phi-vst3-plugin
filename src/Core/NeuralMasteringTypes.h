@@ -26,13 +26,42 @@ inline constexpr std::size_t kNeuralMasteringIssueCapacity = 16;
 // param set without Core depending on AI.
 inline constexpr std::size_t kNeuralMasteringCompBandCount = 3;
 
+// AUDIT-FIX (L1-6, 2026-06-29): named normalization constants for the
+// compressor parameter decode path. Previously the decoder used magic
+// numbers (20.0, 8.0, 3.5, 2.5) without explanation, making it impossible
+// to verify the normalization without cross-referencing the training code.
+// These constants define the linear map from real units → [-1,1] and back:
+//   normalized = (value - center) / halfRange
+//   real_unit  = normalized * halfRange + center
+// The center/halfRange are chosen so the full [min, max] clamp band maps
+// onto approximately [-1, 1] with a small margin at the extremes.
+namespace CompNorm {
+    // Threshold normalization: real ∈ [-40, -6] dB, center = -20 dB, half-range = 8 dB
+    inline constexpr float kThresholdCenterDb  = -20.0f;
+    inline constexpr float kThresholdHalfRangeDb =   8.0f;
+    // Ratio normalization: real ∈ [1, 6], center = 3.5, half-range = 2.5
+    inline constexpr float kRatioCenter        =   3.5f;
+    inline constexpr float kRatioHalfRange     =   2.5f;
+    // Per-param clamp bounds (same values used in the decoder)
+    inline constexpr float kThresholdMinDb     = -40.0f;
+    inline constexpr float kThresholdMaxDb     =  -6.0f;
+    inline constexpr float kAttackMinMs        =   0.1f;
+    inline constexpr float kAttackMaxMs        = 100.0f;
+    inline constexpr float kReleaseMinMs       =  10.0f;
+    inline constexpr float kReleaseMaxMs       = 500.0f;
+    inline constexpr float kMakeupMinDb        =   0.0f;
+    inline constexpr float kMakeupMaxDb        =  12.0f;
+    inline constexpr float kKneeMinDb           =   0.0f;
+    inline constexpr float kKneeMaxDb           =  12.0f;
+} // namespace CompNorm
+
 // AUDIT-2.1: full per-band compressor params, in real units. The 44-float
 // SonicMaster decision carries all six (threshold,ratio,attack,release,makeup,
 // knee) per band, but the normalized MasteringTargetVector.dynamics array holds
 // only 2/band in [-1,1] delta space. The other four travel in this sidecar.
 struct NeuralMasteringCompBand
 {
-    float thresholdDb = -20.0f;
+    float thresholdDb = -20.0f;  // = CompNorm::kThresholdCenterDb
     float ratio       =   2.5f;
     float attackMs    =  15.0f;
     float releaseMs   = 150.0f;

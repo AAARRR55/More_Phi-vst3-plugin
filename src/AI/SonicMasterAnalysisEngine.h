@@ -200,15 +200,17 @@ public:
     void notifyHostedParameterChanged() noexcept
     {
         paramChangePending_.store(true, std::memory_order_relaxed);
-        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        paramChangeNs_.store(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()),
+            std::memory_order_relaxed);
     }
 	    // P2.8: configurable settling period (seconds). After a parameter change the
 	    // engine waits this long before trusting a capture window, so the hosted
 	    // plugin's internal state (filters, lookahead, tails) has flushed. Defaults to
 	    // 0.5 s; raise for plugins with long tails/reverb. Message thread.
 	    void setParamTransitionSettleSeconds(double seconds) noexcept
-	    { paramSettleSeconds_ = seconds > 0.0 ? seconds : 0.0; }
+	    { paramSettleSeconds_.store(seconds > 0.0 ? seconds : 0.0, std::memory_order_relaxed); }
 
 	    // AUDIT-FIX (P4, 2026-06-27): audio source change notification. When the DAW
 	    // switches routing, the user changes the input source, or the processor resets,
@@ -217,13 +219,15 @@ public:
 	    // transition guard as notifyHostedParameterChanged, with an optional human-
 	    // readable reason string for diagnostics. Thread-safe: relaxed atomics.
 	    // Call from message thread (PluginProcessor::reset, etc.).
-	    void notifyAudioSourceChanged(const char* reason = "input_changed") noexcept
-	    {
-	        paramChangePending_.store(true, std::memory_order_relaxed);
-	        paramChangeNs_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
-	            std::chrono::steady_clock::now().time_since_epoch()).count();
-	        lastSourceChangeReason_ = reason;
-	    }
+		    void notifyAudioSourceChanged(const char* reason = "input_changed") noexcept
+		    {
+		        paramChangePending_.store(true, std::memory_order_relaxed);
+		        paramChangeNs_.store(static_cast<std::uint64_t>(
+		            std::chrono::duration_cast<std::chrono::nanoseconds>(
+		                std::chrono::steady_clock::now().time_since_epoch()).count()),
+		            std::memory_order_relaxed);
+		        lastSourceChangeReason_ = reason;
+		    }
 	    // DIAGNOSTIC: returns the reason string from the most recent audio source
 	    // change notification, or empty if none. Advisory — only the most recent
 	    // change reason is remembered.
@@ -318,8 +322,13 @@ public:
     };
     [[nodiscard]] ClosedLoopState getClosedLoopState() const noexcept
     {
-        return { feedbackActive_, lastAppliedTargetLufs_, lastMeasuredLufs_,
-                 lastLufsError_, feedbackActive_ ? feedbackTargetLufs_ : -14.0f };
+        // AUDIT-FIX (L2-1): acquire loads pair with release stores in runCycle().
+        const bool active = feedbackActive_.load(std::memory_order_acquire);
+        return { active,
+                 lastAppliedTargetLufs_.load(std::memory_order_acquire),
+                 lastMeasuredLufs_.load(std::memory_order_acquire),
+                 lastLufsError_.load(std::memory_order_acquire),
+                 active ? feedbackTargetLufs_.load(std::memory_order_acquire) : -14.0f };
     }
     // F2/AUDIT: true when the last apply actually reached an active audio path.
     // Mirrors the Applied vs AppliedNoAudioPath split for clients that read a
@@ -567,11 +576,15 @@ private:
     // bounded correction into feedbackTargetLufs_ for the NEXT cycle's decode.
     // feedbackActive_ gates it (off until the first apply lands; reset on
     // prepare/release). Bounded by the public kFeedback* constants above.
-    bool  feedbackActive_   = false;
-    float feedbackTargetLufs_ = -14.0f;   // next cycle's target override
-    float lastAppliedTargetLufs_ = -14.0f; // what the last apply targeted (for error)
-    float lastMeasuredLufs_      = 0.0f;   // last achieved LUFS readback
-    float lastLufsError_         = 0.0f;   // target - measured (positive = too quiet)
+    // AUDIT-FIX (L2-1, 2026-06-29): all five fields are now atomic — written on
+    // the analysis thread (runCycle) and on the message thread (prepare after
+    // join), read from any thread via getClosedLoopState(). Release/acquire
+    // ordering ensures the analysis-thread payload is visible to MCP-thread readers.
+    std::atomic<bool>  feedbackActive_   { false };
+    std::atomic<float> feedbackTargetLufs_ { -14.0f };   // next cycle's target override
+    std::atomic<float> lastAppliedTargetLufs_ { -14.0f }; // what the last apply targeted (for error)
+    std::atomic<float> lastMeasuredLufs_      { 0.0f };   // last achieved LUFS readback
+    std::atomic<float> lastLufsError_         { 0.0f };   // target - measured (positive = too quiet)
 
     // GENRE PRIOR (Stage 1): genre-derived target LUFS pushed from the message
     // thread (AutoMasteringEngine genre tick). kUseModelTargetLufs = no prior.
@@ -610,8 +623,11 @@ private:
 	    // the most recent change. Relaxed atomics: advisory — a missed/delayed observation
 	    // only risks analyzing one stale window, never corrupts data.
 	    std::atomic<bool> paramChangePending_ { false };
-	    std::uint64_t paramChangeNs_ = 0;
-	    double paramSettleSeconds_ = 0.5;   // default settling period after a param change
+	    // AUDIT-FIX (L1-4, 2026-06-29): made atomic — written on message/MCP
+	    // thread, read on analysis thread. Relaxed is sufficient (advisory — a
+	    // missed/delayed observation only risks analyzing one stale window).
+	    std::atomic<std::uint64_t> paramChangeNs_ { 0 };
+	    std::atomic<double> paramSettleSeconds_ { 0.5 };   // default settling period after a param change
 	    // AUDIT-FIX (P4, 2026-06-27): reason string from the most recent
 	    // notifyAudioSourceChanged call. const char* pointer is stable (string
 	    // literals / static storage only — never heap-allocated, never freed).

@@ -22,6 +22,9 @@
 
 #if MORE_PHI_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
+#ifdef _WIN32
+#include <windows.h>  // MultiByteToWideChar (L1-8)
+#endif
 #endif
 
 namespace more_phi {
@@ -79,13 +82,28 @@ bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::strin
         opts.SetGraphOptimizationLevel(ORT_ENABLE_ALL);
 
         const std::string pathStr { modelPath };
-        session_->session = std::make_unique<Ort::Session>(
+
 #ifdef _WIN32
-            *session_->env, std::wstring(pathStr.begin(), pathStr.end()).c_str(), opts
+        // AUDIT-FIX (L1-8, 2026-06-29): use MultiByteToWideChar for proper
+        // UTF-8→UTF-16 conversion. The old std::wstring(pathStr.begin(),
+        // pathStr.end()) did a code-unit-by-code-unit copy that mangled
+        // non-ASCII characters (e.g. CJK paths, accented chars), causing
+        // ORT to fail with an unhelpful error. The wstring must outlive the
+        // Ort::Session constructor call, so it is declared before make_unique.
+        std::wstring widePath;
+        {
+            const int len = MultiByteToWideChar(CP_UTF8, 0,
+                pathStr.c_str(), static_cast<int>(pathStr.size()), nullptr, 0);
+            widePath.resize(static_cast<std::size_t>(len));
+            MultiByteToWideChar(CP_UTF8, 0,
+                pathStr.c_str(), static_cast<int>(pathStr.size()), &widePath[0], len);
+        }
+        session_->session = std::make_unique<Ort::Session>(
+            *session_->env, widePath.c_str(), opts);
 #else
-            *session_->env, pathStr.c_str(), opts
+        session_->session = std::make_unique<Ort::Session>(
+            *session_->env, pathStr.c_str(), opts);
 #endif
-        );
 
         // ── Validate I/O contract ───────────────────────────────────────────
         if (session_->session->GetInputCount() != 1 || session_->session->GetOutputCount() != 1)
@@ -140,7 +158,28 @@ bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::strin
         session_->outputName = outNameAlloc.get();
         session_->inputBuffer.assign(2 * kSonicMasterSegmentFrames, 0.0f);
 
-        available_ = true;
+        // AUDIT-FIX (L1-7, 2026-06-29): warmup inference to trigger ORT lazy init
+        // and JIT compilation. The first session->Run() can be 2-10× slower than
+        // subsequent calls due to graph optimization and memory allocation inside
+        // ORT. Running a zero-input inference at load time populates those caches so
+        // the first real inference on the analysis thread doesn't blow the 5-second
+        // MCP timeout. Warmup failure is non-fatal — it just means the first real
+        // inference may be slow.
+        try
+        {
+            Ort::Value warmupInput = Ort::Value::CreateTensor<float>(
+                session_->memoryInfo,
+                session_->inputBuffer.data(),
+                session_->inputBuffer.size(),
+                session_->inputShape.data(),
+                session_->inputShape.size());
+            const char* wIn[]  = { session_->inputName.c_str() };
+            const char* wOut[] = { session_->outputName.c_str() };
+            session_->session->Run(Ort::RunOptions{nullptr}, wIn, &warmupInput, 1, wOut, 1);
+        }
+        catch (...) { /* warmup failure non-fatal */ }
+
+        available_.store(true, std::memory_order_release);  // AUDIT-FIX (L1-1)
         return true;
     }
     catch (const Ort::Exception&)
@@ -159,10 +198,13 @@ bool SonicMasterDecisionRunner::loadModel(std::string_view modelPath, std::strin
 void SonicMasterDecisionRunner::unloadModel() noexcept
 {
     session_.reset();
-    available_ = false;
+    available_.store(false, std::memory_order_release);  // AUDIT-FIX (L1-1)
 }
 
-bool SonicMasterDecisionRunner::isAvailable() const noexcept { return available_; }
+bool SonicMasterDecisionRunner::isAvailable() const noexcept
+{
+    return available_.load(std::memory_order_acquire);  // AUDIT-FIX (L1-1)
+}
 
 bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
                                             float* outDecision,
@@ -172,7 +214,7 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
     (void) stereoInterleaved; (void) outDecision; (void) outCapacity;
     return false;
 #else
-    if (!available_ || session_ == nullptr || stereoInterleaved == nullptr
+    if (!available_.load(std::memory_order_acquire) || session_ == nullptr || stereoInterleaved == nullptr
         || outDecision == nullptr || outCapacity < kSonicMasterDecisionWidth)
         return false;
 
@@ -222,6 +264,18 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
             // prevMax refreshed by CAS failure; loop until stored or overtaken.
         }
 
+        // AUDIT-FIX (L1-2, 2026-06-29): verify the output tensor has at least
+        // kSonicMasterDecisionWidth elements before reading. Symbolic dimensions in
+        // the model shape (e.g. batch = -1) pass load-time validation, but the
+        // runtime output may be shorter if the model is corrupted or version-mismatched.
+        const auto outInfo = outputs[0].GetTensorTypeAndShapeInfo();
+        if (static_cast<std::size_t>(outInfo.GetElementCount()) < kSonicMasterDecisionWidth)
+        {
+            recordError("ONNX output dimension mismatch: fewer elements than expected");
+            failCount_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
         const float* outData = outputs[0].GetTensorData<float>();
         std::copy_n(outData, kSonicMasterDecisionWidth, outDecision);
 
@@ -257,6 +311,10 @@ bool SonicMasterDecisionRunner::runDecision(const float* stereoInterleaved,
 void SonicMasterDecisionRunner::recordError(const char* msg) noexcept
 {
     if (msg == nullptr) msg = "(null)";
+    // AUDIT-FIX (L1-3, 2026-06-29): lock the buffer so concurrent getLastRunError()
+    // readers see a consistent snapshot. recordError is called from the analysis
+    // thread only; getLastRunError can be called from any thread (e.g. MCP handler).
+    const std::lock_guard<std::mutex> lock(errorBufMutex_);
     std::size_t n = 0;
     for (; n < kErrorBufLen - 1 && msg[n] != '\0'; ++n)
         lastRunError_[n] = msg[n];

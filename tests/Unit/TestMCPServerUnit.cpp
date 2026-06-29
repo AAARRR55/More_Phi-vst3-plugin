@@ -1598,3 +1598,48 @@ TEST_CASE("sonicmaster_decision schema advertises the fallback parameters",
     CHECK(schema.find("\"default\":false") != std::string::npos);     // fallback default off
     CHECK(schema.find("\"default\":-14.0") != std::string::npos);     // fallback target default
 }
+
+// ── AUDIT-FIX (L3-7, 2026-06-29): JSON-RPC "id":null handling ────────────
+
+TEST_CASE("MCPServer responds to explicit id:null (not a notification)",
+          "[mcp][protocol]")
+{
+    // JSON-RPC 2.0 §4: a notification is a request WITHOUT an "id" member.
+    // An explicit "id": null IS a request and MUST receive a response.
+    // Previously, both absent-id and id:null were treated as notifications
+    // (response suppressed). Now, only absent-id suppresses the response.
+    ScopedTrackAssistantStore store;
+    more_phi::MorePhiProcessor proc;
+    more_phi::MCPServer server(proc);
+
+    // Build a request with explicit "id": null
+    nlohmann::json request = {
+        {"jsonrpc", "2.0"},
+        {"method", "initialize"},
+        {"params", {
+            {"authToken", "test-auth-token"},
+            {"clientInfo", {{"name", "test-client"}, {"version", "1.0"}}}
+        }},
+        {"id", nullptr}
+    };
+
+    bool authenticated = false;
+    auto respStr = server.processRequestForTesting(juce::String(request.dump()), authenticated);
+    // With the fix, id:null should produce a response (not drop it).
+    CHECK(respStr.isNotEmpty());
+
+    auto resp = nlohmann::json::parse(respStr.toStdString());
+    CHECK(resp.contains("id"));
+    CHECK(resp["id"].is_null());
+
+    // Contrast: a notification (no "id" key at all) should produce NO response.
+    nlohmann::json notification = {
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/cancelled"},
+        {"params", {{"requestId", 1}}}
+        // No "id" key → this is a notification
+    };
+    bool notifAuth = false;
+    auto notifResp = server.processRequestForTesting(juce::String(notification.dump()), notifAuth);
+    CHECK(notifResp.isEmpty());  // notification → no response
+}

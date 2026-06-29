@@ -133,6 +133,15 @@ struct ApplyVerification
     // timing, not genuine drift. Counting it against verifiedFraction() made a
     // clean apply spuriously read <0.80 -> AppliedPartial. confirmedFraction()
     // only counts writes whose state is genuinely known.
+    //
+    // AUDIT-FIX (L4-4, 2026-06-29): clarification — confirmedFraction() returns
+    // 1.0 (not 0.0) when no writes have landed yet (landed == 0). This is a
+    // "no evidence of problems" sentinel, distinct from 0.0 which would mean
+    // "all landed writes are unconfirmed." An initial 1.0 is correct for the
+    // first apply cycle (there is no basis to claim partial application before
+    // any read-backs have occurred), but callers should treat a 1.0 with
+    // enqueued==0 as "no data" rather than "perfect confirmation." The
+    // projected_plan.confidence field in the MCP surface feeds this value.
     [[nodiscard]] float confirmedFraction() const noexcept
     {
         const int landed = verified + driftedDiscrete;
@@ -224,11 +233,15 @@ public:
     // call against the hosted plugin. Compares each enqueued param's requested
     // normalized value against getParameterNormalized(idx) after the command queue
     // drains, with a discrete-aware tolerance (matching MCPToolHandler's
-    // classifyVerification). Atomic copy: written under the apply path, read from
-    // any thread. Returns a zeroed struct before the first apply or when the hosted
-    // plugin applicator is unmapped.
+    // classifyVerification). Returns a zeroed struct before the first apply or when
+    // the hosted plugin applicator is unmapped.
+    // AUDIT-FIX (L2-2, 2026-06-29): now SpinLock-guarded — written on the message
+    // thread, read from any thread (MCP handler).
     [[nodiscard]] ApplyVerification getLastApplyVerification() const noexcept
-    { return lastApplyVerification_; }
+    {
+        const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_);
+        return lastApplyVerification_;
+    }
 
     // AUDIT-FIX (Fix 2/6): true iff the most recent applyValidatedPlan() either
     // enqueued <80% of the requested slots OR read back <80% of the enqueued params
@@ -289,8 +302,13 @@ public:
 
     // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
     // Returns a zeroed struct before the first apply. Read from any thread.
+    // AUDIT-FIX (L2-3, 2026-06-29): now SpinLock-guarded — same pattern as
+    // getLastApplyVerification.
     [[nodiscard]] CompositeQualityScore getLastQualityScore() const noexcept
-    { return lastQualityScore_; }
+    {
+        const juce::SpinLock::ScopedLockType lock(lastQualityScoreLock_);
+        return lastQualityScore_;
+    }
 
     // P2.5 (AUDIT): wire the ActionLedger so neural mastering writes (which bypass
     // MCPToolHandler::handle and were therefore NOT recorded) become auditable. Pass
@@ -384,10 +402,15 @@ private:
     // AUDIT-FIX (Fix 7): cumulative sample count for frame-based staleness.
     std::atomic<std::uint64_t> analyzedSamples_ { 0 };
     // AUDIT-FIX (Fix 2): readback verification of the last applyValidatedPlan().
+    // AUDIT-FIX (L2-2, 2026-06-29): protected by lastApplyVerifyLock_ — written on
+    // the message thread (applyValidatedPlan), read from any thread (MCP handler).
+    mutable juce::SpinLock lastApplyVerifyLock_;
     ApplyVerification lastApplyVerification_ {};
     // AUDIT-FIX (Fix 2/6): partial-apply flag (see lastApplyWasPartial()).
     std::atomic<bool> lastApplyWasPartial_ { false };
     // AUDIT-FIX (R8, Phase 3b): composite quality score from the last apply.
+    // AUDIT-FIX (L2-3, 2026-06-29): protected by lastQualityScoreLock_ — same pattern.
+    mutable juce::SpinLock lastQualityScoreLock_;
     CompositeQualityScore lastQualityScore_ {};
     // P2.5: optional ledger for auditing neural writes. Set by the processor after
     // the MCP server's AutomationRuntime exists. nullptr when not wired (tests).

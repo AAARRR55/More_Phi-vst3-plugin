@@ -128,21 +128,28 @@ bool decodeSonicMasterDecision(const float* decision,
     //    travel ONLY in the sidecar — applyValidatedPlan reads them when
     //    hasCompParams is set, otherwise falls back to the threshold/ratio pair
     //    and the DSP's existing attack/release/makeup/knee values.
+    //    AUDIT-FIX (L1-6, 2026-06-29): replaced magic numbers with named
+    //    constants from CompNorm (NeuralMasteringTypes.h) so normalization
+    //    parameters are auditable in one place.
     for (std::size_t band = 0; band < kSonicMasterCompBandCount; ++band)
     {
         const std::size_t o = kSonicMasterCompOffset + band * kSonicMasterCompBandWidth;
-        const float thresholdDb = clamp(decision[o + 0], -40.0f, -6.0f);
+        const float thresholdDb = clamp(decision[o + 0], CompNorm::kThresholdMinDb, CompNorm::kThresholdMaxDb);
         const float ratioRaw    = clamp(decision[o + 1], kSonicMasterCompRatioMin, kSonicMasterCompRatioMax);
-        const float attackMs    = clamp(decision[o + 2],   0.1f, 100.0f);
-        const float releaseMs   = clamp(decision[o + 3],  10.0f, 500.0f);
-        const float makeupDb    = clamp(decision[o + 4],   0.0f,  12.0f);
-        const float kneeDb      = clamp(decision[o + 5],   0.0f,  12.0f);
+        const float attackMs    = clamp(decision[o + 2], CompNorm::kAttackMinMs, CompNorm::kAttackMaxMs);
+        const float releaseMs   = clamp(decision[o + 3], CompNorm::kReleaseMinMs, CompNorm::kReleaseMaxMs);
+        const float makeupDb    = clamp(decision[o + 4], CompNorm::kMakeupMinDb, CompNorm::kMakeupMaxDb);
+        const float kneeDb      = clamp(decision[o + 5], CompNorm::kKneeMinDb, CompNorm::kKneeMaxDb);
 
-	        // Normalized pair for the safety policy's delta math. Map ratio over
-	        // the agreed [1,6] band (P5 widened from [1,4]): ratio=3.5 -> 0.0,
-	        // ratio=1 -> -1.0, ratio=6 -> +1.0. Center 3.5, factor 2.5.
-	        out.projectedTargets.dynamics[2 * band + 0] = clamp((thresholdDb + 20.0f) / 8.0f, -1.0f, 1.0f);
-	        out.projectedTargets.dynamics[2 * band + 1] = clamp((ratioRaw - 3.5f) / 2.5f, -1.0f, 1.0f);
+            // Normalized pair for the safety policy's delta math. The
+            // normalization is (value - center) / halfRange → [-1, 1].
+            // Ratio: center=3.5, halfRange=2.5; threshold: center=-20, halfRange=8.
+            out.projectedTargets.dynamics[2 * band + 0] = clamp(
+                (thresholdDb - CompNorm::kThresholdCenterDb) / CompNorm::kThresholdHalfRangeDb,
+                -1.0f, 1.0f);
+            out.projectedTargets.dynamics[2 * band + 1] = clamp(
+                (ratioRaw - CompNorm::kRatioCenter) / CompNorm::kRatioHalfRange,
+                -1.0f, 1.0f);
 
         // Full real-unit sidecar for the DSP.
         auto& cp = out.compParams[band];

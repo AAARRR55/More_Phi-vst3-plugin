@@ -63,6 +63,81 @@ juce::String authHeadersFor(LLMProviderId id, const juce::String& apiKey)
     return "Authorization: Bearer " + apiKey + "\r\ncontent-type: application/json\r\n";
 }
 
+// Extract a human-readable detail string from a provider error response body.
+// Mirrors LLMChatClient's extractProviderErrorDetail (kept local for the same
+// layer-separation reason as baseUrlFor/authHeadersFor above). Providers
+// disagree on their error envelope shape; NVIDIA NIM (FastAPI/Starlette) emits
+// {"detail":"..."} / {"detail":[{"msg":"..."}]}, which the bare body dump would
+// otherwise hide behind an opaque "http_400" code in the agent ledger. Tries
+// the observed shapes in order and returns the first non-empty extraction.
+juce::String extractProviderErrorDetail(const juce::String& body)
+{
+    if (body.trim().isEmpty())
+        return {};
+
+    json root;
+    try { root = json::parse(body.toRawUTF8()); }
+    catch (...) { return {}; }
+
+    if (!root.is_object())
+        return {};
+
+    if (root.contains("error") && root["error"].is_object()
+        && root["error"].contains("message") && root["error"]["message"].is_string())
+    {
+        const auto msg = juce::String::fromUTF8(root["error"]["message"].get<std::string>().c_str());
+        if (msg.trim().isNotEmpty())
+            return msg;
+    }
+
+    if (root.contains("error") && root["error"].is_string())
+    {
+        const auto msg = juce::String::fromUTF8(root["error"].get<std::string>().c_str());
+        if (msg.trim().isNotEmpty())
+            return msg;
+    }
+
+    if (root.contains("detail") && root["detail"].is_string())
+    {
+        const auto msg = juce::String::fromUTF8(root["detail"].get<std::string>().c_str());
+        if (msg.trim().isNotEmpty())
+            return msg;
+    }
+
+    if (root.contains("detail") && root["detail"].is_array() && !root["detail"].empty())
+    {
+        juce::StringArray parts;
+        for (const auto& entry : root["detail"])
+        {
+            if (parts.size() >= 3)
+                break;
+            if (entry.is_object() && entry.contains("msg") && entry["msg"].is_string())
+            {
+                const auto msg = juce::String::fromUTF8(entry["msg"].get<std::string>().c_str());
+                if (msg.trim().isNotEmpty())
+                    parts.add(msg);
+            }
+            else if (entry.is_string())
+            {
+                const auto msg = juce::String::fromUTF8(entry.get<std::string>().c_str());
+                if (msg.trim().isNotEmpty())
+                    parts.add(msg);
+            }
+        }
+        if (!parts.isEmpty())
+            return parts.joinIntoString("; ");
+    }
+
+    if (root.contains("message") && root["message"].is_string())
+    {
+        const auto msg = juce::String::fromUTF8(root["message"].get<std::string>().c_str());
+        if (msg.trim().isNotEmpty())
+            return msg;
+    }
+
+    return {};
+}
+
 // Should this HTTP status be retried? 429 (rate limit) and 5xx (server) yes;
 // 4xx (client error — bad key, bad request) no — retrying wastes the user's
 // quota and won't fix the problem.
@@ -268,7 +343,12 @@ ILlmClient::CompletionResponse RestLlmClient::complete(const CompletionRequest& 
     if (lastStatus < 200 || lastStatus >= 300)
     {
         out.errorCode = "http_" + juce::String(lastStatus);
-        out.content   = httpResp.body;
+        // Surface the provider's parsed error detail (e.g. NVIDIA NIM's
+        // {"detail":[{"msg":"..."}]}) instead of the raw body, so agent-ledger
+        // diagnostic entries are human-readable. Falls back to the raw body if
+        // no recognizable detail shape is present.
+        const auto detail = extractProviderErrorDetail(httpResp.body);
+        out.content = detail.isNotEmpty() ? detail : httpResp.body;
         return out;
     }
 
@@ -313,20 +393,82 @@ ILlmClient::CompletionResponse RestLlmClient::complete(const CompletionRequest& 
         }
         else if (provider_ == LLMProviderId::Anthropic)
         {
-            // {"content":[{"type":"text","text":"..."}]}
+            // AUDIT-FIX (P16, 2026-06-29): Anthropic content arrays can contain
+            // mixed-type blocks — e.g. {"type":"thinking","thinking":"..."} before
+            // the actual {"type":"text","text":"..."} block. The old code read
+            // content[0].text which fails when the first block is a thinking block
+            // (no ".text" key). Now we iterate to find the first text-type block.
+            // Also handle top-level reasoning_content (some extended-thinking
+            // models return this instead of a content-array thinking block).
             if (parsed.contains("content") && parsed["content"].is_array()
-                && ! parsed["content"].empty() && parsed["content"][0].contains("text"))
-                text = juce::String::fromUTF8(parsed["content"][0]["text"].get<std::string>().c_str());
+                && !parsed["content"].empty())
+            {
+                for (const auto& block : parsed["content"])
+                {
+                    if (block.contains("type") && block["type"] == "text"
+                        && block.contains("text") && block["text"].is_string())
+                    {
+                        text = juce::String::fromUTF8(block["text"].get<std::string>().c_str());
+                        break;
+                    }
+                }
+            }
+            // Extended-thinking models surface reasoning in a top-level field
+            // (not in the content array). Stash it so callers that want it can
+            // access it; the primary text is from the content array above.
+            if (parsed.contains("reasoning_content") && parsed["reasoning_content"].is_string())
+            {
+                // reasoning_content is auxiliary — append as metadata rather than
+                // replacing the structured content. The ConductorAgent uses the
+                // text field for goal decomposition; reasoning is for debugging.
+                out.reasoningContent = juce::String::fromUTF8(
+                    parsed["reasoning_content"].get<std::string>().c_str());
+            }
         }
         else
         {
             // {"choices":[{"message":{"content":"..."}}]}
+            // AUDIT-FIX (P16, 2026-06-29): also handle the newer OpenAI content-array
+            // format where "content" is an array of {"type":"text","text":"..."} blocks
+            // (e.g. GPT-4o with vision). Fall back to string content for backwards compat.
             if (parsed.contains("choices") && parsed["choices"].is_array()
                 && ! parsed["choices"].empty() && parsed["choices"][0]["message"].contains("content"))
             {
                 const auto& c = parsed["choices"][0]["message"]["content"];
-                text = c.is_string() ? juce::String::fromUTF8(c.get<std::string>().c_str())
-                                     : juce::String::fromUTF8(c.dump().c_str());
+                if (c.is_string())
+                {
+                    text = juce::String::fromUTF8(c.get<std::string>().c_str());
+                }
+                else if (c.is_array() && !c.empty())
+                {
+                    // OpenAI content-array: find first text-type block
+                    for (const auto& block : c)
+                    {
+                        if (block.contains("type") && block["type"] == "text"
+                            && block.contains("text") && block["text"].is_string())
+                        {
+                            text = juce::String::fromUTF8(block["text"].get<std::string>().c_str());
+                            break;
+                        }
+                    }
+                    if (text.isEmpty())
+                        text = juce::String::fromUTF8(c.dump().c_str());
+                }
+                else
+                {
+                    text = juce::String::fromUTF8(c.dump().c_str());
+                }
+            }
+            // OpenAI o-series models with reasoning: reasoning_content is nested
+            // under choices[0].message when present (distinct from Anthropic's
+            // top-level field, but structurally the same data).
+            if (parsed.contains("choices") && parsed["choices"].is_array()
+                && !parsed["choices"].empty()
+                && parsed["choices"][0]["message"].contains("reasoning_content"))
+            {
+                const auto& rc = parsed["choices"][0]["message"]["reasoning_content"];
+                if (rc.is_string())
+                    out.reasoningContent = juce::String::fromUTF8(rc.get<std::string>().c_str());
             }
         }
     }
