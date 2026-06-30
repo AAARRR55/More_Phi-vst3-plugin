@@ -226,8 +226,14 @@ class SyntheticTeacher:
         eq = []
         for i in range(SPECTRAL_BAND_COUNT):
             # Low bands cut when tilt is bright, highs boosted when dull.
+            # AUDIT-FIX 2026-06-30: amplitude 0.4 -> 0.15. The audio gate
+            # (evaluate_student_audio through the real engine) showed the model
+            # faithfully reproduced a 0.4 corrective-tilt ceiling -> ~4.8 dB EQ
+            # moves -> eqGainMae 2.31 dB (release gate <=1.5), i.e. broad tonal
+            # coloration a careful master would not apply. 0.15 -> ~1.8 dB ceiling
+            # = transparent corrective tilt. eq_to_gain_db scales delta by *12.
             band_pos = i / (SPECTRAL_BAND_COUNT - 1)  # 0=low ... 1=high
-            corrective = math.tanh(-tilt * (band_pos - 0.5) / 3.0) * 0.4
+            corrective = math.tanh(-tilt * (band_pos - 0.5) / 3.0) * 0.15
             eq.append(max(-1.0, min(1.0, corrective)))
 
         loudness_delta = math.tanh((-14.0 - lufs) / 6.0) * 0.6
