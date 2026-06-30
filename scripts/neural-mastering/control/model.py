@@ -69,8 +69,12 @@ def _build_input_scales() -> torch.Tensor:
     s[7] = 1.5
     # [8] transientDensity ~[0,1], [9] harmonicRisk ~[0,1], [10] sourceQuality ~[0,1]
     s[8] = s[9] = s[10] = 0.5
-    # [11:43] spectralBands — log-magnitude-ish, treat as ~[0,1]
-    s[11 : 11 + SPECTRAL_BAND_COUNT] = 0.5
+    # [11:43] spectralBands are magnitude in dB (C++ RealtimeSpectrumAnalyzer
+    # magnitudeDB clamped [-120,+24]; features.py parity, also dB). Normalize by
+    # a dB-scale divisor so real music energy (~-60..-20 dB/typical band) lands in
+    # tanh's usable range instead of saturating to -1 (the prior /0.5 assumed
+    # [0,1] and pinned every real input's spectrum to -1). AUDIT-FIX 2026-06-30.
+    s[11 : 11 + SPECTRAL_BAND_COUNT] = 40.0
     # [43:51] stereoCorrelation ~[-1,1]
     s[43 : 43 + STEREO_BAND_COUNT] = 0.5
     # [51:59] midSideRatio ~[0,1]

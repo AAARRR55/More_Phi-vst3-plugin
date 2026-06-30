@@ -207,7 +207,7 @@ class SyntheticTeacher:
             transient_density=self.rng.uniform(0.0, 1.0),
             harmonic_risk=self.rng.uniform(0.0, 0.5),
             source_quality_score=self.rng.uniform(0.5, 1.0),
-            spectral_bands=tuple(self.rng.uniform(0.0, 1.0) for _ in range(SPECTRAL_BAND_COUNT)),
+            spectral_bands=tuple(self.rng.uniform(-75.0, -15.0) for _ in range(SPECTRAL_BAND_COUNT)),  # dB scale, matches C++ magnitudeDB / features.py
             stereo_correlation=tuple(self.rng.uniform(-0.3, 1.0) for _ in range(8)),
             mid_side_ratio=tuple(self.rng.uniform(0.1, 1.0) for _ in range(8)),
             sample_rate=self.rng.choice([44100.0, 48000.0]),
