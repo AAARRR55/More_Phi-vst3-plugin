@@ -92,8 +92,12 @@ TEST_CASE("decodeSonicMasterDecision clamps LUFS to engine's [-23,-8] range",
 
     decision[more_phi::kSonicMasterTargetLufsIdx] = -30.0f;
     REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
-    // -23 -> (-23+14)/6 = -1.5
-    CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(-1.5f, 1e-4f));
+    // -30 clamps to -23 at the decoder input. (-23+14)/6 = -1.5, which exits the
+    // safety policy's [-1,1] target bounds → would trip TargetOutOfRange. The
+    // SAFETY-RANGE-CLAMP in the decoder saturates the normalized output to -1.0
+    // so the plan survives the safety gate (re-applies as -20 LUFS). This is the
+    // fix for the `safety_rejected:target_out_of_range` heuristic-fallback bug.
+    CHECK_THAT(plan.projectedTargets.loudness[0], Catch::Matchers::WithinAbs(-1.0f, 1e-4f));
 }
 
 TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band (telemetry, mask off)",
@@ -112,6 +116,75 @@ TEST_CASE("decodeSonicMasterDecision maps true-peak ceiling into limiter band (t
     // applyValidatedPlan: ceiling = -1 + limiter[0]*0.5. A -1 dBTP target must
     // decode to limiter[0] == 0.0 so a caller that enables the mask reproduces it.
     CHECK_THAT(plan.projectedTargets.limiter[0], Catch::Matchers::WithinAbs(0.0f, 1e-4f));
+}
+
+TEST_CASE("decodeSonicMasterDecision clamps limiter target to safety [-1,1] range at ceiling extremes",
+          "[SonicMaster][Decoder][safety]")
+{
+    // SAFETY-RANGE-CLAMP regression (2026-06-30): the (ceiling+1)/0.5 map exits
+    // [-1,1] for almost every valid ceiling. Extreme valid inputs must saturate
+    // to ±1 rather than tripping the safety policy's TargetOutOfRange gate.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+
+    // Ceiling at the tight extreme (-0.1 dBTP) would naively decode to +1.8.
+    decision[more_phi::kSonicMasterTruePeakIdx] = -0.1f;
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    CHECK(plan.projectedTargets.limiter[0] <= 1.0f);
+    CHECK(plan.projectedTargets.limiter[0] >= -1.0f);
+
+    // Ceiling at the loose extreme (-3.0 dBTP) would naively decode to -4.0.
+    decision[more_phi::kSonicMasterTruePeakIdx] = -3.0f;
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+    CHECK(plan.projectedTargets.limiter[0] <= 1.0f);
+    CHECK(plan.projectedTargets.limiter[0] >= -1.0f);
+}
+
+TEST_CASE("decodeSonicMasterDecision keeps every target inside the safety [-1,1] contract for full-span inputs",
+          "[SonicMaster][Decoder][safety]")
+{
+    // Regression guard for the `safety_rejected:target_out_of_range` bug: drive
+    // every decoded dimension with extreme-but-valid inputs and assert the full
+    // projectedTargets vector stays inside [-1, 1] so the safety policy cannot
+    // hard-reject a well-formed plan. EQ is exercised by the slot-scaled fill;
+    // loudness/limiter use the documented range endpoints; dynamics/stereo use
+    // their own in-range decode paths.
+    float decision[more_phi::kSonicMasterDecisionWidth] {};
+    for (std::size_t i = 0; i < more_phi::kSonicMasterEqGainCount; ++i)
+        decision[i] = (i % 2 == 0) ? 12.0f : -12.0f;   // +/- kAdaptiveEqMaxGainDb
+    decision[more_phi::kSonicMasterTargetLufsIdx] = -23.0f;   // range floor
+    decision[more_phi::kSonicMasterTruePeakIdx]   = -0.1f;    // range ceiling
+    // Dynamics block: threshold/ratio/attack/release/makeup/knee at extremes.
+    for (std::size_t band = 0; band < more_phi::kSonicMasterCompBandCount; ++band)
+    {
+        const std::size_t o = more_phi::kSonicMasterCompOffset
+                            + band * more_phi::kSonicMasterCompBandWidth;
+        decision[o + 0] = more_phi::CompNorm::kThresholdMinDb;
+        decision[o + 1] = more_phi::kSonicMasterCompRatioMax;
+        decision[o + 2] = more_phi::CompNorm::kAttackMaxMs;
+        decision[o + 3] = more_phi::CompNorm::kReleaseMaxMs;
+        decision[o + 4] = more_phi::CompNorm::kMakeupMaxDb;
+        decision[o + 5] = more_phi::CompNorm::kKneeMaxDb;
+    }
+    // Stereo width regions at +/-1 endpoints.
+    decision[more_phi::kSonicMasterStereoOffset + 0] = 1.0f;
+    decision[more_phi::kSonicMasterStereoOffset + 1] = -1.0f;
+
+    more_phi::ValidatedNeuralMasteringPlan plan {};
+    REQUIRE(more_phi::decodeSonicMasterDecision(decision, more_phi::kSonicMasterDecisionWidth, 48000.0, plan));
+
+    auto checkVec = [](const auto& arr) {
+        for (float v : arr)
+        {
+            CHECK(v <= 1.0f);
+            CHECK(v >= -1.0f);
+        }
+    };
+    checkVec(plan.projectedTargets.eq);
+    checkVec(plan.projectedTargets.dynamics);
+    checkVec(plan.projectedTargets.stereo);
+    checkVec(plan.projectedTargets.limiter);
+    checkVec(plan.projectedTargets.loudness);
 }
 
 TEST_CASE("decodeSonicMasterDecision fills the 3-band compressor block",

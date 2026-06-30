@@ -103,12 +103,22 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
         ch.inputBufferA.assign(static_cast<size_t>(fftSize_), 0.0f);
         ch.inputBufferB.assign(static_cast<size_t>(fftSize_), 0.0f);
 
-        // Output buffer: fftSize + enough room for one extra block without re-shift.
-        // FIX 2.3: Must also hold every frame written within a single block at
-        // increasing offsets (up to ceil(maxBlockSize/hopSize)+1 frames × hopSize_)
-        // plus one full fftSize_ tail, so multi-hop blocks never overflow.
-        const int maxHopsPerBlock = (maxBlockSize / hopSize_) + 2;
-        const int outLen = fftSize_ + std::max(hopSize_, maxBlockSize) + maxHopsPerBlock * hopSize_;
+        // Output ring sizing (PERF-OLA, 2026-06-30): the drain is now circular,
+        // so outWritePos advances monotonically and wraps modulo outLen. The
+        // ring must be large enough that the write region of a frame
+        // (fftSize_ samples ahead of outWritePos) never collides with live
+        // (written-but-not-yet-drained) data sitting between outReadPos and
+        // outWritePos.
+        //
+        // Worst-case live gap = steady-state tail (fftSize_) + in-flight block
+        // (maxBlockSize) + one hop of lookahead (hopSize_). Adding the frame
+        // being written (fftSize_) and a safety margin gives the bound:
+        //   outLen >= 2*fftSize_ + maxBlockSize + hopSize_ + margin
+        // We allocate 2*fftSize_ + 2*maxBlockSize + 2*hopSize_ for headroom.
+        // This is larger than the pre-refactor linear buffer, but the memmove
+        // it eliminates was O(outLen) per block per channel — the trade is
+        // strictly favorable for CPU at the cost of a few KiB of RAM.
+        const int outLen = 2 * fftSize_ + 2 * std::max(hopSize_, maxBlockSize) + 2 * hopSize_;
         ch.outputBuffer.assign(static_cast<size_t>(outLen), 0.0f);
 
         ch.fftRealA.assign(static_cast<size_t>(numBins_), 0.0f);
@@ -134,6 +144,7 @@ void SpectralMorphEngine::prepare(double sampleRate, int maxBlockSize)
         ch.writePos = 0;
         ch.hopCount = 0;
         ch.outWritePos = 0;   // FIX 2.3: reset overlap-add write head
+        ch.outReadPos = 0;    // PERF-OLA: reset circular drain read head
     }
 
     // Size blockAlphas_ to support the maximum number of hops in a block.
@@ -188,6 +199,7 @@ void SpectralMorphEngine::reset() noexcept
         ch.writePos = 0;
         ch.hopCount = 0;
         ch.outWritePos = 0;   // FIX 2.3: reset overlap-add write head
+        ch.outReadPos = 0;    // PERF-OLA: reset circular drain read head
     }
     for (auto& det : transientDetectors_)
         det.reset();
@@ -290,34 +302,36 @@ void SpectralMorphEngine::processBlock(juce::AudioBuffer<float>& bufA,
             }
         }
 
-        // ── Drain numSamples from front of output buffer into bufA ────────────
+        // ── Drain numSamples from the circular output ring into bufA ─────────
+        // PERF-OLA (2026-06-30): replaced the linear memmove drain with a
+        // circular read. The previous implementation copied numSamples out of
+        // the front of outputBuffer and then memmove'd the remaining
+        // (outBufLen - numSamples) floats left every block — an O(fftSize)
+        // per-block cost per channel. At FFT 2048 / hop 512 / block 256 that
+        // was ~2304 floats shifted per channel per block, dominating the
+        // spectral-engine CPU budget under FL Studio with small buffers.
+        //
+        // The ring now has a read head (outReadPos) that chases the write head
+        // (outWritePos). Drain reads forward from outReadPos with wraparound,
+        // then zeroes the consumed slots (preserving the original "fresh tail"
+        // invariant the overlap-add relies on) and advances outReadPos by
+        // drainLen. The write head no longer needs to be shifted back.
         float* out = bufA.getWritePointer(c);
         const int outBufLen = static_cast<int>(ch.outputBuffer.size());
         const int drainLen  = std::min(numSamples, outBufLen);
 
+        int readPos = ch.outReadPos;
         for (int i = 0; i < drainLen; ++i)
-            out[i] = ch.outputBuffer[static_cast<size_t>(i)];
-        // Zero-pad if drain window exceeds output buffer (shouldn't happen)
+        {
+            out[i] = ch.outputBuffer[static_cast<size_t>(readPos)];
+            ch.outputBuffer[static_cast<size_t>(readPos)] = 0.0f;   // clear after read
+            readPos = (readPos + 1 == outBufLen) ? 0 : readPos + 1;
+        }
+        // Zero-pad if drain window exceeds what's available (priming blocks).
         for (int i = drainLen; i < numSamples; ++i)
             out[i] = 0.0f;
 
-        // Shift output buffer left by numSamples
-        const int remaining = outBufLen - drainLen;
-        if (remaining > 0)
-        {
-            std::memmove(ch.outputBuffer.data(),
-                         ch.outputBuffer.data() + drainLen,
-                         static_cast<size_t>(remaining) * sizeof(float));
-        }
-        std::fill(ch.outputBuffer.begin() + remaining,
-                  ch.outputBuffer.end(), 0.0f);
-
-        // FIX 2.3: Advance the overlap-add write head with the drain so the
-        // next block's first frame resumes at the correct absolute offset.
-        // Clamp at 0 — underflow would mean we drained more than was written,
-        // which can only happen on the priming blocks before steady state.
-        ch.outWritePos -= drainLen;
-        if (ch.outWritePos < 0) ch.outWritePos = 0;
+        ch.outReadPos = readPos;
     }
 }
 
@@ -397,18 +411,34 @@ void SpectralMorphEngine::processFrame(ChannelState& ch, float alpha) noexcept
     // ── 7. Inverse FFT → windowed time-domain frame in linBuf ────────────────
     inverseFFT(ch.fftRealOut.data(), ch.fftImagOut.data(), linBuf, scratch);
 
-    // ── 8. Overlap-add into output buffer ─────────────────────────────────────
+    // ── 8. Overlap-add into the circular output ring ──────────────────────────
     //   FIX 2.3: Each frame is added at the channel's overlap-add write head,
     //   which advances by hopSize_ per frame. This is what gives correct 75%
     //   overlap reconstruction: consecutive windowed frames must be offset by
     //   exactly hopSize_ so the four overlapping Hann² envelopes sum to the
     //   COLA constant. Adding every frame at offset 0 (the old behavior) broke
     //   reconstruction whenever more than one hop fired in a single block.
+    //
+    //   PERF-OLA (2026-06-30): the write head now wraps modulo outBufLen. The
+    //   drain clears each slot after reading, so OLA accumulation (+ =) lands
+    //   on zeroed slots — bit-identical to the linear-buffer behavior, just
+    //   indexed circularly. If the frame straddles the wrap, finish it in two
+    //   contiguous segments.
     const int outBufLen = static_cast<int>(ch.outputBuffer.size());
-    const int addLen    = std::min(fftSize_, outBufLen - ch.outWritePos);
-    for (int n = 0; n < addLen; ++n)
-        ch.outputBuffer[static_cast<size_t>(ch.outWritePos + n)] += linBuf[n];
-    ch.outWritePos += hopSize_;
+    int writePos        = ch.outWritePos % outBufLen;
+    int samplesLeft     = fftSize_;
+    int linOffset       = 0;
+    while (samplesLeft > 0)
+    {
+        const int space = outBufLen - writePos;
+        const int seg   = std::min(samplesLeft, space);
+        for (int n = 0; n < seg; ++n)
+            ch.outputBuffer[static_cast<size_t>(writePos + n)] += linBuf[linOffset + n];
+        linOffset += seg;
+        samplesLeft -= seg;
+        writePos = (writePos + seg == outBufLen) ? 0 : writePos + seg;
+    }
+    ch.outWritePos = (ch.outWritePos + hopSize_) % outBufLen;
 }
 
 // ─── computeHannWindow() ─────────────────────────────────────────────────────

@@ -56,6 +56,7 @@ add_executable(MorePhiTests
     # V2 subsystem tests
     Unit/TestModulationEngine.cpp
     Unit/TestSpectralEngine.cpp
+    Unit/TestSpectralMorphEngineRegression.cpp
     Unit/TestGranularEngine.cpp
     Unit/TestPresetLibrary.cpp
     Unit/TestV2Integration.cpp
