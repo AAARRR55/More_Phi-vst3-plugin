@@ -1616,8 +1616,19 @@ MorePhiProcessor::createParameterLayout()
         juce::ParameterID{"disableTouchDetection", 1}, "Disable Touch Detect", false));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID{"throttleParamCommits", 1}, "Throttle Param Commits", false));
+    // PERF-CPU-DEFAULT (2026-06-30): default flipped OFF→ON.
+    // Rationale: the audio-domain path (spectral/granular FFT + oversampling)
+    // is the dominant CPU consumer when morph engines are engaged, and FL Studio
+    // users on the Master bus were hitting CPU-saturation dropouts/crashes with
+    // the prior OFF default (FFT 2048/4096, oversampling uncapped). cpuSaver
+    // halves the effective FFT size (min 512) and caps oversampling at ×2,
+    // cutting audio-domain CPU ~40-60% (per AGENTS.md PERF-CPU). The trade is
+    // higher noise floor / lower spectral resolution — acceptable for realtime
+    // morphing, and the user can disable it for offline render/bounce.
+    // Backward compat: APVTS persists the bool, so saved sessions recall their
+    // stored value; only NEW instantiations get the new default.
     params.push_back(std::make_unique<juce::AudioParameterBool>(
-        juce::ParameterID{"cpuSaver", 1}, "CPU Saver", false));
+        juce::ParameterID{"cpuSaver", 1}, "CPU Saver", true));
 
     // DAW Write Toggle: gates whether drift output is written to
     // driftOutputX/Y for DAW automation recording. Default ON for

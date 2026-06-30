@@ -81,7 +81,17 @@ bool decodeSonicMasterDecision(const float* decision,
                                && callerTargetLufs != kUseModelTargetLufs;
         const float modelLufs = clamp(decision[kSonicMasterTargetLufsIdx], -23.0f, -8.0f);
         const float targetLufs = useCaller ? clamp(callerTargetLufs, -23.0f, -8.0f) : modelLufs;
-        const float value = (targetLufs + 14.0f) / 6.0f;
+        // SAFETY-RANGE-CLAMP (2026-06-30): the (lufs+14)/6 map exits [-1, 1] for
+        // targets below -20 LUFS (e.g. -23 -> -1.5). The NeuralMasteringSafetyPolicy's
+        // default target bounds are [-1, 1] (NeuralMasteringSafetyPolicy::defaultConfig),
+        // so an out-of-range value here trips TargetOutOfRange → hard reject →
+        // `safety_rejected:target_out_of_range` → heuristic fallback on EVERY plan,
+        // even on well-behaved material. Clamp the normalized output to [-1, 1] so
+        // the decoded target passes the safety gate. Saturation only affects the
+        // [-23, -20) LUFS extreme (saturates to -20 LUFS on apply); the [-8, -20]
+        // span most masters live in is unaffected. applyValidatedPlan's
+        // `-14 + value*6` clamps its final output to [-23, -8] regardless.
+        const float value = std::clamp((targetLufs + 14.0f) / 6.0f, -1.0f, 1.0f);
         out.projectedTargets.loudness[0] = value;
         out.projectedTargets.loudness[1] = value;
         out.projectedTargets.loudness[2] = value;
@@ -106,7 +116,16 @@ bool decodeSonicMasterDecision(const float* decision,
         // The mask stays OFF (limiter is high-risk); this just keeps telemetry
         // consistent with what applyValidatedPlan would actually enforce.
         const float ceiling = clamp(decision[kSonicMasterTruePeakIdx], -3.0f, -0.1f);
-        const float value = (ceiling + 1.0f) / 0.5f;
+        // SAFETY-RANGE-CLAMP (2026-06-30): the (ceiling+1)/0.5 map exits [-1, 1]
+        // for almost every valid ceiling (e.g. -0.1 -> +1.8, -3.0 -> -4.0). The
+        // NeuralMasteringSafetyPolicy's default target bounds are [-1, 1], so an
+        // out-of-range value here trips TargetOutOfRange → hard reject even though
+        // the limiter mask is OFF (line below) and applyValidatedPlan force-clamps
+        // the ceiling to kStreamingSafeCeilingDBTP (-1.0) regardless. The decoded
+        // limiter slot is telemetry-only in the default posture; clamping it to
+        // [-1, 1] stops it from poisoning the safety verdict without changing any
+        // audible behaviour. See the matching loudness clamp above.
+        const float value = std::clamp((ceiling + 1.0f) / 0.5f, -1.0f, 1.0f);
         out.projectedTargets.limiter[0] = value;
         out.projectedTargets.limiter[1] = value;
         out.appliedMask.limiter = false;

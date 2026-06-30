@@ -172,6 +172,15 @@ private:
         // Decremented by the per-block drain amount so the next block's first
         // frame resumes at the right offset.
         int outWritePos = 0;
+
+        // PERF-OLA (2026-06-30): circular read head for the overlap-add output
+        // ring. Replaces the per-block memmove drain (O(fftSize)/block) with
+        // O(1) indexing. outReadPos chases outWritePos: processFrame advances
+        // outWritePos by hopSize_ per frame; processBlock drains numSamples
+        // from outReadPos and advances it by the same amount. The buffer is
+        // sized (in prepare) with enough margin that outWritePos never wraps
+        // around and overtakes outReadPos before the drain catches up.
+        int outReadPos = 0;
     };
 
     static constexpr int kMaxChannels = 2;
