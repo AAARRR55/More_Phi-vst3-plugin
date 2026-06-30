@@ -138,27 +138,45 @@ def _clamp(v: float, lo: float = -0.95, hi: float = 0.95) -> float:
 
 
 def feature_driven_dynamics(frame: FeatureFrame) -> list[float]:
-    """Feature-driven mastering-bus compression target for the 8-dim dynamics slice.
+    """3-band x (threshold, ratio) mastering-bus compression target, emitting the
+    EXACT layout the C++ runtime consumes (AutoMasteringEngine.cpp:593-599, the
+    `else` branch every neural plan takes since hasCompParams is never set):
 
-    Coherent across the synthetic + SSBC corpora (both call this). The dynamics
-    target MUST be a deterministic function of the 63-dim features — those are all
-    that's available at runtime — so SSBC's per-combo params (which vary only
-    within a song and are therefore non-regressable from song-level features) are
-    NOT used as targets; SSBC contributes real-song *feature distributions* only.
+        d0/d1 = band0 (threshold, ratio)
+        d2/d3 = band1 (threshold, ratio)
+        d4/d5 = band2 (threshold, ratio)
+        d6/d7 = unused
 
-    Proxy-aligned (diff_dsp._apply_compressor): amount=sigmoid(2*d0),
-    threshold=-24+12*tanh(d1) dB, ratio=1+5*sigmoid(2*d2); d3..d7 unused.
-    Encoded heuristics: dense/low-crest -> compress harder; louder -> higher
-    threshold; louder/denser -> higher ratio. Bounded to [-0.95, 0.95] per dim.
+    C++ decode (per band b, base=2*b):
+        thresholdDB = -20 + v*8      (clamped [-40, -6])
+        ratio       = 3.5 + v*2.5    (clamped [1, 6])
+    so the teacher's inverse maps are:  v_thr = (thr_db + 20)/8 ,  v_rat = (ratio - 3.5)/2.5.
+
+    Driven ONLY by runtime-LIVE features with a VERIFIED scale. features.py stubs
+    crestFactorDb / monoFoldDownDeltaDb / transientDensity / harmonicRisk to 0.0
+    (dead). integrated_lufs (~[-35,-6] dB) and loudness_range (~[0,20]) are live
+    and scale-verified on real SSBC audio. spectral_bands ARE live but live in
+    LOG/dB scale (~[-120,-55]), so a naive energy sum is scale-ambiguous -- V1
+    emits UNIFORM threshold/ratio across all 3 bands (coherent symmetric bus
+    compression that scales with loudness); per-band differentiation via a
+    log->linear spectral conversion is a V2 follow-up. Abstains (midpoint zeros)
+    only on genuine near-silence (lufs < -45). Bounded [-0.95, 0.95].
     """
-    crest = getattr(frame, "crest_factor_db", 10.0)
     lufs = getattr(frame, "integrated_lufs", -16.0)
-    dens = getattr(frame, "transient_density", 0.5)
+    lra = getattr(frame, "loudness_range", 6.0)
 
-    d0 = _clamp(0.45 + 0.40 * math.tanh((10.0 - crest) / 4.0))            # amount: denser -> harder
-    d1 = _clamp(0.50 * math.tanh((lufs + 14.0) / 8.0))                    # threshold: louder -> higher
-    d2 = _clamp(0.45 * math.tanh((lufs + 14.0) / 8.0 + (dens - 0.5)))     # ratio: louder/denser -> higher
-    return [d0, d1, d2, 0.0, 0.0, 0.0, 0.0, 0.0]
+    if lufs < -45.0:                       # genuine near-silence -> abstain to midpoint
+        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # Overall compression need: louder and/or wider material -> compress more.
+    need = _clamp(math.tanh((lufs + 14.0) / 6.0) + 0.3 * math.tanh((lra - 6.0) / 8.0))
+    # Map need[-1,1] -> ratio[2.0,3.5]:1 (always a little glue, never bypassed)
+    #                    and thr[-14,-20] dB (louder -> lower threshold -> more GR).
+    ratio = 2.0 + 1.5 * (need + 1.0) / 2.0
+    thr_db = -14.0 - 6.0 * (need + 1.0) / 2.0
+    v_thr = _clamp((thr_db + 20.0) / 8.0)
+    v_rat = _clamp((ratio - 3.5) / 2.5)
+    return [v_thr, v_rat, v_thr, v_rat, v_thr, v_rat, 0.0, 0.0]  # uniform across 3 bands
 
 
 # ── Synthetic teacher ────────────────────────────────────────────────────────

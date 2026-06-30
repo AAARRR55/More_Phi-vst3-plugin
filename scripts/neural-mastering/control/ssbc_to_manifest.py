@@ -47,24 +47,6 @@ DY0 = DYNAMICS_SLICE[0]  # 32
 DY_LEN = DYNAMICS_SLICE[1] - DYNAMICS_SLICE[0]  # 8
 
 
-def combo_dynamics(threshold_db: float, ratio: float) -> list[float]:
-    """The 8-element dynamics slice for an SSBC combo (proxy-aligned).
-
-    dyn[0]=amount -> sigmoid(2*d0); SSBC = full compression -> d0 = 1
-    dyn[1]=threshold -> -24 + 12*tanh(d1); d1 = clamp(arctanh((th+24)/12),-1,1)
-    dyn[2]=ratio -> 1 + 5*sigmoid(2*d2); d2 = clamp(0.5*logit((ratio-1)/5),-1,1)
-    dyn[3..7] unused (no proxy slot; attack/release not modeled by the proxy).
-    The proxy's threshold/ratio ranges are narrower than SSBC's -> extreme combos clamp.
-    """
-    d = [0.0] * DY_LEN
-    d[0] = 1.0  # amount: full compression (proxy sigmoid(2) ~= 0.88)
-    t = max(-0.999, min(0.999, (threshold_db + 24.0) / 12.0))
-    d[1] = max(-1.0, min(1.0, math.atanh(t)))
-    r = max(1e-3, min(1.0 - 1e-3, (ratio - 1.0) / 5.0))
-    d[2] = max(-1.0, min(1.0, 0.5 * math.log(r / (1.0 - r))))
-    return d
-
-
 def read_audio(path: Path) -> tuple[np.ndarray, int]:
     import soundfile as sf
     data, sr = sf.read(str(path), always_2d=True, dtype="float32")
@@ -82,7 +64,7 @@ def main() -> int:
     ap.add_argument("--selfcheck", action="store_true")
     args = ap.parse_args()
 
-    from train import SyntheticTeacher  # lazy: pulls torch; only needed for the vocab blend
+    from train import SyntheticTeacher, feature_driven_dynamics  # lazy: pulls torch
     teacher = SyntheticTeacher(seed=1337)  # teacher_deltas is rng-free; seed irrelevant
 
     payload = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -142,7 +124,7 @@ def main() -> int:
             continue
         feature = serialize_feature_frame(frame)
         base = list(teacher.teacher_deltas(frame))            # full synthetic vocab (64+8)
-        base[DY0:DY0 + DY_LEN] = combo_dynamics(float(it["threshold"]), float(it["ratio"]))  # real compression
+        base[DY0:DY0 + DY_LEN] = feature_driven_dynamics(frame)  # dynamics: feature-driven (combo params are non-regressable; kept as metadata below)
         delta = base
         row = {
             "id": it.get("id"),
@@ -174,49 +156,61 @@ def main() -> int:
     if errs:
         print(f"WARN: {len(errs)} input extractions failed; first: {errs[:3]}")
 
-    # ONE self-check on the dynamics derivation (the novel logic; the 64 non-dynamics
-    # deltas are just SyntheticTeacher.teacher_deltas, already tested in train.py).
+    # ONE self-check on feature_driven_dynamics (the dynamics target source; the 64
+    # non-dynamics deltas are SyntheticTeacher.teacher_deltas, tested in train.py).
     if args.selfcheck:
         import torch
+        from types import SimpleNamespace
         from diff_dsp import DifferentiableMasteringChain
 
-        failures: list[str] = []
-        print("=== dynamics-derivation grid: [amount, threshold, ratio] ===")
-        for th in (-24.0, -12.0, -6.0, 0.0):
-            for ra in (2.0, 4.0, 10.0):
-                cd = combo_dynamics(th, ra)
-                in_range = all(-1.0 <= v <= 1.0 for v in cd)
-                print(f"  th={th:<5} ra={ra:<4} -> amount={cd[0]:.3f} thr_d={cd[1]:+.3f} ratio_d={cd[2]:+.3f} "
-                      f"unused[3:]=0:{all(v == 0.0 for v in cd[3:])} in_range:{in_range}")
-                if not (in_range and all(v == 0.0 for v in cd[3:])):
-                    failures.append(f"grid th={th} ra={ra}")
-        d2_by_ratio = [combo_dynamics(-12.0, ra)[2] for ra in (2.0, 4.0, 10.0)]
-        d1_by_th = [combo_dynamics(th, 4.0)[1] for th in (-24.0, -12.0, -6.0, 0.0)]
-        if d2_by_ratio != sorted(d2_by_ratio):
-            failures.append(f"ratio_d not monotonic: {d2_by_ratio}")
-        if d1_by_th != sorted(d1_by_th):
-            failures.append(f"threshold_d not monotonic: {d1_by_th}")
+        def frame(lufs: float = -16.0, lra: float = 6.0, bands=None):
+            return SimpleNamespace(integrated_lufs=lufs, loudness_range=lra,
+                                   spectral_bands=tuple(bands) if bands is not None else (0.5,) * 32)
 
+        failures: list[str] = []
+        print("=== feature_driven_dynamics: 3-band contract (bounded, d6/d7=0, C++ decode roundtrip) ===")
+        for lufs in (-24.0, -14.0, -6.0):
+            fd = feature_driven_dynamics(frame(lufs=lufs))
+            in_range = all(-1.0 <= v <= 1.0 for v in fd)
+            unused_zero = fd[6] == 0.0 and fd[7] == 0.0
+            dec = [(-20.0 + 8.0 * fd[2 * b], 3.5 + 2.5 * fd[2 * b + 1]) for b in range(3)]
+            print(f"  lufs={lufs:<5} -> bands(thr,rat)={[(round(t,1), round(r,2)) for t, r in dec]} "
+                  f"unused0:{unused_zero} in_range:{in_range}")
+            if not (in_range and unused_zero and all(-40 <= t <= -6 and 1 <= r <= 6 for t, r in dec)):
+                failures.append(f"bounded/decode lufs={lufs}: {dec}")
+        # louder -> more compression in EVERY band (lower threshold, higher ratio)
+        quiet = feature_driven_dynamics(frame(lufs=-24.0))
+        loud = feature_driven_dynamics(frame(lufs=-6.0))
+        for b in range(3):
+            if loud[2 * b] >= quiet[2 * b]:     # v_thr must DECREASE for louder (lower threshold)
+                failures.append(f"band{b} threshold not lower for louder: q={quiet[2*b]:+.3f} l={loud[2*b]:+.3f}")
+            if loud[2 * b + 1] <= quiet[2 * b + 1]:  # v_rat must INCREASE for louder
+                failures.append(f"band{b} ratio not higher for louder: q={quiet[2*b+1]:+.3f} l={loud[2*b+1]:+.3f}")
+        # V1 emits UNIFORM threshold/ratio across the 3 bands (coherent symmetric
+        # bus compression); per-band differentiation is a V2 follow-up.
+        fd = feature_driven_dynamics(frame(lufs=-14.0))
+        if not (fd[0] == fd[2] == fd[4] and fd[1] == fd[3] == fd[5]):
+            failures.append(f"V1 not uniform across bands: {[round(v, 3) for v in fd[:6]]}")
+        # near-silent input abstains to midpoint zeros (lufs-only gate)
+        silent = feature_driven_dynamics(frame(lufs=-60.0, bands=[0.0] * 32))
+        if silent != [0.0] * 8:
+            failures.append(f"silent input did not abstain to zeros: {silent}")
+
+        # isolated 3-band compressor: a feature-driven dynamics vector must reduce level
         chain = DifferentiableMasteringChain(sample_rate=48000.0).eval()
         rng = np.random.default_rng(0)
         audio = torch.tensor(0.3 * rng.standard_normal((1, 2, 48000 * 2), dtype=np.float32))
         rin = 20.0 * math.log10(max(float(np.sqrt((audio[0].numpy() ** 2).mean())), 1e-9))
-
-        def rms_db(t: torch.Tensor) -> float:
-            return 20.0 * math.log10(max(float(np.sqrt((t[0].numpy() ** 2).mean())), 1e-9))
-
-        print("=== isolated _apply_compressor reduction by ratio (threshold=-12) ===")
-        mags = []
-        for ra in (2.0, 4.0, 10.0):
-            dyn = torch.zeros((1, OUTPUT_DELTA_COUNT), dtype=torch.float32)
-            dyn[0, DY0:DY0 + DY_LEN] = torch.tensor(combo_dynamics(-12.0, ra))
-            with torch.no_grad():
-                out = chain._apply_compressor(audio, dyn)
-            red = rms_db(out) - rin
-            mags.append(-red)
-            print(f"  ratio={ra:<4}: reduction={red:+.2f}dB")
-        if not (all(m > 0.1 for m in mags) and mags == sorted(mags)):
-            failures.append(f"isolated compressor not reducing/monotonic: {mags}")
+        print("=== isolated _apply_compressor reduction (loud frame) ===")
+        fd = feature_driven_dynamics(frame(lufs=-8.0))
+        dyn = torch.zeros((1, OUTPUT_DELTA_COUNT), dtype=torch.float32)
+        dyn[0, DY0:DY0 + DY_LEN] = torch.tensor(fd)
+        with torch.no_grad():
+            out = chain._apply_compressor(audio, dyn)
+        red = 20.0 * math.log10(max(float(np.sqrt((out[0].numpy() ** 2).mean())), 1e-9)) - rin
+        print(f"  bands(thr,rat)={[(round(-20+8*fd[2*b],1), round(3.5+2.5*fd[2*b+1],2)) for b in range(3)]}: reduction={red:+.2f}dB")
+        if red > -0.1:
+            failures.append(f"compressor not reducing: {red:.2f}dB")
 
         if failures:
             print("SELF-CHECK FAIL: " + "; ".join(failures))

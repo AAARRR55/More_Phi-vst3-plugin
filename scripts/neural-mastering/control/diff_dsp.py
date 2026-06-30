@@ -121,18 +121,27 @@ class DifferentiableMasteringChain(nn.Module):
         return torch.stack((mid + side, mid - side), dim=1)
 
     def _apply_compressor(self, audio: torch.Tensor, deltas: torch.Tensor) -> torch.Tensor:
+        # 3-band x (threshold, ratio) decode matching the C++ runtime
+        # (AutoMasteringEngine.cpp:593-599, the `else` branch every neural plan
+        # takes): d0/d1=band0, d2/d3=band1, d4/d5=band2, d6/d7 unused; per band
+        # thresholdDB=-20+v*8, ratio=3.5+v*2.5. Applied here as a SERIAL
+        # differentiable proxy -- the real chain is parallel multiband; this
+        # approximation's contract is "delta -> monotonic gain reduction", and the
+        # real per-band behavior is gated by evaluate_student_audio.py (ctypes
+        # through the actual AutoMasteringEngine), not by this proxy.
         dyn = deltas[:, DYNAMICS_SLICE[0] : DYNAMICS_SLICE[1]]
-        amount = torch.sigmoid(2.0 * dyn[:, 0])
-        threshold_db = -24.0 + 12.0 * torch.tanh(dyn[:, 1])
-        ratio = 1.0 + 5.0 * torch.sigmoid(2.0 * dyn[:, 2])
         knee_db = 6.0
-
-        level = audio.pow(2).mean(dim=1).clamp_min(EPS).sqrt()
-        level_db = linear_to_db(level)
-        over = torch.nn.functional.softplus((level_db - threshold_db[:, None]) / knee_db) * knee_db
-        reduction_db = over * (1.0 - 1.0 / ratio[:, None]) * amount[:, None]
-        gain = torch.pow(torch.as_tensor(10.0, dtype=audio.dtype, device=audio.device), -reduction_db / 20.0)
-        return audio * gain[:, None, :]
+        x = audio
+        for b in range(3):
+            thr_db = -20.0 + 8.0 * dyn[:, 2 * b]
+            ratio = (3.5 + 2.5 * dyn[:, 2 * b + 1]).clamp_min(1.0 + EPS)
+            level = x.pow(2).mean(dim=1).clamp_min(EPS).sqrt()
+            level_db = linear_to_db(level)
+            over = torch.nn.functional.softplus((level_db - thr_db[:, None]) / knee_db) * knee_db
+            reduction_db = over * (1.0 - 1.0 / ratio[:, None])
+            gain = torch.pow(torch.as_tensor(10.0, dtype=audio.dtype, device=audio.device), -reduction_db / 20.0)
+            x = x * gain[:, None, :]
+        return x
 
     def _apply_saturation(self, audio: torch.Tensor, deltas: torch.Tensor) -> torch.Tensor:
         harmonic = deltas[:, HARMONIC_SLICE[0]]
