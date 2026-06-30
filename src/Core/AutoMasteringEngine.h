@@ -183,6 +183,13 @@ public:
     // to the most recent prepare(); defaults false before prepare() is called.
     [[nodiscard]] bool isIntelligenceActive() const noexcept { return intelligenceActive_; }
 
+    // Headless/eval-only: open the applyValidatedPlan internal-DSP write gate
+    // (Fix 8) WITHOUT starting prepare(...,true)'s intelligence subsystems
+    // (10 Hz timer, GenreClassifier thread, heuristic compressor defaults).
+    // Call after prepare(...,false); reset() does not touch this flag, so one
+    // call persists for the session. Single-threaded eval path, not shipped use.
+    void setInternalChainActive(bool active) noexcept { intelligenceActive_ = active; }
+
     // ── Activation (any thread — atomic) ─────────────────────────────────────
 
     void setActive(bool active) noexcept { active_.store(active, std::memory_order_relaxed); }

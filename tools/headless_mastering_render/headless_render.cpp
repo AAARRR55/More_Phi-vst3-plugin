@@ -136,6 +136,9 @@ MPHRENDER_EXPORT int morephi_headless_init(double sampleRate,
         // no heuristic compressor defaults. Pure DSP shell.
         g_state.engine->prepare(sampleRate, maxBlockSize, /*startIntelligence=*/false);
         g_state.engine->setActive(true);
+        // Option 2: open the internal-DSP write gate (Fix 8) for eval WITHOUT
+        // starting prepare(true)'s intelligence subsystems (timer/genre/heuristics).
+        g_state.engine->setInternalChainActive(true);
 
         g_state.sampleRate       = sampleRate;
         g_state.blockSize        = maxBlockSize;
@@ -223,6 +226,7 @@ MPHRENDER_EXPORT int render(const float*  unmastered_pcm,
         g_state.engine->setActive(false);
         g_state.engine->prepare(sample_rate, g_state.blockSize, /*startIntelligence=*/false);
         g_state.engine->setActive(true);
+        g_state.engine->setInternalChainActive(true);
         g_state.engine->getLoudnessNormalizer().setEnabled(g_state.normalizerEnabled);
         g_state.sampleRate = sample_rate;
     }
