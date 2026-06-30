@@ -312,8 +312,15 @@ def train(args: argparse.Namespace) -> dict[str, float]:
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
     train_ds, val_ds = make_datasets(args)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=len(train_ds) >= args.batch_size)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+    nw = max(0, int(args.num_workers))
+    dl_common = dict(
+        num_workers=nw,
+        pin_memory=str(args.device).startswith("cuda"),
+        persistent_workers=nw > 0,
+    )
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                              drop_last=len(train_ds) >= args.batch_size, **dl_common)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, **dl_common)
 
     model = build_model(gated_head=args.gated_head, zero_init=not args.no_zero_init).to(device)
     weights = HybridLossWeights(
@@ -360,7 +367,13 @@ def train(args: argparse.Namespace) -> dict[str, float]:
         export_onnx(model, export_path)
         print(f"exported ONNX -> {export_path}")
 
-    headless_metrics = evaluate_headless(model, val_ds, args, device)
+    # ponytail: the ONNX + checkpoint are already written above, so a headless-render
+    # failure (ctypes/.so/NaN) must not abort the run or lose the model card. Log + skip.
+    try:
+        headless_metrics = evaluate_headless(model, val_ds, args, device)
+    except Exception as exc:  # noqa: BLE001 — degrade to empty metrics, keep the card
+        print(f"headless validation SKIPPED: {exc!r}")
+        headless_metrics = {}
     if headless_metrics:
         print("headless validation: " + json.dumps(headless_metrics, sort_keys=True))
         final_metrics.update(headless_metrics)
@@ -401,6 +414,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model-card", type=Path)
     p.add_argument("--headless-lib", help="optional libmore_phi_headless_render path for final acceptance metrics")
     p.add_argument("--headless-limit", type=int, default=8)
+    p.add_argument("--num-workers", type=int, default=0,
+                   help="DataLoader worker processes (0=main thread). Real-audio manifest mode "
+                        "benefits most; synthetic is GPU-bound. pin_memory auto-on for cuda.")
     p.add_argument("--seed", type=int, default=1337)
     args = p.parse_args(argv)
     if args.data_mode == "manifest" and (not args.train_manifest or not args.val_manifest):

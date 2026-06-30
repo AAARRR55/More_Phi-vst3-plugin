@@ -270,6 +270,7 @@ def export_onnx(model: nn.Module, path: Path) -> None:
             dynamic_axes=None,  # static batch=1; the plugin proposes one plan at a time
             opset_version=18,  # torch 2.12's exporter floor; ORT >= 1.16 supports it
             do_constant_folding=True,
+            dynamo=False,  # legacy exporter: avoids cuda/cpu FakeTensor mismatch on a GPU-trained model
         )
 
 
