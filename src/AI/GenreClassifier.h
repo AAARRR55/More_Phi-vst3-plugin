@@ -92,8 +92,19 @@ public:
      */
     bool getGenreProbs(float* out) const noexcept;
 
-    // ── Feed audio (message thread) ───────────────────────────────────────────
-
+    // ── Feed audio ────────────────────────────────────────────────────────────
+    //
+    // RT-AUDIT (2026-06-30): feedAudio is reachable from the audio thread via
+    //   processBlock → applyOutputGainAndMetering → (throttled)
+    //   AutoMasteringEngine::analyzeBlock → genreClassifier_.feedAudio.
+    // The 10-second capture buffer (audioAccum_) MUST therefore be pre-allocated
+    // off the audio thread. prepare() sizes it once for the host's sample rate;
+    // feedAudio then uses avoidRealloc=true so setSize is a no-op capacity check
+    // (JUCE's AudioBuffer::setSize never reallocates when avoidRealloc=true).
+    //
+    // prepare(): message thread (AutoMasteringEngine::prepare / prepareToPlay).
+    // feedAudio(): audio thread (see chain above) — no allocation.
+    void prepare(double sampleRate);
     void feedAudio(const juce::AudioBuffer<float>& audio, double sampleRate);
 
     // Test hook: run one classification immediately on the calling thread,
