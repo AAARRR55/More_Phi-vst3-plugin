@@ -97,7 +97,7 @@ This label populates the dashboard's "My Banks" and "Featured Presets" lists. Wi
 **3. Conductor goal decomposition (already exists, repointed).**
 `ConductorAgent::decomposeGoal` already calls `ILlmClient`. Pointing it at Gemini gives the agent layer a real LLM for natural-language mastering goals ("make this louder and brighter"). Pure reuse of existing infrastructure.
 
-**Model choice.** `gemini-2.0-flash` (or current fast tier) for labels and coaching — low-latency, cheap, sufficient for summarization/reasoning over structured metadata. The embedded ONNX mastering model stays local (it is the DSP-grade real-time path; Gemini is the reasoning/labeling layer on top, not the DSP).
+**Model choice.** **`gemini-2.5-flash-lite`** (Vertex AI) for labels and coaching — `$0.10 / $0.40` per 1M input/output tokens (Google's cheapest current model). Note: `gemini-2.0-flash` was **shut down June 1, 2026** (today) and must not be used; 2.5 Flash-Lite is the successor for low-reasoning summarization/labeling workloads. Labeling and coaching do not need heavy reasoning, so Flash-Lite (not full 2.5 Flash at `$0.50 / $2–3.50`) is the cost-correct pick. The embedded ONNX mastering model stays local (it is the DSP-grade real-time path; Gemini is the reasoning/labeling layer on top, not the DSP).
 
 **Honest scoping for the narrative.** The real-time mastering *intelligence* is the embedded ONNX model + agent runtime; Gemini is the natural-language reasoning layer (labeling, coaching, goal decomposition). Stated plainly to avoid AI-washing — judges penalize overclaiming harder than honest scoping.
 
@@ -184,8 +184,53 @@ These are noted as post-hackathon extensions, not v1 work.
 1. **License pricing** — **DECIDED:** $29 intro (May 19 – Aug 17) → $99 regular. Reflected in §4.
 2. **Stripe vs. alternative payment processor** — Stripe recommended (Firebase+Next.js native fit); confirm.
 3. **GCP project + billing account** provisioning (owner) — needed before Cloud Run/Firestore/Vertex AI can be wired.
-4. **Gemini model ID confirmation** — `gemini-2.0-flash` assumed; pin to whatever is current/fast at build time.
+4. **Gemini model ID** — **DECIDED:** `gemini-2.5-flash-lite` (2.0 Flash deprecated June 1, 2026). Reflected in §3.
 5. **Public repo decision** — XPRIZE wants a source-code repository; owner decides private-during-build vs. public.
+6. **GCP account status** (owner) — confirm whether the GCP account is new (eligible for the $300/90-day free trial) or existing. Affects the cost model in §9.
+7. **Windows code-signing certificate** (owner decision) — see §9 caveat. Not counted in the cost model; flagged for legitimacy vs cost.
+
+---
+
+## 9. Cost Model & Marginal Economics
+
+Validated 2026-06-30 against live pricing. This section doubles as the source for the submission's **"costs" evidence artifact**.
+
+### Cost drivers (what we actually pay)
+
+| Driver | Normal price | What we pay | Why |
+|---|---|---|---|
+| Domain (`more-phi.tech`) | ~$15/yr | **$0** | Owner-owned |
+| Stripe fees | 2.9% + $0.30/sale | **$0 on first $1,000 revenue**, then standard | GitHub Student Pack Stripe benefit ("Waived transaction fees on first $1,000 in revenue processed") |
+| Gemini (2.5 Flash-Lite) | $0.10 / $0.40 per M tokens | **~$0–$1 / window** | Calls are small (structured metadata → short label); low call volume |
+| Firestore + Cloud Storage + Cloud Run | pay-as-you-go | **$0** | Free tiers cover our volume; GCP new-account $300/90-day credit covers the whole window |
+| Landing-page hosting | ~$20/mo | **$0** | Vercel free tier (Next.js app) |
+
+### Marginal cost per customer (after the $1k Stripe waiver expires)
+
+- Stripe fee: 2.9% × $29 + $0.30 = **$1.14 / sale**
+- GCP per customer (entire window): ~5 bank syncs × ~$0.00011/call ≈ **$0**
+- **Marginal cost per customer ≈ $1.14** (≈3.9% of the $29 price)
+
+### Scenarios (90-day window, $29 intro price)
+
+| Customers sold | Revenue | Stripe fees | GCP | **Total expenses** | **Net profit** | **Margin** |
+|---|---|---|---|---|---|---|
+| 25 | $725 | $0 (under $1k waiver) | $0 | **~$0** | $725 | ~100% |
+| 50 | $1,450 | $18 (only the $450 past $1k) | $0 | **~$18** | $1,432 | ~99% |
+| 100 | $2,900 | $75 (the $1,900 past $1k) | ~$1 | **~$76** | $2,824 | ~97% |
+
+### Caveats (these matter — read before launch)
+
+1. **Stripe waiver claiming bug.** Multiple users report trouble activating the GitHub Student Pack Stripe benefit (GitHub discussion #171064). **Verify the waiver activates before launch** — link the Pack to Stripe early and confirm the fee credit appears. If it fails, the 100-customer scenario rises from ~$76 to ~$171 in fees (still cheap, but confirm).
+2. **Firebase Storage requires the Blaze (billing) plan** since Oct 1, 2025 — even though the free tier keeps it $0. GCP billing must be enabled. **Set the storage location to `us-west1`** to stay on the "Always Free" tier.
+3. **GCP $300 free trial** is one-time, 90 days, new accounts only. Aligns with the hackathon window. If the owner's GCP account has prior usage, the trial may not apply — confirm (§8 item 6).
+4. **Rate-limit Gemini.** "Analyze my mix" is user-triggered — cap it (e.g., 10 calls/day/user) so one user can't spike costs. Risk is small at Flash-Lite prices but the rate-limit is mandatory defensive engineering.
+5. **No GCP credit in the GitHub Student Pack.** The pack includes Azure ($100), DigitalOcean ($200), Heroku, MongoDB — but **not GCP**. GCP is the only place paid out-of-pocket, mitigated by the free trial + free tiers above.
+6. **Windows code-signing certificate (optional, owner decision).** Without it, Windows SmartScreen shows a warning on the installer. OV cert ~$100–200/yr; EV ~$300/yr. Many launch-time devs skip it initially (users bypass). **Not counted in the table.** Legitimacy-vs-cost tradeoff.
+
+### What this means for the score
+
+Near-zero marginal cost and ~97–100% margin is genuinely a Business Viability strength. The submission's "costs" artifact should document transparent Stripe + GCP invoices against the revenue ledger — clean, auditable, near-pure margin.
 
 ---
 
