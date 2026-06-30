@@ -30,6 +30,8 @@ import json
 import re
 import shutil
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Same directory as this script; Python puts script dir on sys.path[0].
@@ -140,7 +142,11 @@ def build_items(
             is_holdout = combo in holdout
             if split == "train" and is_holdout:
                 continue  # control-space extrapolation set: never trained on
-            sid = _leading_num(song)
+            # Song id = the stem before "_UnmasteredWAV.wav" (e.g. "54", "5thFloor",
+            # "Celebrate"). The repo target is <song>-exported.wav, NOT
+            # <full-source-filename>-exported.wav — using the raw key here was the
+            # 404 bug (it produced "Celebrate_UnmasteredWAV.wav-exported.wav").
+            sid = song.removesuffix("_UnmasteredWAV.wav") if song.endswith("_UnmasteredWAV.wav") else song
             items.append(
                 {
                     "id": f"ssbc_{sid}_{combo}",
@@ -211,12 +217,17 @@ def discover_index(repo: str, token: str | None) -> tuple[dict[str, str], list[s
 
 
 def materialize(
-    items: list[dict], cache_dir: Path, repo: str, token: str | None
+    items: list[dict], cache_dir: Path, repo: str, token: str | None,
+    max_workers: int = 16,
 ) -> int:
     """Fetch referenced audio into cache_dir laid out repo-relative, so that
     manifest.parent/<repo-relative-path> resolves for torchaudio.load in
     train_neural_mastering.py. Matches the established Lightning staging model
-    (audio pre-staged in data/, no HF access in the train loop)."""
+    (audio pre-staged in data/, no HF access in the train loop).
+
+    Downloads CONCURRENTLY with `max_workers` threads; each file is chunked
+    further by hf_transfer when HF_HUB_ENABLE_HF_TRANSFER=1. A single failed
+    file is logged and skipped (not fatal) so one bad row can't abort the run."""
     from huggingface_hub import hf_hub_download
 
     cache_dir = Path(cache_dir)
@@ -228,16 +239,30 @@ def materialize(
             if rel not in seen:
                 seen.add(rel)
                 needed.append(rel)
-    print(f"materialize: {len(needed)} unique files -> {cache_dir}")
-    for index, rel in enumerate(needed):
+    print(f"materialize: {len(needed)} unique files -> {cache_dir} ({max_workers} workers)")
+
+    done = [0]
+    lock = threading.Lock()
+
+    def fetch(rel: str) -> None:
         dst = cache_dir / rel
-        if dst.exists():
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        src = hf_hub_download(repo_id=repo, repo_type="dataset", filename=rel, token=token)
-        shutil.copy2(src, dst)
-        if (index + 1) % 50 == 0:
-            print(f"  {index + 1}/{len(needed)}")
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src = hf_hub_download(repo_id=repo, repo_type="dataset", filename=rel, token=token)
+            shutil.copy2(src, dst)
+        with lock:
+            done[0] += 1
+            if done[0] % 100 == 0:
+                print(f"  {done[0]}/{len(needed)}")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(fetch, rel): rel for rel in needed}
+        for fut in as_completed(futs):
+            try:
+                fut.result()
+            except Exception as exc:  # one failed file is not fatal
+                print(f"  WARN: skip {futs[fut]}: {exc}", file=sys.stderr)
+    print(f"materialize: {done[0]}/{len(needed)} files present")
     return len(needed)
 
 
@@ -352,6 +377,7 @@ def main() -> int:
                    help="fetch referenced audio into --cache-dir (repo-relative) so paths resolve on the studio")
     p.add_argument("--cache-dir", type=Path, help="materialize target dir (default: manifest parent)")
     p.add_argument("--max-songs", type=int, help="curriculum cap: use only the first N songs by id (full corpus ~2.6 TB)")
+    p.add_argument("--max-workers", type=int, default=16, help="materialize: parallel file-download threads (each chunked by hf_transfer)")
     args = p.parse_args()
 
     if args.out is None:
@@ -388,7 +414,7 @@ def main() -> int:
         token = os.environ.get("HF_TOKEN")
         if not token:
             raise SystemExit("HF_TOKEN required for --materialize (set as a Lightning secret; never commit)")
-        materialize(items, args.cache_dir or args.out.parent, args.repo, token)
+        materialize(items, args.cache_dir or args.out.parent, args.repo, token, args.max_workers)
     return 0 if audit["passed"] else 2
 
 

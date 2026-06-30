@@ -3,14 +3,16 @@
  *
  * Concrete INeuralMasteringModelRunner backed by an ONNX Runtime session.
  *
- * STATUS (v3.3.0): SEAM ONLY.
- *   The ONNX Runtime library is intentionally NOT linked into the build yet
- *   (see CMakeLists.txt — no onnxruntime dependency). Until it is, loadModel()
- *   returns false and isAvailable() reports false, so wiring this runner into
- *   a NeuralMasteringController is behaviourally identical to the Null runner:
- *   it abstains on every frame and the controller falls back to the
- *   DeterministicBaselineNeuralMasteringRunner. No audio-thread or
- *   distribution surface changes.
+ * STATUS (v3.4.0): ACTIVE when MORE_PHI_ENABLE_ONNX=ON.
+ *   ONNX Runtime 1.22.1 is linked PRIVATE; loadModel() constructs an Ort::Session
+ *   on the message thread, validates the 63->72 I/O contract, and runs inference
+ *   at 1-5 Hz OFF the audio thread (audioCallbackInference=false is hard-enforced).
+ *   When MORE_PHI_ENABLE_ONNX=OFF (the shipping default) the ORT code is
+ *   #if MORE_PHI_HAS_ONNX-guarded out, loadModel() returns false, isAvailable()
+ *   reports false, and the controller falls back to DeterministicBaselineNeural-
+ *   MasteringRunner — no audio-thread or distribution-surface change. The V2
+ *   model (neural_mastering_v2.onnx) is staged next to the binary by CMake when
+ *   present; initializeNeuralMasteringV2() searches for it at startup.
  *
  * DESIGN GOALS:
  *   1. Real-time safety: loadModel()/unloadModel() run on the message thread

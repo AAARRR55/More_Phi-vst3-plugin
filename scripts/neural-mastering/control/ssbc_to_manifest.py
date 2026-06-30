@@ -2,19 +2,27 @@
 """Build (feature, delta) JSONL manifests from the SolidStateBusComp corpus for
 blended control-regressor training. (License: user-dismissed CC-BY-NC.)
 
-Each SSBC pair's 72-delta target is a COHERENT full-mastering label:
-  - the DYNAMICS slice (8) comes from the real SSBC compressor combo (threshold/
-    ratio), grounded in the proxy DSP (diff_dsp._apply_compressor):
-      dyn[0]=amount(=1, full), dyn[1]=threshold, dyn[2]=ratio, dyn[3..7]=0
+Each SSBC pair's 72-delta target is a COHERENT, FEATURE-DRIVEN full-mastering
+label. ALL 72 deltas are deterministic functions of the input's real features
+(so they are regressable from the 63-dim feature vector available at runtime):
+  - the DYNAMICS slice (8) comes from train.feature_driven_dynamics(frame) —
+    mastering-bus heuristics (dense/low-crest -> compress harder; louder ->
+    higher threshold; louder/denser -> higher ratio), proxy-aligned.
   - the OTHER 64 deltas (eq/stereo/harmonic/limiter/loudness) come from the
     synthetic mastering teacher (train.SyntheticTeacher) evaluated on that
-    input's real features — corrective EQ + loudness makeup + width, exactly as
-    a balanced master applies AFTER compression. This avoids the compression-
-    only trap (SSBC targets have no EQ/makeup, so naively zeroing the other
-    slices taught the model to skip EQ/loudness on real audio).
+    input's real features.
 
-Features (63) are extracted from the INPUT audio once per unique song (each is
-shared across ~220 combos) via features.py (strict C++ runtime parity).
+Why not the SSBC combo params as dynamics targets: features are extracted once
+per song (shared across ~220 combos), so the combo-specific target varies only
+WITHIN a song — a within-song-variance decomposition showed 100% of the dyn-MSE
+residual was the combo-specific `ratio` dim (across-song ratio-mean std = 0),
+i.e. it is non-regressable from song-level features, and `threshold` clamped to
++1.0 (SSBC thresholds saturate the proxy domain). So SSBC's role here is
+REAL-SONG FEATURE DISTRIBUTIONS, not combo-param supervision. The per-combo
+threshold/ratio/attack/release are retained as provenance metadata only.
+
+Features (63) are extracted from the INPUT audio once per unique song via
+features.py (strict C++ runtime parity).
 
 Output JSONL rows: {"feature":[63], "delta":[72], split, sourceId, combo, ...}.
 Consumed by train.py --data-mode manifest (ConcatDataset blends with synthetic).

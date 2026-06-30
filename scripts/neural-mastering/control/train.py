@@ -130,6 +130,37 @@ class MasteringControlLoss(nn.Module):
         }
 
 
+# ── Dynamics target (feature-driven, proxy-aligned) ──────────────────────────
+
+
+def _clamp(v: float, lo: float = -0.95, hi: float = 0.95) -> float:
+    return max(lo, min(hi, v))
+
+
+def feature_driven_dynamics(frame: FeatureFrame) -> list[float]:
+    """Feature-driven mastering-bus compression target for the 8-dim dynamics slice.
+
+    Coherent across the synthetic + SSBC corpora (both call this). The dynamics
+    target MUST be a deterministic function of the 63-dim features — those are all
+    that's available at runtime — so SSBC's per-combo params (which vary only
+    within a song and are therefore non-regressable from song-level features) are
+    NOT used as targets; SSBC contributes real-song *feature distributions* only.
+
+    Proxy-aligned (diff_dsp._apply_compressor): amount=sigmoid(2*d0),
+    threshold=-24+12*tanh(d1) dB, ratio=1+5*sigmoid(2*d2); d3..d7 unused.
+    Encoded heuristics: dense/low-crest -> compress harder; louder -> higher
+    threshold; louder/denser -> higher ratio. Bounded to [-0.95, 0.95] per dim.
+    """
+    crest = getattr(frame, "crest_factor_db", 10.0)
+    lufs = getattr(frame, "integrated_lufs", -16.0)
+    dens = getattr(frame, "transient_density", 0.5)
+
+    d0 = _clamp(0.45 + 0.40 * math.tanh((10.0 - crest) / 4.0))            # amount: denser -> harder
+    d1 = _clamp(0.50 * math.tanh((lufs + 14.0) / 8.0))                    # threshold: louder -> higher
+    d2 = _clamp(0.45 * math.tanh((lufs + 14.0) / 8.0 + (dens - 0.5)))     # ratio: louder/denser -> higher
+    return [d0, d1, d2, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+
 # ── Synthetic teacher ────────────────────────────────────────────────────────
 
 
@@ -173,7 +204,6 @@ class SyntheticTeacher:
         """
         lufs = frame.integrated_lufs
         tilt = frame.spectral_tilt
-        quality = max(0.1, frame.source_quality_score)
 
         eq = []
         for i in range(SPECTRAL_BAND_COUNT):
@@ -183,14 +213,13 @@ class SyntheticTeacher:
             eq.append(max(-1.0, min(1.0, corrective)))
 
         loudness_delta = math.tanh((-14.0 - lufs) / 6.0) * 0.6
-        dynamics_delta = math.tanh((lufs + 14.0) / 8.0) * 0.3 * quality
         stereo_delta = math.tanh((frame.mono_fold_down_delta_db) / 3.0) * 0.2
         harmonic_delta = -math.tanh(frame.harmonic_risk * 2.0) * 0.2
         limiter_delta = max(0.0, math.tanh((-1.0 - frame.true_peak_dbtp) / 2.0)) * 0.3
 
         out = (
             eq
-            + [dynamics_delta] * 8
+            + feature_driven_dynamics(frame)   # 8-dim dynamics (per-dim feature-driven, proxy-aligned)
             + [stereo_delta] * 8
             + [harmonic_delta] * 8
             + [limiter_delta] * 8
