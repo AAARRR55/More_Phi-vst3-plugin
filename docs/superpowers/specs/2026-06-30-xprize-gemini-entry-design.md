@@ -1,0 +1,181 @@
+# More-Phi × XPRIZE "Build with Gemini" — Entry Design
+
+**Date:** 2026-06-30
+**Status:** Approved (brainstorming complete) → awaiting implementation plan
+**Challenge:** [Build with Gemini XPRIZE](https://xprize.devpost.com/) — build a real business in 90 days powered by Gemini + Google Cloud, judged on Business Viability, AI-Native Operations, and Category Impact.
+**Build window:** May 19 – Aug 17, 2026 (submission deadline Aug 17, 1:00 PM PDT).
+
+---
+
+## 1. Product & Positioning
+
+**Product.** More-Phi remains a desktop VST3/AU plugin (the hero product). The XPRIZE entry adds a **license-account-tied cloud morph-bank**: users sync their 12 snapshot slots across machines, and each bank receives a Gemini-generated descriptive label (genre / character / intent) that powers search and a "Featured Presets" surface in the landing dashboard.
+
+**Customer.** Professional audio engineers, producers, and small studios delivering client work (mastering, mix prep, sound design). The professional is the paying customer, consistent with a paid-license revenue model.
+
+**Category.** **Professional Services.** Mastering is literally a professional service; the product maps cleanly onto billable client work, and Category Impact is measurable (time-to-master, tracks/day, turnaround).
+
+**Hard-requirement coverage (the two that disqualify if missed):**
+
+| Requirement | Resolution |
+|---|---|
+| Gemini API call in the deployed app | The plugin's `RestLlmClient` calls **Gemini via Vertex AI** (OpenAI-compatible endpoint) for bank labeling and on-demand mix coaching. The call is load-bearing — see §3. |
+| ≥1 Google Cloud product in critical path | **Firestore** (bank metadata), **Cloud Storage** (binary bank chunks), **Vertex AI** (Gemini), authenticated via **Firebase Auth** (already present in `landing-page/`). Four real GCP products, none vestigial. |
+
+**Pre-existing-work disclosure (mandatory).** More-Phi is a mature v3.4.1 plugin that predates the hackathon. XPRIZE rules permit pre-existing work **if disclosed**. The disclosure line:
+
+- **Pre-existing (disclosed):** plugin DSP, morph/physics/genetic engines, embedded ONNX mastering model, multi-agent runtime, MCP server.
+- **New since May 19, 2026 (the entry's center):** the Gemini integration, the cloud morph-bank sync, the license-account business, Stripe checkout, the evidence-capture infrastructure.
+
+Misrepresenting maturity is a disqualifier; honest disclosure with a strong new-work story is permitted and normal. The narrative centers on the new AI-native mastering *service*, with More-Phi as the disclosed foundation.
+
+---
+
+## 2. Architecture & Data Flow
+
+### Components
+
+| Component | Status | Role |
+|---|---|---|
+| `MorePhiProcessor` (plugin) | Exists | Adds cloud-sync client; triggers Vertex AI Gemini labeling on bank sync |
+| `RestLlmClient` (`src/AI/Agents/Llm/`) | Exists | Add `kVertexAi_Gemini` provider path (OpenAI-compatible endpoint). Reuses the `ILlmClient` seam — no new abstraction. |
+| `PresetSerializer` / `PresetSerializerV2` (`src/Preset/`) | Exists (1,427 LOC) | Serialize the 12-slot morph bank to the existing V2 format. Reuse, no new serializer. |
+| **Cloud-sync client** (`src/Cloud/`, new) | **New** | Thin REST client: auth → upload/list/download banks. Carries a Firebase JWT; never touches the audio thread. |
+| **Cloud Run service** (`tools/cloud_sync/`, new) | **New** | Containerized endpoint. Bank CRUD against Firestore + Cloud Storage. Calls Vertex AI Gemini to label each uploaded bank. Holds the Gemini API key server-side (never shipped to users). |
+| Firebase Auth | Exists (`landing-page/lib/firebase.ts`) | License-account identity shared by web + plugin |
+| Landing dashboard (`landing-page/app/dashboard/`) | Exists as a route | Add "My Banks" + "Featured Presets" views (read Firestore) |
+| License/checkout (`landing-page/app/checkout/`) | Exists | Unchanged in shape; wire to Stripe (§4) |
+
+### Data flow — upload a morph bank
+
+```
+[Plugin: user hits "Sync to Cloud"]   (message thread / worker — NEVER audio thread)
+   → PresetSerializer::serialize(bank)            // existing V2 format
+   → Cloud-sync client (Firebase Auth JWT)
+   → POST /banks  (Cloud Run)
+        → store binary chunk → Cloud Storage
+        → write metadata doc → Firestore (userId, name, hash, createdAt)
+        → Vertex AI Gemini: summarize(bank metadata + genre + tonal-balance + LUFS prior)
+              → descriptive label + tags
+        → persist label into Firestore doc
+   → return bankId
+```
+
+### Data flow — pull on a new machine
+
+```
+[Plugin: user logs in → "Pull from Cloud"]
+   → GET /banks (Cloud Run, scoped to userId via JWT)
+   → Firestore metadata + Cloud Storage signed URL
+   → download chunk → PresetSerializer::deserialize → load into 12 slots
+```
+
+### Threading discipline (non-negotiable, per AGENTS.md)
+
+All cloud and Gemini calls execute on the **message thread or a dedicated worker** — never the audio thread. Any parameter changes resulting from a synced bank load are enqueued through the existing `LockFreeQueue` → audio-thread drain, exactly like the MCP/agent path. No allocations, no locks, no network on the audio thread. The cloud-sync client is a message-thread-only object.
+
+### Why Cloud Run (not Cloud Functions / GCE)
+
+Cloud Run is the simplest containerized deployment that can hold a Vertex AI session, scale to zero between calls (cost-efficient for a sparse sync workload), and serve both the plugin's REST client and the landing dashboard from one image. Cloud Functions would fragment the surface; GCE is overkill.
+
+---
+
+## 3. Gemini's Role & AI-Native Defense
+
+Judges score AI-Native Operations on whether AI is "fundamentally at the core of operations." A vanity ping fails. So Gemini is **load-bearing** — remove it and the product gets meaningfully worse. Three calls:
+
+**1. Bank labeling (core, load-bearing — runs on every sync).**
+Each synced bank carries metadata More-Phi already computes: `GenreClassifier` output, the 8-band `TonalBalanceExtractor` residual, target-LUFS prior, per-slot parameter deltas. Gemini ingests these and returns:
+- A **human-readable label** — e.g. *"Warm indie-rock master — controlled low-mids, airy top, −9 LUFS target."*
+- **Searchable tags** — genre, character, intensity.
+
+This label populates the dashboard's "My Banks" and "Featured Presets" lists. Without Gemini the user sees raw slot dumps — meaningfully worse. **This is the call that makes AI-Native defensible.**
+
+**2. Mix coaching (secondary, on-demand, user-triggered).**
+"Analyze my mix" sends the genuine BS.1770 telemetry + spectral snapshot (already computed by `SonicMasterAnalysisEngine`) to Gemini, which returns 2–3 plain-English coaching notes ("low-mids muddy around 250 Hz; try snapshot 4"). Optional, not in the audio path.
+
+**3. Conductor goal decomposition (already exists, repointed).**
+`ConductorAgent::decomposeGoal` already calls `ILlmClient`. Pointing it at Gemini gives the agent layer a real LLM for natural-language mastering goals ("make this louder and brighter"). Pure reuse of existing infrastructure.
+
+**Model choice.** `gemini-2.0-flash` (or current fast tier) for labels and coaching — low-latency, cheap, sufficient for summarization/reasoning over structured metadata. The embedded ONNX mastering model stays local (it is the DSP-grade real-time path; Gemini is the reasoning/labeling layer on top, not the DSP).
+
+**Honest scoping for the narrative.** The real-time mastering *intelligence* is the embedded ONNX model + agent runtime; Gemini is the natural-language reasoning layer (labeling, coaching, goal decomposition). Stated plainly to avoid AI-washing — judges penalize overclaiming harder than honest scoping.
+
+---
+
+## 4. Business Viability & Revenue (1/3 of score — the binding constraint)
+
+No code produces paying customers. This section splits into **what the owner runs** and **what code captures the evidence**.
+
+### Revenue model
+
+License-key purchase (one-time). Credible introductory range for working engineers: **$49–$149** (final price owner's call). Cloud sync is **included** with the license — not a separate tier — to keep the value proposition sharp and the model simple.
+
+### Distribution motion (OWNER's parallel work — the actual battle)
+
+1. **Beta cohort (weeks 1–4).** Recruit 10–20 engineers/producers from r/audioengineering, producer Discords, Gearspace. Free beta for testimonials + usage data. Seeds the "real users" evidence.
+2. **Paid launch (weeks 5–8).** Open the existing `checkout/` flow. Target **20–50 paying customers** — at ~$99 avg that is $2k–$5k documented revenue. Even modest numbers satisfy "real revenue" if documented cleanly.
+3. **Case studies (weeks 9–12).** 2–3 engineers who used More-Phi on real client work, with before/after + time-saved metrics. This is the Category Impact evidence.
+
+### Evidence-capture code (buildable — closes the submission-artifact loop)
+
+- **Revenue evidence:** wire the existing `checkout/` routes to **Stripe** (consistent with the Firebase + Next.js stack). Each transaction records amount, timestamp, customer, cost basis. Produces the exact artifact XPRIZE wants: total/monthly revenue, costs, marketing spend.
+- **User evidence:** Firebase Auth signups are already the user ledger. Add lightweight, opt-in usage telemetry (banks synced, sessions, Gemini calls) to Firestore so "real users" is data-backed, not screenshot-backed.
+- **AI execution logs:** every Gemini call through Cloud Run logs request / response / latency / model to **Cloud Logging**. Directly satisfies the "production evidence & AI execution logs" submission requirement.
+
+### Go/no-go signal
+
+If by **Aug 1** there are fewer than ~10 paying users, the entry is weak on Business Viability regardless of code quality. Set this checkpoint now.
+
+---
+
+## 5. Submission Artifacts & Owners
+
+| Artifact | Owner | Source |
+|---|---|---|
+| Source code repository | Code (me) + Owner (public release decision) | Exists; cloud-sync code added with clean commits |
+| 3-minute video pitch | **Owner** | Must demo real product + real customer + real revenue. No code substitutes. Script outline draftable. |
+| Written narrative (500–1,000 words) | Draft (me) + Truth-check (Owner) | Written against the three judging pillars; Owner verifies revenue/user claims |
+| Revenue + user + cost evidence | Owner (runs business) + Code (capture infra) | Stripe receipts + Firestore user ledger + Cloud Logging |
+| AI execution logs | Code (infra) | Cloud Logging on every Vertex AI Gemini call — auto-generated |
+
+---
+
+## 6. Scope Boundaries (YAGNI)
+
+Explicitly **out of scope** for the hackathon window (deferred unless the business proves out):
+
+- Community preset marketplace (browse/share/download others' banks). Adds a discovery loop but also moderation/population burden — not worth the focus cost in 90 days.
+- Cloud-side mastering reference (upload a track, cloud returns a mastered reference). Strongest AI-Native story but creeps toward SaaS and pulls the plugin off-center.
+- Subscription tier. License-key keeps the model simple; recurring revenue can come later.
+
+These are noted as post-hackathon extensions, not v1 work.
+
+---
+
+## 7. Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Thin GCP story reads as bolted-on to judges | Gemini labeling is load-bearing (§3); four real GCP products in the critical path (§1) |
+| Real revenue doesn't materialize by Aug 17 | Go/no-go checkpoint at Aug 1 (§4); beta cohort seeds early momentum |
+| AI-washing perception (ONNX does the DSP, Gemini is "just" labeling) | Honest scoping in narrative — Gemini is the reasoning layer, ONNX is the DSP layer. Both real. |
+| Pre-existing-work disclosure rejected | Disclosure is explicit and rules-permitted; entry centers on genuinely new Gemini+GCP+business work |
+| Gemini API key leakage | Key lives server-side in Cloud Run only; plugin carries a Firebase JWT, never the Gemini key |
+| Audio-thread violation from cloud calls | Cloud-sync client is message-thread/worker-only; results flow through the existing `LockFreeQueue` (§2) |
+
+---
+
+## 8. Open Items Before Implementation
+
+1. **Final license price** (owner) — affects narrative and revenue math.
+2. **Stripe vs. alternative payment processor** — Stripe recommended (Firebase+Next.js native fit); confirm.
+3. **GCP project + billing account** provisioning (owner) — needed before Cloud Run/Firestore/Vertex AI can be wired.
+4. **Gemini model ID confirmation** — `gemini-2.0-flash` assumed; pin to whatever is current/fast at build time.
+5. **Public repo decision** — XPRIZE wants a source-code repository; owner decides private-during-build vs. public.
+
+---
+
+## Next step
+
+Invoke the **writing-plans** skill to produce the detailed implementation plan (build sequence, file-level changes, test plan, milestone schedule against the Aug 17 deadline).
