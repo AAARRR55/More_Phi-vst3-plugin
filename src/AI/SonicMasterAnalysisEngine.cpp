@@ -287,6 +287,42 @@ void SonicMasterAnalysisEngine::ensureRing() noexcept
     ring_.store(ringStorage_.get(), std::memory_order_release);
 }
 
+void SonicMasterAnalysisEngine::ensureAnalysisThreadStarted() noexcept
+{
+    // PERF-IDLE (2026-06-29): idempotently spawn the analysis cycle thread. The
+    // thread used to spawn unconditionally in prepare(), leaving a background loop
+    // polling source_->refreshProbe() every 3 s even when the feature was OFF.
+    // Now it only exists once the feature is turned on (setActive(true)). All
+    // callers (prepare/release/setActive) run on the message thread, so the
+    // analysisThreadStarted_ flag needs no atomic — a plain bool guarded by the
+    // single-threaded message-thread discipline suffices (mirrors release()'s
+    // assumption that prepare/release/process are mutually exclusive per JUCE).
+    if (analysisThreadStarted_) return;
+    if (!prepared_.load(std::memory_order_relaxed)) return;
+    if (stopRequested_.load(std::memory_order_relaxed)) return;
+
+    analysisThreadStarted_ = true;
+    thread_ = std::thread([this] { analysisLoop(); });
+}
+
+void SonicMasterAnalysisEngine::ensureOnDemandBuffers(std::size_t hostFrames) noexcept
+{
+    // PERF-MEM (2026-06-29): idempotently allocate the on-demand scratch buffers.
+    // Once sized, the capacity persists; subsequent calls are a no-op (the .empty()
+    // guard is the allocation gate). Runs on the message thread (requestDecisionNow
+    // is invoked from the MCP tool handler), never the audio thread, so the one-time
+    // heap allocation is real-time-safe. hostFrames is the host-rate window length
+    // computed by the caller (mirrors prepare()'s computation).
+    if (!onDemandL_.empty()) return;
+    if (hostFrames == 0) return;
+
+    onDemandL_.assign(hostFrames, 0.0f);
+    onDemandR_.assign(hostFrames, 0.0f);
+    onDemandModelL_.assign(kSonicMasterSegmentFrames, 0.0f);
+    onDemandModelR_.assign(kSonicMasterSegmentFrames, 0.0f);
+    onDemandInterleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
+}
+
 void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
 {
     // Re-prepare is allowed: tear down any prior thread first.
@@ -342,21 +378,26 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
 	    interleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
 	    decision_.fill(0.0f);
 
-		    // AUDIT-FIX (P2, 2026-06-27): size the on-demand scratch buffers alongside
-		    // the shared set so requestDecisionNow() can run without holding inferMutex_
-		    // across the resample/normalize stages. Sized identically to the shared set.
-		    // M-3 AUDIT-NOTE: The duplication of these buffers (shared + onDemand) is
-		    // intentional and necessary for concurrency. requestDecisionNow() runs on
-		    // the MCP thread while runCycle() runs on the analysis thread; merging them
-		    // would require a mutex across the expensive resample stage, deserializing
-		    // inference requests. The ~160 KB cost (5 buffers × ~32 KB each) is
-		    // acceptable for a thread-safety guarantee.
-		    onDemandL_.assign(hostFrames, 0.0f);
-	    onDemandR_.assign(hostFrames, 0.0f);
-	    onDemandModelL_.assign(kSonicMasterSegmentFrames, 0.0f);
-	    onDemandModelR_.assign(kSonicMasterSegmentFrames, 0.0f);
-	    onDemandInterleaved_.assign(2 * kSonicMasterSegmentFrames, 0.0f);
-	    onDemandDecision_.fill(0.0f);
+		    // PERF-MEM (2026-06-29): the on-demand scratch buffers (onDemandL_/R_/
+		    // ModelL_/ModelR_/Interleaved_/Decision_) are NO LONGER eagerly allocated
+		    // here. They are used exclusively by requestDecisionNow() (the
+		    // sonicmaster_decision / mastering.neural_apply MCP tool path), which is a
+		    // rare, on-demand call — not the steady-state cycle path. Allocating them
+		    // eagerly burned ~6.3 MiB at 44.1 kHz (~25 MiB at 192 kHz) for every session
+		    // even when the MCP on-demand tool was never invoked. They are now allocated
+		    // lazily inside requestDecisionNow() via ensureOnDemandBuffers(). The shared
+		    // set above (captureL_/R_, modelL_/R_, interleaved_) stays eager because the
+		    // background cycle path reads from it and on-demand resampling also uses it.
+		    // The concurrency invariant (separate buffers so requestDecisionNow does not
+		    // need inferMutex_ across resample) is preserved — the buffers exist when the
+		    // on-demand path needs them, just not before.
+		    onDemandL_.clear();
+		    onDemandR_.clear();
+		    onDemandModelL_.clear();
+		    onDemandModelR_.clear();
+		    onDemandInterleaved_.clear();
+		    onDemandDecision_.fill(0.0f);
+
 
     consecutiveFailures_.store(0, std::memory_order_relaxed);
     lastPlanId_ = 0;
@@ -381,7 +422,15 @@ void SonicMasterAnalysisEngine::prepare(double sampleRate, int /*maxBlockSize*/)
     status_.store(isAvailable() ? Status::CollectingAudio : Status::Disabled,
                   std::memory_order_release);
 
-    thread_ = std::thread([this] { analysisLoop(); });
+    // PERF-IDLE (2026-06-29): do NOT spawn the analysis cycle thread here. The
+    // loop only matters when the background auto-apply feature is turned on
+    // (setActive(true)); with the feature OFF (the default), spawning it left a
+    // background thread polling source_->refreshProbe() every 3 s for the whole
+    // session. The cycle thread is now spawned lazily in setActive(true).
+    // requestDecisionNow (on-demand) runs on the caller's thread, so this does
+    // not regress the CAPTURE-DECOUPLE on-demand path — only the auto-apply
+    // background loop is deferred, and that loop requires active_=true anyway.
+    analysisThreadStarted_ = false;
 }
 
 void SonicMasterAnalysisEngine::release() noexcept
@@ -394,6 +443,7 @@ void SonicMasterAnalysisEngine::release() noexcept
     cv_.notify_all();
     if (thread_.joinable())
         thread_.join();
+    analysisThreadStarted_ = false;
     prepared_.store(false, std::memory_order_release);
     if (wasPrepared)
         status_.store(Status::Disabled, std::memory_order_release);
@@ -504,13 +554,23 @@ void SonicMasterAnalysisEngine::analysisLoop() noexcept
         }
         if (stopRequested_.load(std::memory_order_acquire)) break;
 
+        // PERF-IDLE (2026-06-29): skip everything when the feature is inactive.
+        // Previously source_->refreshProbe() ran every interval regardless of
+        // active_, so a toggled-off feature kept probing the inference server
+        // every 3 s for the whole session. refreshProbe is only useful immediately
+        // before a cycle, so it now runs only when active_. The primary inference
+        // source (the in-process ONNX runner) reports availability from its load
+        // state, not from refreshProbe — so this only affects the optional HTTP
+        // fallback source (OFF by default), whose cache warms on the first cycle
+        // after setActive(true) spawns this thread.
+        if (!active_.load(std::memory_order_relaxed)) { nextDeadline += kIntervalMs; continue; }
+
         // ponytail: keep the availability cache warm on this background thread so
         // the editor's isAvailable() (message thread) never blocks on a /health
         // probe to a dead server. Throttled internally to ~5 s inside refreshProbe.
         if (source_ != nullptr)
             source_->refreshProbe();
 
-        if (!active_.load(std::memory_order_relaxed)) { nextDeadline += kIntervalMs; continue; }
         runCycle();
         nextDeadline += kIntervalMs;
     }
@@ -894,11 +954,17 @@ bool SonicMasterAnalysisEngine::requestDecisionNow(float targetLufs,
 	        return false;
 	    }
 
+	    // PERF-MEM (2026-06-29): lazily size the on-demand scratch buffers on
+	    // first call (they are no longer allocated in prepare()). hostFrames is
+	    // the host-rate window length, computed identically to prepare().
+	    const std::size_t hostFrames = static_cast<std::size_t>(
+	        std::llround(kSonicMasterSegmentFrames * sampleRate_ / 44100.0));
+	    ensureOnDemandBuffers(hostFrames);
+
 	    // ── Stage 1: drain ring into ON-DEMAND scratch buffers (no mutex) ─────
 	    // This is safe because onDemand* buffers are exclusively owned by this
-	    // function (allocated in prepare(), only touched here). The ring is
+	    // function (allocated lazily above, only touched here). The ring is
 	    // atomic-published (C-3 fix) — acquire-load safe from any thread.
-	    const std::size_t hostFrames = onDemandL_.size();
 	    const std::size_t got = ring->readNewest(hostFrames, onDemandL_.data(), onDemandR_.data());
 	    if (got < hostFrames)
 	    {

@@ -2,11 +2,14 @@
  * More-Phi — Host/PluginHostManager.cpp
  * Robust plugin hosting with exception handling for stability.
  *
- * Stability: exceptionCount_ tracks consecutive processBlock failures.
- * When it reaches MAX_PLUGIN_EXCEPTIONS the plugin is auto-unloaded to
- * prevent a misbehaving guest from continuously disrupting real-time audio.
+ * Stability: PluginHealthMonitor tracks consecutive processBlock failures.
+ * When it reaches MAX_PLUGIN_EXCEPTIONS (20) the plugin is Suspended (audio
+ * bypassed) and a background-thread auto-recovery is attempted via tickHealth/
+ * tryStartRecovery. This prevents a misbehaving guest from continuously
+ * disrupting real-time audio while allowing it to recover if it can.
  */
 #include "PluginHostManager.h"
+#include "SafePluginCreate.h"
 #include <exception>
 
 #if defined(_MSC_VER)
@@ -29,6 +32,27 @@ static inline bool safePluginProcessBlock(juce::AudioPluginInstance* plugin,
         return false;
     }
 }
+
+// SEH-guarded plugin initialisation (enableAllBuses + prepareToPlay). Returns
+// true on success, false on a C++ or hardware exception. Standalone for the
+// same MSVC no-mixing reason as above (must not contain objects requiring
+// unwinding inside __try; this helper only uses raw pointers).
+static inline bool safeInitialisePlugin(juce::AudioPluginInstance* plugin,
+                                        juce::AudioPlayHead* playHead,
+                                        double sampleRate, int blockSize)
+{
+    __try
+    {
+        plugin->setPlayHead(playHead);
+        plugin->enableAllBuses();
+        plugin->prepareToPlay(sampleRate, blockSize);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
 #endif
 
 namespace more_phi {
@@ -36,6 +60,11 @@ namespace more_phi {
 PluginHostManager::PluginHostManager()
 {
     formatManager.addDefaultFormats();  // VST3 + AU
+    // PERF-BROWSER: populate knownPlugins from the on-disk cache so the browser
+    // can show a previously-discovered list instantly on first GUI open, without
+    // re-instantiating every installed VST3. No-op (and never throws) if the
+    // cache file is absent or corrupt — the browser will run a full scan then.
+    loadKnownPluginsCache();
 }
 
 PluginHostManager::~PluginHostManager()
@@ -249,27 +278,62 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         ~SwapGuard() { flag.store(false, std::memory_order_release); }
     } swapGuard{ isSwapping_ };
 
-    // M-5 FIX: Some VST3 plugins require the MessageManagerLock during
+    // M-5 FIX (revised): Some VST3 plugins require the MessageManagerLock during
     // creation (especially when hosted from a plugin context like FL Studio).
-    // Acquire it if a MessageManager is available.
+    // However, when loadPlugin() is called FROM the message thread (the normal
+    // UI path: PopupMenu callback → performPluginLoad → loadPlugin), constructing
+    // a MessageManagerLock on the message thread causes a self-deadlock or returns
+    // lockWasGained()==false in JUCE 8, after which createPluginInstance() runs
+    // without the lock and crashes plugins that need the message pump during init
+    // (COM initialization, window creation, etc.).
+    //
+    // When already on the message thread, the lock is unnecessary — we already have
+    // exclusive access to the message pump. Skip it entirely. Only acquire the
+    // MessageManagerLock when called from a background thread (e.g. state-restore
+    // timer that dispatches to a worker).
     std::unique_ptr<juce::MessageManagerLock> mmLock;
-    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
+    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+    const bool onMessageThread = (mm != nullptr && mm->isThisTheMessageThread());
+
+    if (!onMessageThread && mm != nullptr)
     {
         mmLock = std::make_unique<juce::MessageManagerLock>(
             juce::Thread::getCurrentThread());
         if (!mmLock->lockWasGained())
         {
-            DBG("loadPlugin: Failed to acquire MessageManagerLock");
+            DBG("loadPlugin: Failed to acquire MessageManagerLock (background thread)");
             mmLock.reset();
-            // Continue anyway — many plugins don't need it
+            // Continue anyway — many plugins don't need it, but those that do
+            // may fail or crash. The on-message-thread path avoids this problem.
         }
     }
 
     // Create the new instance BEFORE destroying the old one.
     // If creation fails, the current plugin remains untouched.
     juce::String errorMessage;
-    auto newPlugin = formatManager.createPluginInstance(
-        desc, currentSampleRate, currentBlockSize, errorMessage);
+    std::unique_ptr<juce::AudioPluginInstance> newPlugin;
+#if defined(_MSC_VER)
+    // FL-Studio FIX (SEH): createPluginInstance calls into the VST3 COM
+    // factory (GetFactory/createInstance/initialize). Some third-party plugins
+    // fault there with an access violation. Under /EHsc a C++ catch(...) does
+    // NOT catch SEH, so safeCreatePluginInstance (compiled with /EHa) is used
+    // to convert such a hardware exception into a graceful load failure
+    // instead of crashing the host (FL Studio) the moment the user picks the
+    // plugin from the dropdown.
+    newPlugin = safeCreatePluginInstance(
+        formatManager, desc, currentSampleRate, currentBlockSize, errorMessage);
+#else
+    try
+    {
+        newPlugin = formatManager.createPluginInstance(
+            desc, currentSampleRate, currentBlockSize, errorMessage);
+    }
+    catch (...)
+    {
+        newPlugin.reset();
+        errorMessage = "Exception during plugin creation";
+    }
+#endif
 
     // Release the lock before initialization (init doesn't need it)
     mmLock.reset();
@@ -284,12 +348,27 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         return false;
     }
 
+#if defined(_MSC_VER)
+    // FL-Studio FIX (SEH): guard enableAllBuses + prepareToPlay. These call
+    // IComponent::activateBus / setupProcessing which can fault in buggy
+    // third-party VST3s. Under /EHsc a C++ catch(...) does NOT catch SEH
+    // (access violation), so without this guard the host (FL Studio) would
+    // crash the moment the user picks that plugin. The SEH __except converts
+    // it into a graceful load failure instead. For bridged plugins (yabridge),
+    // disabling buses can cause Wine-side shared-memory layout mismatches that
+    // crash during processBlock, so we enable all buses before preparing.
+    if (!safeInitialisePlugin(newPlugin.get(),
+                              playHead_.load(std::memory_order_acquire),
+                              currentSampleRate, currentBlockSize))
+    {
+        DBG("loadPlugin: plugin threw a hardware/C++ exception during init");
+        return false;
+    }
+#else
     try
     {
         // Enable all buses first so the plugin can configure its full I/O layout,
-        // then prepare. For bridged plugins (yabridge), disabling buses can cause
-        // mismatches between the host-side channel expectations and the Wine-side
-        // shared memory layout, leading to memcpy crashes during processBlock.
+        // then prepare.
         newPlugin->setPlayHead(playHead_.load(std::memory_order_acquire));
         newPlugin->enableAllBuses();
         newPlugin->prepareToPlay(currentSampleRate, currentBlockSize);
@@ -306,11 +385,27 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         DBG("Unknown exception during plugin initialization");
         return false;
     }
+#endif
 
-    // New plugin is valid — now swap it in.
-    unloadPlugin();
+    // New plugin is valid — now swap it in. Use the internal unload path
+    // because we already hold the isSwapping_ flag — the public unloadPlugin()
+    // would CAS-fail and skip the unload entirely, leaving hostedPluginPtr_
+    // dangling after the unique_ptr assignment below (FL Studio crash).
+    unloadPluginInternal();
+
+    // Before swapping, drain any deferred plugins to prevent memory bloat
+    // when rapidly cycling plugins.
+    drainDeferredDoomedPlugins();
+
     hostedPlugin = std::move(newPlugin);
     hostedPluginPtr_.store(hostedPlugin.get(), std::memory_order_release);
+
+    // Initialize the new health monitor state
+    healthMonitor_.reset();
+
+    // (The UI-owned HostedPluginWindow manages the visible native editor and
+    //  holds a ref-counted lease via acquirePluginForUse; the manager does not
+    //  own an editor. See setWindowCloseCallback for the out-of-band teardown hook.)
 
     {
         const juce::SpinLock::ScopedLockType guard(descLock_);
@@ -320,20 +415,18 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
         // pointer without exposing lock-protected data to a TOCTOU race.
         auto snapshot = std::make_unique<juce::PluginDescription>(desc);
         auto* raw = snapshot.get();
-        descriptionHistory_.push_back(std::move(snapshot));
+
         // AUDIT-FIX: Cap history growth. Repeated plugin swaps (e.g. automated
         // testing, long sessions) otherwise accumulated PluginDescription objects
         // indefinitely — a slow leak. Keep only the most recent entries.
         constexpr size_t kMaxDescriptionHistory = 16;
         while (descriptionHistory_.size() > kMaxDescriptionHistory)
             descriptionHistory_.erase(descriptionHistory_.begin());
+        descriptionHistory_.push_back(std::move(snapshot));
         descriptionSnapshot_.store(raw, std::memory_order_release);
     }
 
     hasPreparedConfiguration_ = true;
-    exceptionCount_.store(0, std::memory_order_relaxed);
-    suspended_.store(false, std::memory_order_relaxed);
-    recoveryGracePeriod_.store(0, std::memory_order_relaxed);
     return true;
 }
 
@@ -354,10 +447,11 @@ void PluginHostManager::unloadPlugin()
         ~SwapGuard() { flag.store(false, std::memory_order_release); }
     } swapGuard{ isSwapping_ };
 
-    // DAW-M2: Execute directly without message-thread dispatch.
-    // The callFunctionOnMessageThread dispatch was removed to prevent
-    // re-entrancy and lifetime issues when called from destructors or
-    // state-restore paths.
+    unloadPluginInternal();
+}
+
+void PluginHostManager::unloadPluginInternal()
+{
     if (hostedPlugin)
     {
         // H-3 FIX: Bounded wait for an in-flight exclusive state capture/restore.
@@ -366,37 +460,49 @@ void PluginHostManager::unloadPlugin()
         // endExclusivePluginUse() — which hangs the DAW on track removal. After a
         // 200 ms grace window (exclusive ops are sub-millisecond in practice),
         // force-release the flag and proceed. NOTE: the activePluginUsers_ wait
-        // below is intentionally still unbounded — proceeding past a live audio
+        // below is intentionally still bounded — proceeding past a live audio
         // lease would be a use-after-free, so we must wait for audio to drain.
+        //
+        // FL-Studio FIX: When called on the message thread (the normal path when
+        // swapping plugins from the UI), Thread::sleep(1) blocks the DAW's message
+        // pump, causing FL Studio to consider the plugin unresponsive and terminate
+        // it. On the message thread, yield the timeslice instead — this allows
+        // other message-thread work (including DAW paint/timer events) to run
+        // between checks without fully blocking. On background threads, sleep(1)
+        // is fine.
+        auto* mmWait = juce::MessageManager::getInstanceWithoutCreating();
+        const bool waitOnMessageThread = (mmWait != nullptr && mmWait->isThisTheMessageThread());
         for (int i = 0; i < 200 && exclusivePluginUseRequested_.load(std::memory_order_acquire); ++i)
-            juce::Thread::sleep(1);
+        {
+            if (waitOnMessageThread)
+                juce::Thread::yield();    // message thread: don't block the pump
+            else
+                juce::Thread::sleep(1);   // background thread: full sleep is fine
+        }
         exclusivePluginUseRequested_.store(false, std::memory_order_release);
 
         hostedPluginPtr_.store(nullptr, std::memory_order_release);
 
-        // Notify any open editor window to close before destroying the plugin.
-        // BP-4 FIX (audit): callAsync() can silently drop in headless hosts or
-        // when no editor is open, orphaning a hosted plugin's window. Invoke
-        // directly when we're already on the message thread (the common case —
-        // unloadPlugin runs here), and only fall back to callAsync for the rare
-        // non-message-thread caller.
-        if (windowCloseCallback_)
-        {
-            auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-            if (mm != nullptr && mm->isThisTheMessageThread())
-                windowCloseCallback_();
-            else
-                juce::MessageManager::callAsync([cb = windowCloseCallback_]() { cb(); });
-        }
+        // The UI-owned editor window (if open) holds a ref-counted lease via
+        // acquirePluginForUse(); the bounded wait below therefore also serves
+        // as the editor-teardown gate — the instance is not destroyed until the
+        // window's lease is released (or deferred to the doom-queue). windowCloseCallback_
+        // (set via setWindowCloseCallback) is the out-of-band hook that asks the
+        // UI to close the window before this point when possible.
 
         // FIX C2/C1: Bounded wait for active audio-thread leases. An unbounded
-        // spin here can hang the DAW forever if a lease holder is stalled. After
-        // a 500 ms grace window we detach the plugin from live use
+        // spin here can hang the DAW forever if a lease holder is stalled. After a
+        // 500 ms grace window we detach the plugin from live use
         // (hostedPluginPtr_ is already nulled above, so new acquirePluginForUse()
         // calls return nullptr) but we do NOT destroy it while a lease is held —
         // that would be a use-after-free. Instead we move it to the deferred-doom
         // queue, which the message-thread maintenance timer drains once
         // activePluginUsers_ returns to zero (see drainDeferredDoomedPlugins).
+        //
+        // FL-Studio FIX: When on the message thread, Thread::sleep(1) blocks the
+        // DAW message pump making FL Studio consider the plugin unresponsive.
+        // Use yield() on the message thread instead; on background threads,
+        // Thread::sleep(1) is fine.
         const auto waitStart = juce::Time::getMillisecondCounter();
         const bool leasesDrained = [&, this]() {
             while (activePluginUsers_.load(std::memory_order_acquire) > 0)
@@ -406,7 +512,10 @@ void PluginHostManager::unloadPlugin()
                     DBG("PluginHostManager::unloadPlugin — timeout waiting for audio thread lease; deferring destruction");
                     return false;
                 }
-                juce::Thread::sleep(1);
+                if (waitOnMessageThread)
+                    juce::Thread::yield();    // message thread: don't block the pump
+                else
+                    juce::Thread::sleep(1);   // background thread: full sleep is fine
             }
             return true;
         }();
@@ -443,8 +552,15 @@ void PluginHostManager::unloadPlugin()
 void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
                                       juce::MidiBuffer& midi) noexcept
 {
+    // Lock-free transport state forwarding (audio thread -> message thread bridge).
+    // We update the forwarder with the latest playhead info, even if we
+    // don't have a plugin or we're suspended. This ensures the message
+    // thread always has up-to-date transport data for the UI.
+    transportForwarder_.updateFromAudioThread(
+        playHead_.load(std::memory_order_acquire));
+
     auto* plugin = acquirePluginForUse();
-    if (!plugin)
+    if (!plugin || !healthMonitor_.shouldProcess())
     {
         // Distinguish two cases where acquirePluginForUse() returns nullptr:
         //
@@ -462,7 +578,9 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         if (hostedPluginPtr_.load(std::memory_order_acquire) == nullptr)
             return;  // (1) dry passthrough
 
-        if (currentGain_ > 0.0f)   // (2) fade-out seam
+        // If the plugin is present but not processing (suspended / recovering),
+        // pass through silence with a fade out / in.
+        if (currentGain_ > 0.0f)   // (2) fade-out seam or bypass
         {
             buffer.applyGainRamp(0, buffer.getNumSamples(), currentGain_, 0.0f);
             currentGain_ = 0.0f;
@@ -470,6 +588,14 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         else
         {
             buffer.clear();
+        }
+
+        // If we are bypassing because the plugin is unhealthy, report this
+        // as a failure to the health monitor so it can advance its state
+        // machine (e.g. Degraded -> Suspended).
+        if (plugin != nullptr && !healthMonitor_.shouldProcess())
+        {
+            healthMonitor_.reportFailure();
         }
         return;
     }
@@ -495,41 +621,10 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // If suspended, pass-through silence — do NOT unload.
-    if (suspended_.load(std::memory_order_relaxed))
+    // Health check: if the plugin is not healthy, bypass processing.
+    if (!healthMonitor_.shouldProcess())
     {
         buffer.clear();  // FIX C22: ensure silence, not stale pass-through audio
-        // Periodically attempt recovery (every ~100 blocks ≈ once per second)
-        const int count = exceptionCount_.load(std::memory_order_relaxed);
-        if (count > 0 && (count % 100) == 0)
-        {
-            try
-            {
-                plugin->processBlock(buffer, midi);
-                // If we get here, the plugin recovered!
-                // m-5 FIX: Set a grace period before fully re-enabling.
-                // This prevents immediate re-suspend from a burst of exceptions.
-                suspended_.store(false, std::memory_order_relaxed);
-                exceptionCount_.store(0, std::memory_order_relaxed);
-                recoveryGracePeriod_.store(10, std::memory_order_relaxed);
-                return;
-            }
-            catch (...)
-            {
-                // C12 FIX: Saturated unsigned increment in suspended recovery path.
-            const uint32_t c = exceptionCount_.load(std::memory_order_relaxed);
-            if (c < static_cast<uint32_t>(MAX_PLUGIN_EXCEPTIONS) + 1)
-                exceptionCount_.fetch_add(1, std::memory_order_relaxed);
-            // AUDIT-FIX: recovery attempt failed — count this failure and return.
-            // Previously fell through to the unconditional increment below,
-            // double-counting every failed recovery probe (every 100th block).
-            return;
-            }
-        }
-        // C12 FIX: Saturated unsigned increment in suspended path.
-        const uint32_t c = exceptionCount_.load(std::memory_order_relaxed);
-        if (c < static_cast<uint32_t>(MAX_PLUGIN_EXCEPTIONS) + 1)
-            exceptionCount_.fetch_add(1, std::memory_order_relaxed);
         return;  // Output silence (buffer unchanged = pass-through)
     }
 
@@ -574,7 +669,7 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         if (!safePluginProcessBlock(plugin, subBuffer, midi))
         {
             currentGain_ = 0.0f;
-            applyExceptionGracePeriod(buffer);
+            healthMonitor_.reportFailure();
             return;
         }
 #else
@@ -585,16 +680,12 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
         catch (...)
         {
             currentGain_ = 0.0f;
-            applyExceptionGracePeriod(buffer);
+            healthMonitor_.reportFailure();
             return;
         }
 #endif
         {
-            exceptionCount_.store(0, std::memory_order_relaxed);
-            // m-5 FIX: Decrement grace period
-            int grace = recoveryGracePeriod_.load(std::memory_order_relaxed);
-            if (grace > 0)
-                recoveryGracePeriod_.store(grace - 1, std::memory_order_relaxed);
+            healthMonitor_.reportSuccess();
         }
 
         // Copy processed audio back to the caller's buffer (only up to safeSamples)
@@ -622,7 +713,7 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
     if (!safePluginProcessBlock(plugin, buffer, midi))
     {
         currentGain_ = 0.0f;
-        applyExceptionGracePeriod(buffer);
+        healthMonitor_.reportFailure();
         return;
     }
 #else
@@ -633,17 +724,12 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
     catch (...)
     {
         currentGain_ = 0.0f;
-        applyExceptionGracePeriod(buffer);
+        healthMonitor_.reportFailure();
         return;
     }
 #endif
     {
-        exceptionCount_.store(0, std::memory_order_relaxed);  // reset on success
-        // m-5 FIX: Decrement grace period. If an exception occurs during grace,
-        // re-suspend immediately rather than waiting for 20 more exceptions.
-        int grace = recoveryGracePeriod_.load(std::memory_order_relaxed);
-        if (grace > 0)
-            recoveryGracePeriod_.store(grace - 1, std::memory_order_relaxed);
+        healthMonitor_.reportSuccess();
 
         // Smoothly fade in after recall / bypass switch
         if (currentGain_ < 1.0f)
@@ -654,78 +740,166 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
     }
 }
 
-// ---------------------------------------------------------------------------
-//  H12 FIX: Deduplicated exception grace-period helper
-// ---------------------------------------------------------------------------
-
-bool PluginHostManager::applyExceptionGracePeriod(juce::AudioBuffer<float>& buffer) noexcept
+juce::File PluginHostManager::getKnownPluginsCacheFile() const
 {
-    buffer.clear();
-    if (recoveryGracePeriod_.load(std::memory_order_relaxed) > 0)
+    // PERF-BROWSER: cache under the user app-data "MorePhi/" folder — same
+    // convention as the genre-classifier model path (see
+    // MorePhiProcessor::initializeGenreClassifier). createUnixDirectories is
+    // safe to call here unconditionally; it's idempotent.
+    const auto baseDir = juce::File::getSpecialLocation(
+        juce::File::userApplicationDataDirectory);
+    return baseDir.getChildFile("MorePhi").getChildFile("known_plugins.xml");
+}
+
+void PluginHostManager::loadKnownPluginsCache()
+{
+    // PERF-BROWSER: deserialize the persisted KnownPluginList so the browser can
+    // show the list instantly on first GUI open. Fail-soft: any parse error,
+    // missing file, or version skew is ignored — the browser will fall back to a
+    // full scan. Held under knownPluginsLock_ because knownPlugins is mutated.
+    const auto cacheFile = getKnownPluginsCacheFile();
+    if (!cacheFile.existsAsFile())
+        return;
+
+    juce::XmlDocument doc(cacheFile);
+    const auto xml = doc.getDocumentElement();
+    if (xml == nullptr)
     {
-        suspended_.store(true, std::memory_order_relaxed);
-        recoveryGracePeriod_.store(0, std::memory_order_relaxed);
-        return true;
+        DBG("PluginHostManager::loadKnownPluginsCache — failed to parse cache: "
+            + doc.getLastParseError());
+        return;
     }
-    // C12 FIX: Saturated unsigned increment — never wraps, never overflows.
-    const uint32_t maxSat = static_cast<uint32_t>(MAX_PLUGIN_EXCEPTIONS) + 1;
-    uint32_t count = exceptionCount_.load(std::memory_order_relaxed);
-    if (count < maxSat)
-        count = exceptionCount_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (count >= static_cast<uint32_t>(MAX_PLUGIN_EXCEPTIONS))
-        suspended_.store(true, std::memory_order_relaxed);
-    return false;
+
+    const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+    knownPlugins.recreateFromXml(*xml);
+}
+
+void PluginHostManager::saveKnownPluginsCache() const
+{
+    // PERF-BROWSER: persist the discovered plugin list so subsequent GUI opens
+    // skip the slow VST3-instantiation scan entirely. Snapshot the list under
+    // the lock, then write to a temp file and atomically move into place — this
+    // avoids a partial-write corrupting the cache if the process is killed mid-
+    // write. Never throws on failure (best-effort persistence).
+    const auto cacheFile = getKnownPluginsCacheFile();
+    const auto cacheDir = cacheFile.getParentDirectory();
+    if (!cacheDir.exists() && !cacheDir.createDirectory())
+    {
+        DBG("PluginHostManager::saveKnownPluginsCache — could not create cache dir");
+        return;
+    }
+
+    std::unique_ptr<juce::XmlElement> xml;
+    {
+        const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+        xml = knownPlugins.createXml();
+    }
+    if (xml == nullptr)
+        return;
+
+    // Atomic write: write to a fixed temp path, then move into place. Delete any
+    // stale temp first (a previous crashed write may have left one). The temp
+    // file lives next to the cache so the move is on the same volume (atomic).
+    const auto tempFile = cacheFile.getSiblingFile("known_plugins.xml.tmp");
+    tempFile.deleteFile();
+    if (!tempFile.replaceWithText(xml->toString()))
+    {
+        DBG("PluginHostManager::saveKnownPluginsCache — failed to write temp cache");
+        tempFile.deleteFile();
+        return;
+    }
+    if (!tempFile.moveFileTo(cacheFile))
+    {
+        DBG("PluginHostManager::saveKnownPluginsCache — failed to move cache into place");
+        tempFile.deleteFile();
+    }
 }
 
 void PluginHostManager::scanPluginFolders()
 {
-    // VST3-SPEC FIX: scanning a VST3 plugin instantiates its module, and many
-    // plugins' entry points assume the host's message-thread context (they touch
-    // COM / the message pump / UI APIs during init). Running PluginDirectoryScanner
-    // on a bare background thread — as PluginBrowserPanel does via juce::Thread::launch
-    // — crashes FL Studio (and other strict hosts) the moment a plugin with such an
-    // entry point is scanned. This is the same class of bug documented in
-    // juce-framework/JUCE#997 and lsp-plugins#576.
+    // VST3-SPEC FIX (background): scanning a VST3 plugin instantiates its module,
+    // and many plugins' entry points assume the host's message-thread context
+    // (they touch COM / the message pump / UI APIs during init). Running
+    // PluginDirectoryScanner on a bare background thread — as PluginBrowserPanel
+    // does via juce::Thread::launch — crashes FL Studio (and other strict hosts)
+    // the moment a plugin with such an entry point is scanned. Same class of bug
+    // as juce-framework/JUCE#997 and lsp-plugins#576.
     //
-    // The fix matches the guard already applied by discoverPlugin() and loadPlugin()
-    // in this file: acquire MessageManagerLock on the scanning thread so each
-    // plugin's instantiation sees a message-thread-safe context. The lock is held on
-    // THIS (worker) thread; it briefly blocks the DAW message thread only during
-    // each plugin's instantiation, identical to loadPlugin's behavior. Scan is only
-    // ever invoked from a worker thread by the browser, so this never deadlocks the
-    // message thread against itself.
+    // PERF-BROWSER FIX (the actual browser-freeze root cause, 2026-06-28): the
+    // PRIOR implementation acquired ONE MessageManagerLock at the top of this
+    // function and held it across the ENTIRE for+while loop over every installed
+    // plugin. The comment below claimed it "briefly blocks the DAW message thread
+    // only during each plugin's instantiation" — that was factually wrong: a
+    // single RAII guard blocks FL Studio's message thread CONTINUOUSLY for the
+    // whole scan (many seconds to tens of seconds), freezing the entire DAW UI.
     //
-    // LOCK ORDER: MessageManagerLock is acquired BEFORE knownPluginsLock_, matching
-    // loadPlugin() (MMLock at the top, then the data lock). This prevents an
-    // AB-BA inversion: if a future message-thread caller held knownPluginsLock_ and
-    // then needed the message pump, it would not deadlock against this scan.
-    std::unique_ptr<juce::MessageManagerLock> mmLock;
-    if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
-    {
-        mmLock = std::make_unique<juce::MessageManagerLock>(juce::Thread::getCurrentThread());
-        if (!mmLock->lockWasGained())
-        {
-            DBG("PluginHostManager::scanPluginFolders — MessageManagerLock not gained; aborting scan");
-            return;
-        }
-    }
+    // The fix: acquire AND RELEASE both locks PER PLUGIN, so the DAW message
+    // thread can pump events between plugin instantiations. Each plugin still
+    // sees a message-thread-safe context during its own scanNextFile() call
+    // (VST3-spec compliant), but no longer blocks the host between plugins.
+    //
+    // LOCK ORDER: per-plugin, MessageManagerLock is acquired BEFORE
+    // knownPluginsLock_ (matching loadPlugin()/discoverPlugin()). Neither lock
+    // is held across iteration boundaries, so there is no long-held lock and no
+    // possibility of AB-BA inversion with any other caller.
 
-    const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
-
-    // Scan default VST3 and AU locations
+    // Check for an exit request up front (the launching worker thread may be
+    // joined during shutdown); rechecked implicitly each iteration via MMLock
+    // gain failure below.
+    bool aborted = false;
     for (auto* format : formatManager.getFormats())
     {
-        auto defaultLocations = format->getDefaultLocationsToSearch();
+        if (aborted)
+            break;
+
+        const auto defaultLocations = format->getDefaultLocationsToSearch();
+
+        // Scanner construction does NOT instantiate plugins — only scanNextFile
+        // does — so it's safe to build outside the locks. It captures a
+        // reference to knownPlugins, which we guard per-call below.
         juce::PluginDirectoryScanner scanner(
             knownPlugins, *format, defaultLocations,
             true, juce::File(), false);
 
         juce::String pluginName;
-        while (scanner.scanNextFile(true, pluginName))
+        // Loop until the scanner has no more files. Each iteration:
+        //   1. acquire MessageManagerLock (message-thread context for the plugin)
+        //   2. acquire knownPluginsLock_ (guard the list mutation)
+        //   3. scanNextFile (instantiates one plugin, may append to knownPlugins)
+        //   4. release both locks — yields the DAW message thread between plugins
+        while (true)
         {
-            // Progress reported via pluginName
+            // Per-plugin MessageManagerLock. If the host is shutting down the
+            // message manager, lockWasGained() returns false and we abort the
+            // scan cleanly (matches the prior early-return behavior).
+            std::unique_ptr<juce::MessageManagerLock> mmLock;
+            if (juce::MessageManager::getInstanceWithoutCreating() != nullptr)
+            {
+                mmLock = std::make_unique<juce::MessageManagerLock>(juce::Thread::getCurrentThread());
+                if (!mmLock->lockWasGained())
+                {
+                    DBG("PluginHostManager::scanPluginFolders — MessageManagerLock not gained; aborting scan");
+                    aborted = true;
+                    break;
+                }
+            }
+
+            bool more = false;
+            {
+                const juce::SpinLock::ScopedLockType lock(knownPluginsLock_);
+                more = scanner.scanNextFile(true, pluginName);
+            }
+            // mmLock releases here as it goes out of scope — message thread freed.
+            if (!more)
+                break;
         }
     }
+
+    // PERF-BROWSER: persist the freshly-scanned list so the next GUI open is
+    // instant. Best-effort; failure to write the cache is non-fatal (the list
+    // is still populated in memory for this session). Written even on abort so
+    // whatever was discovered before the abort is still cached.
+    saveKnownPluginsCache();
 }
 
 const juce::PluginDescription* PluginHostManager::getLastDescription() const

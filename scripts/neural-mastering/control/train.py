@@ -130,6 +130,55 @@ class MasteringControlLoss(nn.Module):
         }
 
 
+# ── Dynamics target (feature-driven, proxy-aligned) ──────────────────────────
+
+
+def _clamp(v: float, lo: float = -0.95, hi: float = 0.95) -> float:
+    return max(lo, min(hi, v))
+
+
+def feature_driven_dynamics(frame: FeatureFrame) -> list[float]:
+    """3-band x (threshold, ratio) mastering-bus compression target, emitting the
+    EXACT layout the C++ runtime consumes (AutoMasteringEngine.cpp:593-599, the
+    `else` branch every neural plan takes since hasCompParams is never set):
+
+        d0/d1 = band0 (threshold, ratio)
+        d2/d3 = band1 (threshold, ratio)
+        d4/d5 = band2 (threshold, ratio)
+        d6/d7 = unused
+
+    C++ decode (per band b, base=2*b):
+        thresholdDB = -20 + v*8      (clamped [-40, -6])
+        ratio       = 3.5 + v*2.5    (clamped [1, 6])
+    so the teacher's inverse maps are:  v_thr = (thr_db + 20)/8 ,  v_rat = (ratio - 3.5)/2.5.
+
+    Driven ONLY by runtime-LIVE features with a VERIFIED scale. features.py stubs
+    crestFactorDb / monoFoldDownDeltaDb / transientDensity / harmonicRisk to 0.0
+    (dead). integrated_lufs (~[-35,-6] dB) and loudness_range (~[0,20]) are live
+    and scale-verified on real SSBC audio. spectral_bands ARE live but live in
+    LOG/dB scale (~[-120,-55]), so a naive energy sum is scale-ambiguous -- V1
+    emits UNIFORM threshold/ratio across all 3 bands (coherent symmetric bus
+    compression that scales with loudness); per-band differentiation via a
+    log->linear spectral conversion is a V2 follow-up. Abstains (midpoint zeros)
+    only on genuine near-silence (lufs < -45). Bounded [-0.95, 0.95].
+    """
+    lufs = getattr(frame, "integrated_lufs", -16.0)
+    lra = getattr(frame, "loudness_range", 6.0)
+
+    if lufs < -45.0:                       # genuine near-silence -> abstain to midpoint
+        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # Overall compression need: louder and/or wider material -> compress more.
+    need = _clamp(math.tanh((lufs + 14.0) / 6.0) + 0.3 * math.tanh((lra - 6.0) / 8.0))
+    # Map need[-1,1] -> ratio[2.0,3.5]:1 (always a little glue, never bypassed)
+    #                    and thr[-14,-20] dB (louder -> lower threshold -> more GR).
+    ratio = 2.0 + 1.5 * (need + 1.0) / 2.0
+    thr_db = -14.0 - 6.0 * (need + 1.0) / 2.0
+    v_thr = _clamp((thr_db + 20.0) / 8.0)
+    v_rat = _clamp((ratio - 3.5) / 2.5)
+    return [v_thr, v_rat, v_thr, v_rat, v_thr, v_rat, 0.0, 0.0]  # uniform across 3 bands
+
+
 # ── Synthetic teacher ────────────────────────────────────────────────────────
 
 
@@ -158,7 +207,7 @@ class SyntheticTeacher:
             transient_density=self.rng.uniform(0.0, 1.0),
             harmonic_risk=self.rng.uniform(0.0, 0.5),
             source_quality_score=self.rng.uniform(0.5, 1.0),
-            spectral_bands=tuple(self.rng.uniform(0.0, 1.0) for _ in range(SPECTRAL_BAND_COUNT)),
+            spectral_bands=tuple(self.rng.uniform(-75.0, -15.0) for _ in range(SPECTRAL_BAND_COUNT)),  # dB scale, matches C++ magnitudeDB / features.py
             stereo_correlation=tuple(self.rng.uniform(-0.3, 1.0) for _ in range(8)),
             mid_side_ratio=tuple(self.rng.uniform(0.1, 1.0) for _ in range(8)),
             sample_rate=self.rng.choice([44100.0, 48000.0]),
@@ -173,24 +222,28 @@ class SyntheticTeacher:
         """
         lufs = frame.integrated_lufs
         tilt = frame.spectral_tilt
-        quality = max(0.1, frame.source_quality_score)
 
         eq = []
         for i in range(SPECTRAL_BAND_COUNT):
             # Low bands cut when tilt is bright, highs boosted when dull.
+            # AUDIT-FIX 2026-06-30: amplitude 0.4 -> 0.15. The audio gate
+            # (evaluate_student_audio through the real engine) showed the model
+            # faithfully reproduced a 0.4 corrective-tilt ceiling -> ~4.8 dB EQ
+            # moves -> eqGainMae 2.31 dB (release gate <=1.5), i.e. broad tonal
+            # coloration a careful master would not apply. 0.15 -> ~1.8 dB ceiling
+            # = transparent corrective tilt. eq_to_gain_db scales delta by *12.
             band_pos = i / (SPECTRAL_BAND_COUNT - 1)  # 0=low ... 1=high
-            corrective = math.tanh(-tilt * (band_pos - 0.5) / 3.0) * 0.4
+            corrective = math.tanh(-tilt * (band_pos - 0.5) / 3.0) * 0.15
             eq.append(max(-1.0, min(1.0, corrective)))
 
         loudness_delta = math.tanh((-14.0 - lufs) / 6.0) * 0.6
-        dynamics_delta = math.tanh((lufs + 14.0) / 8.0) * 0.3 * quality
         stereo_delta = math.tanh((frame.mono_fold_down_delta_db) / 3.0) * 0.2
         harmonic_delta = -math.tanh(frame.harmonic_risk * 2.0) * 0.2
         limiter_delta = max(0.0, math.tanh((-1.0 - frame.true_peak_dbtp) / 2.0)) * 0.3
 
         out = (
             eq
-            + [dynamics_delta] * 8
+            + feature_driven_dynamics(frame)   # 8-dim dynamics (per-dim feature-driven, proxy-aligned)
             + [stereo_delta] * 8
             + [harmonic_delta] * 8
             + [limiter_delta] * 8
@@ -270,6 +323,7 @@ def export_onnx(model: nn.Module, path: Path) -> None:
             dynamic_axes=None,  # static batch=1; the plugin proposes one plan at a time
             opset_version=18,  # torch 2.12's exporter floor; ORT >= 1.16 supports it
             do_constant_folding=True,
+            dynamo=False,  # legacy exporter: avoids cuda/cpu FakeTensor mismatch on a GPU-trained model
         )
 
 

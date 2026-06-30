@@ -103,8 +103,9 @@ private:
     /** Tool: sonicmaster_decision — runs the neural mastering model on the last
      *  ~6s of captured audio and returns the decoded mastering decision (EQ
      *  gains, target LUFS, true-peak ceiling, 3-band compressor, stereo, limiter,
-     *  character) WITHOUT applying it. The assistant applies via apply_mastering_plan
-     *  or set_parameters once the user confirms. Params: target_lufs (float, default -14). */
+     *  character) WITHOUT applying it. The assistant applies the decision via
+     *  mastering.neural_apply; use apply_mastering_plan only as a heuristic fallback.
+     *  Params: target_lufs (float, default -14). */
     static juce::String sonicmasterDecision(const juce::var& params, MorePhiProcessor& p);
 
     // ── IPC Assistant tools ─────────────────────────────────────────────────

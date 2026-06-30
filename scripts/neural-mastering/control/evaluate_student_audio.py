@@ -44,6 +44,35 @@ from target import build_target  # noqa: E402
 from reference_score import score_breakdown, check_release_gates, RELEASE_GATES  # noqa: E402
 from labels import eq_to_gain_db  # noqa: E402  EQ delta[-1,1] -> gain dB (AdaptiveEQ kMaxGainDB=12)
 
+try:
+    import pyloudnorm as _pyln  # noqa: E402
+    _PLN_AVAILABLE = True
+except Exception:  # noqa: BLE001  -- optional; falls back to the C++ meter
+    _PLN_AVAILABLE = False
+
+LUFS_SENTINEL = -200.0  # C++ meter returns <= this for <3s / per-candidate reset
+
+
+def _pln_lufs(audio_planar: np.ndarray, sr: int, meter) -> float:
+    """pyloudnorm BS.1770 integrated LUFS on planar [ch, N] rendered audio.
+
+    The headless render resets LUFSMeter per-candidate (headless_render.cpp
+    prepare/reset per call), so the C++ integrated LUFS returns its -inf sentinel
+    on short gate segments even though the real plugin (continuous streaming) is
+    unaffected. This cross-check on the rendered WAV makes the loudness axis
+    measurable without an engine rebuild. Returns -inf if pyloudnorm unavailable.
+    """
+    if meter is None:
+        return float("-inf")
+    a = np.ascontiguousarray(audio_planar, dtype=np.float32)
+    if a.ndim != 2 or a.shape[0] < 1 or a.shape[1] < int(sr * 0.4):  # pyloudnorm needs >=400ms
+        return float("-inf")
+    a = np.clip(a.T, -1.0, 1.0)  # [N, ch]
+    try:
+        return float(meter.integrated_loudness(a))
+    except Exception:  # noqa: BLE001
+        return float("-inf")
+
 
 def _load_segment(source_path: str, start: int, seg_samples: int, sr: int) -> np.ndarray:
     """Load a [2, seg_samples] stereo segment from source_path at startSample."""
@@ -110,6 +139,7 @@ def main() -> int:
     seg_samples = int(round(args.segment_seconds * args.sr))
     host = HeadlessRenderer(args.lib, sample_rate=args.sr, block_size=512,
                             normalizer_mode=args.normalizer_mode)
+    _pln_meter = _pyln.Meter(float(args.sr)) if _PLN_AVAILABLE else None
     sess = ort.InferenceSession(args.model)
 
     rows = []
@@ -185,8 +215,17 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"  seg {i}: reference_score breakdown failed ({e})")
 
-        acc["lufs_model"].append(m_model.lufs_integrated)
-        acc["lufs_zero"].append(m_zero.lufs_integrated)
+        # LUFS: use the C++ meter when finite; fall back to a pyloudnorm measurement
+        # on the rendered audio only when the C++ meter returns its <=-200 sentinel
+        # (headless per-candidate reset). Real plugin streams continuously -> finite.
+        _lm = m_model.lufs_integrated
+        if not np.isfinite(_lm) or _lm <= LUFS_SENTINEL:
+            _lm = _pln_lufs(r_model, args.sr, _pln_meter)
+        _lz = m_zero.lufs_integrated
+        if not np.isfinite(_lz) or _lz <= LUFS_SENTINEL:
+            _lz = _pln_lufs(r_zero, args.sr, _pln_meter)
+        acc["lufs_model"].append(_lm)
+        acc["lufs_zero"].append(_lz)
         acc["tp_model"].append(m_model.true_peak_dbtp)
         acc["tp_zero"].append(m_zero.true_peak_dbtp)
         acc["spec_rmse_model"].append(_spec_rmse(list(f_model.spectral_bands), target.spec_db))

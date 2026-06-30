@@ -32,6 +32,14 @@ option(MORE_PHI_ENABLE_LTO "Enable LTO for Release builds" OFF)
 option(MORE_PHI_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(MORE_PHI_ENABLE_ONNX "Link ONNX Runtime and enable the OnnxNeuralMasteringRunner inference path (downloads a prebuilt binary at configure time)" OFF)
 option(MORE_PHI_ENABLE_PROFILING "Enable PerformanceProfiler instrumentation and the MorePhiDiagnostics 10s message-thread sampler (writes diagnostics-<pid>.log)" OFF)
+# CRASH-DIAG (2026-06-29): emit a PDB for Release so FL Studio crash dumps
+# (%LOCALAPPDATA%\CrashDumps\FL64.exe.*.dmp) resolve to source files/lines.
+# The .pdb is written beside the .vst3 and referenced by the PE. ON by default
+# — a small binary-size/compile-time cost is worth being able to diagnose the
+# recurring "FL crashes after choosing hosted plugin" symptom, which has been
+# impossible to pin down without symbols. Set -DMORE_PHI_RELEASE_PDB=OFF for a
+# stripped shipping Release.
+option(MORE_PHI_RELEASE_PDB "Emit PDB debug info for Release builds so crash dumps resolve to source" ON)
 
 # AUDIT-2026-06-25: security / commercial-viability opt-ins.
 # The embedded MCP server and the standalone Python IPC bridge expose a
@@ -109,6 +117,27 @@ function(more_phi_apply_build_tuning target_name)
         target_compile_options(${target_name} PRIVATE /Zm200)
         if(NOT MORE_PHI_MSVC_MP STREQUAL "0")
             target_compile_options(${target_name} PRIVATE "/MP${MORE_PHI_MSVC_MP}")
+        endif()
+
+        # CRASH-DIAG (2026-06-29): Generate PDB debug info even for Release so FL
+        # Studio crash dumps (WER .dmp in %LOCALAPPDATA%\CrashDumps) resolve to
+        # source files/lines via the .pdb shipped beside the .vst3. Without this,
+        # the Release VST3 is stripped and an access-violation dump can only be
+        # resolved to a raw module+offset — which made the post-Ozone-hosting FL
+        # crash un-diagnosable (the crashing binary was also overwritten between
+        # the crash and analysis). /Zi emits program database; /DEBUG:fastlink at
+        # link writes the PDB next to the binary. The option is declared once at
+        # the top of this file (next to the other MORE_PHI_ options).
+        if(MORE_PHI_RELEASE_PDB)
+            target_compile_options(${target_name} PRIVATE $<$<CONFIG:Release>:/Zi /Oy->)
+            target_compile_options(${target_name} PRIVATE $<$<CONFIG:RelWithDebInfo>:/Zi /Oy->)
+            if(_more_phi_target_type STREQUAL "EXECUTABLE"
+                OR _more_phi_target_type STREQUAL "SHARED_LIBRARY"
+                OR _more_phi_target_type STREQUAL "MODULE_LIBRARY")
+                target_link_options(${target_name} PRIVATE
+                    $<$<CONFIG:Release>:/DEBUG:fastlink /OPT:REF /OPT:ICF>
+                    $<$<CONFIG:RelWithDebInfo>:/DEBUG:fastlink /OPT:REF /OPT:ICF>)
+            endif()
         endif()
 
         if(MORE_PHI_ENABLE_LTO)
@@ -437,6 +466,12 @@ set(MORE_PHI_HOST_SOURCES
     src/Host/PluginHostManager.cpp
     src/Host/ParameterBridge.h
     src/Host/ParameterBridge.cpp
+    src/Host/DAWTransportForwarder.h
+    src/Host/DAWTransportForwarder.cpp
+    src/Host/PluginHealthMonitor.h
+    src/Host/PluginHealthMonitor.cpp
+    src/Host/SafePluginCreate.h
+    src/Host/SafePluginCreate.cpp
 )
 
 set(MORE_PHI_LICENSING_SOURCES
@@ -707,6 +742,18 @@ if(MSVC)
         src/AI/Dataset/MetadataSchema.cpp
         PROPERTIES
             COMPILE_OPTIONS "/bigobj"
+    )
+
+    # SafePluginCreate wraps createPluginInstance in catch(...). Under the
+    # default /EHsc, catch(...) does NOT catch structured (hardware) exceptions,
+    # so a buggy third-party VST3 factory fault would crash the host (FL Studio).
+    # /EHa makes catch(...) also catch SEH, converting the fault into a graceful
+    # load failure. This is the ONLY TU that needs /EHa — it's isolated so the
+    # rest of the codebase keeps /EHsc (no silent SEH-swallowing elsewhere).
+    set_source_files_properties(
+        src/Host/SafePluginCreate.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "/EHa"
     )
 endif()
 
@@ -1017,13 +1064,20 @@ if(MORE_PHI_HAS_ONNX)
     # Copy the ONNX Runtime shared lib next to the plugin/test binaries so the
     # host process can resolve ONNX symbols at runtime (Windows DLL search path;
     # Linux/macOS rpath convenience). FetchOnnxRuntime.cmake exposes the path in
-    # MORE_PHI_ONNX_RUNTIME_LIB; the copy must run POST_BUILD on every consumer
-    # of the SharedCode lib that links ORT.
+    # MORE_PHI_ONNX_RUNTIME_LIB.
+    #
+    # AUDIT FIX (2026-06-29): Changed from POST_BUILD to PRE_LINK. The VST3 link
+    # step invokes juce_vst3_helper.exe which loads the newly-built plugin. The
+    # plugin's delay-load hook for onnxruntime.dll looks in the plugin's directory.
+    # If the DLL hasn't been copied yet, the hook falls back to the default loader
+    # path, which resolves to C:\Windows\System32's v1.17.1 (instead of our bundled
+    # v1.22.1), causing the manifest generation to fail. PRE_LINK ensures the DLL is
+    # present before juce_vst3_helper.exe runs.
     if(WIN32)
         set(_ort_dll_dir "${CMAKE_CURRENT_BINARY_DIR}/_deps/onnxruntime-prebuilt/onnxruntime-win-x64-${MORE_PHI_ONNX_VERSION}/lib")
         foreach(_consumer MorePhi_VST3 MorePhi_Standalone MorePhiCLI MorePhiMcpServer HeadlessHost)
             if(TARGET ${_consumer})
-                add_custom_command(TARGET ${_consumer} POST_BUILD
+                add_custom_command(TARGET ${_consumer} PRE_LINK
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${_ort_dll_dir}/onnxruntime.dll"
                         "$<TARGET_FILE_DIR:${_consumer}>/onnxruntime.dll"

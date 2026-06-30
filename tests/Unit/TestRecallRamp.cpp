@@ -197,3 +197,22 @@ TEST_CASE("ParameterBridge recall ramp rejects bad input",
     REQUIRE_FALSE(bridge.startRecallRamp(target, 0));
     REQUIRE_FALSE(bridge.isRecallRampActive());
 }
+
+TEST_CASE("ParameterBridge applyParameterSpan writes the requested offset only",
+          "[ParameterBridge][batch][performance]")
+{
+    auto plugin = std::make_unique<FakeRampPlugin>();
+    FakeHostManager host(std::move(plugin));
+    ParameterBridge bridge(host);
+    auto* pluginPtr = host.getPlugin();
+    REQUIRE(pluginPtr != nullptr);
+    REQUIRE(pluginPtr->getParameters().size() == 4);
+
+    const float values[2] = { 0.25f, 0.75f };
+    bridge.applyParameterSpan(2, values, 2, /*now=*/10);
+
+    REQUIRE(readParam(*pluginPtr, 0) == Approx(0.0f).margin(1e-6f));
+    REQUIRE(readParam(*pluginPtr, 1) == Approx(0.0f).margin(1e-6f));
+    REQUIRE(readParam(*pluginPtr, 2) == Approx(0.25f).margin(1e-5f));
+    REQUIRE(readParam(*pluginPtr, 3) == Approx(0.75f).margin(1e-5f));
+}

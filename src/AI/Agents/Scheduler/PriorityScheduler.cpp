@@ -46,13 +46,19 @@ void PriorityScheduler::stop()
     if (! running_.exchange(false, std::memory_order_acq_rel))
         return;
     cv_.notify_all();
-    // H-6 FIX: std::jthread destructor calls request_stop() + join()
-    // automatically. The workers are joined BEFORE the agentRuntime_ context
-    // they reference is destroyed (see ~MorePhiProcessor ordering). No detach
-    // fallback needed — the stop_token + cv_any wait ensures prompt wake-up.
+    // H-6 FIX (revised): std::jthread's destructor calls request_stop()+join()
+    // automatically, but that runs only at ~jthread — AFTER the manual join
+    // below. The worker loop exits on stopToken.stop_requested(), and without an
+    // explicit request_stop() here the workers never observe it (they busy-spin
+    // on the now-true running_ predicate and the join deadlocks). Request stop
+    // explicitly before joining so the workers exit promptly. The workers are
+    // still joined BEFORE the agentRuntime_ context they reference is destroyed.
     for (auto& t : workers_)
+    {
+        t.request_stop();
         if (t.joinable())
             t.join();
+    }
     workers_.clear();
     // Drain anything left unexecuted so we don't keep dangling lambdas.
     // C-3: Only levels 0-2 under mutex; level 3 (urgents pool) drained below.
@@ -167,7 +173,15 @@ void PriorityScheduler::workerLoop(std::stop_token stopToken)
             }
 
             bumpStarvingBackground();
-            escalateStarving();
+            // O3 (2026-06-29): escalateStarving() does a FIFO scan of Normal and
+            // High on every call. Skip it entirely when both are empty — the scan
+            // can find nothing to promote. bumpStarvingBackground() already has
+            // this guard internally; escalateStarving() now matches. The two
+            // .empty() checks are O(1) and run under the already-held mutex.
+            constexpr int kNormalOrd = Entry::ordinal(TaskPriority::Normal);
+            constexpr int kHighOrd   = Entry::ordinal(TaskPriority::High);
+            if (! queues_[kNormalOrd].empty() || ! queues_[kHighOrd].empty())
+                escalateStarving();
 
             // H-1/M-4: Check queues in priority order (highest first).
             // Level 3 (RealtimeCritical) is now handled by urgents pool;

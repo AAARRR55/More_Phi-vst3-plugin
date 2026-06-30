@@ -26,7 +26,10 @@
 set(_harness_ai_deps
     src/AI/EQParameterTranslator.cpp
     src/AI/GenreClassifier.cpp
-    src/AI/ChainPlanExecutor.cpp)
+    src/AI/ChainPlanExecutor.cpp
+    src/AI/MelSpectrogram.cpp               # GenreClassifier dep
+    src/AI/AutomationControlPlane.cpp       # ActionLedger::record (AutoMasteringEngine dep)
+    src/AI/RuleBasedMasteringResolver.cpp)  # ChainPlanExecutor dep
 # OzonePlanApplicator/OzoneParameterMap are intentionally EXCLUDED: they are
 # plugin-coupled (OzonePlanApplicator ctor takes a MorePhiProcessor& and calls
 # enqueueParameterSet -> pulls the whole plugin into the link). ChainPlanExecutor
@@ -82,6 +85,7 @@ target_link_libraries(more_phi_headless_render PRIVATE
     juce::juce_events
     juce::juce_dsp
     juce::juce_gui_basics
+    juce::juce_audio_processors   # core sources (e.g. SnapshotBank) reference AudioPluginInstance
     nlohmann_json::nlohmann_json
 )
 
@@ -107,6 +111,11 @@ target_compile_definitions(more_phi_headless_render PRIVATE
 # Windows stack + Linux .so naming.
 if(MSVC)
     target_link_options(more_phi_headless_render PRIVATE /STACK:4194304)
+endif()
+# Fail the link if any symbol is undefined — surfaces ALL missing transitive
+# deps at link time instead of one-per-dlopen on the ctypes teacher.
+if(UNIX)
+    target_link_options(more_phi_headless_render PRIVATE -Wl,--no-undefined)
 endif()
 
 # Output a predictable library name on every platform:

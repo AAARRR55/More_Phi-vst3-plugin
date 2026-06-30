@@ -471,6 +471,14 @@ public:
     {
         return ozoneParamMap_ != nullptr ? ozoneParamMap_->mappedSlotCount() : 0;
     }
+
+    /**
+     * FIX (2026-06-29): Attempt to build the OzonePlanApplicator on-demand when no
+     * applicator exists but a hosted plugin is loaded. This handles the case where
+     * the user switched plugins or the initial load didn't trigger a refresh.
+     * Returns true if the applicator is now ready (or was already ready).
+     */
+    bool ensureOzonePlanApplicator();
     NeuralMasteringEvidenceLevel getNeuralMasteringEvidenceLevel() const noexcept
     {
         return neuralMasteringController_.getLastStatus().evidenceLevel;

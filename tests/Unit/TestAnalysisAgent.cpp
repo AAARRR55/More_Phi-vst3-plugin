@@ -57,7 +57,7 @@ TEST_CASE("AnalysisAgent is read-only and refuses write tools", "[agents][analys
     REQUIRE(agent.allowedTools() == std::vector<juce::String>{
         "analysis.get_summary", "analysis.get_spectrum", "analysis.get_stereo_field",
         "ozone.track.analyze", "get_mastering_state", "analysis.capture_window",
-        "analysis.compare_render" });
+        "analysis.compare_render", "sonicmaster_decision" });
 
     AgentTask task;
     task.id = "a1";

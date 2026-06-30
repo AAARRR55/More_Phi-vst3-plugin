@@ -11,20 +11,26 @@
 
 namespace more_phi::agents {
 
-// Reactive output-gain trimmer. L2 FIX (doc/code alignment): corrections are
-// NOT routed through the lock-free ParamCommand queue. They hop to the message
-// thread via MessageManager::callAsync and invoke more_phi.set_parameter through
-// DefaultToolInvoker -> MCPToolHandler::handle (the same chokepoint MCP uses),
-// which resolves the parameter by name and enqueues the write under its own
-// transaction. This is safe (never touches the audio thread) and audited, but
-// the mechanism is the async tool path, not the SPSC queue.
+// Reactive output-gain trimmer. Corrections are invoked SYNCHRONOUSLY on the
+// blackboard pump thread via ctx_->tools->invoke("more_phi.set_parameter", ...)
+// -> DefaultToolInvoker -> MCPToolHandler::handle -> dispatchWithAutomationTransaction
+// -> enqueueParameterSet onto the existing LockFreeQueue<ParamCommand> (the same
+// chokepoint MCP uses). The delivery path is HEADLESS-SAFE: no
+// MessageManager::callAsync is on it (callAsync drops in headless/offline-render
+// hosts — see the .cpp M5 note and CLAUDE.md Thread-Communication). The pump
+// thread is joined in AgentRuntime::stop() BEFORE the registry destroys agents,
+// so there is no deferred callback to outlive `this`.
 // "RealtimeCritical" priority means "jump the AGENT queue", NOT "run on the audio
-// thread" (Decision D2). Corrections target the More-Phi OUTPUT GAIN parameter
-// by name (resolved safely on the message thread by more_phi.set_parameter), NOT
-// a hardcoded hosted-plugin index (audit C3: index 0 was an arbitrary/unrelated
-// control). Correction values are ABSOLUTE normalized targets derived from a
-// tracked current-gain estimate — set_parameter semantics are absolute, so the
-// previous code that passed a -delta dB as "value" was also wrong.
+// thread" (Decision D2). Reactive latency is bounded by the AnalysisAgent cadence
+// (~100ms) + the blackboard pump interval + the synchronous transaction cost —
+// ~100-200ms worst case under a clip storm (the pump runs the full transaction
+// synchronously), NOT sub-100ms. The load-bearing guarantee is D2 (queue
+// priority, never the audio thread), not a latency target. Corrections target
+// the More-Phi OUTPUT GAIN parameter by name (resolved safely on the message
+// thread), NOT a hardcoded hosted-plugin index (audit C3: index 0 was an
+// arbitrary/unrelated control). Correction values are ABSOLUTE normalized targets
+// derived from a tracked current-gain estimate — set_parameter semantics are
+// absolute, so the previous code that passed a -delta dB as "value" was also wrong.
 class RealtimeControlAgent : public IAgent
 {
 public:
@@ -57,14 +63,6 @@ public:
     void prepare(const AgentContext& ctx) override
     {
         ctx_ = &ctx;
-        // C-4: alias-construct a shared_ptr with no-op deleter from the raw
-        // tools pointer, then store a weak_ptr. The shared_ptr ref-count lives
-        // as long as ctx_->tools is valid (owned by Processor::agentTools_,
-        // which outlives agentRuntime_). The weak_ptr provides graceful
-        // degradation if teardown ordering ever changes.
-        auto shared = std::shared_ptr<IToolInvoker>(std::shared_ptr<IToolInvoker>{},
-                                                      ctx_->tools);
-        weakTools_ = shared;
     }
 
     // Driven by the blackboard pump.
@@ -76,10 +74,13 @@ public:
     // Sync execute (for direct task submission).
     AgentResult execute(const AgentTask& task) override;
     AgentState state() const noexcept override { return state_.load(); }
-    // M5 FIX: clears alive_ so any callAsync lambda still queued on the message
-    // thread after teardown early-returns instead of touching freed state. The
-    // runtime calls stop() on every agent during AgentRuntime::stop (workers and
-    // the pump are joined first), so this runs before the agent is destroyed.
+    // Clears alive_ defensively. Today's delivery path is synchronous (see the
+    // class comment — onEvent invokes the tool on the blackboard pump thread, not
+    // via MessageManager::callAsync), so nothing is deferred; alive_ is checked
+    // before the tool invoke as a guard against any future caller that defers
+    // this path. The runtime calls stop() on every agent during AgentRuntime::stop
+    // (workers and the pump are joined first), so this runs before the agent is
+    // destroyed.
     void stop() override { alive_->store(false, std::memory_order_release); state_.store(AgentState::Stopped); }
 
 private:
@@ -88,18 +89,14 @@ private:
     const AgentContext* ctx_ = nullptr;
     Config config_;
     std::atomic<AgentState> state_{ AgentState::Idle };
-    // C-4 FIX: shared liveness flag + weak tool invoker. The liveness flag
-    // guards against message-thread callbacks touching `this` after stop();
-    // the weak tool invoker ensures ctx_->tools remains valid for the duration
-    // of invoke() even if AgentRuntime::stop() runs mid-pump-cycle and the
-    // DefaultToolInvoker is destroyed (locks fail gracefully). The shared_ptr
-    // backing the weak_ptr is a static no-op deleter pointing to the real
-    // DefaultToolInvoker, kept alive by the Processor's agentTools_ member.
-    // M5 FIX: shared liveness flag. Captured by value into the callAsync lambda
-    // (heap-allocated, outlives the agent). Cleared in stop(). Lets a queued
-    // message-thread callback detect that the agent is gone without capturing `this`.
+    // C-4 / M5: shared liveness flag. The delivery path is synchronous (class
+    // comment), so onEvent checks alive_ directly before invoking the tool; the
+    // flag is captured by value anywhere a path could be deferred, and cleared in
+    // stop() so a (hypothetical) deferred caller can detect the agent is gone
+    // without capturing `this`. The DefaultToolInvoker the tool resolves through
+    // is owned independently by the Processor's agentTools_ member, so it outlives
+    // this agent regardless.
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
-    std::weak_ptr<IToolInvoker> weakTools_;
 
     struct RateBucket { juce::int64 windowStartMs = 0; int count = 0; };
     mutable std::mutex mutex_;

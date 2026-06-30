@@ -318,13 +318,24 @@ void ParameterBridge::applyParameterState(const float* values, int count) noexce
 
 void ParameterBridge::applyParameterState(const float* values, int count, juce::uint32 now) noexcept
 {
+    applyParameterSpan(0, values, count, now);
+}
+
+void ParameterBridge::applyParameterSpan(int startIndex, const float* values, int count, juce::uint32 now) noexcept
+{
     if (!values || count <= 0) return;
+    if (startIndex < 0) return;
 
     withPlugin(host_, cachedConcreteHost_, "applyParameterState", 0,
-        [this, values, count, now](juce::AudioPluginInstance& plugin) -> int
+        [this, startIndex, values, count, now](juce::AudioPluginInstance& plugin) -> int
     {
         auto& params = plugin.getParameters();
-        const int safeCount = juce::jmin(count, (int)params.size(), (int)throttleStates_.size());
+        if (startIndex >= (int)params.size() || startIndex >= (int)throttleStates_.size())
+            return 0;
+
+        const int safeCount = juce::jmin(count,
+                                         (int)params.size() - startIndex,
+                                         (int)throttleStates_.size() - startIndex);
 
         const juce::SpinLock::ScopedTryLockType throttleLock(throttleMutex_);
         const bool hasThrottleLock = throttleLock.isLocked();
@@ -339,7 +350,8 @@ void ParameterBridge::applyParameterState(const float* values, int count, juce::
             bool throttled = false;
             if (hasThrottleLock)
             {
-                const auto& state = throttleStates_[static_cast<size_t>(i)];
+                const auto paramIndex = static_cast<size_t>(startIndex + i);
+                const auto& state = throttleStates_[paramIndex];
                 throttled = state.lastValue >= 0.0f
                     && (now - state.lastUpdateTime) < 2
                     && std::abs(clamped - state.lastValue) <= 0.01f;
@@ -349,11 +361,11 @@ void ParameterBridge::applyParameterState(const float* values, int count, juce::
                 continue;
 
             // C-1 FIX: use SEH wrapper — avoids C++ heap allocation on hosted-plugin throw.
-            if (!setValueNoexcept(params[i], clamped, this))
+            if (!setValueNoexcept(params[startIndex + i], clamped, this))
                 continue;
 
             if (hasThrottleLock)
-                throttleStates_[static_cast<size_t>(i)] = {clamped, now};
+                throttleStates_[static_cast<size_t>(startIndex + i)] = {clamped, now};
         }
 
         return 0;

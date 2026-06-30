@@ -28,12 +28,24 @@ using Catch::Approx;
 
 namespace {
 
-// Locate the staged model artifact. Returns empty path if not found — the test
-// skips gracefully in that case. (No standalone ONNX model is staged here; the
-// SonicMaster ONNX model is driven by SonicMasterDecisionRunner.)
+// Locate the staged 63->72 V2 feature->delta control-regressor ONNX
+// (neural_mastering_v2.onnx). Searches cwd, the repo's models/sonicmaster, and
+// the control export dir; also walks up from cwd to find the repo root. Returns
+// empty (test skips gracefully) only if no candidate is staged anywhere.
 std::filesystem::path resolve_model_path()
 {
-    // No standalone candidate is staged. Return empty to skip gracefully.
+    namespace fs = std::filesystem;
+    const fs::path name { "neural_mastering_v2.onnx" };
+    for (const auto& rel : { name, fs::path("models/sonicmaster") / name,
+                             fs::path("scripts/neural-mastering/control") / name })
+        if (fs::exists(rel)) return fs::absolute(rel);
+    fs::path dir = fs::current_path();
+    for (int i = 0; i < 8 && dir.has_parent_path(); ++i)
+    {
+        const auto p = dir / "models" / "sonicmaster" / name;
+        if (fs::exists(p)) return fs::absolute(p);
+        dir = dir.parent_path();
+    }
     return {};
 }
 
@@ -69,9 +81,8 @@ TEST_CASE("OnnxNeuralMasteringRunner loads and infers on a real artifact", "[Onn
     const auto model_path = resolve_model_path();
     if (model_path.empty())
     {
-        WARN("ONNX model not staged — skipping live ONNX inference test. "
-             "Export the SonicMaster model via tools/export_onnx/export_patched.py "
-             "to exercise this path.");
+        WARN("neural_mastering_v2.onnx not found — skipping live ONNX inference test. "
+             "Run scripts/neural-mastering/control/train.py --export-onnx to produce it.");
         return;
     }
 

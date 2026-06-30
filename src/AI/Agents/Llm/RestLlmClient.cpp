@@ -22,6 +22,29 @@ constexpr int  kMaxAttempts       = 3;     // initial + 2 retries
 constexpr int  kBaseBackoffMs     = 1000;  // 1s, 2s, (4s) exponential
 constexpr int  kMaxBackoffMs      = 8000;
 constexpr int  kRateLimitDefaultMs= 5000;  // if server omits Retry-After
+
+// Per-provider HTTP timeout for the agent/Conductor path. The WinHTTP transport
+// (JuceLLMHttpClient) clamps connect/send against this, and the receive budget
+// is set to it — so for non-streaming NIM this is effectively the model's whole
+// generation window. NVIDIA NIM endpoints can cold-start in 60–180s on the first
+// call to a model, which the previous flat 30s ceiling guaranteed to fail as a
+// spurious "network_error" (WinHTTP 12002) before the model had finished. The
+// chat path (LLMChatClient) already grants NVIDIA 120s via kTimeoutMsNvidia; this
+// mirrors that ceiling so the agent path no longer fails faster than the chat
+// path against the same provider. Non-NVIDIA providers keep the shorter budget
+// (60s) since cold starts there are rare and a tighter timeout surfaces real
+// outages faster.
+//
+// AUDIT-FIX (transport-timeout, 2026-06-29): previously buildRequest_ returned a
+// flat 30000 for every provider, which silently broke the documented "configured
+// RestLlmClient is the live path when a key is set" contract for NVIDIA.
+constexpr int  kTimeoutMsNvidia   = 120000;  // NVIDIA NIM cold-start budget
+constexpr int  kTimeoutMsDefault  = 60000;   // OpenAI / Anthropic / OpenAI-compatible / etc.
+
+int timeoutMsForProvider(LLMProviderId id) noexcept
+{
+    return (id == LLMProviderId::NVIDIA) ? kTimeoutMsNvidia : kTimeoutMsDefault;
+}
 }
 
 RestLlmClient::RestLlmClient(LLMProviderId provider,
@@ -294,7 +317,7 @@ LLMHttpRequest RestLlmClient::buildRequest_(const CompletionRequest& request) co
         bodyStr = "{}";
     }
 
-    return { LLMHttpMethod::Post, base + path, headers, juce::String::fromUTF8(bodyStr.c_str()), 30000 };
+    return { LLMHttpMethod::Post, base + path, headers, juce::String::fromUTF8(bodyStr.c_str()), timeoutMsForProvider(provider_) };
 }
 
 ILlmClient::CompletionResponse RestLlmClient::complete(const CompletionRequest& request)

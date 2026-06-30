@@ -30,6 +30,9 @@ add_executable(MorePhiTests
     # Output-protection limiter on the main wet path (morph-clip fix).
     Unit/TestMorphOutputProtection.cpp
     Unit/TestAIRegressions.cpp
+    # End-to-end guard: an AI edit (enqueue -> drain -> hosted setValue) must
+    # actually change the hosted plugin's value. No prior test asserted this.
+    Unit/TestAIEditApplyEndToEnd.cpp
     Unit/TestLLMSettings.cpp
     Unit/TestLLMSettingsStore.cpp
     Unit/TestLLMConnectionValidator.cpp
@@ -68,6 +71,8 @@ add_executable(MorePhiTests
     # ── Pre-Deployment Audit Protocol (2026-04-14) ──────────────────────────────
     # Module 2: Host Integration (P0)
     Unit/TestHostIntegration.cpp
+    Unit/TestDAWTransportForwarder.cpp
+    Unit/TestPluginHostLayer.cpp
     # Module 3: MIDI Routing (P1)
     Unit/TestMIDIRouting.cpp
     # Module 4: Concurrency & Real-Time Safety (P0)

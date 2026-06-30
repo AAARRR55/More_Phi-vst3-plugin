@@ -495,3 +495,62 @@ TEST_CASE("RestLlmClient handles empty Anthropic content array gracefully",
     REQUIRE(resp.ok);
     REQUIRE(resp.content.isEmpty());  // no text block found
 }
+
+// ── AUDIT-FIX (transport-timeout, 2026-06-29): per-provider HTTP timeout ──
+//
+// buildRequest_ previously returned a flat 30000ms for every provider, which
+// silently broke the agent/Conductor path against NVIDIA NIM (cold starts can
+// exceed 30s, surfacing as a spurious "network_error" / WinHTTP 12002). It now
+// grants NVIDIA 120s and other providers 60s — matching the chat path's
+// kTimeoutMsNvidia. These tests pin that contract by inspecting the timeoutMs
+// of the request handed to the HTTP client.
+
+// Capturing variant of the fake client: records the timeoutMs of the last
+// request so the per-provider selection is observable without a real network.
+class CapturingHttpClient final : public ILLMHttpClient
+{
+public:
+    LLMHttpResponse execute(const LLMHttpRequest& request) override
+    {
+        lastTimeoutMs = request.timeoutMs;
+        ++callCount;
+        // Return a minimal 200 so complete() succeeds and doesn't retry.
+        return { 200, openAiSuccessBody("ok", 1).toStdString(), "" };
+    }
+
+    std::atomic<int> lastTimeoutMs{ 0 };
+    std::atomic<int> callCount{ 0 };
+};
+
+LLMProviderSettings nvidiaSettings()
+{
+    LLMProviderSettings ps;
+    ps.apiKey = "nvapi-test-key";
+    ps.selectedModel = "meta/llama-3.1-70b-instruct";
+    return ps;
+}
+
+TEST_CASE("RestLlmClient grants NVIDIA the 120s cold-start timeout",
+          "[agents][llm][transport]")
+{
+    auto http = std::make_shared<CapturingHttpClient>();
+    RestLlmClient client{ LLMProviderId::NVIDIA, nvidiaSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(http->callCount == 1);
+    REQUIRE(http->lastTimeoutMs == 120000);
+}
+
+TEST_CASE("RestLlmClient keeps the default 60s timeout for non-NVIDIA providers",
+          "[agents][llm][transport]")
+{
+    auto http = std::make_shared<CapturingHttpClient>();
+    // Construct directly (not via makeClient) because CapturingHttpClient is a
+    // distinct mock type; shared_ptr<Derived> converts to shared_ptr<ILLMHttpClient>.
+    RestLlmClient client{ LLMProviderId::OpenAI, openAiSettings(), http };
+    auto resp = client.complete(sampleRequest());
+
+    REQUIRE(resp.ok);
+    REQUIRE(http->lastTimeoutMs == 60000);
+}

@@ -103,6 +103,7 @@ public:
     // H-1 FIX: overload accepting a cached block timestamp.
     void applyParameterState(const float* values, int count, juce::uint32 now) noexcept;
     void applyParameterState(const std::vector<float>& values, juce::uint32 now) noexcept;
+    void applyParameterSpan(int startIndex, const float* values, int count, juce::uint32 now) noexcept;
 
     // C-5 FIX (audit): Ramped recall. Instead of snapping every hosted
     // parameter to the snapshot value in one block (an audible click on

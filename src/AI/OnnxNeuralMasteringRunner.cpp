@@ -472,9 +472,10 @@ bool OnnxNeuralMasteringRunner::loadModel(std::string_view absolutePath,
         // SonicMasterDecisionRunner::loadModel, commit a28b621); the lower-level
         // GetDimensions call on the same handle is stable. Same data, no fault.
         // GetElementType() above is unaffected because it does not touch the
-        // dimension storage. This runner is currently seam-only (ORT not linked
-        // into its path) but the fix is applied preemptively so a future
-        // feature-frame model wiring cannot reintroduce the segfault.
+        // dimension storage. (ORT IS linked when MORE_PHI_HAS_ONNX is on; the
+        // GetDimensions workaround is applied preemptively so a feature-frame
+        // model wiring cannot reintroduce the segfault seen on the waveform
+        // runner — see SonicMasterDecisionRunner::loadModel, commit a28b621.)
         const auto inDimCount = inputTensor.GetDimensionsCount();
         const auto outDimCount = outputTensor.GetDimensionsCount();
         std::vector<int64_t> inDims(inDimCount, -1);

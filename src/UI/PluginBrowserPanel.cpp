@@ -123,8 +123,11 @@ void PluginBrowserPanel::showPluginListDialog()
     }
 
     // Create a dialog with JUCE's built-in PluginListComponent
-    auto& knownPlugins = host_.getKnownPlugins();
-    auto types = knownPlugins.getTypes();
+    // FL-Studio FIX: Use getKnownPluginsSnapshot() instead of getKnownPlugins()
+    // to avoid a TOCTOU race — getKnownPlugins() returned a reference with the
+    // lock already released, so getTypes() could race with concurrent scanner
+    // writes. The snapshot copy is made under the lock and is safe to use.
+    auto types = host_.getKnownPluginsSnapshot();
 
     if (types.isEmpty())
     {

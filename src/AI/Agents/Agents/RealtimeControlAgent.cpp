@@ -120,23 +120,17 @@ void RealtimeControlAgent::onEvent(const juce::String& type,
     // more_phi.set_parameter resolves by parameter_id; the value is ABSOLUTE
     // (not a -delta). Synchronous on the blackboard pump thread.
     //
-    // C-4 FIX: use weakTools_ (weak_ptr to the raw tools pointer) so invoke()
-    // gracefully returns when teardown has freed the DefaultToolInvoker.
     // M5 NOTE: invoked synchronously here, NOT via MessageManager::callAsync.
     // The pump thread is joined in AgentRuntime::stop() BEFORE the registry
-    // destroys agents, so there is no deferred callback to outlive `this` —
-    // the original use-after-free window only existed with callAsync. Keeping
-    // it synchronous also matches the contract the unit tests assert and avoids
-    // a MessageManager dependency in the agent layer. `alive_` is still checked
-    // defensively in case a future caller ever defers this path.
+    // destroys agents, so there is no deferred callback to outlive `this`.
+    // `alive_` is checked defensively in case a future caller ever defers this path.
     if (! alive_->load(std::memory_order_acquire))
         return;
-    auto tools = weakTools_.lock();
-    if (! tools)
+    if (! ctx_ || ! ctx_->tools)
         return;
 
     const juce::String paramName = config_.outputGainParamName;
-    auto result = tools->invoke("more_phi.set_parameter",
+    auto result = ctx_->tools->invoke("more_phi.set_parameter",
         { { "parameter_id", paramName.toStdString() },
           { "value", targetNormalized } }, id());
 

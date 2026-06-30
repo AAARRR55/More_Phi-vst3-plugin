@@ -84,6 +84,12 @@ public:
      *  Exposed for testing. */
     static juce::String parseGeminiResponseForTest(int statusCode, const juce::String& body);
 
+    /** Map a WinHTTP transport-error body (e.g. "WinHTTP receive response failed
+     *  with error 12002 (request timed out).") to a short, actionable remediation
+     *  suffix. Returns empty for empty input or unrecognized codes. Exposed for
+     *  testing so a regression in the code-parsing path is caught. */
+    static juce::String transportErrorHintForTest(const juce::String& transportErrorBody);
+
     /** Return the max_tokens budget for a given model id. Reasoning models
      *  (DeepSeek-R1, Nemotron, QwQ, ...) need a larger budget because their
      *  reasoning tokens count against it; without it they exhaust the budget
@@ -108,17 +114,17 @@ private:
     // ── Request building ───────────────────────────────────────────────────
     static juce::String buildOpenAIRequestBody(const LLMProviderSettings& ps,
                                                const juce::String& model,
-                                               const std::string& messagesJson,
+                                               const nlohmann::json& messages,
                                                const nlohmann::json& toolsArray);
 
     static juce::String buildAnthropicRequestBody(const LLMProviderSettings& ps,
                                                    const juce::String& model,
-                                                   const std::string& messagesJson,
+                                                   const nlohmann::json& messages,
                                                    const nlohmann::json& toolsArray);
 
     static juce::String buildGeminiRequestBody(const LLMProviderSettings& ps,
                                                 const juce::String& model,
-                                                const std::string& messagesJson,
+                                                const nlohmann::json& messages,
                                                 const nlohmann::json& toolsArray);
 
     static LLMHttpRequest buildHttpRequest(LLMProviderId id,
@@ -133,8 +139,8 @@ private:
     // ── Anthropic message format conversion ────────────────────────────────
     /** Convert OpenAI-style message array (nlohmann::json) to Anthropic format.
      *  Returns {anthropicMessages, systemPromptText}. */
-    static std::pair<std::string, std::string>
-    convertToAnthropicMessages(const std::string& openAIMessagesJson);
+    static std::pair<nlohmann::json, std::string>
+    convertToAnthropicMessages(const nlohmann::json& messages);
 
     // ── In-process tool execution ──────────────────────────────────────────
     juce::String executeTool(const juce::String& name, const juce::String& argumentsJson);
@@ -153,7 +159,14 @@ private:
     static constexpr int kMaxTokensReasoning = 16384; // reasoning models (CoT counts vs budget)
     static constexpr int kTimeoutMs          = 60000;   // default (OpenAI, Anthropic)
     static constexpr int kTimeoutMsNvidia    = 120000;  // NVIDIA NIM cold-start (reduced from 300s)
-    static constexpr int kAgentLoopTimeoutMs = 90000;   // overall agent loop budget
+    // Overall agent-loop wall-clock budget. MUST be >= kTimeoutMsNvidia, otherwise
+    // a single cold-starting NVIDIA turn (which can legitimately consume the full
+    // 120s receive budget) would trip the loop timeout before the provider even
+    // returned, surfacing a misleading "Agent loop timed out" instead of the real
+    // transport/empty-body error. 180s leaves ~60s of headroom for any follow-up
+    // tool-call turns after the first provider response.
+    // AUDIT-FIX (transport-timeout, 2026-06-29): was 90000 (< kTimeoutMsNvidia).
+    static constexpr int kAgentLoopTimeoutMs = 180000;
 
     static const char* const kSystemPrompt;
 };

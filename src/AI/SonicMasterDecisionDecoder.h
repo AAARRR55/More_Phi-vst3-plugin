@@ -48,8 +48,10 @@ inline constexpr float kSonicMasterCompRatioMin = 1.0f;
 inline constexpr std::size_t kSonicMasterStereoRegionCount = 2;  // decision[35..36] = width region 0,1
 
 // AUDIT-3: dynamics slot layout in projectedTargets.dynamics.
-//   dynamics[2*band + 0] = threshold value (forward map: -20 + v*8 dB)
-//   dynamics[2*band + 1] = ratio value     (forward map:  2.5 + v*1.5)
+//   dynamics[2*band + 0] = threshold value (forward map: -20 + v*8 dB, clamp [-40,-6])
+//   dynamics[2*band + 1] = ratio value     (forward map:  3.5 + v*2.5, clamp [1,6])
+// (Must match AutoMasteringEngine.cpp:598-599 exactly. AUDIT-FIX 2026-06-30: the
+//  prior comment said 2.5+v*1.5, which contradicted the engine -- corrected.)
 inline constexpr std::size_t kSonicMasterDynamicsSlotsPerBand = 2;
 inline constexpr std::size_t kSonicMasterExciterGateIdx = 29;
 inline constexpr std::size_t kSonicMasterSatOffset     = 30; // 4 floats: 2 x (drive,mix)

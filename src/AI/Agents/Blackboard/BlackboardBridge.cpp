@@ -21,6 +21,18 @@ juce::String BlackboardBridge::publish(const juce::String& source,
     ev.timestamp = juce::Time::getCurrentTime();
     const auto eventId = ev.eventId;
     bus_.publish(std::move(ev));   // publish stamps ev.sequence
+    // O4 (2026-06-29): wake any event-driven pump so the event fans out
+    // immediately instead of waiting up to the next fixed-interval poll.
+    // H-5 FIX: copy the shared_ptr under onPublishMutex_ (the setter runs on the
+    // message thread during start()/stop(); publish runs on agent worker / MCP
+    // threads) and invoke it unlocked, so we never read+invoke a std::function
+    // another thread is reassigning (was UB: torn read / use-after-free at teardown).
+    std::shared_ptr<std::function<void()>> hook;
+    {
+        std::lock_guard<std::mutex> lock(onPublishMutex_);
+        hook = onPublish_;
+    }
+    if (hook && *hook) (*hook)();
     return eventId;
 }
 
