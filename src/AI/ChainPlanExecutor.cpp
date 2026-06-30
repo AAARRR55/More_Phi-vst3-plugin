@@ -44,6 +44,15 @@ MultiEffectPlan ChainPlanExecutor::previewPlan(int   genreIndex,
 
 int ChainPlanExecutor::applyPlan(const MultiEffectPlan& plan)
 {
+    // RT-AUDIT (2026-06-30): THREADING INVARIANT. applyPlan takes a blocking
+    // SpinLock (ozoneApplicatorLock_) and calls OzonePlanApplicator::apply which
+    // parses JSON + builds juce::Strings + grows vectors. It MUST NEVER run on the
+    // audio thread. Legitimate callers: (1) AutoMasteringEngine::applyValidatedPlan
+    // (message thread via timer, or MCP server thread via MCPToolHandler); (2)
+    // MCPToolHandler heuristic/mastering paths (MCP server thread). Both are
+    // off-audio. The audio thread touches the plan subsystem ONLY through the
+    // lastDrainedPlanId_ atomic store at the plan-boundary drain arm in
+    // drainParameterCommandQueue (PluginProcessor.cpp:1077) — never through here.
     if (!plan.valid)
         return 0;
 
@@ -69,6 +78,27 @@ ApplyVerification ChainPlanExecutor::getLastOzoneVerification() const noexcept
     if (ozoneApplicator_ != nullptr)
         return ozoneApplicator_->getLastVerification();
     return {};
+}
+
+std::uint64_t ChainPlanExecutor::getLastOzoneSubmittedPlanId() const noexcept
+{
+    const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+    if (ozoneApplicator_ != nullptr)
+        return ozoneApplicator_->getLastSubmittedPlanId();
+    return 0;
+}
+
+int ChainPlanExecutor::emitDeferredOzoneGestures() noexcept
+{
+    // F1 FIX (2026-06-30): forward to the registered applicator. Holds the same
+    // ozoneApplicatorLock_ as the other forwarders so a concurrent setOzonePlan-
+    // Applicator/clearOzonePlanApplicator (plugin load/unload on the message
+    // thread) cannot invalidate the pointer mid-call. The virtual default no-ops
+    // for stubs / non-Ozone applicators, so this is always safe to call.
+    const juce::SpinLock::ScopedLockType guard(ozoneApplicatorLock_);
+    if (ozoneApplicator_ != nullptr)
+        return ozoneApplicator_->emitDeferredGestures();
+    return 0;
 }
 
 MultiEffectPlan ChainPlanExecutor::buildPlan(const RuleBasedMasteringInput& input) const

@@ -34,7 +34,14 @@ const MultibandDynamicsProcessor::BandParams kHeuristicDefaults[] = {
 // AUDIT-FIX-2: hard upper bound on the limiter ceiling enforced after every
 // neural/heuristic apply. -1.0 dBTP is the streaming-platform standard
 // (Spotify, YouTube, Apple Music). Lower ceilings are always allowed.
-constexpr float kStreamingSafeCeilingDBTP = -1.0f;
+// F3 FIX (2026-06-30): the canonical definition now lives in NeuralMasteringTypes.h
+// (kStreamingSafeCeilingDBTP) so the SonicMasterDecisionDecoder can reference it.
+// VERIFICATION FIX (2026-06-30): the file-local alias below was removed because it
+// created an ambiguous symbol — both it (file scope) and NeuralMasteringTypes.h's
+// inline constexpr (namespace more_phi, visible here) named kStreamingSafeCeilingDBTP,
+// so any bare reference was ambiguous (C2872). The call sites at lines ~523/689/701/702/1030
+// now resolve directly to more_phi::kStreamingSafeCeilingDBTP from the header, which is
+// the same -1.0f value. (Pre-existing latent break exposed when this TU recompiled.)
 } // namespace
 
 AutoMasteringEngine::AutoMasteringEngine() = default;
@@ -68,6 +75,10 @@ void AutoMasteringEngine::prepare(double sampleRate, int maxBlockSize, bool star
     normalizer_.prepare(sampleRate, lufs_);
     spectrumAnalyzer_.prepare(sampleRate, maxBlockSize);
     stereoFieldAnalyzer_.prepare(sampleRate, maxBlockSize);
+    // RT-AUDIT (A1, 2026-06-30): pre-allocate the genre classifier's 10-second
+    // capture window here (message thread) so the audio-thread feedAudio path
+    // never heap-allocates. See GenreClassifier::prepare doc comment.
+    genreClassifier_.prepare(sampleRate);
     meterWindow_.reset();
     analysisElapsedSeconds_ = 0.0;
     analysisSamplesSinceWindowSample_ = 0;
@@ -144,7 +155,10 @@ void AutoMasteringEngine::reset() noexcept
     analyzedSamples_.store(0, std::memory_order_relaxed);   // AUDIT-FIX (Fix 7)
     // P1.2: clear verification so it can't be read as a stale "last apply" result
     // across a prepare/reset cycle.
-    { const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_); lastApplyVerification_ = {}; }
+    { const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_);
+      lastApplyVerification_ = {};
+      lastApplySnapshotPartial_ = false;
+      lastApplyInterrupted_ = false; }   // L5/H2 FIX: keep snapshot mirror in sync
     lastApplyWasPartial_.store(false, std::memory_order_release);
     clearLastSafeNeuralMasteringPlan();
     for (auto& b : bandBuffers_)
@@ -523,11 +537,39 @@ void AutoMasteringEngine::applyPlan(const MultiEffectPlan& plan)
 
 bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan& incomingPlan) noexcept
 {
+    // RT-AUDIT (2026-06-30): THREADING INVARIANT. This function (and its callees
+    // chainPlanner_.applyPlan / OzonePlanApplicator::apply / applyEQ) allocates
+    // heavily: JSON parse, juce::String builds, vector push_back, and a blocking
+    // SpinLock. It MUST NEVER run on the audio thread — doing so would cause
+    // unbounded per-block malloc and xruns. Legitimate callers are the message
+    // thread (MorePhiProcessor::timerCallback → processPendingApplication) and the
+    // MCP server connection thread (MCPToolHandler.cpp:7445). Both are non-audio.
+    // JUCE cannot directly identify the audio thread, so we cannot assert positively
+    // here without false-positiving on the legitimate MCP-thread caller. The
+    // authoritative guard lives in OzonePlanApplicator::apply (the JSON-parse site),
+    // which is the single most allocation-heavy callee.
+
+    // OBSERVABILITY: stamp the apply start so processPendingReverify can measure
+    // the full apply→drain→verify cycle latency.
+    applyStartSteadyNs_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+
     // ponytail: MED-10 — instant parameter set is fine because the internal chain
     // is dormant in the shipped plugin. If activated, add 5-10ms ramps to avoid
     // discontinuities on live audio.
     if (!incomingPlan.valid || incomingPlan.fallbackMode != NeuralMasteringFallbackMode::None)
+    {
+        // AUDIT-FIX-2 (2026-06-30): a rejected plan (NaN, out-of-range, schema
+        // mismatch, safety fallback) must clear any prior successful applied
+        // count — otherwise getLastOzoneAppliedCount() and the host-visible
+        // "neuralMasteringActive" parameter keep reporting the last good apply
+        // as if it were current, and the user hears unprocessed audio while the
+        // UI says mastering is active. Previously this branch returned false
+        // without touching the counter, leaving it stale indefinitely.
+        resetOzoneAppliedState(NeuralMasteringResetReason::PlanRejected);
         return false;
+    }
 
     // AUDIT-FIX (F4.1, 2026-06-27): enforce the per-cycle delta caps against the
     // last safe baseline HERE, not only at decode time. validate() runs these
@@ -621,6 +663,25 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
         exciter_.setEnabled(amount > 0.01f);
         exciter_.setDrive(std::clamp(6.0f + amount * 12.0f, 0.0f, 18.0f));
         exciter_.setDryWet(std::clamp(amount, 0.0f, 0.6f));
+    }
+    else if (plan.applyHarmonic)
+    {
+        // F4 FIX (2026-06-30): opt-in saturation side-channel (parallel to
+        // applyLimiterCeiling). The SonicMaster decoder fills
+        // projectedTargets.harmonic[0..2] (amount/drive/mix) from decision[29..33]
+        // and sets applyHarmonic when the exciter gate is high, WITHOUT raising
+        // appliedMask.harmonic (which would trip the safety policy's HighRiskMask
+        // hard-reject). This branch consumes that side-channel on the internal
+        // exciter when intelligence is active. The hosted-plugin forwarding happens
+        // in buildBridgePlanFromNeural (MultiEffectPlan.exciterDrive/Mix).
+        const auto amount = std::clamp(plan.projectedTargets.harmonic[0], 0.0f, 1.0f);
+        const auto drive  = std::clamp(plan.projectedTargets.harmonic[1], 0.0f, 1.0f);
+        const auto mix    = std::clamp(plan.projectedTargets.harmonic[2], 0.0f, 1.0f);
+        exciter_.setEnabled(amount > 0.01f);
+        // Map decoded drive [0,1] onto the exciter's 6..18 dB drive range;
+        // amount scales the dry/wet so a low gate gently excites.
+        exciter_.setDrive(std::clamp(6.0f + drive * 12.0f, 0.0f, 18.0f));
+        exciter_.setDryWet(std::clamp(mix * amount, 0.0f, 0.6f));
     }
 
     // IMPACT (Phase 3): transient shaper. The 44-float decision vector has no
@@ -743,23 +804,28 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     // classifies as AppliedPartial. A processor-side post-drain flush hook can
     // later re-read to convert residual mismatched into confirmed verdicts; it is
     // not required for the signal to be truthful.
-    { const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_); lastApplyVerification_ = chainPlanner_.getLastOzoneVerification(); }
+    //
+    // C2 FIX (2026-06-30): the post-drain re-read IS now implemented. Arm a
+    // pendingReverify_ flag here and record the plan id the audio thread must
+    // reach before the re-read is meaningful. The processor's message-thread timer
+    // polls hasPendingReverify() and, once lastDrainedPlanId catches up, calls
+    // processPendingReverify() to re-invoke getLastVerification() and recompute
+    // lastApplyWasPartial_ with truthful post-drain landing values.
     {
         const auto bd = chainPlanner_.getLastOzoneApplyBreakdown();
-        // P1.2 partial heuristic: the apply was "partial" if fewer than 80% of the
-        // REQUESTED slots were enqueued, OR fewer than 80% of the CONFIRMED (landed)
-        // params read back within tolerance. enqueuedShortfall is a genuine signal
-        // (writes never reached the queue); confirmedShortfall is drift among writes
-        // whose state is actually known.
-        const int requested = bd.enqueued + bd.skipped + bd.unmapped + bd.ambiguous;
-        const bool enqueuedShortfall = (requested > 0)
-            && (static_cast<float>(bd.enqueued) < 0.80f * static_cast<float>(requested));
-        const int landed = lastApplyVerification_.verified + lastApplyVerification_.driftedDiscrete;
-        const bool confirmedShortfall = (landed > 0)
-            && (lastApplyVerification_.confirmedFraction() < 0.80f);
-        lastApplyWasPartial_.store(enqueuedShortfall || confirmedShortfall,
-                                   std::memory_order_release);
+        const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_);
+        lastApplyVerification_ = chainPlanner_.getLastOzoneVerification();
+        reverifyPlanId_ = chainPlanner_.getLastOzoneSubmittedPlanId();
+        // L5 FIX: compute + mirror the partial flag INSIDE the lock so the locked
+        // snapshot (getLastApplySnapshot) and the atomic publication agree.
+        const bool partial = computePartialFlag_(lastApplyVerification_, bd);
+        lastApplySnapshotPartial_ = partial;
+        lastApplyWasPartial_.store(partial, std::memory_order_release);
     }
+    // Arm the post-drain reverify only when there is a real plan id to wait on
+    // (apply produced >0 writes → enqueuePlanBoundary fired). When the applicator
+    // is all-stubs (id stays 0) there is nothing to drain-reverify.
+    pendingReverify_.store(reverifyPlanId_ != 0, std::memory_order_release);
 
     // P2.5 (AUDIT): record the neural apply in the ActionLedger so it is auditable
     // alongside MCP/agent tool calls. The neural path bypasses MCPToolHandler::handle
@@ -828,10 +894,130 @@ bool AutoMasteringEngine::applyValidatedPlan(const ValidatedNeuralMasteringPlan&
     return true;
 }
 
+// C2 FIX (2026-06-30): shared partial-flag computation. Identical logic for the
+// pre-drain capture (apply time) and the post-drain re-read (processPendingReverify).
+// Pre-drain, mismatched are excluded from confirmedFraction() (timing artifacts);
+// post-drain, mismatched now reflect genuine drift/loss so confirmedShortfall
+// becomes a truthful signal. Extracted so the two call sites cannot drift apart.
+bool AutoMasteringEngine::computePartialFlag_(const ApplyVerification& v,
+                                              const OzoneApplyBreakdown& bd) noexcept
+{
+    const int requested = bd.enqueued + bd.skipped + bd.unmapped + bd.ambiguous;
+    const bool enqueuedShortfall = (requested > 0)
+        && (static_cast<float>(bd.enqueued) < 0.80f * static_cast<float>(requested));
+    const int landed = v.verified + v.driftedDiscrete;
+    const bool confirmedShortfall = (landed > 0) && (v.confirmedFraction() < 0.80f);
+    return enqueuedShortfall || confirmedShortfall;
+}
+
+// C2 FIX (2026-06-30): post-drain read-back. Called by the processor's message-
+// thread timer once the audio thread's lastDrainedPlanId reaches the id captured
+// at apply time. Re-invokes getLastVerification() (a pure re-read of the current
+// hosted-plugin bridge state) and recomputes lastApplyWasPartial_ so a write the
+// audio thread dropped, failed, or that morph clobbered is now surfaced as a
+// genuine partial instead of being masked by the pre-drain timing artifact.
+void AutoMasteringEngine::processPendingReverify(std::uint64_t lastDrainedPlanId,
+                                                  std::uint64_t currentSnapshotRecallEpoch) noexcept
+{
+    if (!pendingReverify_.load(std::memory_order_acquire))
+        return;
+
+    {
+        const juce::SpinLock::ScopedLockType lock(lastApplyVerifyLock_);
+        if (lastDrainedPlanId < reverifyPlanId_)
+        {
+            // OBSERVABILITY: plan still draining — count the poll so a slow drain
+            // (queue pressure / many snapshot recalls) is visible in metrics.
+            reverifyPollCount_.fetch_add(1, std::memory_order_relaxed);
+            return;  // audio thread hasn't drained our plan boundary yet
+        }
+        // Re-read after drain. mismatched now means real drift/loss, not a timing artifact.
+        // L5 FIX: write verification + snapshot-partial together under the lock.
+        const auto postDrain = chainPlanner_.getLastOzoneVerification();
+        const auto bd = chainPlanner_.getLastOzoneApplyBreakdown();
+        lastApplyVerification_ = postDrain;
+        const bool partial = computePartialFlag_(postDrain, bd);
+        // H2 FIX: a snapshot recall during the drain window (epoch advanced between
+        // apply and now) clears live-edit holds and overwrites params — the plan
+        // was interrupted. The read-back reflects the recalled state, not the
+        // plan's intent, so force-partial and flag interrupted regardless of the
+        // numeric verification (the values "verified" are no longer the plan's).
+        const bool interrupted = currentSnapshotRecallEpoch != applySnapshotRecallEpoch_;
+        lastApplyInterrupted_ = interrupted;
+        const bool effectivePartial = partial || interrupted;
+        lastApplySnapshotPartial_ = effectivePartial;
+        lastApplyWasPartial_.store(effectivePartial, std::memory_order_release);
+    }
+
+    // OBSERVABILITY: measure the full apply→drain→verify cycle latency now that
+    // the boundary has drained and the reverify discharged.
+    if (applyStartSteadyNs_ != 0)
+    {
+        const auto nowNs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        const auto elapsedMs = (nowNs - applyStartSteadyNs_) / 1000000u;
+        lastApplyToReverifyMs_.store(elapsedMs, std::memory_order_relaxed);
+    }
+
+    // F1 FIX (2026-06-30): now that the audio thread has drained the plan, emit
+    // the deferred DAW gesture envelope on the message thread (this callback runs
+    // from the processor's message-thread timer). The drain applied each write
+    // via setValue() (gesture-free by JUCE design); emitDeferredOzoneGestures
+    // wraps each applied param in begin/perform/end via the VST3
+    // IEditControllerHostEditing extension so the DAW records the batch as
+    // undoable automation. Best-effort: a non-VST3 hosted plugin or a missing
+    // host-editing extension makes it a documented no-op. Idempotent (the
+    // applicator tracks the gestured plan id), so a timer re-poll before the
+    // next apply does not double-emit.
+    chainPlanner_.emitDeferredOzoneGestures();
+
+    pendingReverify_.store(false, std::memory_order_release);
+}
+
 void AutoMasteringEngine::clearLastSafeNeuralMasteringPlan() noexcept
 {
     lastSafeNeuralPlan_ = {};
     hasLastSafeNeuralPlan_ = false;
+}
+
+// AUDIT-FIX-2 (2026-06-30): see header. Resets the applied count so the
+// lastApplyReachedAudioPath() predicate and the host-visible
+// "neuralMasteringActive" parameter stop reporting a stale "reached audio"
+// verdict after a rejection / unload / model failure. Records a structured
+// transition in the ActionLedger (prev count, new count=0, reason) so the
+// three previously-silent transitions are now auditable alongside the
+// success-path neural_mastering.apply_validated_plan entry.
+void AutoMasteringEngine::resetOzoneAppliedState(NeuralMasteringResetReason reason) noexcept
+{
+    const int prevCount = lastOzoneAppliedCount_.exchange(0, std::memory_order_acq_rel);
+
+    if (actionLedger_ != nullptr)
+    {
+        const char* reasonStr = nullptr;
+        switch (reason)
+        {
+            case NeuralMasteringResetReason::PlanRejected:   reasonStr = "plan_rejected";   break;
+            case NeuralMasteringResetReason::PluginUnloaded: reasonStr = "plugin_unloaded"; break;
+            case NeuralMasteringResetReason::ModelFailure:   reasonStr = "model_failure";   break;
+        }
+
+        AutomationTransaction txn;
+        txn.toolName = "neural_mastering.state_reset";
+        // Read-only classification: this records a state transition, it writes
+        // nothing to the hosted plugin. Keeps it out of the HighImpact approval
+        // gate that apply_validated_plan (a genuine hosted write) must pass.
+        txn.risk = RiskLevel::ReadOnly;
+        txn.params = {
+            {"reason", reasonStr},
+        };
+        txn.result = {
+            {"prev_ozone_applied_count", prevCount},
+            {"new_ozone_applied_count", 0},
+        };
+        txn.success = true;
+        actionLedger_->record(std::move(txn));
+    }
 }
 
 MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
@@ -926,7 +1112,16 @@ MultiEffectPlan AutoMasteringEngine::buildBridgePlanFromNeural(
 
     p.exciterEnabled = plan.appliedMask.harmonic
                        ? (plan.projectedTargets.harmonic[0] > 0.01f)
-                       : false;
+                       : (plan.applyHarmonic
+                          && plan.projectedTargets.harmonic[0] > 0.01f);
+    // F4 FIX (2026-06-30): forward the decoded drive/mix so OzonePlanApplicator
+    // can drive the hosted exciter with the model's saturation amount rather than
+    // a fixed default. Only meaningful when exciterEnabled is true.
+    if (p.exciterEnabled && plan.applyHarmonic)
+    {
+        p.exciterDrive = std::clamp(plan.projectedTargets.harmonic[1], 0.0f, 1.0f);
+        p.exciterMix   = std::clamp(plan.projectedTargets.harmonic[2], 0.0f, 1.0f);
+    }
 
     return p;
 }

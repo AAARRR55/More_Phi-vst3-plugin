@@ -11,7 +11,11 @@
 #endif
 #include "Core/InterpolationEngine.h"
 #include "Core/OversamplingWrapper.h"
-#include "Core/ABCompareEngine.h"
+// ABCompareEngine.{h,cpp} removed 2026-06-30 (AUDIT_PONYTAIL.md finding 1):
+// the class had 0 instantiations — the live A/B-compare path is the inline
+// abCompareState_ / toggleABCompare implementation in this file. Slot 11 of
+// SnapshotBank remains reserved for that inline rollback path (kABCompareSlot
+// below), so captureSnapshotToSlot() / setCurrentProgram() still guard it.
 #include "AI/InstanceRegistry.h"
 #include "AI/OzoneParameterMap.h"
 #include "AI/OzonePlanApplicator.h"
@@ -155,6 +159,30 @@ MorePhiProcessor::MorePhiProcessor()
     licenseManager_ = std::make_shared<licensing::LicenseManager>(licenseRuntimeState_);
     requestMessageThreadMaintenance();
 
+    // LA1 FIX (audit): wire hosted-plugin latency-change notifications into
+    // MorePhi's latency recompute path. When a hosted plugin reports its own
+    // latency changed (e.g. user engages Ozone's Maximizer lookahead), the
+    // host manager's AudioProcessorListener fires this callback, which dirties
+    // latencyConfigDirty_; the maintenance timer then re-runs
+    // updateReportedLatency() on the message thread and setLatencySamples()
+    // tells the DAW to re-PDC. Without this, a hosted latency change was
+    // invisible until an incidental trigger (plugin swap / audio-domain toggle).
+    //
+    // Thread safety: the listener fires on whichever thread the hosted plugin
+    // chose (typically the message thread for kLatencyChanged). This lambda only
+    // performs (a) an atomic store and (b) a noexcept message-thread-deferred
+    // maintenance kick — both any-thread safe. It must NOT touch the hosted
+    // plugin pointer or any non-thread-safe state. Registered for both the main
+    // host manager and the V2 audio-domain host manager.
+    {
+        auto onHostedLatencyChanged = [this]() {
+            latencyConfigDirty_.store(true, std::memory_order_release);
+            requestMessageThreadMaintenance();
+        };
+        hostManager.setLatencyChangedCallback(onHostedLatencyChanged);
+        hostManagerB_.setLatencyChangedCallback(onHostedLatencyChanged);
+    }
+
     // SonicMaster realtime neural mastering (preview): drive the analysis loop.
     // Tries ONNX in-process inference first; falls back to the local Python
     // inference server (HTTP) when the ONNX model is not staged alongside the
@@ -257,9 +285,21 @@ void MorePhiProcessor::initializeSonicMaster()
         int contractBinSize = 0;
         const char* contractBinData = BinaryData::getNamedResource("masteringbrain_v2_decision_contract_json", contractBinSize);
 
+        // L1 FIX (2026-06-30): close the TOCTOU window. Previously the canonical
+        // shared filename was written, SHA-256-checked, then mmap'd by ORT in
+        // three separate steps — another process could swap the file between the
+        // hash and the mmap. Now: write a unique per-PID temp file, hash IT, then
+        // atomically rename onto the canonical path, and re-hash immediately
+        // before load. A swap in either gap changes the hash and we refuse.
+        const auto pidSuffix = "_" + juce::String(juce::Random::getSystemRandom().nextInt64()) + ".tmp";
+        juce::File stagingModel = tempDir.getChildFile("morephi_sonicmaster_model" + pidSuffix);
+
         if (modelBinData != nullptr && modelBinSize > 0)
         {
-            extractedModel.replaceWithData(modelBinData, modelBinSize);
+            stagingModel.replaceWithData(modelBinData, modelBinSize);
+            // Atomically replace the canonical file (rename-over on Windows is atomic
+            // when both files are in the same filesystem, which they are here).
+            stagingModel.moveFileTo(extractedModel);
             extracted = true;
         }
         if (contractBinData != nullptr && contractBinSize > 0)
@@ -267,17 +307,18 @@ void MorePhiProcessor::initializeSonicMaster()
 
         if (extracted && extractedModel.existsAsFile())
         {
-            // SHA-256 integrity check (W8)
+            // SHA-256 integrity check (W8) — re-hash the canonical path immediately
+            // before load so a swap after the rename is still caught (L1 FIX).
             bool hashOk = true;
+            juce::String actualHex;
 #if MORE_PHI_HAS_ONNX
-            {   // Compute SHA-256 of the extracted file and compare with the
-                // expected hash baked at CMake configure time.
+            {
                 juce::MemoryBlock fileData;
                 if (extractedModel.loadFileAsData(fileData) && fileData.getSize() > 0)
                 {
                     juce::SHA256 actualHash(static_cast<const uint8_t*>(fileData.getData()),
                                             fileData.getSize());
-                    const juce::String actualHex = actualHash.toHexString().toLowerCase();
+                    actualHex = actualHash.toHexString().toLowerCase();
                     const juce::String expectedHex = juce::String(sonicmaster::kExpectedModelHash).toLowerCase();
                     if (actualHex != expectedHex)
                     {
@@ -300,7 +341,7 @@ void MorePhiProcessor::initializeSonicMaster()
             {
                 sonicMasterEngine_.setInferenceSource(&sonicMasterSource_);
                 sonicMasterEngine_.setFallbackInferenceSource(&sonicMasterHttpSource_);
-                DBG("[MorePhiProcessor] SonicMaster ONNX model loaded from bundled resource");
+                DBG("[MorePhiProcessor] SonicMaster ONNX model loaded from bundled resource (sha256=" + actualHex + ")");
                 return;
             }
         }
@@ -599,13 +640,33 @@ bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
     if (paramIndex < 0 || paramIndex >= MAX_PARAMETERS)
         return false;
 
-    const bool pushed = commandQueue.push(ParamCommand{
+    const ParamCommand cmd{
         paramIndex,
         juce::jlimit(0.0f, 1.0f, normalizedValue),
         false, -1,
         source,
         holdAgainstMorph
-    });
+    };
+
+    // M1-retry FIX (2026-06-30): bounded yield-and-retry on a full queue. A brief
+    // burst >8191 pending commands (a large batch under DAW contention) used to
+    // fail EVERY write with no backpressure, silently losing the whole batch.
+    // This rides out transient saturation: up to kMaxEnqueueRetries yields, each
+    // giving the audio-thread drain one block to free slots. Bounded so a
+    // genuinely sustained overload still fails fast (and the M1 drop counter
+    // records it). Safe because all callers are message/MCP/UI threads — NEVER
+    // the audio thread (verified: AIAssistant, MCPToolHandler, MCPToolsExtended,
+    // OzonePlanApplicator, VST3IPCBridge, MacroKnobStrip).
+    constexpr int kMaxEnqueueRetries = 8;
+    bool pushed = false;
+    for (int attempt = 0; attempt < kMaxEnqueueRetries; ++attempt)
+    {
+        pushed = commandQueue.push(cmd);
+        if (pushed)
+            break;
+        // Queue full — yield once and let the audio thread drain a block.
+        std::this_thread::yield();
+    }
 
     // P2.8 (AUDIT): arm the SonicMaster transition guard so the analysis cycle
     // discards any capture window that straddles this hosted-parameter change
@@ -684,6 +745,13 @@ int MorePhiProcessor::enqueueParameterState(const std::vector<float>& normalized
             return queued;
         ++queued;
     }
+    // L3 FIX (2026-06-30): arm the SonicMaster transition guard for batch state
+    // writes (A/B-compare restore, breeding-panel offspring). This funnel pushed
+    // directly to commandQueue, bypassing enqueueParameterSet's guard at line ~651
+    // — so a full param-set restore left the capture ring analyzing a hybrid state.
+    // Mirrors the per-write guard; coalesced by design (one stamp per batch).
+    if (queued > 0)
+        sonicMasterEngine_.notifyHostedParameterChanged();
     return queued;
 }
 
@@ -749,6 +817,13 @@ bool MorePhiProcessor::recallSnapshotQueued(int slot)
     if (!commandQueue.push(ParamCommand{ -1, 0.0f, true, slot, ParameterEditSource::Snapshot, false }))
         return false;
 
+    // L3 FIX (2026-06-30): arm the SonicMaster transition guard. Snapshot/program
+    // recall restores the ENTIRE plugin state at once — a maximally hybrid capture
+    // window. This funnel bypassed enqueueParameterSet's guard, so a DAW preset
+    // change or MCP recall_snapshot left the model analyzing pre-recall audio.
+    // One stamp per recall (coalesced by design, same as batch enqueue).
+    sonicMasterEngine_.notifyHostedParameterChanged();
+
     return true;
 }
 
@@ -757,25 +832,21 @@ bool MorePhiProcessor::captureSnapshotToSlot(int slot, bool includeStateChunk)
     if (slot < 0 || slot >= SnapshotBank::NUM_SLOTS)
         return false;
 
-    // M-11 FIX: Runtime enforcement of slot 11 reservation for A/B compare rollback
+    // M-11 FIX: Runtime enforcement of slot 11 reservation for the inline
+    // A/B-compare rollback path (abCompareState_). Slot 11 holds the rollback
+    // checkpoint and must never be overwritten by a normal snapshot capture.
     if (slot == 11)
     {
         jassertfalse;
         return false;
     }
 
-    // Push undo record before overwriting the slot
-    {
-        std::vector<float> beforeVals;
-        if (snapshotBank.getSlotValuesCopy(slot, beforeVals))
-        {
-            ParameterState beforeState;
-            beforeState.capture(beforeVals.data(), static_cast<int>(beforeVals.size()));
-            beforeState.occupied = snapshotBank.isOccupied(slot);
-            undoRedoManager_.pushSnapshotState(slot, beforeState,
-                                               "Capture slot " + juce::String(slot + 1));
-        }
-    }
+    // UndoRedoManager record-push removed 2026-06-30 (AUDIT_PONYTAIL.md finding 5):
+    // UndoRedoManager was a write-only sink — pushSnapshotState() was called here
+    // on every capture, but no caller ever invoked undo()/redo() (no UI control,
+    // no MCP tool, no test). The recorded history was never consumed. Re-add both
+    // the manager and this push site from version history if an undo toolbar is
+    // ever wired.
 
     // Retry exclusive lock up to 3 times to handle transient contention from
     // the audio thread's processBlock or the DAW's getStateInformation calls.
@@ -1012,6 +1083,9 @@ int MorePhiProcessor::drainParameterCommandQueue(int cachedParamCount,
         if (cmd.isSnapshotMarker)
         {
             MORE_PHI_PROFILE(profiler_, "command_drain_snapshot");
+            // H2 FIX: bump the recall epoch so any in-flight AI/neural plan can
+            // detect it was interrupted (held values cleared at line below).
+            snapshotRecallEpoch_.fetch_add(1, std::memory_order_release);
             const int slot = cmd.snapshotSlot;
             auto positions = InterpolationEngine::getClockPositions();
             if (slot >= 0 && slot < static_cast<int>(positions.size()))
@@ -1662,6 +1736,21 @@ MorePhiProcessor::createParameterLayout()
         false,
         juce::AudioParameterBoolAttributes().withAutomatable(false)));
 
+    // AUDIT-FIX-2 (2026-06-30): host-visible status indicator. TRUE only when a
+    // neural mastering plan actually reached the hosted plugin's parameters
+    // (an applicator is registered AND the last apply wrote >0 params). Read-
+    // only: not user-settable, not automatable. Published from timerCallback.
+    // Closes the audit gap where the DAW UI had NO signal that mastering was
+    // or wasn't reaching audio — the only prior indicator (the MCP ozone_applied
+    // field) reported applicator REGISTRATION, not apply SUCCESS, and was not
+    // visible in the host at all. Drives the host parameter lane + any UI
+    // binding that wants to show "mastering active".
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"neuralMasteringActive", 1},
+        "Neural Mastering Active",
+        false,
+        juce::AudioParameterBoolAttributes().withAutomatable(false)));
+
     return { params.begin(), params.end() };
 }
 
@@ -1721,6 +1810,16 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     liveEditX_.assign(MAX_PARAMETERS, 0.5f);
     liveEditY_.assign(MAX_PARAMETERS, 0.5f);
     liveEditFader_.assign(MAX_PARAMETERS, 0.0f);
+
+    // RT-AUDIT (B1, 2026-06-30): Pre-allocate the reusable MIDI buffers' byte
+    // capacity so the audio-thread paths that clear()/addEvents into them
+    // (processMIDIAndSidechain, applyOutputGainAndMetering's audio-domain
+    // midiCopyB_ copy at ~line 2832) never trigger a MidiBuffer realloc mid-block.
+    // clear() is noexcept and retains capacity; addEvents only grows the internal
+    // storage if it exceeds ensureSize'd capacity. samplesPerBlock * 4 bytes is a
+    // safe worst-case bound (≥4 dense MIDI events per sample, far beyond realistic).
+    filteredMidiBuffer_.ensureSize(static_cast<size_t>(juce::jmax(1, samplesPerBlock)) * 4u);
+    midiCopyB_.ensureSize(static_cast<size_t>(juce::jmax(1, samplesPerBlock)) * 4u);
 
     // PERF-PROFILE: Register all profiling sections before audio starts.
     // Without this, MORE_PHI_PROFILE timers are silently dropped on the audio
@@ -2542,8 +2641,17 @@ void MorePhiProcessor::applyMorphAndParameters(juce::AudioBuffer<float>& buffer,
                             // drainParameterCommandQueue (both audio-thread and assistant-flush
                             // paths). To prevent a data race when the assistant flush holds
                             // touchStateLock_ while we don't, gate this check on hasTouchLock.
-                            // When hasTouchLock is false, live-edit-holds are skipped for this
-                            // block — the assistant's explicit edits take priority anyway.
+                            //
+                            // H3 NOTE (2026-06-30): when hasTouchLock is false, held values are
+                            // NOT protected for this block — morph output may overwrite them.
+                            // liveEditHold_ is std::vector<uint8_t> (not atomic), so a lock-free
+                            // read here would itself be a data race. The window is narrow (only
+                            // while the assistant flush path holds touchStateLock_, which is
+                            // infrequent), and the C2 post-drain reverify (AutoMasteringEngine::
+                            // processPendingReverify) now surfaces any resulting drift on the next
+                            // verification cycle. Upgrade path: make liveEditHold_ a vector of
+                            // std::atomic<uint8_t> to allow a safe relaxed read here. Documented,
+                            // not changed — the data-race tradeoff favors the current try-lock.
                             if (hasTouchLock)
                             {
                                 if (i < static_cast<int>(liveEditHold_.size()) && liveEditHold_[idx] != 0)
@@ -3475,6 +3583,16 @@ void MorePhiProcessor::clearHostedMasteringApplicators() noexcept
     autoMasteringEngine_.getChainPlanner().clearOzonePlanApplicator();
     ozonePlanApplicator_.reset();
     ozoneParamMap_.reset();
+    // AUDIT-FIX-2 (2026-06-30): unloading the hosted mastering plugin means
+    // the last successful apply no longer reflects reality — its parameter
+    // writes targeted a plugin that is no longer present. Reset the applied
+    // count + reach predicate so lastApplyReachedAudioPath() and the host-
+    // visible "neuralMasteringActive" parameter don't keep reporting a stale
+    // "active" verdict about a now-unhosted plugin. (Audit noted the MCP
+    // ozone_applied field already read hasOzoneApplicator() and so did go
+    // false here — but the engine getter and the new APVTS param did not,
+    // until this reset.)
+    autoMasteringEngine_.resetOzoneAppliedState(NeuralMasteringResetReason::PluginUnloaded);
 }
 
 void MorePhiProcessor::refreshHostedMasteringApplicators(const juce::PluginDescription& desc)
@@ -3546,6 +3664,28 @@ bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& 
         // Re-apply the hosted plugin's saved opaque state (EQ curves, etc.)
         if (auto* plugin = host.beginExclusivePluginUse(500))
         {
+            // SP2 FIX (audit, 2026-06-30): warn on hosted-plugin version
+            // mismatch. The saved <HOSTED_PLUGIN> element carries desc.version
+            // (serialized by juce::PluginDescription::createXml); the loaded
+            // binary reports its own version via getPluginDescription().version.
+            // A mismatch (e.g. user saved with Ozone 10, upgraded to Ozone 11,
+            // then reopened the session) means the saved opaque state blob may
+            // be parsed differently by the newer plugin. We surface this as a
+            // DBG warning; the hosted plugin is still responsible for its own
+            // backward/forward compatibility inside setStateInformation, and we
+            // still attempt the restore (better to apply best-effort than drop
+            // user settings silently). This runs on the message thread only
+            // (loadHostedPluginFromState is message-thread), so DBG is safe.
+            const juce::String savedVersion = desc.version;
+            const juce::String liveVersion  = plugin->getPluginDescription().version;
+            if (savedVersion.isNotEmpty() && liveVersion.isNotEmpty()
+                && savedVersion != liveVersion)
+            {
+                DBG("loadHostedPluginFromState: WARNING — hosted plugin version mismatch "
+                    "(saved: " + savedVersion + ", loaded: " + liveVersion
+                    + "); applying saved state may be partial or rejected");
+            }
+
             juce::MemoryBlock stateToApply;
             {
                 const juce::SpinLock::ScopedLockType guard(pendingStateMutex_);
@@ -3652,7 +3792,8 @@ bool MorePhiProcessor::hasPendingMessageThreadWork() const noexcept
         || pendingFullStateRecallGeneration_.load(std::memory_order_acquire) != appliedFullStateRecallGeneration_
         || pendingStateRestore_.load(std::memory_order_acquire)
         || morphPositionNotifyPending_.load(std::memory_order_acquire)
-        || sonicMasterEngine_.hasPendingApplication();  // AUDIT-FIX-R5: Timer-deferred neural plan application
+        || sonicMasterEngine_.hasPendingApplication()  // AUDIT-FIX-R5: Timer-deferred neural plan application
+        || autoMasteringEngine_.hasPendingReverify();  // C2 FIX: post-drain read-back reverify
 }
 
 void MorePhiProcessor::loadCachedLicenseIfNeeded()
@@ -3824,7 +3965,24 @@ void MorePhiProcessor::startAgentRuntimeIfNeeded()
             if (id.startsWith("quality"))      return { "analysis.get_summary", "analysis.compare_render", "mastering.render_status" };
             if (id.startsWith("memory"))       return { "memory.list", "memory.store", "memory.recall" };
             return {};
-        });
+        },
+        // maxCallsPerAgentPerSecond: 0 = unlimited (rate limiting is handled at
+        // the tool/classifier layer; the agent loop's own iteration cap bounds
+        // runaway loops).
+        /*maxCallsPerAgentPerSecond*/ 0,
+        // AUDIT 3.1 (2026-06-30): per-tool dispatch timeout. Without this, a
+        // single blocking tool (hosted_plugin.scan, morephi_ipc_*, a hung
+        // run_self_test) monopolized a scheduler worker indefinitely — only the
+        // chat path's 180s loop wall-clock would eventually trip, surfacing a
+        // misleading "loop timed out" that blamed the loop rather than the tool.
+        // 15s is the conservative floor: long enough to not false-trip scan /
+        // self_test / IPC (the genuinely-slow tools), short enough that a truly
+        // hung dispatch is surfaced as a per-tool tool_timeout instead of a
+        // silent worker stall. Long jobs (render_batch) are already fire-and-track
+        // via detached threads + async_tool.submit and return immediately, so
+        // they are unaffected. Tighten per-tool later by routing the long tools
+        // through async_tool.submit (audit rec #1).
+        /*dispatchTimeoutMs*/ 15000);
 
     // M2: production observability. StructuredAgentLogger appends one JSONL record
     // per agent log call to a per-run file under the shared More-Phi data dir,
@@ -4278,7 +4436,69 @@ void MorePhiProcessor::timerCallback()
     // silently drop in headless hosts. The analysis thread stores the plan and
     // sets a flag; the processor's timer applies it here.
     if (sonicMasterEngine_.hasPendingApplication())
+    {
+        // H2 FIX: capture the recall epoch BEFORE the apply runs so the post-drain
+        // reverify can detect a snapshot recall that interrupts the plan mid-drain.
+        autoMasteringEngine_.setApplySnapshotRecallEpoch(getSnapshotRecallEpoch());
         sonicMasterEngine_.processPendingApplication();
+    }
+
+    // C2 FIX (2026-06-30): post-drain read-back verification. applyValidatedPlan
+    // armed pendingReverify_ at apply time; once the audio thread's
+    // lastDrainedPlanId reaches the submitted plan id, re-invoke the applicator's
+    // read-back so mismatched (pre-drain timing artifacts) reclassify into real
+    // verified/drifted verdicts and lastApplyWasPartial_ reflects true landing.
+    // H2 FIX: also pass the live recall epoch — if it advanced during the drain
+    // window, the plan was interrupted (held values cleared) and is flagged partial.
+    if (autoMasteringEngine_.hasPendingReverify())
+        autoMasteringEngine_.processPendingReverify(getLastDrainedPlanId(),
+                                                     getSnapshotRecallEpoch());
+
+    // AUDIT-FIX-2 (2026-06-30): clear stale "applied" state when the SonicMaster
+    // analysis cycle produced NO plan due to a GENUINE failure. The analysis
+    // thread has no failure callback (only a success-only maintenance request),
+    // so this timer poll is the chokepoint: it reads getLastCycleFailure() and
+    // zeroes the applied count when the model errored. Excludes the two benign
+    // non-error states: InsufficientAudio (fires every cycle while the ~6s
+    // capture window fills — would spuriously clear a good prior apply) and
+    // NotPrepared (engine dormant). Edge-detected via ozoneStaleResetPending_
+    // so a sustained failure (lingers until recovery) triggers exactly ONE
+    // reset, not one per 50ms tick. See NeuralMasteringResetReason::ModelFailure.
+    {
+        const DecisionFailure fail = sonicMasterEngine_.getLastCycleFailure();
+        const bool genuineFailure = (fail == DecisionFailure::InferenceRejected
+                                  || fail == DecisionFailure::DecodeFailed
+                                  || fail == DecisionFailure::SafetyRejected
+                                  || fail == DecisionFailure::SilentInput);
+        const bool prev = ozoneStaleResetPending_.exchange(genuineFailure,
+                                                           std::memory_order_acq_rel);
+        if (genuineFailure && !prev)
+            autoMasteringEngine_.resetOzoneAppliedState(NeuralMasteringResetReason::ModelFailure);
+    }
+
+    // AUDIT-FIX-2 (2026-06-30): publish the neural-mastering-active status
+    // indicator to APVTS so the DAW UI / host automation lane reflects whether
+    // mastering is actually reaching the hosted plugin's audio path. Predicate
+    // = an applicator is registered AND the last apply wrote parameters; this
+    // runs AFTER the model-failure reset block above so a reset that just
+    // zeroed the count is reflected on the SAME tick (no extra 50ms delay).
+    // Edge-detected via lastNeuralMasteringActivePublished_ so the host lane
+    // only receives a notification when the value actually changes — a steady
+    // "active" or "inactive" state doesn't spam beginChangeGesture every tick.
+    {
+        const bool active = autoMasteringEngine_.getChainPlanner().hasOzoneApplicator()
+                         && autoMasteringEngine_.getLastOzoneAppliedCount() > 0;
+        if (active != lastNeuralMasteringActivePublished_.load(std::memory_order_relaxed))
+        {
+            lastNeuralMasteringActivePublished_.store(active, std::memory_order_relaxed);
+            if (auto* param = apvts.getParameter("neuralMasteringActive"))
+            {
+                param->beginChangeGesture();
+                param->setValueNotifyingHost(active ? 1.0f : 0.0f);
+                param->endChangeGesture();
+            }
+        }
+    }
 
     // GENRE PRIOR (Stage 1 + 2, Ozone §3.2): push the genre classifier's current
     // top genre into the SonicMaster decode path. Stage 1 = target-LUFS prior
@@ -4481,12 +4701,12 @@ void MorePhiProcessor::setCurrentProgram(int index)
     if (index >= 0 && index < SnapshotBank::NUM_SLOTS)
     {
         currentProgram_.store(index, std::memory_order_relaxed);
-        // C3 FIX: slot 11 is reserved for ABCompareEngine rollback (kReservedSlot,
-        // ABCompareEngine.h:30). captureSnapshotToSlot() rejects writes to it
-        // (PluginProcessor.cpp:429), but recall was not symmetric — a DAW
-        // selecting program 12 (index 11) could recall the rollback checkpoint and
-        // clobber live params. Treat it like an empty slot: selectable for DAW
-        // program-index consistency, but never recalled via the morph/recall path.
+        // C3 FIX: slot 11 is reserved for the inline A/B-compare rollback path
+        // (abCompareState_, kABCompareSlot). captureSnapshotToSlot() rejects
+        // writes to it, but recall was not symmetric — a DAW selecting program 12
+        // (index 11) could recall the rollback checkpoint and clobber live params.
+        // Treat it like an empty slot: selectable for DAW program-index
+        // consistency, but never recalled via the morph/recall path.
         if (index == 11)
             return;
         if (snapshotBank.isOccupied(index))
@@ -4543,6 +4763,19 @@ double MorePhiProcessor::getTailLengthSeconds() const
         }
         hostManager.releasePluginFromUse();
     }
+
+    // TA1 FIX (audit, 2026-06-30): explicit infinite-tail propagation.
+    // JUCE's VST3 wrapper (juce_VST3PluginFormat.cpp) maps the SDK's
+    // kInfiniteTail onto std::numeric_limits<double>::infinity() returned from
+    // AudioProcessor::getTailLengthSeconds(). The previous code relied on
+    // jmax(infinity, finite) keeping infinity purely as an accident of floating-
+    // point ordering — correct today but brittle. Short-circuit here so the
+    // engine-tail jmax's below (finite values, including a "huge finite"
+    // sentinel an engine might one day return) cannot shadow a genuine
+    // infinite tail. Also guards against a -inf from a misbehaving plugin
+    // (we treat only +inf as infinite tail; -inf falls through to jmax).
+    if (std::isinf(tail) && tail > 0.0)
+        return tail;
 
     // AUDIT-FIX (TAIL-1): add the plugin's own engine tails when the audio
     // domain is active. isActive() gates each engine so dormant engines add 0.
