@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-30
 **Status:** Approved (brainstorming complete) → awaiting implementation plan
-**Challenge:** [Build with Gemini XPRIZE](https://xprize.devpost.com/) — build a real business in 90 days powered by Gemini + Google Cloud, judged on Business Viability, AI-Native Operations, and Category Impact.
-**Build window:** May 19 – Aug 17, 2026 (submission deadline Aug 17, 1:00 PM PDT).
+**Challenge:** [Build with Gemini XPRIZE](https://xprize.devpost.com/) — build a real business powered by Gemini + Google Cloud, judged on Business Viability, AI-Native Operations, and Category Impact.
+**Build window:** May 19 – Aug 17, 2026 (submission deadline Aug 17, 1:00 PM PDT). **Time remaining as of 2026-06-30: ~48 days (~7 weeks).** This is a compressed go-to-market, not a full 90-day runway — see §10 for the adjusted distribution timeline.
 
 ---
 
@@ -126,9 +126,13 @@ That is a ~70% launch discount — genuine, standard launch economics, not metri
 
 ### Distribution motion (OWNER's parallel work — the actual battle)
 
-1. **Beta cohort (weeks 1–4).** Recruit 10–20 engineers/producers from r/audioengineering, producer Discords, Gearspace. Free beta for testimonials + usage data. Seeds the "real users" evidence.
-2. **Paid launch (weeks 5–8).** Open the existing `checkout/` flow. Target **20–50 paying customers** — at ~$99 avg that is $2k–$5k documented revenue. Even modest numbers satisfy "real revenue" if documented cleanly.
-3. **Case studies (weeks 9–12).** 2–3 engineers who used More-Phi on real client work, with before/after + time-saved metrics. This is the Category Impact evidence.
+**Compressed 48-day timeline (as of 2026-06-30):**
+
+1. **Beta + outreach sprint (Days 1–14, Jun 30 – Jul 14).** Recruit 10–20 engineers/producers from r/audioengineering, producer Discords, Gearspace. **In parallel**, launch YouTube creator outreach (15–25 targets, prioritizing responsive small/mid channels). Free beta for testimonials + usage data. Seeds "real users" evidence.
+2. **Paid launch + first reviews (Days 15–30, Jul 15 – Jul 30).** Open the existing `checkout/` flow. Target **20–50 paying customers** — at $29 intro, $580–$1,450 documented revenue. Aim for 3–5 creator reviews/mentions live by end of this window (the realistic yield from 48-day outreach).
+3. **Case studies + final push (Days 31–47, Jul 31 – Aug 16).** 1–2 engineers who used More-Phi on real client work, with before/after + time-saved metrics (Category Impact evidence). Final revenue push + submission-artifact compilation.
+
+**Why the compression matters:** a 90-day plan allows long-lead creator reviews to land before paid launch. 48 days does not — outreach and beta must run *concurrently*, and we should expect only **3–5** reviews/mentions from 15–25 contacted (creator response rates are ~20–30%, and video turnaround eats 2–3 weeks). See §10 for the full marketing plan.
 
 ### Evidence-capture code (buildable — closes the submission-artifact loop)
 
@@ -231,6 +235,66 @@ Validated 2026-06-30 against live pricing. This section doubles as the source fo
 ### What this means for the score
 
 Near-zero marginal cost and ~97–100% margin is genuinely a Business Viability strength. The submission's "costs" artifact should document transparent Stripe + GCP invoices against the revenue ledger — clean, auditable, near-pure margin.
+
+---
+
+## 10. Marketing & Distribution Plan (48-Day Compressed GTM)
+
+Full version in `docs/xprize-submission/marketing-plan.md`. Summary here.
+
+### Positioning & target audience
+
+- **Positioning:** "The AI-native morphing mastering studio for working engineers — morph between parameter snapshots with physics-based interpolation, guided by Gemini." Hero = plugin. Differentiator = morph + AI labeling (not "another AI master button").
+- **Primary audience:** working engineers/producers delivering client work (Professional Services category).
+- **Secondary audience:** serious hobbyists/sound designers who'll adopt the morph workflow.
+
+### Key messages (3 pillars, one per judging criterion)
+
+1. **Business Viability:** "Real tool, real price ($29 launch), real users." Documented Stripe + GCP invoices.
+2. **AI-Native:** "Gemini labels every morph bank; the ONNX model does real-time DSP." Honest scoping.
+3. **Category Impact:** "Time saved per client master" — quantified in case studies.
+
+### Channel budget
+
+**~$150–250 total marketing spend** (consistent with near-zero cost structure, §9):
+- Giveaway prizes (5 × $29 licenses + 1 × $99 future): **~$0 hard cost** (digital licenses), framed at retail value ~$245.
+- YouTube creator licenses (20 × NFR perpetual): **$0 hard cost**.
+- Optional boosted posts / r/audioengineering contest prizes: **~$50–150**.
+- All其余 distribution is earned (creator reviews, community posts) — $0.
+
+### Giveaway strategy
+
+- **Mechanic:** "5 lifetime licenses + 1 $99 voucher" giveaway, entry = email signup + follow + (optional) share for extra entries. Run **Days 8–22** (one mid-window burst, not sustained — 48 days doesn't allow multiple cycles).
+- **Distribution:** landing-page signup (already exists) → email list; announce on r/audioengineering (with moderator permission), producer Discords, YouTube creator collaborations.
+- **Projected reach:** 200–500 email signups; convert 3–8% post-giveaway → 6–40 paid. *Low-confidence projection — adjust after Days 1–14 beta signals.*
+
+### YouTube outreach (15–25 creators)
+
+**Tiered by reachability, not just size** (critical for 48-day window):
+- **Tier A (anchor, 2–3):** mid-size (50K–300K) channels known to review plugins — e.g. *In The Mix* (FL Studio, hundreds of thousands of subs), *Reid Stefan* (annual plugin awards), *Music By Mattie*. Lower response rate but high payoff.
+- **Tier B (workhorses, 8–12):** small/growing (5K–50K) channels — *Akayo*, *Jonsine*, *Synthet*, *Sanjay C*, *AutomaticGainsay/Marc Doty* (~52K). **Highest response rate; primary yield source.**
+- **Tier C (long-shots, 5–10):** larger channels (300K+) — outreach but don't depend on them.
+
+**Offer:** free NFR (not-for-resale) perpetual license + early access + named credit. **Ask:** honest review (no paid placement — disclosure matters for trust + XPRIZE integrity).
+
+**Realistic yield:** expect **3–5 reviews/mentions** from 20 contacted at ~20–30% response rate, with 2–3 week video turnaround. Plan the paid launch to *not* depend on reviews landing.
+
+### Social & community
+
+- **Platforms:** Reddit (r/audioengineering, r/mixingmastering — value posts, not ads), X/Bluesky (build-in-public), producer Discord servers.
+- **Cadence:** 3–4 value posts/week; 1 demo video/week.
+- **Themes:** morph workflow demos, before/after masters, "Gemini labeled this bank" teardowns.
+
+### Metrics tracked
+
+Email signups, giveaway entries, creator response rate, reviews live, referral traffic (UTM), conversion rate, paying customers, revenue, CAC (should be ~$0), Gemini call volume/cost.
+
+### ⚠️ Honest constraints (read before executing)
+
+1. **48 days is tight for creator marketing.** Expect missed deadlines; don't gate paid launch on reviews.
+2. **Subscriber counts in the full plan are estimates** — verify each channel's current count and responsiveness before outreach (the full plan flags which are confirmed vs. estimated).
+3. **No paid placements.** XPRIZE integrity + audience trust both require honest reviews; paid content must be disclosed.
+4. **The binding constraint remains paying customers**, not awareness. Marketing exists to convert; the cost model (§9) means even modest conversion is profitable.
 
 ---
 
