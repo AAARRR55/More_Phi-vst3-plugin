@@ -109,7 +109,20 @@ No code produces paying customers. This section splits into **what the owner run
 
 ### Revenue model
 
-License-key purchase (one-time). Credible introductory range for working engineers: **$49–$149** (final price owner's call). Cloud sync is **included** with the license — not a separate tier — to keep the value proposition sharp and the model simple.
+License-key purchase (one-time). Cloud sync is **included** with the license — not a separate tier — to keep the value proposition sharp and the model simple.
+
+**Introductory launch pricing (chosen 2026-06-30):**
+
+| Window | Price | Rationale |
+|---|---|---|
+| **Intro:** May 19 – Aug 17, 2026 (hackathon window) | **$29** | Maximizes user volume — the metric that makes "real users" and Category Impact land in the narrative. Stays above per-user cost (Stripe fees + GCP ≈ $1–3) to preserve visible margin. |
+| **Regular:** post-Aug 17 | **$99** | Restores pro-tool margin and credibility signal for ongoing sales after the launch. |
+
+That is a ~70% launch discount — genuine, standard launch economics, not metric-gaming. One-time-license mechanics keep post-deadline clean: window buyers keep their license indefinitely; future buyers pay $99. No grandfathering, no renewals.
+
+**Narrative line for the submission:** *"introductory launch pricing during our launch window to build the initial user base and gather feedback; regular pricing ($99) takes effect post-launch."*
+
+**Why not cheaper ($9 range):** under ~$25 the price undermines the Professional Services positioning (pro audio has a strong price-equals-quality reflex — Ozone is ~$250+) and the margin barely clears per-user cost, weakening the viability story. $29 is the floor of the credible band.
 
 ### Distribution motion (OWNER's parallel work — the actual battle)
 
@@ -168,7 +181,7 @@ These are noted as post-hackathon extensions, not v1 work.
 
 ## 8. Open Items Before Implementation
 
-1. **Final license price** (owner) — affects narrative and revenue math.
+1. **License pricing** — **DECIDED:** $29 intro (May 19 – Aug 17) → $99 regular. Reflected in §4.
 2. **Stripe vs. alternative payment processor** — Stripe recommended (Firebase+Next.js native fit); confirm.
 3. **GCP project + billing account** provisioning (owner) — needed before Cloud Run/Firestore/Vertex AI can be wired.
 4. **Gemini model ID confirmation** — `gemini-2.0-flash` assumed; pin to whatever is current/fast at build time.
