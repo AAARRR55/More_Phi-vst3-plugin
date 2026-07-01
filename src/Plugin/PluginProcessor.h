@@ -19,7 +19,6 @@
 #include "Core/LockFreeQueue.h"
 #include "Core/ParameterClassifier.h"
 #include "Core/DiscreteParameterHandler.h"
-#include "Core/UndoRedoManager.h"
 #include "Host/PluginHostManager.h"
 #include "Host/ParameterBridge.h"
 #include "MIDI/MIDIRouter.h"
@@ -43,6 +42,9 @@
 #include "AI/OnnxNeuralMasteringRunner.h"
 #include "AI/SonicMasterAnalysisEngine.h"
 #include "AI/SonicMasterDecisionRunner.h"
+#if MORE_PHI_ENABLE_UNDO_REDO
+#include "Plugin/TinyAPVTSHistory.h"
+#endif
 #include "AI/SonicMasterHttpInferenceSource.h"
 #include "AI/GenreMasteringProfile.h"
 #if MORE_PHI_HAS_ONNX
@@ -105,7 +107,7 @@ public:
     juce::AudioProcessorParameter* getBypassParameter() const override;
     void processBlockBypassed(juce::AudioBuffer<float>&, juce::MidiBuffer&) noexcept override;
 
-    juce::AudioProcessorEditor* createEditor() override;
+    juce::AudioProcessorEditor* createEditor() noexcept override;
     bool hasEditor() const override { return true; }
 
     // Canonical plugin name matches CMake PRODUCT_NAME ("MorePhi") so preset,
@@ -253,6 +255,18 @@ public:
     // (enqueued but not yet drained) without polling the queue depth.
     [[nodiscard]] std::uint64_t getLastDrainedPlanId() const noexcept
     { return lastDrainedPlanId_.load(std::memory_order_acquire); }
+
+    // H2 FIX (2026-06-30): monotonically increasing epoch bumped each time a
+    // snapshot/program recall drains on the audio thread. A recall clears
+    // live-edit holds and overwrites params, so any AI/neural plan in flight at
+    // that moment (submitted but boundary not yet drained) is interrupted — its
+    // held values are clobbered. AutoMasteringEngine records the epoch at apply
+    // time and checks it at post-drain reverify: if the epoch advanced during the
+    // drain window, the plan is flagged interrupted (AppliedPartial) even if the
+    // boundary later drains, because the read-back would reflect the recalled
+    // state, not the plan's intent.
+    [[nodiscard]] std::uint64_t getSnapshotRecallEpoch() const noexcept
+    { return snapshotRecallEpoch_.load(std::memory_order_acquire); }
     bool enqueueParameterBatch(const std::vector<ParamCommand>& commands);
     int enqueueParameterState(const std::vector<float>& normalizedValues,
                               ParameterEditSource source = ParameterEditSource::UI,
@@ -289,6 +303,24 @@ public:
     bool isCommandQueueHealthy() const;   // Returns false if >80% full
     int  getCommandQueueCapacity() const { return static_cast<int>(COMMAND_QUEUE_CAPACITY); }
     size_t getCommandQueueFreeSpaceApprox() const { return commandQueue.freeSpaceApprox(); }
+    // M1 FIX (2026-06-30): total parameter-write drops (push/pushRange returned
+    // false because the ring was full). Surfaced via MCP diagnostics so overflow
+    // — the highest-risk silent-failure path — is observable in production.
+    std::uint64_t getCommandQueueDroppedCount() const noexcept { return commandQueue.getDroppedCount(); }
+    // AUDIT F3 FIX (2026-06-30): hosted-plugin load-failure surface. When a
+    // saved session's <HOSTED_PLUGIN> path can't be resolved (plugin uninstalled,
+    // moved, or renamed) after the full retry window, this flag is latched true
+    // and the failing plugin's name is captured. Surfaced via MCP diagnostics
+    // (MCPToolHandler) and polled by the editor so the user is not left staring
+    // at a silently-empty plugin slot. Reset to false at the start of every
+    // setStateInformation (a fresh restore supersedes a prior failure).
+    bool hostedPluginLoadFailed() const noexcept
+    {
+        return hostedPluginLoadFailed_.load(std::memory_order_acquire);
+    }
+    // The name of the plugin that failed to load. Reads pendingPluginDesc_.name
+    // under pendingPluginDescLock_ (only meaningful when hostedPluginLoadFailed()).
+    juce::String lastFailedPluginName() const noexcept;
     size_t getPendingParameterCommandCountApprox() const
     {
         const auto free = commandQueue.freeSpaceApprox();
@@ -320,7 +352,9 @@ public:
     void dumpProfilingReportToConsole() const; // Log profiling report to DBG output
 
     // ── Undo/Redo ────────────────────────────────────────────────────────────
-    UndoRedoManager& getUndoRedoManager() noexcept { return undoRedoManager_; }
+    // UndoRedoManager removed 2026-06-30 (AUDIT_PONYTAIL.md finding 5): the
+    // member was owned and exposed via getter but had 0 callers and no UI
+    // controls. Re-add from version history if a future toolbar needs it.
 
     // ── Morph state: UI/MCP writes, audio thread reads ───────────────────────
     void  setMorphX(float v)
@@ -579,6 +613,12 @@ private:
     WaypointEngine     waypointEngine_;
     MIDIRouter         midiRouter;
     MCPServer          mcpServer;
+    // APVTS undo/redo history (lazily initialized on first access)
+    #if MORE_PHI_ENABLE_UNDO_REDO
+    std::unique_ptr<TinyAPVTSHistory> apvtsHistory_;
+    public: TinyAPVTSHistory* getAPVTSHistory() { return apvtsHistory_.get(); }
+    private:
+    #endif
     std::unique_ptr<VST3IPCBridge> vst3IpcBridge_;
     std::unique_ptr<standalone_mcp::MorePhiIPCDiscovery> ipcDiscovery_;
     std::unique_ptr<standalone_mcp::MorePhiIPCAssistant> ipcAssistant_;
@@ -590,6 +630,8 @@ private:
     // read (acquire) by getLastDrainedPlanId(). Lets a caller detect that a full
     // AI/neural plan committed vs. is still partial in the queue.
     std::atomic<std::uint64_t> lastDrainedPlanId_ { 0 };
+    // H2 FIX: snapshot-recall epoch (see getSnapshotRecallEpoch).
+    std::atomic<std::uint64_t> snapshotRecallEpoch_ { 0 };
     licensing::LicenseRuntimeState licenseRuntimeState_;
     // L-5 FIX: shared_ptr so detached refresh threads can safely extend the
     // manager's lifetime past processor destruction.
@@ -634,6 +676,23 @@ private:
     float                               v2FluxMean_ = 0.0f;
 
     // ── SonicMaster realtime neural mastering (preview, default OFF) ──────────
+    //
+    // PERSISTENCE BOUNDARY (AUDIT F7, 2026-06-30): of this subsystem's runtime
+    // state, only the on/off *enable* flag is persisted — and it is persisted
+    // implicitly, as the APVTS bool parameter "SonicMasterAnalysisEnabled"
+    // (PluginProcessor.cpp createParameterLayout), which flows through
+    // getStateInformation via the APVTS subtree and re-arms the engine on restore
+    // via syncStateFromAPVTS → sonicMasterEngine_.setActive(...). Everything else
+    // here is intentionally EPHEMERAL and is NOT serialized:
+    //   - sonicMasterEngine_ pendingPlans_ ring / status_ / capture ring
+    //     (a stale in-flight plan or half-captured window must never be restored
+    //      across a session — it would analyze audio that no longer matches the
+    //      measurement context).
+    //   - sonicMasterRunner_ session state
+    // The last APPLIED plan (AutoMasteringEngine::lastSafeNeuralPlan_) IS
+    // persisted separately, via AutoMasteringEngine::serializeLastPlan under the
+    // <MASTERING_PLAN> element, because it is a committed decision (not transient
+    // inference state) and re-applying it is safe + desirable.
     SonicMasterDecisionRunner            sonicMasterRunner_;
     SonicMasterAnalysisEngine            sonicMasterEngine_;
     SonicMasterRunnerInferenceSource     sonicMasterSource_ { sonicMasterRunner_ };
@@ -682,9 +741,6 @@ private:
     PerformanceProfiler profiler_;
     MorePhiDiagnostics diagnostics_;
 
-    // Undo/redo for snapshot operations
-    UndoRedoManager undoRedoManager_;
-
 public:
     /** Diagnostic accessor (profiling builds only; otherwise the object is inert). */
     MorePhiDiagnostics& getDiagnostics() noexcept { return diagnostics_; }
@@ -718,7 +774,11 @@ private:
     // allocation.
     juce::AudioBuffer<float> dryBuffer_;
     // M-2 FIX: scratch gain arrays for the SIMD bypass crossfade.
-    // Resized in applyOutputGainAndMetering (analysis thread — not audio-critical).
+    // Pre-allocate to currentBlockSize in prepareToPlay; the audio-thread path
+    // (applyOutputGainAndMetering) writes into the first ns elements and never
+    // resizes — resize() on a vector whose capacity already suffices is a no-op,
+    // but we avoid the call entirely so there is zero risk of a mid-block heap
+    // allocation if the host ever changes block size without re-preparing.
     std::vector<float> wetGainScratch_;
     std::vector<float> dryGainScratch_;
     std::array<float*, OversamplingWrapper::kMaxChannels> osParamPtrs_{};
@@ -844,6 +904,14 @@ private:
     std::atomic<bool> prepared{false};
     std::atomic<bool> shuttingDown_{false};
     std::atomic<int> audioThreadActive_{0};
+    // SMART-DISABLE: tracks whether the host has activated the plugin via
+    // JUCE's VST3 wrapper (which routes setActive() through prepareToPlay()/
+    // releaseResources()). Set true at the end of prepareToPlay_, false at the
+    // end of releaseResources_. Currently used only for state tracking; the
+    // expensive teardown/rebuild on Smart Disable is handled by the standard
+    // JUCE lifecycle. Future optimization: detect re-activation with the same
+    // sample-rate/block-size and skip buffer reallocation + thread re-spawn.
+    bool isActive_ = false;
 
     // Audio thread writes host playhead data; MCP/UI read snapshots only.
     std::atomic<bool> transportAvailable_{false};
@@ -873,6 +941,12 @@ private:
     std::atomic<int>  pendingLoadAttempts_{0};
     std::atomic<int>  pluginLoadRetryCount_{0};
     static constexpr int MAX_PLUGIN_LOAD_RETRIES = 10;  // 500ms total retry window
+
+    // AUDIT F3 FIX (2026-06-30): hosted-plugin load-failure latching. Set in the
+    // timerCallback give-up branch (after the retry window exhausts) and cleared
+    // on successful load or at the start of a new setStateInformation. The name
+    // is guarded by pendingPluginDescLock_ (already held at the set/clear sites).
+    std::atomic<bool> hostedPluginLoadFailed_{false};
     
     // Force synchronous load flag for offline rendering contexts
     std::atomic<bool> forceSynchronousLoad_{false};
@@ -958,6 +1032,10 @@ private:
         std::atomic<float>* waypointEnable = nullptr;
         std::atomic<float>* waypointPlay = nullptr;
         std::atomic<float>* waypointBPM = nullptr;
+        // COMMERCIAL-ENABLE (2026-07-01): native mastering chain toggle.
+        std::atomic<float>* nativeMastering = nullptr;
+        // Read-only host indicator published from timerCallback.
+        std::atomic<float>* neuralMasteringActive = nullptr;
     };
     RawParameters rawParams_{};
 
@@ -980,6 +1058,19 @@ private:
     // setMorphPositionExternal sets this flag; timerCallback picks it up on the
     // message thread (where the timer reliably fires even with editor closed).
     std::atomic<bool> morphPositionNotifyPending_{false};
+
+    // AUDIT-FIX-2 (2026-06-30): edge-detection for the model-failure reset poll
+    // in timerCallback. Holds the last genuine-failure verdict so a sustained
+    // InferenceRejected/DecodeFailed/SafetyRejected/SilentInput (which lingers
+    // across many timer ticks until the model recovers) only triggers ONE
+    // resetOzoneAppliedState call, not one per tick. Cleared when the cycle
+    // returns to a non-genuine state (success / InsufficientAudio / NotPrepared).
+    std::atomic<bool> ozoneStaleResetPending_{false};
+    // AUDIT-FIX-2: last value published to the neuralMasteringActive APVTS param.
+    // Lets timerCallback skip the beginChangeGesture/setValueNotifyingHost/
+    // endChangeGesture round-trip when the predicate hasn't changed (avoids
+    // spamming the host automation lane every 50ms with a no-op notification).
+    std::atomic<bool> lastNeuralMasteringActivePublished_{false};
 
     // M3: Gate syncStateFromAPVTS — skip per-block sync when APVTS state is unchanged
     std::atomic<bool> apvtsStateDirty_{true};

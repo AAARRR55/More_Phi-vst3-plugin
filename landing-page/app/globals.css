@@ -1,0 +1,402 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-syncopate), 'Geist Fallback';
+  --font-display: var(--font-outfit), 'Geist Fallback';
+  --font-sans: var(--font-geist-sans), 'Geist Fallback';
+  --font-mono: var(--font-geist-mono), 'Geist Mono Fallback';
+
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --color-cyan: var(--cyan);
+  --color-magenta: var(--magenta);
+  --color-slate-line: var(--slate-line);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* Ultra-dark luxury theme */
+  --background: oklch(0.13 0.005 280);
+  --foreground: oklch(0.95 0.005 280);
+  --card: oklch(0.16 0.006 280);
+  --card-foreground: oklch(0.95 0.005 280);
+  --popover: oklch(0.16 0.006 280);
+  --popover-foreground: oklch(0.95 0.005 280);
+  --primary: oklch(0.82 0.13 90);
+  --primary-foreground: oklch(0.14 0.01 280);
+  --secondary: oklch(0.22 0.006 280);
+  --secondary-foreground: oklch(0.95 0.005 280);
+  --muted: oklch(0.2 0.006 280);
+  --muted-foreground: oklch(0.65 0.01 280);
+  --accent: oklch(0.7 0.18 200);
+  --accent-foreground: oklch(0.14 0.01 280);
+  --destructive: oklch(0.62 0.21 25);
+  --border: oklch(0.32 0.008 280 / 45%);
+  --input: oklch(0.3 0.008 280 / 50%);
+  --ring: oklch(0.82 0.13 90);
+
+  --gold: oklch(0.82 0.13 90);
+  --gold-soft: oklch(0.92 0.1 95);
+  --cyan: oklch(0.82 0.16 200);
+  --magenta: oklch(0.65 0.27 330);
+  --slate-line: oklch(0.4 0.01 280 / 40%);
+
+  --chart-1: oklch(0.82 0.16 200);
+  --chart-2: oklch(0.65 0.27 330);
+  --chart-3: oklch(0.82 0.13 90);
+  --chart-4: oklch(0.6 0.1 250);
+  --chart-5: oklch(0.5 0.05 280);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.16 0.006 280);
+  --sidebar-foreground: oklch(0.95 0.005 280);
+  --sidebar-primary: oklch(0.82 0.13 90);
+  --sidebar-primary-foreground: oklch(0.14 0.01 280);
+  --sidebar-accent: oklch(0.22 0.006 280);
+  --sidebar-accent-foreground: oklch(0.95 0.005 280);
+  --sidebar-border: oklch(0.32 0.008 280 / 45%);
+  --sidebar-ring: oklch(0.82 0.13 90);
+}
+
+.dark {
+  --background: oklch(0.13 0.005 280);
+  --foreground: oklch(0.95 0.005 280);
+  --card: oklch(0.16 0.006 280);
+  --card-foreground: oklch(0.95 0.005 280);
+  --popover: oklch(0.16 0.006 280);
+  --popover-foreground: oklch(0.95 0.005 280);
+  --primary: oklch(0.82 0.13 90);
+  --primary-foreground: oklch(0.14 0.01 280);
+  --secondary: oklch(0.22 0.006 280);
+  --secondary-foreground: oklch(0.95 0.005 280);
+  --muted: oklch(0.2 0.006 280);
+  --muted-foreground: oklch(0.65 0.01 280);
+  --accent: oklch(0.7 0.18 200);
+  --accent-foreground: oklch(0.14 0.01 280);
+  --destructive: oklch(0.62 0.21 25);
+  --border: oklch(0.32 0.008 280 / 45%);
+  --input: oklch(0.3 0.008 280 / 50%);
+  --ring: oklch(0.82 0.13 90);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background-image:
+      radial-gradient(
+        ellipse 80% 50% at 50% -10%,
+        oklch(0.22 0.06 280 / 0.55),
+        transparent
+      ),
+      radial-gradient(
+        ellipse 60% 40% at 90% 10%,
+        oklch(0.3 0.12 200 / 0.14),
+        transparent
+      ),
+      radial-gradient(
+        ellipse 55% 45% at 8% 8%,
+        oklch(0.82 0.13 90 / 0.08),
+        transparent
+      );
+  }
+  html {
+    @apply font-sans;
+    scroll-behavior: smooth;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: oklch(0.18 0.008 280 / 0.55);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--slate-line);
+  }
+
+  .glass-strong {
+    background: oklch(0.16 0.008 280 / 0.75);
+    backdrop-filter: blur(28px) saturate(150%);
+    -webkit-backdrop-filter: blur(28px) saturate(150%);
+    border: 1px solid var(--slate-line);
+  }
+
+  .text-gradient-morph {
+    background: linear-gradient(
+      100deg,
+      var(--cyan),
+      var(--magenta) 80%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .text-gradient-gold {
+    background: linear-gradient(
+      100deg,
+      oklch(0.92 0.1 95),
+      var(--gold)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .halo-cyan {
+    box-shadow:
+      0 0 0 1px oklch(0.82 0.16 200 / 0.4),
+      0 0 30px -4px oklch(0.82 0.16 200 / 0.5);
+  }
+
+  .halo-gold {
+    box-shadow:
+      0 0 0 1px oklch(0.82 0.13 90 / 0.45),
+      0 0 36px -6px oklch(0.82 0.13 90 / 0.55);
+  }
+
+  .grid-noise {
+    background-image:
+      linear-gradient(
+        oklch(0.4 0.01 280 / 0.06) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        90deg,
+        oklch(0.4 0.01 280 / 0.06) 1px,
+        transparent 1px
+      );
+    background-size: 44px 44px;
+  }
+
+  @keyframes float-slow {
+    0%,
+    100% {
+      transform: translateY(0) rotate(0deg);
+    }
+    50% {
+      transform: translateY(-14px) rotate(-0.6deg);
+    }
+  }
+  .animate-float-slow {
+    animation: float-slow 7s ease-in-out infinite;
+  }
+
+  @keyframes pulse-ring {
+    0%,
+    100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes spin-slow {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .animate-spin-slow {
+    animation: spin-slow 24s linear infinite;
+  }
+
+  /* ── Luxury + kinetic additions (balanced-luxe overhaul) ── */
+
+  /* Tri-stop aurora text fill — richer than the 2-stop morph gradient */
+  .text-gradient-aurora {
+    background: linear-gradient(
+      100deg,
+      var(--cyan),
+      var(--magenta) 50%,
+      var(--gold) 100%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* The missing third glow ring */
+  .halo-magenta {
+    box-shadow:
+      0 0 0 1px oklch(0.65 0.27 330 / 0.4),
+      0 0 32px -6px oklch(0.65 0.27 330 / 0.5);
+  }
+
+  /* Reusable 1px conic-gradient aurora border — DRYs up the 3 hand-inlined copies */
+  .aurora-border-fill {
+    background: conic-gradient(
+      from 0deg,
+      var(--cyan),
+      var(--magenta),
+      var(--gold),
+      var(--cyan)
+    );
+  }
+
+  /* Thin gold top hairline + soft gold inner glow — premium card framing */
+  .gold-leaf {
+    position: relative;
+  }
+  .gold-leaf::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      180deg,
+      oklch(0.82 0.13 90 / 0.55),
+      oklch(0.82 0.13 90 / 0.05) 22%,
+      transparent 60%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Slow diagonal light sweep across an element (used on aurora borders / frames) */
+  .shimmer-sweep {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer-sweep::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      115deg,
+      transparent 30%,
+      oklch(0.95 0.05 90 / 0.18) 48%,
+      oklch(0.82 0.16 200 / 0.12) 52%,
+      transparent 70%
+    );
+    transform: translateX(-120%);
+    transition: none;
+    pointer-events: none;
+  }
+  .shimmer-sweep:hover::after {
+    animation: shimmer-pan 1.1s ease-out;
+  }
+  @keyframes shimmer-pan {
+    to {
+      transform: translateX(120%);
+    }
+  }
+
+  /* Scroll reveal — applied by <Reveal> wrapper */
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-up {
+    opacity: 0;
+    transform: translateY(24px);
+    transition:
+      opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+      transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .animate-fade-up.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .animate-fade-in {
+    opacity: 0;
+    transition: opacity 0.9s ease-out;
+  }
+  .animate-fade-in.is-visible {
+    opacity: 1;
+  }
+
+  /* Slow background-position pan for animated gradient text/surfaces */
+  @keyframes gradient-pan {
+    to {
+      background-position: 200% center;
+    }
+  }
+  .animate-gradient-pan {
+    animation: gradient-pan 6s linear infinite;
+  }
+
+  /* Wire up the previously-orphaned pulse-ring keyframe */
+  .animate-pulse-ring {
+    animation: pulse-ring 2.4s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .animate-fade-up,
+  .animate-fade-in {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

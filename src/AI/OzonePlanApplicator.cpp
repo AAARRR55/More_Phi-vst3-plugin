@@ -72,6 +72,46 @@ OzonePlanApplicator::OzonePlanApplicator(MorePhiProcessor& processor,
 {
 }
 
+int OzonePlanApplicator::emitDeferredGestures() noexcept
+{
+    // F1 FIX (2026-06-30): emit ONE DAW gesture per applied parameter, after the
+    // drain. See the header doc for the rationale (audio-thread setValue is
+    // gesture-free by design; this is the message-thread companion that groups
+    // the batch into undoable automation events).
+    //
+    // Idempotency: gesturedPlanId_ tracks the plan whose gestures have already
+    // been emitted. processPendingReverify may poll multiple times before the
+    // next apply; without this guard each poll would re-emit the same N gestures.
+    // lastPlanId_ is a plain uint64_t (message-thread-only: apply() writes it,
+    // emitDeferredGestures() reads it, both on the message thread), so a direct
+    // read is correct — no atomic load needed for the source value.
+    const std::uint64_t submitted = lastPlanId_;
+    if (submitted == 0)
+        return 0;  // no plan was ever applied (apply() only bumps lastPlanId_ on >0 writes)
+    if (gesturedPlanId_.load(std::memory_order_acquire) == submitted)
+        return 0;  // already gestured this plan
+
+    int gestured = 0;
+    auto& bridge = processor_.getParameterBridge();
+    for (const auto& p : lastBreakdown_.applied)
+    {
+        // Each param gets its own begin/perform/end triplet. We do NOT wrap the
+        // whole batch in a single gesture (VST3 gestures are per-ParamID, not
+        // cross-parameter transactions), but emitting them back-to-back on the
+        // message thread right after drain lets the DAW coalesce them into one
+        // undo step in most hosts (Reaper, Cubase, Logic all do this for
+        // contiguous same-timestamp gestures).
+        if (! bridge.beginParameterGesture(p.index))
+            continue;  // non-VST3, no host-editing extension, or out of range — skip
+        bridge.performParameterGesture(p.index, p.requestedNormalized);
+        bridge.endParameterGesture(p.index);
+        ++gestured;
+    }
+
+    gesturedPlanId_.store(submitted, std::memory_order_release);
+    return gestured;
+}
+
 int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
 {
     if (!plan.valid)
@@ -95,18 +135,56 @@ int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
     // AUDIT-FIX (Fix 6): reset the breakdown so it always reflects THIS call.
     lastBreakdown_ = OzoneApplyBreakdown{};
 
+    // M2 FIX (2026-06-30): plugin-swap / positional-reorder guard. The map's
+    // indices are positional and were captured against a specific parameter
+    // layout (fingerprintHost at build time). nameMatches() per-write catches a
+    // name change at a given index, but cannot detect a reorder where the
+    // swapped plugin reuses the same name at a different index — the per-write
+    // check would pass and the stale index would corrupt an unrelated control.
+    // Re-fingerprint the live host here; if it differs from the stored one, the
+    // whole apply is refused (every slot counted as skipped) because NO
+    // positional index is trustworthy until the map is rebuilt. Skipped for the
+    // stub map (empty fingerprint — buildForOzone11 never probed a live host).
+    if (map_.hostFingerprint.isNotEmpty())
+    {
+        const juce::String liveFp = OzoneParameterMap::fingerprintHost(
+            processor_.getParameterBridge());
+        if (liveFp != map_.hostFingerprint)
+        {
+            DBG("OzonePlanApplicator: host fingerprint changed (map built for "
+                + map_.hostFingerprint.substring(0, 12) + ", live is "
+                + liveFp.substring(0, 12) + ") — plugin swapped or parameters "
+                  "reordered. Refusing apply to avoid writing stale positional "
+                  "indices. Re-host and rebuild the map.");
+            lastBreakdown_.skipped = 1;   // signal the apply produced nothing usable
+            lastAppliedCount_ = 0;
+            return 0;
+        }
+    }
+
     int total = 0;
     total += applyEQ(plan);
     total += applyDynamics(plan);
     total += applyStereoImager(plan);
     total += applyMaximizer(plan);
+    total += applyExciter(plan);   // F4 FIX: harmonic/saturation side-channel
 
     // P3.10 (AUDIT): close the plan with a transaction boundary so the audio
     // thread can confirm the full plan drained (getLastDrainedPlanId). Only emit
     // when at least one parameter was enqueued — a zero-param apply has nothing to
     // commit. The boundary is a no-op command (paramIndex=-1) and does not count
     // toward the returned total.
-    if (total > 0)
+    //
+    // F11 FIX (2026-06-30): only emit the boundary for a FULLY-enqueued plan
+    // (no skips, no unmapped slots). The boundary is the atomicity signal callers
+    // correlate against getLastDrainedPlanId(); a partial apply (queue full,
+    // index drift, name mismatch) must NOT claim drain-completion atomicity, or
+    // a downstream reverify would treat a half-applied plan as fully committed.
+    // Partial applies still return their count for telemetry; they simply do not
+    // advance lastPlanId_, so processPendingReverify never fires for them.
+    const bool fullyEnqueued = (lastBreakdown_.skipped == 0 && lastBreakdown_.unmapped == 0
+                                && lastBreakdown_.ambiguous == 0);
+    if (total > 0 && fullyEnqueued)
     {
         const std::uint64_t planId = ++lastPlanId_;
         processor_.enqueuePlanBoundary(planId, MorePhiProcessor::ParameterEditSource::MCP);
@@ -120,6 +198,15 @@ int OzonePlanApplicator::apply(const MultiEffectPlan& plan)
 
 int OzonePlanApplicator::applyEQ(const MultiEffectPlan& plan)
 {
+    // RT-AUDIT (2026-06-30): THREADING INVARIANT — applyEQ performs json::parse
+    // (heavy heap: lexer + DOM node per band/freq/gain/Q), juce::String concats,
+    // and vector push_back via enqueueIfMapped. It MUST NEVER run on the audio
+    // thread. Reachable only from OzonePlanApplicator::apply, which is called
+    // only by ChainPlanExecutor::applyPlan on the message thread (timer-driven
+    // processPendingApplication) or the MCP server connection thread — both
+    // off-audio. The pending-plan atomic-flag pattern in SonicMasterAnalysisEngine
+    // (analysis thread sets flag → message-thread timer applies) is what prevents
+    // any audio-thread reachability; do not bypass it.
     if (plan.eqPrescriptionJSON.isEmpty())
         return 0;
 
@@ -173,9 +260,21 @@ int OzonePlanApplicator::applyEQ(const MultiEffectPlan& plan)
                 "eq band " + juce::String(i + 1) + " enabled");
         }
     }
-    catch (const std::exception&)
+    catch (const std::exception& e)
     {
-        // Malformed JSON — skip EQ application
+        // F12 FIX (2026-06-30): a malformed eqPrescriptionJSON previously caused a
+        // silent partial apply — dynamics/imager/maximizer still ran from the same
+        // plan, but EQ was skipped with no record. Now: log loudly and account for
+        // every EQ slot that would have been written (up to kEQBands bands x 5
+        // params = freq/gain/Q/type/enabled) as unmapped in the breakdown, so
+        // getLastOzoneApplyBreakdown reflects that EQ was dropped and a downstream
+        // reverify / partial classifier sees it. Per the C-3 logging convention the
+        // DBG is message-thread-only (apply() runs on the message thread).
+        DBG("OzonePlanApplicator::applyEQ: malformed eqPrescriptionJSON ("
+            + juce::String(e.what()) + ") — skipping EQ, "
+            + juce::String(OzoneParameterMap::kEQBands * 5)
+            + " slots counted as unmapped.");
+        lastBreakdown_.unmapped += OzoneParameterMap::kEQBands * 5;
     }
     return count;
 }
@@ -313,6 +412,39 @@ int OzonePlanApplicator::applyMaximizer(const MultiEffectPlan& plan)
     count += enqueueIfMapped(map_.maximizer.ceilingIdx,
         OzoneParameterMap::normalizeCeiling(plan.ceilingDBTP),
         "maximizer ceiling");
+    return count;
+}
+
+// ── Exciter / Saturation (F4 FIX) ────────────────────────────────────────────
+
+int OzonePlanApplicator::applyExciter(const MultiEffectPlan& plan)
+{
+    // F4 FIX (2026-06-30): forward the decoded saturation side-channel to the
+    // hosted plugin's Exciter module. exciterEnabled is set by
+    // buildBridgePlanFromNeural when the SonicMaster decoder raised applyHarmonic
+    // and the gate amount is meaningful. drive/mix are pre-clamped [0,1] in the
+    // engine; the bridge's enqueue path clamps again on [0,1], so a stray value
+    // cannot reach the hosted plugin out-of-range. When the map has no exciter
+    // slots mapped, every enqueue counts as unmapped (graceful) and the plan
+    // proceeds — the internal exciter (when intelligence is active) still got the
+    // values via AutoMasteringEngine's direct exciter_.setDrive/setDryWet calls.
+    if (!plan.exciterEnabled)
+        return 0;
+
+    int count = 0;
+    // Enable the module first (a toggle is idempotent and cheap).
+    count += enqueueIfMapped(map_.exciter.enableIdx, 1.0f, "exciter enable");
+    // Drive: the model emits [0,1]; Ozone's Exciter Drive is normalized [0,1]
+    // (0 = none, 1 = max). Pass through directly — clamp happens at enqueue.
+    count += enqueueIfMapped(map_.exciter.driveIdx,
+        std::clamp(plan.exciterDrive, 0.0f, 1.0f),
+        "exciter drive");
+    // Mix: [0,1] maps to [0,1] normalized. The engine already scales mix by the
+    // gate amount for the internal exciter; for the hosted plugin we forward the
+    // raw decoded mix so the user's wet/dry intent is preserved.
+    count += enqueueIfMapped(map_.exciter.mixIdx,
+        std::clamp(plan.exciterMix, 0.0f, 1.0f),
+        "exciter mix");
     return count;
 }
 

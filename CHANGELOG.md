@@ -5,6 +5,27 @@ alongside the audit documents in `docs/audits/` and the production-readiness
 gates in `docs/validation/`. Format is loosely Keep-a-Changelog; entries are
 grouped by date with severity tags.
 
+## 2026-07-01 — Audio-thread allocation elimination & memory leak fixes (branch `morph-audit-fixes`)
+
+Eliminated the last remaining heap allocation path on the audio thread and fixed two memory leak risks. All changes are performance-only — bit-identical audio output.
+
+### Bypass crossfade scratch pre-allocation (RT-SAFETY)
+- **[HIGH] `wetGainScratch_`/`dryGainScratch_` pre-allocation** — These `std::vector<float>` members were previously `resize()`d inside `applyOutputGainAndMetering()` on every bypass transition, which could heap-allocate if the block size exceeded the vector's capacity. Now pre-allocated to `samplesPerBlock` in `prepareToPlay()` and never resized on the audio thread. The old comment claiming "stack-allocated" was incorrect (`std::vector` always uses the heap) and has been updated. `src/Plugin/PluginProcessor.{h,cpp}`.
+
+### Memory leak fixes (MEM-LEAK)
+- **[MED] `PluginHostManager` destructor bounded wait + force-drain** — If audio-thread leases were never released, plugins in the deferred doom queue would leak until process exit. The destructor now does a bounded 100ms wait for leases to release, then calls `drainDeferredDoomedPlugins(true)` (new `force` parameter) to destroy any remaining deferred plugins. `src/Host/PluginHostManager.{h,cpp}`.
+- **[LOW] `MCPServer::ConnectionThread` stop timeout** — `stopThread(-1)` (infinite wait) changed to `stopThread(5000)` (5s timeout) in `ConnectionThread::~ConnectionThread()`. Prevents destructor hangs on stuck sockets while still giving the thread time to exit cleanly. `src/AI/MCPServer.cpp`.
+
+### Smart Disable state tracking (INFRA)
+- **`isActive_` flag** — Added `bool isActive_` member to `MorePhiProcessor`, set true at end of `prepareToPlay()`, false at end of `releaseResources()`. Provides infrastructure for future lightweight Smart Disable optimization. The `SonicMasterAnalysisEngine::setActive()` already handles pause/resume efficiently (no thread join/re-spawn). `src/Plugin/PluginProcessor.{h,cpp}`.
+
+### Documentation updates
+- **Updated:** `AGENTS.md` — Added PERF entries for bypass scratch pre-allocation, Smart Disable state tracking, PluginHostManager leak fix, MCP stop timeout.
+- **Updated:** `AUDIT_VST3_COMPLIANCE_2026-06-30.md` — Added finding 1.5 (bypass scratch pre-alloc), 10.4 (deferred doom force-drain), 10.5 (MCP stop timeout). Updated Section 14 summary.
+- **Updated:** `AUDIT_PONYTAIL.md` — Added finding 11 (withdrawn `std::array` → `std::vector` for scratch arrays).
+- **Updated:** `docs/PERFORMANCE_AUDIT_REPORT.md` — Added Batch 2 fixes (2026-07-01), updated Executive Summary.
+- **Updated:** `docs/ARCHITECTURE.md` — Added `isActive_` concurrency primitive, new "Real-Time Safety Guarantees" section.
+
 ## 2026-07-16 — Documentation overhaul & comprehensive audit
 
 - **New:** `VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md` — 39 KB comprehensive

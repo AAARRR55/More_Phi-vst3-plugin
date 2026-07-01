@@ -1,0 +1,199 @@
+// src/AI/Agents/BlackboardBridge.cpp
+#include "AI/Agents/BlackboardBridge.h"
+
+#include "AI/AutomationControlPlane.h"
+
+namespace more_phi::agents {
+
+BlackboardBridge::BlackboardBridge(IntegrationEventBus& bus) : bus_(bus) {}
+
+juce::String BlackboardBridge::publish(const juce::String& source,
+                                       const juce::String& type,
+                                       nlohmann::json payload,
+                                       const juce::String& runId)
+{
+    more_phi::IntegrationEvent ev;
+    ev.eventId = more_phi::makeAutomationId("evt");
+    ev.source  = source;
+    ev.type    = type;
+    ev.workflowRunId = runId;
+    ev.payload = std::move(payload);
+    ev.timestamp = juce::Time::getCurrentTime();
+    const auto eventId = ev.eventId;
+    bus_.publish(std::move(ev));   // publish stamps ev.sequence
+    // O4 (2026-06-29): wake any event-driven pump so the event fans out
+    // immediately instead of waiting up to the next fixed-interval poll.
+    // H-5 FIX: copy the shared_ptr under onPublishMutex_ (the setter runs on the
+    // message thread during start()/stop(); publish runs on agent worker / MCP
+    // threads) and invoke it unlocked, so we never read+invoke a std::function
+    // another thread is reassigning (was UB: torn read / use-after-free at teardown).
+    std::shared_ptr<std::function<void()>> hook;
+    {
+        std::lock_guard<std::mutex> lock(onPublishMutex_);
+        hook = onPublish_;
+    }
+    if (hook && *hook) (*hook)();
+    return eventId;
+}
+
+void BlackboardBridge::subscribe(const juce::String& agentId,
+                                 const std::vector<juce::String>& eventTypes,
+                                 RawCallback callback)
+{
+    // H-3 FIX: Wrap in shared_ptr to avoid copying the std::function on poll
+    // (from subscribers_ into the local matches vector). The shared_ptr copy
+    // is a single atomic ref-count increment, not a deep copy of the lambda.
+    auto shared = std::make_shared<RawCallback>(std::move(callback));
+    std::lock_guard<std::mutex> lock(subscribersMutex_);
+    for (const auto& t : eventTypes)
+        subscribers_[t.toStdString()].push_back({ agentId.toStdString(), std::move(shared) });
+}
+
+void BlackboardBridge::unsubscribe(const juce::String& agentId)
+{
+    std::lock_guard<std::mutex> lock(subscribersMutex_);
+    const auto id = agentId.toStdString();
+    for (auto it = subscribers_.begin(); it != subscribers_.end(); )
+    {
+        auto& vec = it->second;
+        vec.erase(std::remove_if(vec.begin(), vec.end(),
+            [&](const auto& pair) { return pair.first == id; }),
+            vec.end());
+        if (vec.empty())
+            it = subscribers_.erase(it);
+        else
+            ++it;
+    }
+}
+
+void BlackboardBridge::unsubscribeAll()
+{
+    std::lock_guard<std::mutex> lock(subscribersMutex_);
+    subscribers_.clear();
+}
+
+bool BlackboardBridge::hasNewEvents() const
+{
+    // W-8 FIX (audit): acquire-load — pairs with the release-store in poll().
+    // MCP connection threads call this; without acquire they could observe a
+    // stale cursor (re-delivery) or miss a just-published event (skip).
+    return bus_.lastSequence() > lastSeenSequence_.load(std::memory_order_acquire);
+}
+
+namespace {
+// H3: heuristics for "did an agent publish this event?" The agent layer is the
+// only publisher of these type/source namespaces; non-agent bus traffic (action
+// ledger, permission kernel) uses different type prefixes. Conservative: when in
+// doubt, treat as non-agent and exclude.
+bool isAgentEvent(const juce::String& type, const juce::String& source)
+{
+    static const std::vector<std::string> typePrefixes = {
+        "agents.", "analysis.", "realtime.", "conductor.",
+        "optimization.", "creative.", "quality.", "memory."
+    };
+    const auto t = type.toStdString();
+    for (const auto& p : typePrefixes)
+        if (t.rfind(p, 0) == 0)
+            return true;
+
+    // Agent sources are role-prefixed ids ("conductor-1", "realtime-1", ...).
+    static const std::vector<std::string> sourcePrefixes = {
+        "conductor", "analysis", "optimization", "creative",
+        "realtime", "quality", "memory"
+    };
+    const auto s = source.toLowerCase().toStdString();
+    for (const auto& p : sourcePrefixes)
+        if (s.rfind(p, 0) == 0)
+            return true;
+
+    return false;
+}
+} // namespace
+
+nlohmann::json BlackboardBridge::recentAgentEvents(int limit) const
+{
+    const int safeLimit = juce::jlimit(1, 256, limit <= 0 ? 32 : limit);
+    auto recent = bus_.listRecent(safeLimit * 4);   // over-fetch, then filter
+    if (! recent.is_array())
+        return nlohmann::json::array();
+
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto& ev : recent)
+    {
+        if (! ev.is_object())
+            continue;
+        const juce::String type   = juce::String(ev.value("type",   std::string{}));
+        const juce::String source = juce::String(ev.value("source", std::string{}));
+        if (! isAgentEvent(type, source))
+            continue;
+        // Safe summary: no raw payload. Callers who need detail use the dedicated,
+        // permission-gated tool paths.
+        out.push_back({
+            { "type",   type.toStdString() },
+            { "source", source.toStdString() },
+            { "runId",  juce::String(ev.value("workflowRunId", std::string{})).toStdString() },
+            { "sequence", ev.value("sequence", static_cast<uint64_t>(0)) }
+        });
+        if (static_cast<int>(out.size()) >= safeLimit)
+            break;
+    }
+    return out;
+}
+
+void BlackboardBridge::poll()
+{
+    // C1 FIX: pull only the events strictly newer than our cursor, oldest-first.
+    // The bus stamps each event with a gap-free monotonic sequence, so this is
+    // exact regardless of how many events the bounded ring has evicted since the
+    // last poll. A dropped count cursor (the old design) would re-deliver or skip
+    // events under eviction; the sequence cursor cannot.
+    const int window = 512;
+    // W-8 FIX (audit): acquire-load so any event payload published before this
+    // sequence is visible to this (pump) thread.
+    auto recent = bus_.listRecentSince(lastSeenSequence_.load(std::memory_order_acquire), window);
+    if (! recent.is_array() || recent.empty())
+        return;
+
+    for (const auto& ev : recent)
+    {
+        if (! ev.is_object())
+            continue;
+        const juce::String type   = juce::String(ev.value("type",   std::string{}));
+        const juce::String source = juce::String(ev.value("source", std::string{}));
+        const nlohmann::json payload = ev.value("payload", nlohmann::json::object());
+
+        // H-3 FIX: Copy shared_ptrs (cheap — single ref-count inc each) instead
+        // of deep-copying the std::function objects. Invoke through the shared_ptr.
+        std::vector<std::pair<std::string, Callback>> matches;
+        {
+            std::lock_guard<std::mutex> lock(subscribersMutex_);
+            auto it = subscribers_.find(type.toStdString());
+            if (it != subscribers_.end())
+                matches = it->second;
+        }
+        for (const auto& [agentId, sharedCb] : matches)
+        {
+            if (sharedCb && *sharedCb)
+            {
+                try { (*sharedCb)(type, payload, source); }
+                catch (...) {}
+            }
+        }
+
+        // Advance the cursor past this event. We read the field defensively;
+        // any event lacking a sequence (e.g. a foreign IntegrationEvent not
+        // routed through the same publish() path) is still consumed but does
+        // not move the cursor — it will be re-considered next poll, which is
+        // safe because it has no side effects we haven't already idempotently
+        // guarded against via the rate/budget limiters in the reactive agents.
+        const auto seq = ev.value("sequence", static_cast<uint64_t>(0));
+        // W-8 FIX (audit): release-store so MCP readers (hasNewEvents,
+        // recentAgentEvents) that acquire-load this cursor also see the event
+        // payloads that were published at or before `seq`. Same-thread read on
+        // the pump thread uses relaxed.
+        if (seq > lastSeenSequence_.load(std::memory_order_relaxed))
+            lastSeenSequence_.store(seq, std::memory_order_release);
+    }
+}
+
+} // namespace more_phi::agents

@@ -1,7 +1,7 @@
 # More-Phi - Architecture Document
 
-**Date:** 2026-06-27
-**Version:** 3.4.1
+**Date:** 2026-07-01 (updated)  
+**Version:** 3.4.1  
 **Audit Score:** 7.9/10 — See [VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md)
 **Type:** Desktop Audio Plugin (VST3/AU)
 **Pattern:** Layered plugin architecture with strict thread-domain separation

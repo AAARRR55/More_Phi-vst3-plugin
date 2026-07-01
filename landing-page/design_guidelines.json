@@ -1,0 +1,140 @@
+{
+  "theme_and_archetype": {
+    "domain": "Audio Software / VST Plugin / Developer API",
+    "theme": "Dark",
+    "archetype": "Archetype 4 (Swiss & High-Contrast)",
+    "vibe": "Technical, Professional, Zero-Latency, Studio-Grade",
+    "reasoning": "A VST plugin purchasing and API management system needs to evoke trust, technical precision, and high-fidelity audio engineering. Dark mode reduces eye strain for long studio sessions, and the Swiss brutalist approach ensures clarity in data-heavy views (license management, API docs)."
+  },
+  "typography": {
+    "headings": {
+      "fontFamily": "'Outfit', sans-serif",
+      "weight": "font-bold to font-black",
+      "tracking": "tracking-tight",
+      "usage": "Landing page hero, section headers, prominent feature callouts. Use bold, high-impact weights.",
+      "sizes": {
+        "h1": "text-5xl lg:text-6xl+",
+        "h2": "text-3xl lg:text-4xl",
+        "h3": "text-xl lg:text-2xl"
+      }
+    },
+    "body": {
+      "fontFamily": "'IBM Plex Sans', sans-serif",
+      "weight": "font-normal to font-medium",
+      "tracking": "tracking-normal",
+      "usage": "General body text, documentation paragraphs, dashboard descriptions.",
+      "sizes": {
+        "base": "text-base",
+        "small": "text-sm",
+        "xs": "text-xs uppercase tracking-widest"
+      }
+    },
+    "monospace": {
+      "fontFamily": "'JetBrains Mono', monospace",
+      "weight": "font-medium",
+      "usage": "API endpoints, code snippets, license keys, numerical data, data-grid headers.",
+      "sizes": {
+        "base": "text-sm",
+        "code": "text-xs"
+      }
+    },
+    "installation": "yarn add @fontsource/outfit @fontsource/ibm-plex-sans @fontsource/jetbrains-mono"
+  },
+  "color_palette": {
+    "base": {
+      "background": "#0A0A0A",
+      "surface": "#141414",
+      "surface_hover": "#1C1C1C",
+      "border": "#2A2A2A",
+      "border_focus": "#FF3333"
+    },
+    "brand": {
+      "primary": "#FF3333",
+      "primary_hover": "#E62E2E",
+      "primary_foreground": "#FFFFFF",
+      "accent": "#FFB000",
+      "accent_foreground": "#000000"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A0A0A0",
+      "disabled": "#555555"
+    },
+    "semantic": {
+      "success": "#00E5FF",
+      "success_bg": "rgba(0, 229, 255, 0.1)",
+      "warning": "#FFB000",
+      "warning_bg": "rgba(255, 176, 0, 0.1)",
+      "error": "#FF3333",
+      "error_bg": "rgba(255, 51, 51, 0.1)"
+    },
+    "rules": {
+      "gradients": "Banned for background. Use solid colors or very subtle, grainy textures.",
+      "contrast": "Ensure all text meets 4.5:1 WCAG AA. License keys must use highest contrast (#FFFFFF on #0A0A0A).",
+      "tinting": "Greys should have a very slight cool (blue/purple) undertone to feel native to audio tools, avoiding muddy browns."
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing (p-8 to p-12) for Landing Page sections. Dense, functional spacing (p-4 to p-6) for Dashboard/Admin panels.",
+    "grid_system": {
+      "landing": "Bento Grid Mode A (Tetris Grid). Use asymmetry. Hero spans full width, features break into 8/4 or 6/6 spans.",
+      "dashboard": "Control Room Grid Mode B. Dense grid-cols-1 md:grid-cols-3 lg:grid-cols-4. 100% utilization of vertical space with h-full."
+    },
+    "surfaces": {
+      "dashboard_cards": "Flat background (#141414), 1px solid border (#2A2A2A). NO shadow. Sharp edges (rounded-none or max rounded-sm).",
+      "api_docs": "Grid Borders ('Technical' Look). Expose the skeleton. border-collapse style layout for endpoint lists.",
+      "navbar": "Glassmorphism: backdrop-blur-xl bg-black/60 with 1px border-b border-white/10."
+    }
+  },
+  "components_rules": {
+    "shadcn_customization": {
+      "radius": "0px",
+      "shadows": "Remove all generic drop shadows. Rely on 1px solid borders for separation.",
+      "buttons": "Flat, sharp edges. Primary button is #FF3333. Hover state must explicitly define text color.",
+      "inputs": "Background #0A0A0A, border #2A2A2A, text #FFFFFF. On focus: border-color #FF3333 ring-0.",
+      "tables": "Dense padding (py-2 px-3), border-b border-[#2A2A2A]. Header text: JetBrains Mono, text-xs, text-[#A0A0A0], uppercase."
+    },
+    "forms": "Use Shadcn Form + Zod. All sensitive endpoints must map visual validation states clearly.",
+    "testing": "CRITICAL: All interactive elements MUST include data-testid. Example: data-testid='checkout-buy-button', data-testid='license-copy-btn'."
+  },
+  "images_and_media": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1684162205807-630e5d5904be?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMHNvdW5kJTIwd2F2ZSUyMGRhcmt8ZW58MHx8fHwxNzgxNDM2NjU5fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract wavy pattern on black, representing sound waves. Use with a heavy black overlay (bg-black/60) to ensure text legibility.",
+      "location": "Landing Page Hero Section"
+    },
+    "product_feature": {
+      "url": "https://images.pexels.com/photos/27141312/pexels-photo-27141312.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Close-up of a digital audio interface displaying a vibrant sound wave and control elements.",
+      "location": "Feature section, showcasing the VST's high-fidelity audio processing."
+    },
+    "studio_context": {
+      "url": "https://images.unsplash.com/photo-1627407660893-fe01f60d44c4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHw0fHxtdXNpYyUyMHByb2R1Y3Rpb24lMjBzdHVkaW8lMjBnZWFyfGVufDB8fHx8MTc4MTQzNjY1OXww&ixlib=rb-4.1.0&q=85",
+      "description": "Dark studio monitor setup.",
+      "location": "Testimonial or 'Used By Professionals' section background."
+    },
+    "icons": {
+      "library": "@phosphor-icons/react",
+      "style": "Regular or Light weight. Duotone only for prominent features.",
+      "command": "yarn add @phosphor-icons/react"
+    }
+  },
+  "interactions": {
+    "hover_states": "All buttons must darken (e.g., #FF3333 -> #E62E2E) or lighten slightly on hover. Text color MUST be explicitly set.",
+    "license_keys": "Click-to-copy interaction required. Provide instant visual feedback (Toast notification using Sonner + inline checkmark icon swap).",
+    "page_transitions": "Instant and functional. Minimal animation on the dashboard. Use Framer Motion for landing page scroll reveals (fade up, y: 20 -> 0).",
+    "accessibility": "Respect prefers-reduced-motion. High contrast focus rings (focus:ring-2 focus:ring-[#FF3333] focus:outline-none) on all inputs."
+  },
+  "instructions_to_main_agent": {
+    "stack": "FastAPI (Python) backend, React + Vite frontend, TailwindCSS, Shadcn UI.",
+    "architecture_requirements": {
+      "backend": "Implement REST API for product metadata, auth, checkout session creation, webhook listening, and license generation. Use SQLAlchemy. Protect sensitive endpoints.",
+      "stripe": "Implement Stripe Checkout and Webhooks. Ensure no raw card data hits the backend. Create Payment Intents or Checkout Sessions.",
+      "frontend_routing": "Implement separate layouts: '/' for Landing Page, '/checkout' for purchase flow, '/dashboard' for customer portal/license management, and '/api-docs' for documentation.",
+      "security": "Implement JWT or secure session-based authentication for the dashboard. Enforce rate limits.",
+      "database": "Define schema for Users, Orders, Licenses, Transactions. Relate Licenses to Users via Order ID."
+    },
+    "execution_order": "1. Setup backend models and database. 2. Implement Stripe Checkout and Webhooks. 3. Build frontend Landing Page. 4. Build frontend Dashboard (License Auth/View). 5. Connect Frontend and Backend APIs.",
+    "dev_tools": "Include standard .env templates, Dockerfile (optional), and setup scripts for local testing."
+  }
+}

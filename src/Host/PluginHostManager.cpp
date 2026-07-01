@@ -58,6 +58,7 @@ static inline bool safeInitialisePlugin(juce::AudioPluginInstance* plugin,
 namespace more_phi {
 
 PluginHostManager::PluginHostManager()
+    : latencyListener_(*this)
 {
     formatManager.addDefaultFormats();  // VST3 + AU
     // PERF-BROWSER: populate knownPlugins from the on-disk cache so the browser
@@ -73,16 +74,30 @@ PluginHostManager::~PluginHostManager()
     // C1 FIX: final drain — anything still deferred (audio leases held at the
     // very end) is destroyed now. By this point the AudioProcessor is gone and
     // no processBlock caller can exist.
-    drainDeferredDoomedPlugins();
+    // SMART-DISABLE FIX: If leases are still held (audio thread misbehaving),
+    // wait briefly for them to release, then force-drain to avoid a leak.
+    if (activePluginUsers_.load(std::memory_order_acquire) > 0)
+    {
+        const auto drainStart = juce::Time::getMillisecondCounter();
+        while (activePluginUsers_.load(std::memory_order_acquire) > 0)
+        {
+            if (static_cast<int>(juce::Time::getMillisecondCounter() - drainStart) > 100)
+                break;  // force-drain after 100ms to avoid freezing teardown
+            juce::Thread::sleep(1);
+        }
+    }
+    drainDeferredDoomedPlugins(true);  // force — destructor path, avoid leak
 }
 
-void PluginHostManager::drainDeferredDoomedPlugins()
+void PluginHostManager::drainDeferredDoomedPlugins(bool force)
 {
     // Message-thread only. Destroy any plugin whose teardown was deferred
     // because audio-thread leases were still held when unloadPlugin() timed
     // out. If a lease is STILL held (host misbehaving), leave it for next
-    // drain or the destructor rather than creating a use-after-free.
-    if (activePluginUsers_.load(std::memory_order_acquire) > 0)
+    // drain or the destructor rather than creating a use-after-free — unless
+    // force is true (destructor path after a bounded wait), in which case we
+    // destroy anyway to avoid a leak.
+    if (!force && activePluginUsers_.load(std::memory_order_acquire) > 0)
         return;
 
     std::vector<std::unique_ptr<juce::AudioPluginInstance>> toDestroy;
@@ -400,6 +415,15 @@ bool PluginHostManager::loadPlugin(const juce::PluginDescription& desc)
     hostedPlugin = std::move(newPlugin);
     hostedPluginPtr_.store(hostedPlugin.get(), std::memory_order_release);
 
+    // LA1 FIX (audit): register a latency-changed listener on the hosted plugin
+    // so that a hosted-plugin-initiated latency change (e.g. user engages a
+    // lookahead limiter inside Ozone) reaches the owning processor and dirties
+    // latencyConfigDirty_. The listener is removed in unloadPluginInternal()
+    // before the unique_ptr is reset, so it never dangles. Safe under the
+    // isSwapping_ guard held here.
+    try { hostedPlugin->addListener(&latencyListener_); }
+    catch (...) { /* addListener is non-throwing in JUCE; defensive only */ }
+
     // Initialize the new health monitor state
     healthMonitor_.reset();
 
@@ -482,6 +506,16 @@ void PluginHostManager::unloadPluginInternal()
         exclusivePluginUseRequested_.store(false, std::memory_order_release);
 
         hostedPluginPtr_.store(nullptr, std::memory_order_release);
+
+        // LA1 FIX (audit): remove the latency-changed listener before the plugin
+        // is destroyed or moved to the deferred-doom queue. Done unconditionally
+        // here so both the immediate-destroy and deferred-destroy branches are
+        // covered. removeListener is a no-op if the listener was never added
+        // (e.g. plugin loaded through a path that bypassed addListener, or load
+        // failed). Wrapped because the hosted plugin may be in a bad state and
+        // we must not throw out of teardown.
+        try { hostedPlugin->removeListener(&latencyListener_); }
+        catch (...) { /* defensive — teardown must stay throw-free */ }
 
         // The UI-owned editor window (if open) holds a ref-counted lease via
         // acquirePluginForUse(); the bounded wait below therefore also serves
@@ -712,6 +746,16 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
 #if defined(_MSC_VER)
     if (!safePluginProcessBlock(plugin, buffer, midi))
     {
+        // EI1 FIX (audit, 2026-06-30): on the narrow path the plugin processed
+        // in-place into `buffer`, so a fault mid-processBlock may leave a
+        // partially-written block (some samples advanced through the plugin,
+        // others still the pre-plugin signal). Clear the block so no corrupted
+        // samples are emitted; the existing currentGain_=0 → next-block
+        // fade-to-silence path (see top of processBlock) then produces clean
+        // output on recovery. (Wide path at :689 needs no clear — on crash the
+        // wideBuffer_ is abandoned and the caller's original `buffer` survives
+        // intact.)
+        buffer.clear();
         currentGain_ = 0.0f;
         healthMonitor_.reportFailure();
         return;
@@ -723,6 +767,9 @@ void PluginHostManager::processBlock(juce::AudioBuffer<float>& buffer,
     }
     catch (...)
     {
+        // EI1 FIX: same rationale as the SEH branch above — drop any
+        // half-written samples before the fade-to-silence resume path.
+        buffer.clear();
         currentGain_ = 0.0f;
         healthMonitor_.reportFailure();
         return;

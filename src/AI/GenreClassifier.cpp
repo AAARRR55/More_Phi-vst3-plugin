@@ -219,6 +219,21 @@ bool GenreClassifier::getGenreProbs(float* out) const noexcept
     return true;
 }
 
+void GenreClassifier::prepare(double sampleRate)
+{
+    sampleRate_ = sampleRate;
+    // RT-AUDIT (A1, 2026-06-30): pre-allocate the 10-second capture window here
+    // (message thread) so feedAudio — reachable on the audio thread via the
+    // throttled analyzeBlock path — never heap-allocates. JUCE guarantees
+    // prepareToPlay is re-invoked before processBlock whenever the host changes
+    // sample rate, so re-sizing at the prepare-time rate is correct.
+    const int target = static_cast<int>(sampleRate * 10.0);
+    audioAccum_.setSize(1, juce::jmax(1, target));
+    audioAccum_.clear();
+    accumulatedSamples_ = 0;
+    hasNewAudio_.store(false, std::memory_order_relaxed);
+}
+
 void GenreClassifier::feedAudio(const juce::AudioBuffer<float>& audio, double sampleRate)
 {
     sampleRate_ = sampleRate;
@@ -226,13 +241,21 @@ void GenreClassifier::feedAudio(const juce::AudioBuffer<float>& audio, double sa
     if (accumulatedSamples_ >= target) return;
 
     const int toAdd = std::min(audio.getNumSamples(), target - accumulatedSamples_);
-    audioAccum_.setSize(1, target, true, false, true);
+    // RT-AUDIT (A1, 2026-06-30): avoidRealloc=true guarantees no heap allocation
+    // on the audio thread. The buffer was pre-sized to the prepare-time target in
+    // prepare(); setSize with avoidRealloc=true is a pure capacity check (it never
+    // reallocates, and only shrinks the logical size — which here equals the
+    // already-allocated capacity, so it's a no-op). clearExtra=true keeps the
+    // untouched tail zeroed for downstream mel/ONNX reads.
+    audioAccum_.setSize(1, juce::jmax(1, target), true, /*avoidRealloc=*/true, true);
+    const int cap = audioAccum_.getNumSamples();
     for (int i = 0; i < toAdd; ++i)
     {
         float mono = audio.getReadPointer(0)[i];
         if (audio.getNumChannels() > 1)
             mono = (mono + audio.getReadPointer(1)[i]) * 0.5f;
-        audioAccum_.getWritePointer(0)[accumulatedSamples_ + i] = mono;
+        if (accumulatedSamples_ + i < cap)
+            audioAccum_.getWritePointer(0)[accumulatedSamples_ + i] = mono;
     }
     accumulatedSamples_ += toAdd;
     if (accumulatedSamples_ >= target)

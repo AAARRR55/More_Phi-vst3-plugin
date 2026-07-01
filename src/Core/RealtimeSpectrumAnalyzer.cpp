@@ -192,9 +192,15 @@ void RealtimeSpectrumAnalyzer::processFrame() noexcept
     // M-1 FIX: Use FloatVectorOperations for peak detection (SIMD) instead of
     // scalar per-sample abs+compare. RMS still needs a scalar sum (JUCE has no
     // vectorized sum-of-squares), but the dominant per-sample abs cost is removed.
-    // This code runs on the analysis thread, so the dcRemovedFrame_ member is safe.
+    //
+    // RT-AUDIT (A2, 2026-06-30): processFrame() runs on the AUDIO thread (reached
+    // via processBlock → throttled AutoMasteringEngine::analyzeBlock →
+    // spectrumAnalyzer_.processBlock → processFrame). dcRemovedFrame_ is pre-sized
+    // to fftSize_ in prepare() (see RealtimeSpectrumAnalyzer.cpp:41) and fftSize_
+    // is only ever mutated in prepare(), so no resize is needed here — the prior
+    // dcRemovedFrame_.resize(n) was always a no-op and would have allocated if
+    // fftSize_ were ever made reactive. Removed to close that latent path.
     const auto n = static_cast<size_t>(fftSize_);
-    dcRemovedFrame_.resize(n);
     for (size_t i = 0; i < n; ++i)
         dcRemovedFrame_[static_cast<size_t>(i)] = rawFrame_[i] - frameMean;
 
