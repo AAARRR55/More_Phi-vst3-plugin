@@ -23,21 +23,21 @@
 #include "AI/StandaloneMcp/MorePhiIPCDiscovery.h"
 #include "AI/VST3IPCBridge.h"
 #include "AI/Agents/AgentRuntime.h"
-#include "AI/Agents/Blackboard/BlackboardBridge.h"
-#include "AI/Agents/Tooling/DefaultToolInvoker.h"
-#include "AI/Agents/Logging/StructuredAgentLogger.h"
-#include "AI/Agents/Llm/DeterministicFallbackLlmClient.h"
-#include "AI/Agents/Llm/RestLlmClient.h"          // AUDIT-FIX: real-LLM seam for the agent layer
+#include "AI/Agents/BlackboardBridge.h"
+#include "AI/Agents/DefaultToolInvoker.h"
+#include "AI/Agents/StructuredAgentLogger.h"
+#include "AI/Agents/DeterministicFallbackLlmClient.h"
+#include "AI/Agents/RestLlmClient.h"          // AUDIT-FIX: real-LLM seam for the agent layer
 #include "AI/LLMSettingsStore.h"                   // AUDIT-FIX: load provider config for RestLlmClient
 #include "AI/LLMConnectionValidator.h"             // AUDIT-FIX: JuceLLMHttpClient
 #include "AI/AutomationControlPlane.h"   // H6: AutonomyLevel / toString / autonomyLevelFromString
-#include "AI/Agents/Conductor/ConductorAgent.h"
-#include "AI/Agents/Agents/AnalysisAgent.h"
-#include "AI/Agents/Agents/OptimizationAgent.h"
-#include "AI/Agents/Agents/CreativeAgent.h"
-#include "AI/Agents/Agents/RealtimeControlAgent.h"
-#include "AI/Agents/Agents/QualitySafetyAgent.h"
-#include "AI/Agents/Agents/MemoryAgent.h"
+#include "AI/Agents/ConductorAgent.h"
+#include "AI/Agents/AnalysisAgent.h"
+#include "AI/Agents/OptimizationAgent.h"
+#include "AI/Agents/CreativeAgent.h"
+#include "AI/Agents/RealtimeControlAgent.h"
+#include "AI/Agents/QualitySafetyAgent.h"
+#include "AI/Agents/MemoryAgent.h"
 #include "AI/MCPToolHandler.h"
 #include "AI/Dataset/NeuralMasteringFeatureExtractor.h"
 #include <algorithm>
@@ -630,6 +630,8 @@ void MorePhiProcessor::cacheRawParameterPointers()
     rawParams_.waypointEnable = apvts.getRawParameterValue("waypointEnable");
     rawParams_.waypointPlay = apvts.getRawParameterValue("waypointPlay");
     rawParams_.waypointBPM = apvts.getRawParameterValue("waypointBPM");
+    rawParams_.nativeMastering = apvts.getRawParameterValue("nativeMastering");
+    rawParams_.neuralMasteringActive = apvts.getRawParameterValue("neuralMasteringActive");
 }
 
 bool MorePhiProcessor::enqueueParameterSet(int paramIndex,
@@ -1751,6 +1753,21 @@ MorePhiProcessor::createParameterLayout()
         false,
         juce::AudioParameterBoolAttributes().withAutomatable(false)));
 
+    // COMMERCIAL-ENABLE (2026-07-01): native mastering chain toggle. When ON, the
+    // internal 12-stage AutoMasteringEngine (EQ, dynamics, stereo, exciter,
+    // normalizer, brickwall limiter) processes audio on the wet path — even when
+    // no third-party mastering plugin (e.g. Ozone) is hosted. This removes the
+    // "requires owning Ozone" barrier: the neural mastering decisions become
+    // audible through the built-in chain via the same applyValidatedPlan path.
+    // Default ON so new users get audible AI mastering out of the box without
+    // any dependency. Backward compatible — APVTS persists the bool.
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{"nativeMastering", 1},
+        "Native Mastering Chain",
+        true));
+    // Suppress unused warning for now (used in prepareToPlay/processBlock below).
+    juce::ignoreUnused(params);
+
     return { params.begin(), params.end() };
 }
 
@@ -1774,7 +1791,16 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     updateTransportContextSnapshot(currentPlayHead);
 
     hostManager.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
-    autoMasteringEngine_.prepare(sampleRate, samplesPerBlock, false);
+    // COMMERCIAL-ENABLE (2026-07-01): native chain defaults to ON so new users
+    // get audible AI mastering without third-party plugin dependencies. Read from
+    // APVTS after rawParams are cached (rawParams_ populated in constructor).
+    {
+        const bool enableNative = rawParams_.nativeMastering != nullptr
+            ? (rawParams_.nativeMastering->load(std::memory_order_relaxed) > 0.5f)
+            : true;
+        autoMasteringEngine_.prepare(sampleRate, samplesPerBlock, enableNative);
+        autoMasteringEngine_.setActive(enableNative);
+    }
     neuralMasteringController_.setApplicationEngine(&autoMasteringEngine_);
     neuralMasteringController_.resetStatus();
     sonicMasterEngine_.prepare(sampleRate, samplesPerBlock);
@@ -1901,6 +1927,13 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     // same size as the incoming buffer — never oversampled).
     dryBuffer_.setSize(getTotalNumOutputChannels(), samplesPerBlock);
 
+    // RT-SAFETY: Pre-allocate bypass crossfade scratch gain arrays to the full
+    // block size so the audio-thread path in applyOutputGainAndMetering never
+    // calls resize() (which could heap-allocate if capacity is exceeded). The
+    // vectors are sized once here and only written into on the audio thread.
+    wetGainScratch_.resize(static_cast<size_t>(samplesPerBlock));
+    dryGainScratch_.resize(static_cast<size_t>(samplesPerBlock));
+
     // H-7 FIX: Seed the getStateInformation audio-thread cache now (on the
     // message thread) so that any audio-thread call to getStateInformation
     // (e.g. DAW offline export right after load) finds a valid cached state
@@ -1915,6 +1948,7 @@ void MorePhiProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     prepared.store(true, std::memory_order_release);
     startTimer(50);  // persistent timer — always-on after prepare so audio thread never allocates to kick it
     diagnostics_.start();
+    isActive_ = true;  // SMART-DISABLE: mark active for state tracking
 }
 
 void MorePhiProcessor::releaseResources()
@@ -1960,6 +1994,7 @@ void MorePhiProcessor::releaseResources()
     oversamplingB_.reset();
     stopTimer();
     maintenanceTimerRequested_.store(false, std::memory_order_release);
+    isActive_ = false;
 }
 
 void MorePhiProcessor::reset()
@@ -2247,28 +2282,33 @@ void MorePhiProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     juce::SpinLock::ScopedTryLockType parameterCommandGuard(commandConsumerLock_);
     const bool canDrainCommands = parameterCommandGuard.isLocked();
 
-    const bool isBypassed = readRawBool(rawParams_.bypass, false);
+     const bool isBypassed = readRawBool(rawParams_.bypass, false);
 
-    // Guard: skip morph processing while state is being restored (async plugin reload)
-    if (isRestoring_.load(std::memory_order_acquire))
-    {
-        // Still forward audio through the host if it's loaded
-        if (!isBypassed)
-            hostManager.processBlock(buffer, midi);
-        // ponytail: same throttle as the main path (see 7b).
-        if (++analysisSkipCounter_ >= ANALYSIS_THROTTLE_BLOCKS)
-        {
-            analysisSkipCounter_ = 0;
-            autoMasteringEngine_.analyzeBlock(buffer);
-        }
-        return;
-    }
+     // C-4 FIX: Filter MIDI before the restore guard so filteredMidiBuffer_ is
+     // populated in all paths. This ensures the hosted plugin receives
+     // trigger/CC-filtered MIDI (never raw) even during state restore, and
+     // trigger callbacks fire consistently for snapshot recall queuing.
+     processMIDIAndSidechain(midi, buffer);
 
-    // Profile total processBlock time
-    MORE_PHI_PROFILE(profiler_, "processBlock_total");
+     // Guard: skip morph processing while state is being restored (async plugin reload)
+     if (isRestoring_.load(std::memory_order_acquire))
+     {
+         // Still forward audio + filtered MIDI through the host if it's loaded
+         if (!isBypassed)
+             hostManager.processBlock(buffer, filteredMidiBuffer_);
+         // ponytail: same throttle as the main path (see 7b).
+         if (++analysisSkipCounter_ >= ANALYSIS_THROTTLE_BLOCKS)
+         {
+             analysisSkipCounter_ = 0;
+             autoMasteringEngine_.analyzeBlock(buffer);
+         }
+         return;
+     }
 
-    drainParameterCommandQueue(cachedParamCount, canDrainCommands, blockNow);
-    processMIDIAndSidechain(midi, buffer);
+     // Profile total processBlock time
+     MORE_PHI_PROFILE(profiler_, "processBlock_total");
+
+     drainParameterCommandQueue(cachedParamCount, canDrainCommands, blockNow);
     applyMorphAndParameters(buffer, cachedParamCount, /*canApplyParameters=*/true, blockNow);
     // C-5 FIX (audit): advance any active recall ramp AFTER the morph apply so
     // the ramp's linear-interpolated values win when both run in the same block
@@ -2853,8 +2893,8 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
             const int ns = buffer.getNumSamples();
 
             copyBufferRegion(bufferB_, buffer, ns);
-            midiCopyB_.clear();
-            midiCopyB_.addEvents(filteredMidiBuffer_, 0, -1, 0);
+             midiCopyB_.clear();
+             midiCopyB_.addEvents(filteredMidiBuffer_, 0, -1, 0);
             hostManagerB_.processBlock(bufferB_, midiCopyB_);
 
             const bool spectralActive = spectralEngine_.isActive();
@@ -3045,14 +3085,15 @@ void MorePhiProcessor::applyOutputGainAndMetering(juce::AudioBuffer<float>& buff
         const float nextMix = std::clamp(bypassMix + step, 0.0f, 1.0f);
         const float invNs = 1.0f / static_cast<float>(ns);
         // M-2 FIX: Vectorized wet/dry crossfade. Compute per-sample gain
-        // coefficients into scratch arrays, then use FloatVectorOperations
-        // multiply+add for SIMD throughput (4-8× faster than scalar on AVX/SSE).
-        // The per-sample ramp is: m(t) = bypassMix + (nextMix - bypassMix) * t
+        // coefficients into pre-allocated scratch arrays, then use
+        // FloatVectorOperations multiply+add for SIMD throughput (4-8× faster
+        // than scalar on AVX/SSE). The per-sample ramp is:
+        //   m(t) = bypassMix + (nextMix - bypassMix) * t
         // so wet_gain[i] = m(i/ns), dry_gain[i] = 1 - wet_gain[i].
-        // Scratch arrays are stack-allocated (ns <= typical 4096 → 32 KB stack).
-        const auto uns = static_cast<size_t>(ns);
-        wetGainScratch_.resize(uns);
-        dryGainScratch_.resize(uns);
+        // Scratch arrays are pre-allocated in prepareToPlay to the full block
+        // size — no resize() here, so zero risk of audio-thread heap allocation.
+        jassert(static_cast<size_t>(ns) <= wetGainScratch_.size());
+        jassert(static_cast<size_t>(ns) <= dryGainScratch_.size());
         for (int i = 0; i < ns; ++i)
         {
             const float m = bypassMix + (nextMix - bypassMix) * (static_cast<float>(i) * invNs);
@@ -3362,19 +3403,31 @@ void MorePhiProcessor::setStateInformation(const void* data, int sizeInBytes)
 
     DBG("setStateInformation: Restoring state, XML root tag: " + xml->getTagName());
 
-    // Version check (M1 NOTE): intentionally forward-compatible — we LOG the
-    // saved version but perform no migration. All fromXml() reads use defaulted
-    // getters (getBoolAttribute(...,default)/getIntAttribute(...,default)), so a
-    // missing field from an older state degrades gracefully to its default rather
-    // than corrupting. Add a real `if (major < N)` migration branch here only when
-    // a schema change actually breaks those defaults. Until then this is a
-    // diagnostic breadcrumb, not a migration gate.
+    // AUDIT F3 FIX (2026-06-30): reset the missing-hosted-plugin failure flag at
+    // the start of every restore — a fresh setStateInformation supersedes any
+    // prior load failure (the new state carries its own HOSTED_PLUGIN desc that
+    // will be re-attempted). The flag is set again only if THIS restore's plugin
+    // load ultimately fails the retry window.
+    hostedPluginLoadFailed_.store(false, std::memory_order_release);
+
+    // AUDIT F4 FIX (2026-06-30): run the real forward-migration transform chain.
+    // applyStateMigration (defined below) parses the saved `stateVersion`, rejects
+    // pre-3.0.0 state (structurally incompatible with the versioned schema),
+    // normalizes legacy field spellings for older-but-compatible versions, and
+    // loads newer-than-current state best-effort. It was previously DEAD CODE —
+    // written and advertised in the changelog (Version.h) but never called from
+    // here; this block only logged. Same-version saves hit the early-return at
+    // the top of applyStateMigration and are untouched, so the common case is a
+    // no-op. A `false` return means the state is unrepairably incompatible; we
+    // bail out before touching any subsystem so the plugin keeps its current
+    // (default) state rather than a half-restored mix.
     {
         const juce::String stateVersion = xml->getStringAttribute("stateVersion", "0.0.0");
-        if (stateVersion != juce::String(more_phi::VERSION_STRING))
+        if (!applyStateMigration(*xml, stateVersion))
         {
-            DBG("MorePhiProcessor::setStateInformation — loading state from version " + stateVersion
-                + " (current: " + juce::String(more_phi::VERSION_STRING) + "). Some settings may not be compatible.");
+            DBG("MorePhiProcessor::setStateInformation — rejected state from version "
+                + stateVersion + " (incompatible; no restore performed).");
+            return;
         }
     }
 
@@ -3692,7 +3745,41 @@ bool MorePhiProcessor::loadHostedPluginFromState(const juce::PluginDescription& 
                 stateToApply = pendingHostedState_;
             }
 
-            if (stateToApply.getSize() > 0)
+            // AUDIT F2 FIX (2026-06-30): plugin-identity guard. The snapshot-
+            // recall path (processPendingFullStateRecall) already skips applying
+            // a captured state chunk when the hosted plugin has changed (via
+            // getCachedPluginUID), but this session-restore path did NOT — it
+            // would happily hand Ozone's opaque state blob to a totally different
+            // plugin that happened to be loaded in the saved slot, silently
+            // corrupting it. Mirror the recall-path contract: compute a UID from
+            // the SAVED description and compare against the LIVE plugin's
+            // description. On mismatch, skip setStateInformation and discard the
+            // orphaned blob (don't let it linger across retries). The plugin still
+            // loaded successfully, so we return true from the caller — just
+            // without restored state. Empty saved identity (legacy state with no
+            // manufacturer recorded) applies unconditionally for backward compat,
+            // matching the recall path's `if (cachedUid.isNotEmpty())` guard.
+            const juce::String savedUid  = desc.name + "|" + desc.manufacturerName;
+            const juce::String liveUid   = [&plugin]() {
+                const auto& d = plugin->getPluginDescription();
+                return d.name + "|" + d.manufacturerName;
+            }();
+
+            const bool identityMismatch = savedUid.isNotEmpty()
+                && !desc.name.isEmpty()
+                && savedUid != liveUid;
+
+            if (identityMismatch)
+            {
+                DBG("loadHostedPluginFromState: WARNING — hosted plugin identity "
+                    "mismatch (saved: '" + savedUid + "', loaded: '" + liveUid
+                    + "'); skipping opaque-state restore to avoid corrupting the "
+                      "differently-typed plugin.");
+                // Discard the orphaned blob; it belongs to a different plugin.
+                const juce::SpinLock::ScopedLockType guard(pendingStateMutex_);
+                pendingHostedState_.reset();
+            }
+            else if (stateToApply.getSize() > 0)
             {
                 try
                 {
@@ -4648,6 +4735,10 @@ void MorePhiProcessor::timerCallback()
         // Success!
         hasPendingPluginLoad_.store(false, std::memory_order_release);
         pendingLoadAttempts_.store(0, std::memory_order_relaxed);
+        // AUDIT F3 FIX: clear any prior load-failure latch now that a plugin is
+        // loaded (covers the case where a failed load is later resolved, e.g.
+        // the user re-installed the plugin and reloaded the project).
+        hostedPluginLoadFailed_.store(false, std::memory_order_release);
         DBG("timerCallback: Plugin loaded successfully");
         latencyConfigDirty_.store(true, std::memory_order_release);
     }
@@ -4659,7 +4750,7 @@ void MorePhiProcessor::timerCallback()
         int totalAttempts = pendingLoadAttempts_.load(std::memory_order_relaxed);
 #endif
         pendingLoadAttempts_.store(0, std::memory_order_relaxed);
-        
+
         juce::String pluginName;
         {
             const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
@@ -4669,7 +4760,15 @@ void MorePhiProcessor::timerCallback()
         DBG("MorePhiProcessor::timerCallback — gave up after " + juce::String(totalAttempts) + " attempts: "
             + pluginName);
 #endif
-        
+        // AUDIT F3 FIX: latch the failure so the editor / MCP surface can show
+        // the user WHY the hosted-plugin slot is empty instead of leaving it as
+        // a silent no-op. lastFailedPluginName() returns pendingPluginDesc_.name
+        // (read under the lock above), so no separate name storage is needed.
+        // Only latch if a name was actually recorded — an empty name means no
+        // restore was ever attempted and latching would be misleading.
+        if (pluginName.isNotEmpty())
+            hostedPluginLoadFailed_.store(true, std::memory_order_release);
+
         // Unblock the morph engine so audio can still pass through
         isRestoring_.store(false, std::memory_order_release);
     }
@@ -4694,6 +4793,15 @@ int MorePhiProcessor::getNumPrograms()
 int MorePhiProcessor::getCurrentProgram()
 {
     return currentProgram_.load(std::memory_order_relaxed);
+}
+
+juce::String MorePhiProcessor::lastFailedPluginName() const noexcept
+{
+    // AUDIT F3 FIX (2026-06-30): the pending description that exhausted the
+    // retry window is still held under pendingPluginDescLock_; return its name.
+    // Empty string when no failure is latched or the name was never populated.
+    const juce::SpinLock::ScopedLockType guard(pendingPluginDescLock_);
+    return pendingPluginDesc_.name;
 }
 
 void MorePhiProcessor::setCurrentProgram(int index)
@@ -4727,8 +4835,10 @@ const juce::String MorePhiProcessor::getProgramName(int index)
 
 // ── Editor ────────────────────────────────────────────────────────────────────────────
 
-juce::AudioProcessorEditor* MorePhiProcessor::createEditor()
+juce::AudioProcessorEditor* MorePhiProcessor::createEditor() noexcept
 {
+    // VST3 §6.1: IEditController::createView() must not throw. The try/catch
+    // ensures no exception escapes the noexcept boundary. (AUDIT-FIX L-7/DIM-1)
     try
     {
         auto editor = std::make_unique<MorePhiEditor>(*this);

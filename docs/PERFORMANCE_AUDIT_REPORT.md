@@ -1,18 +1,18 @@
 # More-Phi VST3 Plugin — CPU & Memory Performance Audit Report
 
-**Date:** 2026-07-16  
+**Date:** 2026-07-01 (updated)  
 **Scope:** VST3 engine core, neural model inference, AI assistant, parameter control  
 **Methodology:** Static code analysis + sizeof-based memory estimation + architectural review  
 **Profiling harness:** `tests/Performance/ComprehensiveProfilingHarness.cpp` (new)  
 **Existing benchmarks:** `tests/Performance/BenchmarkSuite.cpp`  
-**Status:** ✅ **ALL 5 FIXES APPLIED** (2026-07-16) — see [Fixes Applied](#fixes-applied-2026-07-16) section below.
+**Status:** ✅ **ALL 8 FIXES APPLIED** (5 from 2026-07-16 + 3 from 2026-07-01) — see [Fixes Applied](#fixes-applied) section below.
 **Cross-reference:** See also the comprehensive [VST3 Technical Audit & Market Analysis](../VST3_TECHNICAL_AUDIT_AND_MARKET_ANALYSIS.md) (7.9/10 overall, Performance 8.5/10).
 
 ---
 
-## Fixes Applied (2026-07-16)
+## Fixes Applied
 
-All five priority fixes from this audit have been implemented:
+### Batch 1 (2026-07-16)
 
 | # | Fix | Files Changed | Impact |
 |---|-----|--------------|--------|
@@ -22,7 +22,13 @@ All five priority fixes from this audit have been implemented:
 | 4 | **Profiling coverage gaps** — added 4 new sections (`midi_processing`, `hosted_plugin_process`, `sonicmaster_capture`, `modulation_engine`); subsequent additions brought total to 19 sections (`output_protect` added later) | `PluginProcessor.cpp` | **Full pipeline visibility** (19 sections) |
 | 5 | **CPU Saver mode** — new `cpuSaver` APVTS param halves FFT size + caps oversampling at ×2 | `PluginProcessor.{h,cpp}` | **~40-60% audio-domain CPU reduction** when enabled |
 
-See commit history for detailed diffs.
+### Batch 2 (2026-07-01) — Audio-thread allocation elimination & memory leak fixes
+
+| # | Fix | Files Changed | Impact |
+|---|-----|--------------|--------|
+| 6 | **Bypass crossfade scratch pre-allocation** — `wetGainScratch_`/`dryGainScratch_` pre-allocated in `prepareToPlay()`, never resized on audio thread | `PluginProcessor.{h,cpp}` | **Zero heap allocation risk** in bypass crossfade path |
+| 7 | **Deferred doom force-drain** — `PluginHostManager` destructor bounded wait + `drainDeferredDoomedPlugins(true)` | `PluginHostManager.{h,cpp}` | **No plugin leaks** on teardown with held audio-thread leases |
+| 8 | **MCP connection thread stop timeout** — `stopThread(-1)` → `stopThread(5000)` in `ConnectionThread::~ConnectionThread()` | `MCPServer.cpp` | **No destructor hangs** on stuck sockets |
 
 ---
 
@@ -38,6 +44,9 @@ More-Phi 3.4.1 is a JUCE 8 VST3/AU plugin that hosts other plugins and morphs be
 | ParameterBridge memory | `throttleStates_` = 8192 entries (128 KB) | LOW | ✅ **FIXED** — reduced to 4096 (64 KB) |
 | Profiling gaps | 4 pipeline stages uninstrumented | LOW | ✅ **FIXED** — MIDI, hosted plugin, SonicMaster, modulation |
 | Audio-domain engines | Spectral/granular/formant FFT paths can dominate | CONDITIONAL | ✅ **MITIGATED** — `cpuSaver` halves FFT + caps OS |
+| Bypass crossfade allocation | `wetGainScratch_`/`dryGainScratch_` could heap-allocate on audio thread | HIGH | ✅ **FIXED** — pre-allocated in `prepareToPlay()` |
+| PluginHostManager leaks | Deferred doom plugins could leak on teardown | MEDIUM | ✅ **FIXED** — bounded wait + force-drain |
+| MCP connection thread hang | `stopThread(-1)` could hang on stuck sockets | LOW | ✅ **FIXED** — 5s timeout |
 | Neural model CPU | ONNX inference at ~0.3 Hz — negligible amortized cost | LOW | No action needed |
 | MCP server overhead | Idle TCP accept loop — ~0% CPU when no connections | LOW | No action needed |
 | Command queue drain | SpinLock try-lock gating; bulk drain is cheap | LOW | No action needed |

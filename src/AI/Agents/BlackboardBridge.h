@@ -1,0 +1,105 @@
+// src/AI/Agents/BlackboardBridge.h
+#pragma once
+
+#include <juce_core/juce_core.h>
+#include <nlohmann/json.hpp>
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace more_phi {
+class IntegrationEventBus;
+} // namespace more_phi
+
+namespace more_phi::agents {
+
+// Typed pub/sub OVER the existing IntegrationEventBus. Does not modify it.
+// poll() must be called on a scheduler/message thread to fan out events to subscribers.
+//
+// C1 FIX: cursoring is by monotonic event sequence (IntegrationEvent::sequence),
+// not by count. The bus is a bounded ring that evicts old entries, so a count
+// cursor would either skip new events (ring shrunk) or re-deliver old ones
+// (ring transiently under-filled). The sequence cursor is gap-free and never
+// recycles, so neither failure can occur.
+class BlackboardBridge
+{
+public:
+    using RawCallback = std::function<void(const juce::String& type,
+                                           const nlohmann::json& payload,
+                                           const juce::String& source)>;
+    // H-3 FIX: Store callbacks by shared_ptr so copying the subscriber list
+    // (done on every pump poll) copies a single ref-count rather than the
+    // entire RawCallback (which may heap-allocate for lambda captures).
+    using Callback = std::shared_ptr<RawCallback>;
+
+    explicit BlackboardBridge(IntegrationEventBus& bus);
+
+    // Publish forwards the event into the bus so listRecent/exportState keep working.
+    // Returns the generated eventId.
+    juce::String publish(const juce::String& source,
+                         const juce::String& type,
+                         nlohmann::json payload,
+                         const juce::String& runId = {});
+
+    void subscribe(const juce::String& agentId,
+                   const std::vector<juce::String>& eventTypes,
+                   RawCallback callback);
+
+    void unsubscribe(const juce::String& agentId);
+    void unsubscribeAll();
+
+    // Cheap non-pulling probe: returns true if the bus has published any event
+    // past our cursor since the last poll(). Lets the pump sleep idly (M3).
+    bool hasNewEvents() const;
+
+    // Drain new events since the last poll and fan out to matching subscribers.
+    void poll();
+
+    // O4 (2026-06-29): optional hook invoked after every successful publish, so an
+    // external pump (AgentRuntime) can wake its condition_variable immediately
+    // instead of waiting for the next fixed-interval poll. Pass an empty function
+    // to disable. Called on the publishing thread (agent worker / MCP thread), so
+    // the callback MUST be thread-safe and non-blocking (e.g. cv.notify_one).
+    // H-5 FIX (2026-06-29): the setter runs on the message thread during
+    // AgentRuntime::start()/stop(), while publish() runs on agent worker / MCP
+    // threads — assigning a bare std::function while another thread reads+invokes
+    // it was a data race (torn read of the internal target pointer /
+    // use-after-free at teardown). Stored as a shared_ptr guarded by
+    // onPublishMutex_, mirroring the H-3 subscriber pattern; publish() copies the
+    // shared_ptr under the lock (cheap ref-count) and invokes it unlocked.
+    void setOnPublishHook(std::function<void()> hook)
+    {
+        auto shared = std::make_shared<std::function<void()>>(std::move(hook));
+        std::lock_guard<std::mutex> lock(onPublishMutex_);
+        onPublish_ = std::move(shared);
+    }
+
+    // H3: curated, agent-only recent events (newest-first), with payloads replaced
+    // by a safe summary. Filters the raw bus down to events whose source/type look
+    // agent-originated, so an MCP consumer can observe agent activity without seeing
+    // non-agent bus traffic (action-ledger artifacts, permission decisions, etc.).
+    nlohmann::json recentAgentEvents(int limit = 32) const;
+
+private:
+    IntegrationEventBus& bus_;
+    std::mutex subscribersMutex_;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, Callback>>> subscribers_;
+    // O4: optional publish hook (see setOnPublishHook). Invoked from publish().
+    // H-5: shared_ptr + onPublishMutex_ — see setOnPublishHook.
+    std::mutex onPublishMutex_;
+    std::shared_ptr<std::function<void()>> onPublish_;
+    // M2 FIX: written by the blackboard pump thread in poll() and read by MCP
+    // connection threads via recentAgentEvents()/hasNewEvents(). A plain
+    // uint64_t was a data race (and a torn read on 32-bit). relaxed ops: the
+    // contract is eventual consistency — a racing reader at worst re-delivers
+    // an already-seen event or skips one the next poll catches.
+    std::atomic<uint64_t> lastSeenSequence_{0};   // monotonic cursor into IntegrationEventBus sequences
+};
+
+} // namespace more_phi::agents

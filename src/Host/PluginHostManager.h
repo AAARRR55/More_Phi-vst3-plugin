@@ -88,6 +88,17 @@ public:
      *  a ref-counted lease that guarantees editor-dies-before-instance. */
     void setWindowCloseCallback(std::function<void()> cb) { windowCloseCallback_ = std::move(cb); }
 
+    /** Set a callback invoked when the hosted plugin reports its own latency
+     *  changed (e.g. user engages a lookahead limiter inside Ozone). The host
+     *  manager forwards this by registering an AudioProcessorListener on the
+     *  hosted plugin in loadPlugin(); the callback typically dirties the owning
+     *  processor's latencyConfigDirty_ flag so updateReportedLatency() re-rolls
+     *  the aggregate and the DAW's PDC stays correct.
+     *  LA1 FIX (audit): without this, hosted-plugin-initiated latency changes
+     *  were invisible to MorePhi until an incidental trigger (plugin swap /
+     *  audio-domain toggle) happened to recompute the rollup. */
+    void setLatencyChangedCallback(std::function<void()> cb) { latencyChangedCallback_ = std::move(cb); }
+
     /** Report the runtime health of the hosted plugin. */
     PluginHealthState getHealthState() const { return healthMonitor_.getState(); }
     PluginHealthMonitor::Snapshot getHealthSnapshot() const { return healthMonitor_.getSnapshot(); }
@@ -157,8 +168,12 @@ public:
      * Safe to call repeatedly; no-op when nothing is pending. Call from the
      * message thread (e.g. on the maintenance timer) so destruction can run
      * without blocking real-time audio.
+     *
+     * @param force  If true, destroy deferred plugins even when audio-thread
+     *               leases are still held. Only used by the destructor after a
+     *               bounded wait — leaks a plugin rather than freezing teardown.
      */
-    void drainDeferredDoomedPlugins();
+    void drainDeferredDoomedPlugins(bool force = false);
 
     // Core unload logic without the isSwapping_ guard — called by both
     // the public unloadPlugin() and by loadPlugin() (which already holds
@@ -242,6 +257,55 @@ private:
     // guarantees editor-dies-before-instance; this is the out-of-band teardown
     // hook for plugin swaps not initiated by the editor UI.
     std::function<void()> windowCloseCallback_;
+
+    // LA1 FIX (audit): latency-changed callback + listener.
+    //
+    // latencyListener_ is registered on each hosted plugin in loadPlugin() and
+    // removed in unloadPluginInternal() BEFORE the unique_ptr is reset / moved
+    // to the deferred-doom queue. The listener must therefore be a member that
+    // outlives any hosted plugin instance — it cannot be owned by the plugin.
+    //
+    // Threading: AudioProcessorListener::audioProcessorChanged is invoked by
+    // JUCE on whichever thread the plugin chose to call
+    // updateHostRepresentation()/asyncUpdateHostRepresentation() from. In
+    // practice VST3 kLatencyChanged arrives on the message thread, but we treat
+    // the callback as any-thread: it only does an atomic store + a
+    // message-thread-deferred maintenance kick, both of which are any-thread
+    // safe. The callback MUST NOT touch the hosted plugin pointer (no
+    // acquirePluginForUse) — it should only dirty a flag on the owning
+    // processor.
+    std::function<void()> latencyChangedCallback_;
+
+    // Concrete AudioProcessorListener that forwards latencyChanged to the
+    // callback above. Defined inline; the only state it touches is
+    // latencyChangedCallback_ (a std::function — read-only here).
+    struct LatencyListener : public juce::AudioProcessorListener
+    {
+        PluginHostManager& owner;
+
+        explicit LatencyListener(PluginHostManager& o) : owner(o) {}
+
+        void audioProcessorChanged([[maybe_unused]] juce::AudioProcessor* processor,
+                                   const ChangeDetails& details) override
+        {
+            // Only react to latency changes; ignore program/parameter/APVTS
+            // notifications (those are handled by the hosted plugin's own UI
+            // and ParameterBridge, not by us).
+            if (details.latencyChanged)
+                if (owner.latencyChangedCallback_)
+                    owner.latencyChangedCallback_();
+        }
+
+        void audioProcessorParameterChanged([[maybe_unused]] juce::AudioProcessor*,
+                                            [[maybe_unused]] int,
+                                            [[maybe_unused]] float) override
+        {
+            // Intentionally empty: hosted-plugin parameter automation is driven
+            // through ParameterBridge / the morph engine, not through this
+            // listener. Avoiding work here also prevents a feedback storm when
+            // MorePhi itself writes the hosted params.
+        }
+    } latencyListener_;
 
     // ------------------------------------------------------------------------
     //  New: DAW Transport Forwarder — lock-free audio→message thread relay

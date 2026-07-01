@@ -165,12 +165,15 @@ sync APVTS atomics (includes cpuSaver reduction)
 
 Core real-time constraints: do not allocate, lock, block, perform I/O, or throw on the audio path. Pre-size buffers in `prepareToPlay()` or subsystem `prepare()` methods. Message/MCP/UI code should communicate to audio through atomics, lock-free queues, or existing handoff mechanisms.
 
-**PERF optimizations applied (2026-07-16):**
+**PERF optimizations applied (2026-07-16 + 2026-07-01):**
 - **PERF-IA (interleaved touch sampling):** `kTouchSamplingStride=4` — only 1/4 params call `getValue()` per block, rotating `touchSamplingPhase_`. Reduces dominant virtual-call cost ~75%.
 - **PERF-CPU (cpuSaver):** New APVTS param halves audio-domain FFT (min 512) + caps oversampling at ×2. Reduces audio-domain CPU ~40-60%.
-- **PERF-MEM (SonicMaster lazy ring):** `ensureRing()` defers `AudioCaptureRing` to first `setActive(true)`. Ring is rate-proportional (`8.0 × sampleRate`, ~4 MiB @ 44.1k, ~16 MiB @ 192k). Saves up to ~60% baseline memory when feature off.
+- **PERF-MEM (SonicMaster eager ring):** `AudioCaptureRing` is rate-proportional (`8.0 × sampleRate`, ~4 MiB @ 44.1k, ~16 MiB @ 192k) and **eagerly allocated in `prepare()`** (CAPTURE-DECOUPLE fix). `ensureRing()` remains as defensive idempotent allocator for tests.
 - **PERF-MEM (throttleStates_):** Reduced from 8192→4096 entries (~64 KB saved).
-- **PERF-PROFILE:** 13 profiling sections registered in `prepareToPlay()` (was 0 — the profiler was silently broken). Sections: `processBlock_total`, `command_queue_drain`, `midi_processing`, `morph_computation`, `modulation_engine`, `parameter_application`, `hosted_plugin_process`, `sonicmaster_capture`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`.
+- **RT-SAFETY (bypass scratch pre-alloc):** `wetGainScratch_`/`dryGainScratch_` pre-allocated to `samplesPerBlock` in `prepareToPlay()`, never resized on audio thread. Eliminates last heap allocation path in `processBlock()`.
+- **MEM-LEAK (deferred doom force-drain):** `PluginHostManager` destructor bounded 100ms wait + `drainDeferredDoomedPlugins(true)` prevents plugin leaks on teardown.
+- **MEM-LEAK (MCP stop timeout):** `ConnectionThread::~ConnectionThread()` uses `stopThread(5000)` not `stopThread(-1)` to prevent hangs on stuck sockets.
+- **PERF-PROFILE:** 19 profiling sections registered in `prepareToPlay()` (was 0 — the profiler was silently broken). Sections: `processBlock_total`, `command_queue_drain`, `morph_computation`, `parameter_application`, `param_getvalue_read`, `param_touch_detect`, `param_setvalue_write`, `command_drain_snapshot`, `command_drain_param`, `audio_domain_total`, `spectral_engine`, `granular_engine`, `formant_engine`, `hybrid_blend`, `midi_processing`, `hosted_plugin_process`, `sonicmaster_capture`, `modulation_engine`, `output_protect`.
 
 ### Thread Domains
 

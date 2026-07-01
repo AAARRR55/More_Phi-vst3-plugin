@@ -199,11 +199,18 @@ public:
     // for the audio-thread drain hot path — wire it at the enqueue point instead.
     void notifyHostedParameterChanged() noexcept
     {
-        paramChangePending_.store(true, std::memory_order_relaxed);
+        // L2 FIX (2026-06-30): publish the timestamp BEFORE arming the flag, and
+        // arm with release. The consumer (runCycle) does an acquire load of the
+        // flag then a relaxed load of the timestamp — the release/acquire pair
+        // guarantees that when the consumer sees pending==true it also sees the
+        // timestamp written by THIS notification, not a stale value from a prior
+        // one. The previous double-relaxed pattern could pair a fresh flag with a
+        // pre-reorder stale timestamp, mis-classifying one capture window.
         paramChangeNs_.store(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count()),
             std::memory_order_relaxed);
+        paramChangePending_.store(true, std::memory_order_release);
     }
 	    // P2.8: configurable settling period (seconds). After a parameter change the
 	    // engine waits this long before trusting a capture window, so the hosted
@@ -221,11 +228,13 @@ public:
 	    // Call from message thread (PluginProcessor::reset, etc.).
 		    void notifyAudioSourceChanged(const char* reason = "input_changed") noexcept
 		    {
-		        paramChangePending_.store(true, std::memory_order_relaxed);
+		        // L2 FIX (2026-06-30): same release/acquire pairing as
+		        // notifyHostedParameterChanged — timestamp first, flag last with release.
 		        paramChangeNs_.store(static_cast<std::uint64_t>(
 		            std::chrono::duration_cast<std::chrono::nanoseconds>(
 		                std::chrono::steady_clock::now().time_since_epoch()).count()),
 		            std::memory_order_relaxed);
+		        paramChangePending_.store(true, std::memory_order_release);
 		        lastSourceChangeReason_ = reason;
 		    }
 	    // DIAGNOSTIC: returns the reason string from the most recent audio source
@@ -461,10 +470,12 @@ public:
     }
     [[nodiscard]] bool hasPendingApplication() const noexcept
     {
-        return pendingApplication_.load(std::memory_order_acquire);
+        // H4 FIX: non-empty when the producer's head is ahead of the consumer's tail.
+        return pendingPlanHead_.load(std::memory_order_acquire)
+             > pendingPlanTail_.load(std::memory_order_acquire);
     }
-    // Message thread only — applies the stored plan via applyValidatedPlan()
-    // and clears the pending flag.
+    // Message thread only — drains ALL queued plans (up to ring depth) in FIFO
+    // order via applyValidatedPlan(). H4 FIX: drains the ring, not a single slot.
     void processPendingApplication() noexcept;
 
 private:
@@ -640,11 +651,20 @@ private:
     // AUDIT-FIX-R5: pending-plan handoff replaces MessageManager::callAsync.
     // The analysis thread writes the plan, then sets the flag (release).
     // The message thread reads the flag (acquire), then reads the plan.
-    // Protected by the flag ordering — only one analysis thread writes (under
-    // inferMutex_ in runCycle) and only one message thread reads/clears.
-    std::atomic<bool> pendingApplication_ { false };
-    ValidatedNeuralMasteringPlan pendingPlan_ {};
-    std::function<void()> maintenanceRequestCb_;  // set by processor; called after flag is set
+    //
+    // H4 FIX (2026-06-30): was a single slot — a second plan produced before the
+    // message thread consumed the first silently overwrote it (silent loss). Now
+    // a depth-2 SPSC ring: the analysis thread pushes up to 2 plans; the message
+    // thread drains all available each tick. A 3rd push while both slots are full
+    // overwrites the OLDEST (coalescing by recency — the newest decisions win,
+    // matching the 3 s cycle's intent that later analysis supersedes earlier).
+    // Capacity 2 covers the realistic backpressure (one in-flight + one queued)
+    // without unbounded memory.
+    static constexpr std::size_t kPendingPlanDepth = 2;
+    ValidatedNeuralMasteringPlan pendingPlans_[kPendingPlanDepth] {};
+    std::atomic<std::uint64_t> pendingPlanHead_ { 0 };  // analysis thread pushes here
+    std::atomic<std::uint64_t> pendingPlanTail_ { 0 };  // message thread drains here
+    std::function<void()> maintenanceRequestCb_;  // set by processor; called after a push
 
 	    // P2.8 (AUDIT): hosted-parameter transition guard. paramChangePending_ is set by
 	    // notifyHostedParameterChanged() (message/MCP thread) and consumed+cleared by

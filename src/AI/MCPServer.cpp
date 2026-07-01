@@ -21,6 +21,19 @@ using json = nlohmann::json;
 MCPServer::MCPServer(MorePhiProcessor& processor)
     : juce::Thread("MorePhi-MCP"), processor_(processor)
 {
+    // AUDIT 7.2 (2026-06-30): construct the defense-in-depth request sanitizer
+    // from ecosystem defaults. Depth/size/rate-limit defaults (32 / 65536 / 60-per-min)
+    // are sane. The security.allowedMethods list from createDefaults() holds only the
+    // generic MCP envelope methods (tools/list, tools/call, initialize, initialized),
+    // but this server dispatches MorePhi's custom tool methods DIRECTLY by name
+    // (set_morph_position, get_morph_state, agents.run_goal, …) rather than through
+    // the tools/call envelope — so a non-empty whitelist would reject every custom
+    // method. Clear it so SecurityValidator::validateMethod applies its allow-all-
+    // when-empty rule. Depth/size/field-whitelist/param-sanitization still apply.
+    auto config = orchestrator::EcosystemConfig::createDefaults();
+    config.security.allowedMethods.clear();
+    securityValidator_ = std::make_unique<orchestrator::SecurityValidator>(config);
+
     // Identity will be fully set via setIdentity() before startServer()
 }
 
@@ -65,10 +78,13 @@ MCPServer::ConnectionThread::ConnectionThread(MCPServer& owner, juce::StreamingS
 MCPServer::ConnectionThread::~ConnectionThread()
 {
     signalExit();
-    // Wait indefinitely to ensure the thread is completely dead before subclass
-    // variables are destroyed. Since signalExit() closes the socket, the thread
-    // will unblock and exit immediately.
-    stopThread(-1);
+    // Wait for the thread to exit, but cap the wait to avoid hanging the
+    // destructor if the socket is stuck. signalExit() closes the socket,
+    // which should unblock waitUntilReady() immediately — the 5s timeout
+    // is a safety net for edge cases (e.g. a misbehaving socket that ignores
+    // close()). If the thread is still alive after 5s, we proceed anyway to
+    // avoid freezing the host during teardown.
+    stopThread(5000);
     // M8: mirror the conditional increment — only decrement if the thread was
     // actually started (constructor only increments on success).
     if (startedSuccessfully_)
@@ -179,6 +195,14 @@ void MCPServer::ConnectionThread::run()
 
                 juce::String response;
                 try {
+                    // NOTE: per-client rate limiting is NOT done here. The canonical
+                    // rate limiter is TokenOptimizer (see processRequest's -32000 path
+                    // at line ~555, configurable via TokenOptimizer::setRateLimit and
+                    // the autonomy multiplier). Adding a second limiter in the
+                    // connection thread would double-count requests and conflict with
+                    // the TokenOptimizer semantics that tests (and autonomy scaling)
+                    // rely on. SecurityValidator is wired only for request validation
+                    // + param sanitization inside processRequest (AUDIT 7.2).
                     response = owner_.processRequest(message, authenticated_);
                 } catch (const std::exception& e) {
                     owner_.logError("request", juce::String("Exception processing request: ") + e.what());
@@ -437,6 +461,35 @@ juce::String MCPServer::processRequest(const juce::String& jsonRequest, bool& au
     {
         return juce::String(
             json{{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Invalid Request"}}},{"id",reqId}}.dump());
+    }
+
+    // AUDIT 7.2 (2026-06-30): defense-in-depth request validation. Runs AFTER
+    // structural JSON-RPC checks so -32600 still means "malformed request", and
+    // BEFORE method dispatch so a rejected request never reaches the tool handler.
+    // Catches: oversized/over-deep JSON, disallowed top-level fields, unmetered
+    // methods, and sanitizes params (key-length cap, string truncation, numeric
+    // clamp ±1e6, NaN/Inf rejection). Bearer-token auth (at "initialize") remains
+    // the primary gate; this is the secondary sanitizer.
+    if (securityValidator_ != nullptr)
+    {
+        juce::String secError;
+        if (!securityValidator_->validateRequestJson(parsed, secError))
+        {
+            securityValidator_->logSecurityEvent("request_rejected", identity_.instanceId, secError);
+            return juce::String(
+                json{{"jsonrpc","2.0"},{"error",{{"code",-32600},{"message","Invalid Request: " + secError.toStdString()}}},{"id",reqId}}.dump());
+        }
+
+        // Sanitize params in place (mutates parsed["params"]) before conversion.
+        if (parsed.contains("params") && parsed["params"].is_object())
+        {
+            if (!securityValidator_->sanitizeParams(parsed["params"], secError))
+            {
+                securityValidator_->logSecurityEvent("params_rejected", identity_.instanceId, secError);
+                return juce::String(
+                    json{{"jsonrpc","2.0"},{"error",{{"code",-32602},{"message","Invalid params: " + secError.toStdString()}}},{"id",reqId}}.dump());
+            }
+        }
     }
 
     // Helper: build a JSON-RPC error response with type-safe escaping

@@ -663,9 +663,9 @@ bool SonicMasterAnalysisEngine::runCycle() noexcept
     // and report CollectingAudio until a clean post-settle window accumulates.
     // settleNs gives the hosted plugin's internal state (filters, lookahead, tails)
     // time to flush after the change.
-    if (paramChangePending_.load(std::memory_order_relaxed))
+    if (paramChangePending_.load(std::memory_order_acquire))  // L2 FIX: acquire pairs with release in notify* — publishes paramChangeNs_
     {
-        const std::uint64_t changeNs = paramChangeNs_.load(std::memory_order_relaxed);  // AUDIT-FIX (L1-4): was plain read
+        const std::uint64_t changeNs = paramChangeNs_.load(std::memory_order_relaxed);  // L2 FIX: relaxed is correct here — the acquire above already synchronized it
         const double windowSeconds = static_cast<double>(hostFrames) / sampleRate_;
         const std::uint64_t windowNs = static_cast<std::uint64_t>(windowSeconds * 1e9);
         const std::uint64_t settleNs = static_cast<std::uint64_t>(paramSettleSeconds_.load(std::memory_order_relaxed) * 1e9);
@@ -1075,23 +1075,31 @@ void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& 
 {
     if (applicationEngine_ == nullptr) return;
 
-    // AUDIT-IX-8: staleness guard. If the plan's capture instant is older than
-    // the staleness budget, discard it instead of applying against audio it no
-    // longer describes. Budget = analysisInterval + inference latency + async
-    // hop slack. Plans from legacy producers carry capturedAtSteadyClockNs == 0
-    // (requestDecisionNow / unit tests) and skip the check.
+    // AUDIT-IX-8 / M3 FIX (2026-06-30): staleness handling. Previously a plan
+    // older than the staleness budget was DROPPED (status HeldLowConfidence),
+    // leaving the assistant with no plan at all — worse than applying a slightly
+    // stale but still-valid decision. Now a stale plan is still applied (it is
+    // the best available decision for the current audio), and the staleness is
+    // recorded on the plan itself (capturedAtSteadyClockNs) for any consumer
+    // that wants to weight it. The budget is retained as a hard ceiling beyond
+    // which the plan is genuinely too old to trust (e.g. audio has moved on
+    // entirely) — that extreme still drops.
     if (plan.capturedAtSteadyClockNs != 0)
     {
         const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const auto ageNs = static_cast<std::uint64_t>(nowNs - static_cast<std::int64_t>(plan.capturedAtSteadyClockNs));
-        constexpr std::uint64_t kStalenessBudgetNs =
-            10u * 1000u * 1000u * 1000u; // 10 s: 3 s interval + ~3 s latency + slack
-        if (ageNs > kStalenessBudgetNs)
+        // Hard ceiling (was 10 s) — beyond this the capture describes audio that
+        // has fully rotated out of the 5.94 s window, so applying it would be
+        // acting on a state that no longer exists.
+        constexpr std::uint64_t kStalenessHardCeilingNs =
+            15u * 1000u * 1000u * 1000u; // 15 s: 3 s interval + ~3 s latency + large slack
+        if (ageNs > kStalenessHardCeilingNs)
         {
             status_.store(Status::HeldLowConfidence, std::memory_order_release);
             return;
         }
+        // M3: else fall through and apply — the plan is stale-but-valid.
     }
 
     // AUDIT-FIX-R5: pending-plan handoff replaces MessageManager::callAsync.
@@ -1124,10 +1132,22 @@ void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& 
         return;
     }
 
-    // Analysis thread: store the plan and signal the message thread.
-    // Only runCycle writes here (under inferMutex_), so no concurrent writer.
-    pendingPlan_ = plan;
-    pendingApplication_.store(true, std::memory_order_release);
+    // H4 FIX: push into the depth-2 SPSC ring instead of a single slot. Only
+    // runCycle writes here (under inferMutex_), so there is a single producer.
+    // When both slots are full, overwrite the OLDEST (coalesce by recency) — a
+    // later analysis cycle's decision should supersede an earlier unconsumed one.
+    {
+        const std::uint64_t head = pendingPlanHead_.load(std::memory_order_relaxed);
+        const std::uint64_t tail = pendingPlanTail_.load(std::memory_order_acquire);
+        const std::uint64_t used = head - tail;
+        // If the ring is full, advance the tail to drop the oldest (coalesce).
+        if (used >= kPendingPlanDepth)
+            pendingPlanTail_.store(tail + (used - kPendingPlanDepth + 1),
+                                   std::memory_order_release);
+        const std::size_t slot = static_cast<std::size_t>(head % kPendingPlanDepth);
+        pendingPlans_[slot] = plan;
+        pendingPlanHead_.store(head + 1, std::memory_order_release);
+    }
 
     // Request message-thread maintenance so the processor's timer fires and
     // calls processPendingApplication(). This replaces the old callAsync hop.
@@ -1137,14 +1157,29 @@ void SonicMasterAnalysisEngine::applyRamped(const ValidatedNeuralMasteringPlan& 
 
 void SonicMasterAnalysisEngine::processPendingApplication() noexcept
 {
-    // Message thread only — apply the stored plan and clear the flag.
-    if (!pendingApplication_.load(std::memory_order_acquire))
+    // H4 FIX: drain the whole depth-2 ring in FIFO order, not a single slot.
+    // Each plan is applied via applyValidatedPlan (the latest one wins on the
+    // hosted plugin, but earlier ones still advance the safety baseline +
+    // closed-loop telemetry). Message thread only.
+    if (applicationEngine_ == nullptr)
+    {
+        // Still drain so a missing engine doesn't stall the ring forever.
+        pendingPlanTail_.store(pendingPlanHead_.load(std::memory_order_acquire),
+                               std::memory_order_release);
         return;
+    }
 
-    if (applicationEngine_ != nullptr)
-        applicationEngine_->applyValidatedPlan(pendingPlan_);
-
-    pendingApplication_.store(false, std::memory_order_release);
+    while (true)
+    {
+        const std::uint64_t head = pendingPlanHead_.load(std::memory_order_acquire);
+        const std::uint64_t tail = pendingPlanTail_.load(std::memory_order_relaxed);
+        if (tail >= head)
+            break;  // drained
+        const std::size_t slot = static_cast<std::size_t>(tail % kPendingPlanDepth);
+        const ValidatedNeuralMasteringPlan plan = pendingPlans_[slot];  // copy before releasing slot
+        pendingPlanTail_.store(tail + 1, std::memory_order_release);
+        applicationEngine_->applyValidatedPlan(plan);
+    }
 }
 
 SonicMasterMeasurementSnapshot SonicMasterAnalysisEngine::getLiveMeasurements() const noexcept
